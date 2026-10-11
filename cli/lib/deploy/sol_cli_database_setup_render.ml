@@ -51,6 +51,18 @@ let resource ~api_version ~kind fields =
 
 let metadata ~ns ~name = Y.map [ "name", Y.string name; "namespace", Y.string ns ]
 
+(** Sol states its ownership on what it writes. The guard that reads this back is
+    {!Sol_cli_secret.assert_destination_is_sol}: a projection may only be written where
+    nothing exists, or where what exists is Sol's. Without the label on the writer's side,
+    every later write of Sol's own object would look like a foreign one. *)
+let metadata_with_labels ~ns ~name =
+  Y.map
+    [ "name", Y.string name
+    ; "namespace", Y.string ns
+    ; "labels", Y.map [ "app.kubernetes.io/managed-by", Y.string "sol" ]
+    ]
+;;
+
 (** The Job makes no Kubernetes API calls: the kubelet fetches the transient Secret for
     the env vars on the pod's behalf, and the container talks only to Postgres. Mounting
     an identity token it cannot use is unnecessary credential surface. *)
@@ -209,7 +221,7 @@ let output_secret_doc ~ns ~name ~postgres_url =
   resource
     ~api_version:"v1"
     ~kind:"Secret"
-    [ "metadata", metadata ~ns ~name
+    [ "metadata", metadata_with_labels ~ns ~name
     ; "type", Y.string "Opaque"
     ; "stringData", Y.map [ postgres_url_key, Y.quoted postgres_url ]
     ]
@@ -232,7 +244,7 @@ let class_external_secret_doc ~ns ~target ~credential_class ~store ~remote_path 
   resource
     ~api_version:"external-secrets.io/v1"
     ~kind:"ExternalSecret"
-    [ "metadata", metadata ~ns ~name
+    [ "metadata", metadata_with_labels ~ns ~name
     ; ( "spec"
       , Y.map
           [ "refreshInterval", Y.string "1h"

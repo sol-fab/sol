@@ -66,6 +66,15 @@ val set_unit_key
 
 val platform_secret_keys : string list
 
+(** The guard a delivered object passes before Sol writes it: what is already there must be
+    absent or Sol's. A Secret is also refused where an ExternalSecret already targets it. *)
+val assert_destination_is_sol
+  :  ctx:Sol_cli_kube_destination.context
+  -> resource:string
+  -> namespace:string
+  -> name:string
+  -> (unit, string) result
+
 val verify_platform_secret_destinations
   :  ctx:Sol_cli_kube_destination.context
   -> namespaces:string list

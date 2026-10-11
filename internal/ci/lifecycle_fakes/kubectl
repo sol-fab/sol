@@ -192,6 +192,12 @@ case " $* " in
     printf 'Error from server (NotFound): secrets "db-credentials" not found\n' >&2
     exit 1
     ;;
+  *" get secret "*"-creds "*)
+    # The class projections. The ownership guard reads them before writing: absent is fine,
+    # and this target has none yet.
+    printf 'Error from server (NotFound): secrets "creds" not found\n' >&2
+    exit 1
+    ;;
   *" get secret sol-secrets "*)
     printf '{"data":{"POSTGRES_URL":"cG9zdGdyZXNxbDovL2xpZmVjeWNsZTpvZmZsaW5lQGxvY2FsaG9zdDo1NDMyL3Rlc3Q=","SOL_API_KEY":"b2ZmbGluZS1zZWNyZXQ="}}\n'
     exit 0

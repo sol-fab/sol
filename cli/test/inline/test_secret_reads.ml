@@ -74,7 +74,9 @@ if [ "$verb" = "get" ]; then
         reason=SecretSynced
         state=True
         if [ "$mode" = "eso-not-synced" ]; then reason=SecretSyncedError; state=False; fi
-        printf '{"metadata":{"generation":2},"status":{"refreshTime":"2026-10-10T12:00:00Z","conditions":[{"type":"Ready","status":"%%s","reason":"%%s"}]}}\n' "$state" "$reason"
+        # A matching syncedResourceVersion, so this mode exercises the *key* check: without
+        # one the freshness gate refuses first and the key check is unreachable.
+        printf '{"metadata":{"generation":2},"status":{"refreshTime":"2026-10-10T12:00:00Z","syncedResourceVersion":"2-1","conditions":[{"type":"Ready","status":"%%s","reason":"%%s"}]}}\n' "$state" "$reason"
       fi
       exit 0 ;;
     externalsecrets)
@@ -436,45 +438,43 @@ let test_external_secret_readiness_verifies_the_generation () =
 
 (* The signal is an ESO implementation detail, so its absence must degrade to
    Ready+SecretSynced with a warning — never a deploy failure. *)
-let test_external_secret_readiness_warns_without_a_synced_version () =
+(* "Unsupported" is not "fresh". Without a generation-bound version there is nothing that
+   distinguishes this selection's sync from an earlier one's, so Ready alone would let a
+   changed binding keep serving the previous database. *)
+let test_external_secret_readiness_refuses_without_a_synced_version () =
   with_fake_kubectl ~mode:"eso-no-synced-version" (fun ~calls:_ ~manifests:_ ->
-    let result, reported =
-      Sol_cli_report.collect (fun () ->
-        Sol_cli_secret.verify_external_secret_ready ~ctx (external_workload_spec ()))
-    in
-    (match result with
-     | Ok () -> ()
-     | Error message -> Windtrap.failf "the fallback must not fail the deploy: %s" message);
-    Windtrap.equal
-      Windtrap.bool
-      ~msg:"the fallback warns that freshness was not verified"
-      true
-      (List.exists
-         (fun (_level, text) ->
-            Sol_cli_string.contains ~needle:"without per-spec freshness verification" text)
-         reported))
+    match
+      Sol_cli_secret.verify_external_secret_ready ~ctx (external_workload_spec ())
+    with
+    | Ok () -> Windtrap.fail "readiness without freshness evidence must refuse"
+    | Error message ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the refusal says there is no evidence the sync belongs to this selection"
+        true
+        (Sol_cli_string.contains
+           ~needle:"no evidence the sync belongs to this selection"
+           message))
 ;;
 
-let test_external_secret_readiness_warns_when_the_generation_lags () =
+(* A *known* mismatch: the published version has not reached the spec this selection asks
+   for. Proceeding is how a changed binding quietly keeps serving the old database — the
+   previous ExternalSecret still reports Ready and its Secret still carries the key. *)
+let test_external_secret_readiness_refuses_when_the_generation_lags () =
   with_fake_kubectl ~mode:"eso-stale-version" (fun ~calls:_ ~manifests:_ ->
-    let result, reported =
-      Sol_cli_report.collect (fun () ->
-        Sol_cli_secret.verify_external_secret_ready
-          ~timeout_s:0.
-          ~ctx
-          (external_workload_spec ()))
-    in
-    (match result with
-     | Ok () -> ()
-     | Error message -> Windtrap.failf "a lagging generation must not fail: %s" message);
-    Windtrap.equal
-      Windtrap.bool
-      ~msg:"the fallback names the lagging generation"
-      true
-      (List.exists
-         (fun (_level, text) ->
-            Sol_cli_string.contains ~needle:"has not reached generation" text)
-         reported))
+    match
+      Sol_cli_secret.verify_external_secret_ready
+        ~timeout_s:0.
+        ~ctx
+        (external_workload_spec ())
+    with
+    | Ok () -> Windtrap.fail "a lagging generation must refuse, not proceed"
+    | Error message ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the refusal names the lagging generation"
+        true
+        (Sol_cli_string.contains ~needle:"has not reached generation" message))
 ;;
 
 let test_unit_set_writes_only_its_unit_secret () =
@@ -809,12 +809,12 @@ let%test "external Secret readiness verifies the synced generation" =
   test_external_secret_readiness_verifies_the_generation ()
 ;;
 
-let%test "external Secret readiness warns when no synced version is published" =
-  test_external_secret_readiness_warns_without_a_synced_version ()
+let%test "external Secret readiness refuses when no synced version is published" =
+  test_external_secret_readiness_refuses_without_a_synced_version ()
 ;;
 
-let%test "external Secret readiness warns when the generation lags" =
-  test_external_secret_readiness_warns_when_the_generation_lags ()
+let%test "external Secret readiness refuses when the generation lags" =
+  test_external_secret_readiness_refuses_when_the_generation_lags ()
 ;;
 
 (* The rollback path renders and applies the same bundle as a deploy: a release whose

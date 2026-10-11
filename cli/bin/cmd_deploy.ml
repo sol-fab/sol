@@ -893,6 +893,28 @@ let run_database_setup_step
         ~name:(Sol_cli_database_setup_render.ddl_creds_name target)
         ~postgres_url:ddl_url
     in
+    (* Every projection is checked before it is rendered: a class Secret may only be written
+       where nothing exists or where what exists is Sol's. The check is here rather than in
+       the coordinator because the names and namespaces are. *)
+    let* () =
+      Sol_cli_secret.assert_destination_is_sol
+        ~ctx
+        ~resource:"secret"
+        ~namespace:migration_namespace
+        ~name:(Sol_cli_database_setup_render.ddl_creds_name target)
+    in
+    let* () =
+      List.fold_left
+        (fun acc ns ->
+           let* () = acc in
+           Sol_cli_secret.assert_destination_is_sol
+             ~ctx
+             ~resource:"secret"
+             ~namespace:ns
+             ~name:(Sol_cli_database_setup_render.dml_creds_name target))
+        (Ok ())
+        dml_namespaces
+    in
     let dml_secrets =
       List.map
         (fun ns ->
