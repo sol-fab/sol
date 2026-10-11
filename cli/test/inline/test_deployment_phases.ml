@@ -1682,6 +1682,12 @@ case "$*" in
       printf 'ddl-pw\ndml-pw\n'
       exit 0
     fi
+    if [ "$SETUP_MODE" = "forbidden" ]; then
+      # A restricted identity: the object may exist and still be unreadable. It must never
+      # be mistaken for "nothing recorded", which would bootstrap over a live target.
+      echo 'Error from server (Forbidden): secrets "payments-db-credentials" is forbidden: User "sol" cannot get resource "secrets" in API group "" in the namespace "myapp-payments"' >&2
+      exit 1
+    fi
     echo 'Error from server (NotFound): secrets "payments-db-credentials" not found' >&2
     exit 1 ;;
 esac
@@ -1722,12 +1728,17 @@ exit 0
     (fun () -> f ~log)
 ;;
 
-let setup_output_secret () =
-  Sol_cli_yaml.document
-    (Sol_cli_yaml.map
-       [ "kind", Sol_cli_yaml.string "Secret"
-       ; "metadata", Sol_cli_yaml.map [ "name", Sol_cli_yaml.string "payments-ddl-creds" ]
-       ])
+(** The class credential as the deploy renders it for this run's passwords — the object
+    2b's reader will consume. Rendering the real one, rather than a stub that carries only
+    the name, is what lets a test assert *which value* was written. *)
+let setup_output_secret ~ddl_password =
+  Sol_cli_database_setup_render.output_secret_doc
+    ~ns:"myapp-payments"
+    ~name:(Sol_cli_database_setup_render.ddl_creds_name "payments")
+    ~postgres_url:
+      (Sol_cli_database_setup_url.ddl
+         ~password:ddl_password
+         "postgresql://postgres:masterpw@db.internal:5432/app")
 ;;
 
 let run_database_setup
@@ -1747,7 +1758,7 @@ let run_database_setup
     ~dml_password
     ~ca_cert:"-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n"
     ~image:("postgres@sha256:" ^ String.make 64 'a')
-    ~output_secrets:[ setup_output_secret () ]
+    ~output_secrets:[ setup_output_secret ~ddl_password ]
 ;;
 
 let test_database_setup_bootstrap_orders_by_verification () =
@@ -1881,7 +1892,76 @@ let test_database_setup_repair_does_not_rewrite_the_record () =
         Windtrap.bool
         ~msg:"a repair still writes the class credential"
         true
-        (setup_mentions "payments-ddl-creds" manifests))
+        (setup_mentions "payments-ddl-creds" manifests);
+      (* And it carries the *recorded* password. "Writes the credential" would otherwise
+         pass for a value the previous release never held. *)
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the class credential carries the recorded password"
+        true
+        (setup_mentions "sol_migrator:ddl-pw@" manifests))
+;;
+
+(** The URL the rendered *class credential* carries, so two deploys can be compared byte
+    for byte.
+
+    Scoped to the class credential on purpose: the manifests log also holds the transient
+    Secret, whose POSTGRES_URL is the master — the same value on every deploy. Reading the
+    first POSTGRES_URL in the log would compare the master with itself and pass no matter
+    what the class credential said. *)
+let ddl_credential_url manifests =
+  match Sol_cli_string.after_opt ~needle:"payments-ddl-creds" manifests with
+  | None -> Windtrap.fail "no class credential was written"
+  | Some credential ->
+    (match Sol_cli_string.after_opt ~needle:"POSTGRES_URL: " credential with
+     | None -> Windtrap.fail "the class credential carries no POSTGRES_URL"
+     | Some value ->
+       (match String.index_opt value '\n' with
+        | None -> value
+        | Some i -> String.sub value 0 i))
+;;
+
+let test_database_setup_unreadable_authority_fails_closed () =
+  (* The RBAC the substrate creates may not grant the deploy `get` on the authority. An
+     unreadable record must never read as "nothing recorded": that bootstraps over a live
+     target and replaces the passwords its consumers are holding — the very failure this
+     change exists to prevent. Only a real NotFound may bootstrap. *)
+  setup_fake_kubectl ~mode:"forbidden" ~fail_verb:"zzz-never" (fun ~log:_ ->
+    let ctx = Sol_cli_kube_destination.local_context in
+    match resolve_passwords ~ctx () with
+    | Ok (operation, _, _) ->
+      Windtrap.fail
+        (Printf.sprintf
+           "an unreadable authority resolved to %s; it must fail closed"
+           (Sol_cli_database_setup.operation_to_string operation))
+    | Error message ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the refusal says the authority could not be read"
+        true
+        (setup_mentions "could not read the target's password authority" message))
+;;
+
+let test_database_setup_a_second_deploy_writes_the_same_credential () =
+  (* Two deploys against a recorded authority: the shape of a second deploy while the first
+     release is serving traffic. The credential written has to be byte-identical, because
+     the pods already running hold it. *)
+  let deploy () =
+    setup_fake_kubectl ~mode:"authority" ~fail_verb:"zzz-never" (fun ~log ->
+      let ctx = Sol_cli_kube_destination.local_context in
+      match resolve_passwords ~ctx () with
+      | Error message -> Windtrap.fail message
+      | Ok (operation, ddl_password, dml_password) ->
+        (match run_database_setup ~operation ~ddl_password ~dml_password () with
+         | Error message -> Windtrap.fail message
+         | Ok () -> ());
+        ddl_credential_url (read_file (log ^ ".manifests")))
+  in
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"the second deploy writes exactly the credential the first one did"
+    (deploy ())
+    (deploy ())
 ;;
 
 let test_database_setup_failure_leaves_the_projections_alone () =
@@ -1980,6 +2060,14 @@ let%test "database setup: a repair reuses the recorded passwords" =
 
 let%test "database setup run: a repair never rewrites the recorded authority" =
   test_database_setup_repair_does_not_rewrite_the_record ()
+;;
+
+let%test "database setup: an unreadable authority fails closed, never a bootstrap" =
+  test_database_setup_unreadable_authority_fails_closed ()
+;;
+
+let%test "database setup: a second deploy writes the same credential as the first" =
+  test_database_setup_a_second_deploy_writes_the_same_credential ()
 ;;
 
 let%test "database setup run: a failed Job leaves the class credentials untouched" =
