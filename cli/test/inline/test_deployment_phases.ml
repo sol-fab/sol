@@ -1450,7 +1450,39 @@ let test_database_setup_sql_is_idempotent () =
     Windtrap.bool
     ~msg:"objects the migration creates default to the DML role"
     true
-    (setup_mentions "ALTER DEFAULT PRIVILEGES FOR ROLE" sql)
+    (setup_mentions "ALTER DEFAULT PRIVILEGES FOR ROLE" sql);
+  (* Upstream requires membership in the role whose default privileges are altered, and a
+     Cloud SQL admin is [cloudsqlsuperuser], not a true superuser. Without the membership
+     grant the whole script dies at the first ALTER DEFAULT PRIVILEGES — observed live on
+     GCP, after the roles themselves were created. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the admin joins the DDL role, so it may alter that role's default privileges"
+    true
+    (setup_mentions "GRANT sol_migrator TO CURRENT_USER" sql);
+  let substring_index haystack needle =
+    let n = String.length haystack
+    and m = String.length needle in
+    let rec loop i =
+      if i + m > n
+      then None
+      else if String.sub haystack i m = needle
+      then Some i
+      else loop (i + 1)
+    in
+    loop 0
+  in
+  match
+    ( substring_index sql "GRANT sol_migrator TO CURRENT_USER"
+    , substring_index sql "ALTER DEFAULT PRIVILEGES FOR ROLE" )
+  with
+  | Some grant_at, Some alter_at ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"and joins it before altering its default privileges"
+      true
+      (grant_at < alter_at)
+  | _ -> Windtrap.fail "the membership grant or the default-privilege grants are missing"
 ;;
 
 let%test "database setup: the image must be a digest reference" =

@@ -335,7 +335,7 @@ let no_deploy_identity_lines ~target ~infra_dir =
 
 (** Resolve the destination, and carry the reconciled environment's root directory out with
     it: the database setup step reads the provisioning connection from that root's outputs. *)
-let environment_destination ~target ~cluster ~infra_dir =
+let environment_destination ~target ~target_cfg ~cluster ~infra_dir =
   match cluster with
   | None ->
     Error
@@ -351,8 +351,15 @@ let environment_destination ~target ~cluster ~infra_dir =
     (match cluster.Sol_cli_cluster.deploy_access () with
      | Ok (Some destination) -> Ok (destination, infra_dir)
      | Ok None ->
-       eprint_guided (no_deploy_identity_lines ~target ~infra_dir);
-       Error (Sol_cli_exit.reported ~code:1 ())
+       (* The provider declares no deploy identity (GCP does not: DEC-034), so the deploy
+          identity is the context the operator configured and named. "No deploy identity"
+          means "do not fabricate one", not "there is none to use": without this the run
+          would print the guidance and then, on the re-run it asks for, print it again. *)
+       (match Sol_cli_config.destination_of_target target_cfg with
+        | Ok destination -> Ok (destination, infra_dir)
+        | Error _ ->
+          eprint_guided (no_deploy_identity_lines ~target ~infra_dir);
+          Error (Sol_cli_exit.reported ~code:1 ()))
      | Error message -> Error (Sol_cli_exit.error message))
 ;;
 
@@ -375,7 +382,7 @@ let environment_refusal_lines ~target ~because =
   ]
 ;;
 
-let environment_stage ~target ~run_log ~action () =
+let environment_stage ~target ~target_cfg ~run_log ~action () =
   if not (allow_setup action)
   then (
     eprint_guided
@@ -397,7 +404,7 @@ let environment_stage ~target ~run_log ~action () =
     with
     | Ok (Sol_cli_environment_stage.Applied { cluster; infra_dir }) ->
       print_guided [ Printf.sprintf "The environment for %s is provisioned." target ];
-      environment_destination ~target ~cluster ~infra_dir
+      environment_destination ~target ~target_cfg ~cluster ~infra_dir
     | Ok (Sol_cli_environment_stage.Apply_failed { failure; _ }) ->
       Error
         (Sol_cli_exit.failure
@@ -424,7 +431,7 @@ let first_run ~target ~target_cfg ~action ~await_delegation ~run_log () =
     | Ok Installation_reported -> Error (Sol_cli_exit.reported ~code:1 ())
     | Error exit -> Error exit
   in
-  environment_stage ~target ~run_log ~action ()
+  environment_stage ~target ~target_cfg ~run_log ~action ()
 ;;
 
 let reconcile_environment_for_deploy
@@ -487,7 +494,7 @@ let reconcile_environment_for_deploy
   with
   | Ok (Sol_cli_environment_stage.Applied { cluster; infra_dir }) ->
     print_guided [ Printf.sprintf "The environment for %s is reconciled." target ];
-    environment_destination ~target ~cluster ~infra_dir
+    environment_destination ~target ~target_cfg ~cluster ~infra_dir
   | Ok (Sol_cli_environment_stage.Apply_failed { failure; _ }) ->
     Error
       (Sol_cli_exit.failure ("\n" ^ Sol_cli_environment_stage.failure_to_string failure))

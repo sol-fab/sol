@@ -101,6 +101,7 @@ END
 $$;
 GRANT USAGE ON SCHEMA public TO %s, %s;
 GRANT CREATE ON SCHEMA public TO %s;
+GRANT %s TO CURRENT_USER;
 ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %s;
 ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA public
@@ -113,6 +114,12 @@ ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA public
     dml_role
     ddl_role
     dml_role
+    ddl_role
+    (* The admin must hold membership in [ddl_role] to alter that role's default privileges:
+       upstream requires membership in (or superuser over) the target role. Cloud SQL's
+       `postgres` is [cloudsqlsuperuser], not a true superuser, so it is refused without
+       this — observed live. Granting it is not an escalation: the admin created the role
+       and already holds admin option on it. *)
     ddl_role
     ddl_role
     dml_role
