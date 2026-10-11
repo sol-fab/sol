@@ -1466,7 +1466,7 @@ let%test "database setup: the role SQL is idempotent and carries no secret" =
 let render_setup () =
   Sol_cli_database_setup_render.docs
     ~ns:"myapp-payments"
-    ~workload:"charge-svc"
+    ~target:"payments"
     ~master_url:"postgresql://postgres:masterpw@db.internal:5432/app"
     ~ddl_password:"ddl-pw"
     ~dml_password:"dml-pw"
@@ -1523,12 +1523,7 @@ let test_database_setup_renders_the_fail_closed_job () =
     Windtrap.bool
     ~msg:"the CA mount exists and is empty"
     true
-    (setup_mentions "projected:" text);
-  Windtrap.equal
-    Windtrap.bool
-    ~msg:"it declares no sources yet"
-    true
-    (setup_mentions "sources: []" text);
+    (setup_mentions "emptyDir: {}" text);
   (* The Job spec must not embed a credential: it references the transient Secret. *)
   Windtrap.equal
     Windtrap.bool
