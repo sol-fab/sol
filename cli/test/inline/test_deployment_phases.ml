@@ -1673,6 +1673,11 @@ let test_database_setup_service_file_quotes () =
     ~msg:"a quote inside a quoted value is escaped"
     "'pa\\'ss'"
     (Sol_cli_database_setup_render.service_value "pa'ss");
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"a line break is quoted, so one entry does not become two"
+    "'a\nb'"
+    (Sol_cli_database_setup_render.service_value "a\nb");
   (* The whole file, through the same path the renderer uses. *)
   Windtrap.equal
     Windtrap.bool
@@ -2132,9 +2137,11 @@ let test_database_setup_reports_a_failed_cleanup () =
     | Error message ->
       Windtrap.equal
         Windtrap.bool
-        ~msg:"the failure says the master may still be in the cluster"
+        ~msg:"the failure says the master's parameters may still be in the cluster"
         true
-        (setup_mentions "master credential may still be in the cluster" message);
+        (setup_mentions
+           "service file carrying the master's parameters may still be in the cluster"
+           message);
       Windtrap.equal
         Windtrap.bool
         ~msg:"...and names the delete that failed"

@@ -145,8 +145,8 @@ let dml_namespaces ~declared ~resource (plan : Sol_cli_deployment_plan.t) =
     caller needs both — the failure it can fix and the credential it must go looking for. *)
 let cleanup_report failures =
   Printf.sprintf
-    "the database master credential may still be in the cluster: its transient material \
-     could not be removed.\n\
+    "the service file carrying the master's parameters may still be in the cluster: its \
+     transient material could not be removed.\n\
      %s\n\
      Confirm it is gone before treating the target as clean."
     (String.concat "\n" (List.map (fun note -> "  - " ^ note) failures))

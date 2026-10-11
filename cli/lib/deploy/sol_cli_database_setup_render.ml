@@ -76,9 +76,13 @@ let service_file_path = service_mount_path ^ "/" ^ service_file_name
 
 (** One service-file value. libpq treats an unquoted [#] as a comment and trims unquoted
     values, so anything that could be read wrongly is quoted; inside quotes a backslash
-    escapes the next character. *)
+    escapes the next character.
+
+    A line break is the sharpest of these: unquoted, it ends the entry and everything after
+    it is parsed as a second one. The role passwords are hex and cannot contain either, but
+    the master password is operator- or provider-set and can. *)
 let service_value value =
-  let unsafe c = List.mem c [ ' '; '\t'; '#'; '\''; '"'; '\\' ] in
+  let unsafe c = List.mem c [ ' '; '\t'; '\n'; '\r'; '#'; '\''; '"'; '\\' ] in
   if not (String.exists unsafe value)
   then value
   else (
@@ -95,7 +99,12 @@ let service_value value =
     Buffer.contents b)
 ;;
 
-(** The master URL, decomposed into the service file's parameters. *)
+(** The master URL, decomposed into the service file's parameters.
+
+    What it restates is the parameters the URL *carried*, which is not the same as a complete
+    connection description: a URL with no port yields no [port=] line, and libpq then applies
+    its own default. That is correct — the URL meant the default too — but a reader should
+    not take the file as self-describing. *)
 let service_file ~master_url =
   let uri = Uri.of_string master_url in
   let query = Uri.query uri in
