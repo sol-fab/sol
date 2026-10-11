@@ -148,12 +148,17 @@ let in_cluster_context ~target_path ~active =
       ~active
   in
   let target = Sol_cli_kubernetes_name.sanitize_name target_path in
+  (* Whether Sol provisions the database decides only the CA mount; the DDL class Secret name
+     is ownership-neutral, so the Job reads `<target>-ddl-creds` either way. This is a
+     different question from which resource is the target's database, and it asks the one
+     binding module rather than re-deriving the answer. *)
   let* provisions_database =
     Sol_cli_config.load_for_target ~target:target_path
     |> Result.map_error Sol_cli_config.error_to_string
     |> Result.map (fun config ->
       match Sol_cli_resource_binding.resolve config with
-      | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
+      | Ok bindings ->
+        Option.is_some (Sol_cli_resource_binding.provisioned_database bindings)
       | Error _ -> false)
   in
   let ca_configmap =

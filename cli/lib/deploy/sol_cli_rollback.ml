@@ -277,17 +277,12 @@ let service_specs_of_release ?config (release : Sol_cli_release.t) =
         | Ok bindings -> bindings
         | Error _ -> []
       in
+      let resource_of (database : Sol_cli_resource_binding.t) = database.resource in
       let provisioned =
-        Sol_cli_resource_binding.provisioned_database bindings
-        |> Option.map (fun (database : Sol_cli_resource_binding.t) -> database.resource)
+        Sol_cli_resource_binding.provisioned_database bindings |> Option.map resource_of
       in
       let target_database =
-        match provisioned with
-        | Some resource -> Some resource
-        | None ->
-          (match Sol_cli_resource_binding.of_type bindings ~typ:"postgres" with
-           | [ (database : Sol_cli_resource_binding.t) ] -> Some database.resource
-           | _ -> None)
+        Sol_cli_resource_binding.target_database bindings |> Option.map resource_of
       in
       let uses resource name =
         Sol_cli_deployment_plan.service_uses_resource (Some declared) name resource

@@ -2441,3 +2441,55 @@ let test_the_reader_routes_on_the_capability_not_the_key_name () =
 let%test "2b: the reader routes on the resource, not the key name or the owner" =
   test_the_reader_routes_on_the_capability_not_the_key_name ()
 ;;
+
+(* 2b: *which* postgres resource is the target's is selected in one place
+   (`Sol_cli_resource_binding.target_database`); the plan test above injects the result and
+   would pass even if the selection picked wrong. One externally bound postgres is the
+   target's database; two are ambiguous, so no consumer's `POSTGRES_URL` routes and each
+   unit keeps its own. *)
+let test_target_database_selects_one_external_and_refuses_two () =
+  let binding ?(ownership = Sol_cli_config.Ownership_sol) resource =
+    { Sol_cli_resource_binding.resource
+    ; typ = "postgres"
+    ; ownership
+    ; store = None
+    ; keys = []
+    ; connection = []
+    ; credentials = []
+    }
+  in
+  let selected bindings =
+    Sol_cli_resource_binding.target_database bindings
+    |> Option.map (fun (b : Sol_cli_resource_binding.t) -> b.resource)
+  in
+  Windtrap.equal
+    (Windtrap.option Windtrap.string)
+    ~msg:"one externally bound postgres is the target's database"
+    (Some "legacy_db")
+    (selected [ binding ~ownership:Sol_cli_config.Ownership_external "legacy_db" ]);
+  Windtrap.equal
+    (Windtrap.option Windtrap.string)
+    ~msg:"a Sol-provisioned database is authoritative beside an external one"
+    (Some "app_db")
+    (selected
+       [ binding "app_db"
+       ; binding ~ownership:Sol_cli_config.Ownership_external "legacy_db"
+       ]);
+  Windtrap.equal
+    (Windtrap.option Windtrap.string)
+    ~msg:"two externally bound postgres resources are ambiguous, so nothing routes"
+    None
+    (selected
+       [ binding ~ownership:Sol_cli_config.Ownership_external "first_db"
+       ; binding ~ownership:Sol_cli_config.Ownership_external "second_db"
+       ]);
+  Windtrap.equal
+    (Windtrap.option Windtrap.string)
+    ~msg:"and no postgres resource routes nothing"
+    None
+    (selected [])
+;;
+
+let%test "2b: the target database is the provisioned one, else exactly one external" =
+  test_target_database_selects_one_external_and_refuses_two ()
+;;

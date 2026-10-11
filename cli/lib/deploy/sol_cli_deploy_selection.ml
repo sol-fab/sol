@@ -219,23 +219,15 @@ let plan (input : Planning_input.t) =
   (* 2d: the plan carries the target's sanitized identity and whether Sol provisions the
      database; the renderer derives any object name from both. 2b adds the target's postgres
      resource whatever its ownership, so a consumer's `POSTGRES_URL` routes to the class
-     Secret for a Sol-provisioned and an externally bound database alike. Resolving
-     ownership here, once, keeps the plan free of the binding resolution. *)
+     Secret for a Sol-provisioned and an externally bound database alike. The binding module
+     owns *which* resource that is; the plan only carries the names. *)
   let target = Sol_cli_kubernetes_name.sanitize_name config.target.name in
   let* provisioned_database, target_database =
     Sol_cli_resource_binding.resolve config
     |> Result.map (fun bindings ->
       let resource_of (database : Sol_cli_resource_binding.t) = database.resource in
-      let provisioned = Sol_cli_resource_binding.provisioned_database bindings in
-      let target_database =
-        match provisioned with
-        | Some database -> Some (resource_of database)
-        | None ->
-          (match Sol_cli_resource_binding.of_type bindings ~typ:"postgres" with
-           | [ database ] -> Some (resource_of database)
-           | _ -> None)
-      in
-      Option.map resource_of provisioned, target_database)
+      ( Option.map resource_of (Sol_cli_resource_binding.provisioned_database bindings)
+      , Option.map resource_of (Sol_cli_resource_binding.target_database bindings) ))
     |> refused
   in
   let* plan =

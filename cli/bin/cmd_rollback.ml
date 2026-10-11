@@ -205,16 +205,13 @@ let cmd =
     Term.(
       const (fun release_id target ->
         let result =
-          let* ctx = Cmd_destination.remote ~command:"rollback" target in
           (* 2b: the rollback's database delivery is derived from the target's **current**
-             bindings, so load them here rather than reading ownership from the release. *)
-          let* config =
-            match target with
-            | None ->
-              Error (Sol_cli_exit.error "rollback requires a target to resolve bindings")
-            | Some path ->
-              Sol_cli_config.load_for_target ~target:path
-              |> Sol_cli_exit.of_error Sol_cli_config.error_to_string
+             bindings, so resolve the cluster and read that config once. A targetless rollback
+             is `sol local rollback` below, which passes no config and gets unit-scoped
+             delivery; this remote form has no target to fall back on and refuses one. *)
+          let* ctx, config =
+            Sol_cli_destination.resolve_with_config ~command:"rollback" ~target
+            |> Sol_cli_exit.of_msg
           in
           run ~ctx ~config release_id
         in
