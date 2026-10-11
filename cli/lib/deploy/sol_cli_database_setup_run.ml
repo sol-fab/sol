@@ -91,6 +91,11 @@ let own_secret_with_job ~ctx ~namespace ~job_name ~secret_name =
   |> Result.map (fun _ -> ())
 ;;
 
+(** Best effort, and the code says so: a failure here is a warning, not an error. The
+    cost differs by object. For the script it is nothing. For the transient Secret it is
+    the master surviving until the next deploy of this target — or until the Job's
+    [ttlSecondsAfterFinished] cascade collects it, if the owner reference was patched
+    before Sol died. *)
 let delete ~ctx ~namespace what name =
   kubectl
     ~ctx
@@ -144,48 +149,55 @@ let run
   (* Re-deploy: a Job's pod template is immutable, so an existing one is removed rather
      than patched. A first deploy finds nothing and this is a no-op. *)
   delete ~ctx ~namespace "job" job_name;
-  (* Sol writes the credentials it will consume, before the Job that assumes they exist. *)
-  let* () =
-    List.fold_left
-      (fun acc (what, doc) ->
-         let* () = acc in
-         apply_doc ~ctx ~what doc)
-      (Ok ())
-      ([ "transient secret", transient; "setup script", script ]
-       @ List.map (fun doc -> "output secret", doc) output_secrets)
-  in
-  let* () = apply_doc ~ctx ~what:"setup job" job_doc in
-  let* () = own_secret_with_job ~ctx ~namespace ~job_name ~secret_name in
-  let outcome =
-    Sol_cli_migration_job.wait
-      ~ctx
-      ~interval_s:wait_interval_s
-      ~attempts:wait_attempts
-      job
-  in
-  let result =
-    match outcome with
-    | Sol_cli_migration_job.Succeeded -> Ok ()
-    | Sol_cli_migration_job.Failed ->
-      Error
-        (Printf.sprintf
-           "database setup for %s failed; the roles were not created"
-           namespace)
-    | Sol_cli_migration_job.Timed_out _ ->
-      Error
-        (Printf.sprintf
-           "database setup for %s timed out; the roles may be partially created"
-           namespace)
-    | Sol_cli_migration_job.Unstartable { reason; detail } ->
-      Error
-        (Printf.sprintf
-           "database setup for %s could not start: %s%s"
-           namespace
-           reason
-           (match detail with
-            | Some d -> " (" ^ d ^ ")"
-            | None -> ""))
-  in
-  cleanup ~ctx ~namespace ~job_name ~configmap_name ~secret_name;
-  result
+  (* Every path from the first apply runs [cleanup], including every early return. A
+     [let*] chain that returned early would leave the transient Secret — the master — in
+     the cluster with no owner and no later delete, which is the exact leak this step
+     exists to prevent. The failure that matters most is [own_secret_with_job] failing:
+     the Job exists, the Secret is not owned by it, and only this [finally] collects it. *)
+  Fun.protect
+    ~finally:(fun () -> cleanup ~ctx ~namespace ~job_name ~configmap_name ~secret_name)
+    (fun () ->
+       (* Sol writes, before the Job runs, both the credentials the Job *consumes* (the
+         transient Secret) and the credentials consumers will consume (the output
+         Secrets). The Job produces the roles those credentials belong to; it does not
+         receive them. *)
+       let* () =
+         List.fold_left
+           (fun acc (what, doc) ->
+              let* () = acc in
+              apply_doc ~ctx ~what doc)
+           (Ok ())
+           ([ "transient secret", transient; "setup script", script ]
+            @ List.map (fun doc -> "output secret", doc) output_secrets)
+       in
+       let* () = apply_doc ~ctx ~what:"setup job" job_doc in
+       let* () = own_secret_with_job ~ctx ~namespace ~job_name ~secret_name in
+       let outcome =
+         Sol_cli_migration_job.wait
+           ~ctx
+           ~interval_s:wait_interval_s
+           ~attempts:wait_attempts
+           job
+       in
+       match outcome with
+       | Sol_cli_migration_job.Succeeded -> Ok ()
+       | Sol_cli_migration_job.Failed ->
+         Error
+           (Printf.sprintf
+              "database setup for %s failed; the roles were not created"
+              namespace)
+       | Sol_cli_migration_job.Timed_out _ ->
+         Error
+           (Printf.sprintf
+              "database setup for %s timed out; the roles may be partially created"
+              namespace)
+       | Sol_cli_migration_job.Unstartable { reason; detail } ->
+         Error
+           (Printf.sprintf
+              "database setup for %s could not start: %s%s"
+              namespace
+              reason
+              (match detail with
+               | Some d -> " (" ^ d ^ ")"
+               | None -> "")))
 ;;
