@@ -229,6 +229,51 @@ let test_gcp_outputs () =
     ]
 ;;
 
+(* The provider reader the deploy's database-setup step calls. It must not conflate "no
+   database was created" (null) with "the output could not be read" (error): the setup step
+   fails closed on both, but for different reasons and with different messages. *)
+let test_postgres_url_of_outputs () =
+  let with_url base value =
+    match base with
+    | `Assoc fields -> `Assoc (fields @ [ output "postgres_url" ~value ])
+    | _ -> assert false
+  in
+  let check ~provider ~base ~value ~msg expected =
+    match
+      Sol_cli_provider_registry.postgres_url_of_outputs
+        provider
+        (Yojson.Safe.to_string (with_url base value))
+    with
+    | Error failure ->
+      Windtrap.fail (Sol_cli_provider_registry.resolution_failure_to_string failure)
+    | Ok url -> Windtrap.equal (Windtrap.option Windtrap.string) ~msg expected url
+  in
+  check
+    ~provider:Sol_cli_provider.Aws
+    ~base:(valid_outputs ())
+    ~value:(`String "postgresql://postgres:master@db.internal:5432/app")
+    ~msg:"AWS reads postgres_url through the provider parser"
+    (Some "postgresql://postgres:master@db.internal:5432/app");
+  check
+    ~provider:Sol_cli_provider.Gcp
+    ~base:(valid_gcp_outputs ())
+    ~value:(`String "postgresql://postgres:master@db.internal:5432/app")
+    ~msg:"GCP dispatches to the GCP parser"
+    (Some "postgresql://postgres:master@db.internal:5432/app");
+  check
+    ~provider:Sol_cli_provider.Aws
+    ~base:(valid_outputs ())
+    ~value:`Null
+    ~msg:"a target that provisions no database is None, not an error"
+    None;
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"an unreadable output is an error, not None"
+    true
+    (Result.is_error
+       (Sol_cli_provider_registry.postgres_url_of_outputs Sol_cli_provider.Aws "not json"))
+;;
+
 let gcp_target () =
   { target with
     name = "prod/gcp/us-central1"
@@ -2060,6 +2105,11 @@ let test_terraform_scope () =
 let%test "contracts: strict AWS outputs" = test_outputs ()
 let%test "contracts: absent optional AWS outputs" = test_outputs_absent_optional ()
 let%test "contracts: strict GCP outputs" = test_gcp_outputs ()
+
+let%test "contracts: postgres_url reads through the provider parser" =
+  test_postgres_url_of_outputs ()
+;;
+
 let%test "contracts: provider-shaped platform variables" = test_platform_terraform_vars ()
 let%test "contracts: cluster identity check" = test_cluster_identity_check ()
 

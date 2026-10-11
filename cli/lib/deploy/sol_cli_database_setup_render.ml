@@ -48,6 +48,33 @@ let ca_mount_path = "/etc/sol/db-ca"
 let secret_name target = setup_name target
 let job_name target = setup_name target
 
+(** The output Secrets: what the classes consume after the Job, and what 2b delivers.
+
+    Two names, not one, because the classes are separate objects (ADR 0007 §4): a namespace
+    that needs both — the migration namespace is also usually a DML consumer — holds the
+    DDL and DML credentials in two Secrets rather than colliding on one [POSTGRES_URL] key.
+    The names are exported so the renderer and the test that asserts them share one
+    definition instead of two that can drift. *)
+let ddl_creds_name target = target ^ "-ddl-creds"
+
+let dml_creds_name target = target ^ "-dml-creds"
+
+(** One output Secret: a class's connection URL under the consumer key.
+
+    [POSTGRES_URL] is the same key the classes read today, so 2b's delivery selects the
+    Secret by class and changes nothing about what the workload reads. The value is the
+    derived URL ({!Sol_cli_database_setup_url}), never the master: the master lives only in
+    the transient Secret, which the coordinator deletes. *)
+let output_secret_doc ~ns ~name ~postgres_url =
+  resource
+    ~api_version:"v1"
+    ~kind:"Secret"
+    [ "metadata", metadata ~ns ~name
+    ; "type", Y.string "Opaque"
+    ; "stringData", Y.map [ "POSTGRES_URL", Y.quoted postgres_url ]
+    ]
+;;
+
 (** The transient Secret. It carries the master for the duration of one Job and is never
     part of a target's inputs.
 

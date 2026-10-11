@@ -139,7 +139,7 @@ let cleanup ~ctx ~namespace ~job_name ~configmap_name ~secret_name =
 ;;
 
 (** The namespaces that must receive the DML credential: one per unit that declares it
-    uses a `postgres` resource.
+    uses the Sol-provisioned `postgres` resource.
 
     This is the declared signal, not a resolved one. Deriving consumers from
     `POSTGRES_URL` in a unit's resolved secrets would not work today: `default_secrets`
@@ -147,16 +147,15 @@ let cleanup ~ctx ~namespace ~job_name ~configmap_name ~secret_name =
     namespace. It becomes meaningful only after 2b — and 2b is what consumes these
     Secrets, so the resolved signal cannot be what gates them.
 
-    `uses` already exists in the workspace model, and the plan already asks this exact
-    question for kafka ([service_uses_resource_type]), so nothing new is needed to
-    answer it for postgres. *)
-let dml_namespaces ~declared (plan : Sol_cli_deployment_plan.t) =
+    It names the resource, not the type, so a consumer of a *different*, externally bound
+    postgres resource is not handed a Sol-written credential: the external database is
+    responsible for its own roles, and only the Sol-provisioned one's consumers get the DML
+    credential. That ownership resolution already exists
+    ([Sol_cli_resource_binding.provisions]); this asks it once and passes the name. *)
+let dml_namespaces ~declared ~resource (plan : Sol_cli_deployment_plan.t) =
   plan.Sol_cli_deployment_plan.services
   |> List.filter (fun (spec : Sol_cli_deployment_plan.service_spec) ->
-    Sol_cli_deployment_plan.service_uses_resource_type
-      declared
-      spec.source_name
-      "postgres")
+    Sol_cli_deployment_plan.service_uses_resource declared spec.source_name resource)
   |> List.map (fun (spec : Sol_cli_deployment_plan.service_spec) ->
     Sol_cli_deployment_plan.namespace_to_string spec.namespace)
   |> List.sort_uniq String.compare

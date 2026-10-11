@@ -193,6 +193,11 @@ val service_uses_resource_type
   -> string
   -> bool
 
+(** Whether a declared service's [uses] names one specific resource. The database setup
+    step asks this, rather than the type form, so an externally bound database's consumers
+    are not written a Sol credential: only the Sol-provisioned resource's consumers are. *)
+val service_uses_resource : Sol_cli_config.declared option -> string -> string -> bool
+
 val resource_of_spec : service_spec -> string
 val external_secret_of_spec : service_spec -> (string * string) option
 val release_workload_of_spec : service_spec -> Sol_cli_release_id.workload

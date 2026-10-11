@@ -172,10 +172,21 @@ let substrate_prerequisite ctx ~plan ~live =
   then Ok ()
   else if live
   then
+    (* The substrate reads the cluster's database-egress fact and applies the allowance. It
+       must know whether this target provisions a database, because only then is an absent
+       fact a failure rather than "nothing to admit". That is the same ownership resolution
+       the database setup step and the Terraform variables use. *)
+    let* manages_database =
+      Sol_cli_resource_binding.resolve ctx.resolved_config
+      |> Result.map (fun bindings ->
+        Sol_cli_resource_binding.provisions bindings ~typ:"postgres")
+      |> Result.map_error (fun message -> Refused message)
+    in
     Sol_cli_substrate.ensure
       ~ctx:ctx.execution.cluster
       ~namespaces
       ~workloads:(plan_workloads plan)
+      ~manages_database
     |> Result.map_error (fun message -> Refused message)
   else
     Sol_cli_substrate.established ~ctx:ctx.execution.cluster ~namespaces
@@ -557,6 +568,7 @@ let run_lifecycle
       ~confirm_group_change
       ~present_plan
       ~gates
+      ~database_setup
       ~before_apply
       ~apply
       ~report_success
@@ -574,6 +586,10 @@ let run_lifecycle
        let* plan = observe_contract_in ~cluster ~workspace plan in
        let* () = present_plan plan in
        let* () = gates plan in
+       (* The database setup step runs after the prerequisite gates — including the
+          substrate it needs — and before the workloads, whose migration Jobs consume the
+          DDL role it creates. Under the lease, because it mutates the target. *)
+       let* () = database_setup () in
        record_plan run_log plan;
        let* () =
          confirm_consumer_groups ~ctx:cluster ~workspace ~confirm_group_change plan
@@ -633,6 +649,7 @@ let apply
       ~push_events
       ~report_success
       ~confirm_group_change
+      ?database_setup
       plan
   =
   let* () =
@@ -640,6 +657,7 @@ let apply
       ~on_refused:on_substrate_refused
       (substrate_prerequisite ctx ~plan ~live:true)
   in
+  let database_setup = Option.value database_setup ~default:(fun () -> Ok ()) in
   run_lifecycle
     ~cluster:ctx.execution.cluster
     ~workspace:ctx.execution.workspace
@@ -653,6 +671,7 @@ let apply
         run_gate ~on_refused:(fun _ -> ()) (migration_prerequisite ctx ~plan ~live:true)
       in
       effective_access ())
+    ~database_setup
     ~before_apply:(fun plan -> contract_reconciliation ctx plan)
     ~apply:(fun ~lease ~release_id:_ plan ->
       let* results =

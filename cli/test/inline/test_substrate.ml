@@ -71,6 +71,7 @@ let test_ensure_refuses_a_reserved_platform_namespace () =
       ~workloads:[]
       ~ctx:Sol_cli_kube_destination.local_context
       ~namespaces:[ "cert-manager" ]
+      ~manages_database:false
   with
   | Ok () -> Windtrap.fail "expected ensure to refuse a reserved platform namespace"
   | Error msg ->
@@ -109,11 +110,31 @@ for a in "$@"; do
   if [ "$prev" = "-f" ]; then file="$a"; fi
   prev="$a"
 done
+case "$*" in
+  *"get configmap sol-platform-network"*)
+    case "$EGRESS_FACT" in
+      present)
+        echo '{"data":{"database-egress-cidrs":"10.0.0.0/16","database-port":"5432"}}'
+        exit 0 ;;
+      forbidden)
+        echo 'Error from server (Forbidden): configmaps "sol-platform-network" is forbidden: cannot get resource "configmaps"' >&2
+        exit 1 ;;
+      *)
+        echo 'Error from server (NotFound): configmaps "sol-platform-network" not found' >&2
+        exit 1 ;;
+    esac ;;
+  *"get secret sol-secrets"*)
+    echo '{"data":{"POSTGRES_URL":"cG9zdGdyZXM="}}'
+    exit 0 ;;
+esac
 kind=other
 if [ -n "$file" ] && grep -q 'kind: Namespace' "$file" 2>/dev/null; then
   kind=Namespace
 fi
 printf '%%s %%s\n' "$verb" "$kind" >> %s
+if [ "$verb" = "apply" ] && [ -n "$file" ]; then
+  cat "$file" >> %s.manifests
+fi
 if [ "$kind" = "Namespace" ]; then
   if [ "$verb" = "apply" ]; then
     echo 'Error from server (Forbidden): namespaces "pluto-checkout" is forbidden:' \
@@ -128,9 +149,10 @@ fi
 exit 0
 |}
     log
+    log
 ;;
 
-let with_fake_kubectl f =
+let with_fake_kubectl ?(egress_fact = "absent") f =
   let dir = Filename.temp_file "sol-fake-kubectl-" "" in
   Sys.remove dir;
   Unix.mkdir dir 0o755;
@@ -145,12 +167,20 @@ let with_fake_kubectl f =
     | Not_found -> ""
   in
   Unix.putenv "PATH" (dir ^ ":" ^ old_path);
+  let old_egress_fact =
+    try Sys.getenv "EGRESS_FACT" with
+    | Not_found -> ""
+  in
+  Unix.putenv "EGRESS_FACT" egress_fact;
   Fun.protect
     ~finally:(fun () ->
       Unix.putenv "PATH" old_path;
+      Unix.putenv "EGRESS_FACT" old_egress_fact;
       (try Sys.remove bin with
        | _ -> ());
       (try Sys.remove log with
+       | _ -> ());
+      (try Sys.remove (log ^ ".manifests") with
        | _ -> ());
       try Unix.rmdir dir with
       | _ -> ())
@@ -243,6 +273,71 @@ let test_operator_bindings_cover_every_workload_namespace () =
       (Sol_cli_string.contains ~needle:"kind: Deployment" doc))
 ;;
 
+(* The database-egress fact. It used to be read with its errors collapsed to [None], so a
+   refused or absent ConfigMap looked exactly like "this target has no managed database":
+   the deploy proceeded and the workloads had no route to it. The two are now distinguished
+   by the target's ownership. *)
+let test_ensure_distinguishes_no_database_from_a_broken_fact () =
+  let run ~egress_fact ~manages_database =
+    with_fake_kubectl ~egress_fact (fun _log ->
+      S.ensure
+        ~workloads:[ "pluto-checkout", "checkout-svc" ]
+        ~ctx:Sol_cli_kube_destination.local_context
+        ~namespaces:[ "pluto-checkout" ]
+        ~manages_database)
+  in
+  (match run ~egress_fact:"absent" ~manages_database:true with
+   | Ok () ->
+     Windtrap.fail
+       "a managed database with no published egress fact must refuse the substrate"
+   | Error message ->
+     check_bool
+       "the refusal names the fact"
+       true
+       (Sol_cli_string.contains ~needle:"sol-platform-network" message);
+     check_bool
+       "the refusal says the workloads would have no route"
+       true
+       (Sol_cli_string.contains ~needle:"no route" message));
+  (match run ~egress_fact:"forbidden" ~manages_database:true with
+   | Ok () -> Windtrap.fail "a refused fact read must not pass as no database"
+   | Error message ->
+     check_bool
+       "the read error is preserved"
+       true
+       (Sol_cli_string.contains ~needle:"Forbidden" message));
+  match run ~egress_fact:"absent" ~manages_database:false with
+  | Ok () -> ()
+  | Error message ->
+    Windtrap.fail ("a target with no managed database needs no egress fact: " ^ message)
+;;
+
+let test_ensure_applies_the_published_allowance () =
+  with_fake_kubectl ~egress_fact:"present" (fun log ->
+    (match
+       S.ensure
+         ~workloads:[ "pluto-checkout", "checkout-svc" ]
+         ~ctx:Sol_cli_kube_destination.local_context
+         ~namespaces:[ "pluto-checkout" ]
+         ~manages_database:true
+     with
+     | Ok () -> ()
+     | Error message -> Windtrap.fail message);
+    let manifests =
+      try read_file (log ^ ".manifests") with
+      | Sys_error _ -> Windtrap.fail "the allowance was not applied"
+    in
+    check_bool
+      "the published range is admitted as an ipBlock"
+      true
+      (Sol_cli_string.contains ~needle:"ipBlock" manifests
+       && Sol_cli_string.contains ~needle:"10.0.0.0/16" manifests);
+    check_bool
+      "on the published port"
+      true
+      (Sol_cli_string.contains ~needle:"port: 5432" manifests))
+;;
+
 let%test "workspace substrate: namespace and RoleBindings only" =
   test_substrate_is_namespace_and_role_bindings_only ()
 ;;
@@ -266,4 +361,17 @@ let%test
      only"
   =
   test_operator_bindings_cover_every_workload_namespace ()
+;;
+
+let%test
+    "workspace substrate (FND-0075): a managed database with no egress fact fails \
+     closed, a target without one does not"
+  =
+  test_ensure_distinguishes_no_database_from_a_broken_fact ()
+;;
+
+let%test
+    "workspace substrate (FND-0075): the published egress range is applied as an ipBlock"
+  =
+  test_ensure_applies_the_published_allowance ()
 ;;

@@ -11,6 +11,15 @@ val of_root
   -> chdir:string
   -> (Sol_cli_cluster.t option, resolution_failure) result
 
+(** The provisioning configuration's [postgres_url] from a raw [terraform output -json]
+    body, read through the provider's own output parser. [Ok None] is a null output — no
+    database was created; [Error] is an unreadable output, which the database setup step
+    must not confuse with "no database". *)
+val postgres_url_of_outputs
+  :  Sol_cli_provider.t
+  -> string
+  -> (string option, resolution_failure) result
+
 val destruction
   :  Sol_cli_provider.t
   -> Sol_cli_destruction.context

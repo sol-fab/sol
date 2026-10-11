@@ -8,6 +8,9 @@ set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
 export REPO_ROOT="$root"
+# 2c's database setup step runs inside the deploy lifecycle and takes its image from the
+# operator: a digest-pinned public Postgres, since Sol publishes no setup image of its own.
+export SOL_SETUP_POSTGRES_IMAGE="postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d"
 sol="$(realpath "${1:-$root/_build/default/cli/bin/main.exe}")"
 real_sol="$sol"
 record_emitter="$(realpath "${2:-$root/_build/default/cli/test/print_release_record.exe}")"

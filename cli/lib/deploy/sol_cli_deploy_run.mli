@@ -84,6 +84,7 @@ val run_lifecycle
   -> confirm_group_change:bool
   -> present_plan:(Sol_cli_deployment_plan.t -> (unit, string) result)
   -> gates:(Sol_cli_deployment_plan.t -> (unit, string) result)
+  -> database_setup:(unit -> (unit, string) result)
   -> before_apply:(Sol_cli_deployment_plan.t -> (unit, string) result)
   -> apply:
        (lease:Sol_cli_boundary_lease.held
@@ -103,6 +104,7 @@ val apply
   -> push_events:(Sol_cli_deploy_event.t list -> unit)
   -> report_success:(Sol_cli_deployment_plan.t -> Sol_cli_executor.result list -> unit)
   -> confirm_group_change:bool
+  -> ?database_setup:(unit -> (unit, string) result)
   -> Sol_cli_deployment_plan.t
   -> (unit, string) result
 

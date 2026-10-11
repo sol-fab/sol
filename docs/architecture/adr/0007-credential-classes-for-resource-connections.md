@@ -156,13 +156,18 @@ cloud/cluster apply (database + network path)
   → workloads                      ← DML
 ```
 
-**The setup Job runs under the same NetworkPolicy as the workloads it precedes.** The egress rule that
-permits the database is the one created in the prerequisites phase, and the Job is subject to it exactly
-as a workload is — it is not exempt and does not carry a rule of its own. Consequently there is no case
-where a workload can reach the database and the setup step cannot: if the network path is not ready,
-neither can connect, and the setup step fails closed *before* any workload starts. The constraint is real
-but it is the same constraint the workloads already carry — which is why the step belongs after
-prerequisites rather than beside the cloud apply.
+**The setup Job reaches the database because no NetworkPolicy selects it.** The rendered policies —
+`network_policy_doc` and `managed_database_egress_doc` — are **pod-scoped**: their `podSelector` matches
+`app: <workload-name>`. That is deliberate, because an empty selector would make the namespace
+egress-default-deny for every pod in it (the invariant `internal/ci/check_managed_database_egress.py`
+guards). The setup Job's pod template carries no `app` label, so no policy selects it and Kubernetes
+leaves an unselected pod's egress unrestricted — the same reason the migration Job reaches the database
+today. It therefore needs no allowance of its own.
+
+This is a dependency on a default, not an exemption. A namespace-scoped default-deny egress policy would
+isolate the Job, and it would then need an explicit rule; nothing in Sol renders one today. The step still
+belongs after the prerequisites rather than beside the cloud apply, because it needs the namespace that
+phase creates; but the guarantee is "the Job is outside the workload policy", not "the Job runs under it".
 
 ## Consequences
 

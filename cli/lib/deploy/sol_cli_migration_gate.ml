@@ -67,7 +67,13 @@ type verification =
 
 let read_status ~ctx ~workspace ~dir ~table ~services =
   let* namespace = Sol_cli_migration_job.job_namespace ~workspace ~services in
-  let* () = Sol_cli_substrate.ensure ~ctx ~namespaces:[ namespace ] ~workloads:[] in
+  let* () =
+    Sol_cli_substrate.ensure
+      ~ctx
+      ~namespaces:[ namespace ]
+      ~workloads:[]
+      ~manages_database:false
+  in
   let* image = Sol_cli_migration_job.runner_image () in
   let* files = migration_files dir in
   let* job =

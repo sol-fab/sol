@@ -224,10 +224,11 @@ let run_set target address from_stdin from_file =
   let* address = parse_secret_address address in
   let* config = load_target target in
   let* facts = Sol_cli_workspace_model.load_cwd () in
-  let* workspace =
-    Sol_cli_workspace.resolve_validated ~dir:(Sys.getcwd ())
-    |> Result.map_error Sol_cli_workspace.workspace_error_to_string
-  in
+  (* The namespace is "<workspace-name>-<domain>", where the name is the workspace directory's
+     basename — the same value every other command uses (`current_name`). Passing the resolved
+     root instead made the name an absolute path, so the namespace started with "/" and the
+     whole `sol secret set` flow failed validation. *)
+  let workspace = Sol_cli_workspace.current_name () in
   let* ctx = destination_context config in
   let* destination =
     match address with

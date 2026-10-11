@@ -1450,7 +1450,39 @@ let test_database_setup_sql_is_idempotent () =
     Windtrap.bool
     ~msg:"objects the migration creates default to the DML role"
     true
-    (setup_mentions "ALTER DEFAULT PRIVILEGES FOR ROLE" sql)
+    (setup_mentions "ALTER DEFAULT PRIVILEGES FOR ROLE" sql);
+  (* Upstream requires membership in the role whose default privileges are altered, and a
+     Cloud SQL admin is [cloudsqlsuperuser], not a true superuser. Without the membership
+     grant the whole script dies at the first ALTER DEFAULT PRIVILEGES — observed live on
+     GCP, after the roles themselves were created. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the admin joins the DDL role, so it may alter that role's default privileges"
+    true
+    (setup_mentions "GRANT sol_migrator TO CURRENT_USER" sql);
+  let substring_index haystack needle =
+    let n = String.length haystack
+    and m = String.length needle in
+    let rec loop i =
+      if i + m > n
+      then None
+      else if String.sub haystack i m = needle
+      then Some i
+      else loop (i + 1)
+    in
+    loop 0
+  in
+  match
+    ( substring_index sql "GRANT sol_migrator TO CURRENT_USER"
+    , substring_index sql "ALTER DEFAULT PRIVILEGES FOR ROLE" )
+  with
+  | Some grant_at, Some alter_at ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"and joins it before altering its default privileges"
+      true
+      (grant_at < alter_at)
+  | _ -> Windtrap.fail "the membership grant or the default-privilege grants are missing"
 ;;
 
 let%test "database setup: the image must be a digest reference" =
@@ -1571,6 +1603,20 @@ let%test "database setup render: the Job is fail-closed and mounted empty of the
 
 let%test "database setup render: credentials live only in the transient Secret" =
   test_database_setup_keeps_credentials_out_of_the_job ()
+;;
+
+(* How the setup Job reaches the database. The workload NetworkPolicies are pod-scoped by
+   design (an empty podSelector would make the namespace egress-default-deny for every pod
+   in it); the Job's pod template carries no `app` label, so no policy selects it and
+   Kubernetes leaves its egress unrestricted — the same reason the migration Job reaches the
+   database today. If this Job ever gains a matching label it becomes selected and would
+   need its own allowance, so the absence is pinned here. *)
+let%test "database setup render: the Job is outside the workload egress policy" =
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the setup Job carries no workload `app` label, so no NetworkPolicy selects it"
+    false
+    (setup_mentions "app:" (render_setup ()))
 ;;
 
 (* The sequence, against a fake kubectl. This is where the master leaks, so these are the
@@ -1831,4 +1877,148 @@ let%test "database setup url: credentials substituted, query parameters preserve
     ~msg:"host and database are untouched"
     true
     (setup_mentions "db.internal:5432/app" ddl)
+;;
+
+(* The output Secrets: one per class, named by the shared constants, carrying the derived
+   URL and never the master. *)
+let%test "database setup render: the class Secrets carry the derived URL, not the master" =
+  let ddl_url = "postgresql://sol_migrator:ddl-pw@db.internal:5432/app?sslmode=require" in
+  let dml_url = "postgresql://sol_app:dml-pw@db.internal:5432/app?sslmode=require" in
+  let render ~name url =
+    Sol_cli_yaml.render
+      [ Sol_cli_database_setup_render.output_secret_doc
+          ~ns:"myapp-payments"
+          ~name
+          ~postgres_url:url
+      ]
+  in
+  let ddl =
+    render ~name:(Sol_cli_database_setup_render.ddl_creds_name "payments") ddl_url
+  in
+  let dml =
+    render ~name:(Sol_cli_database_setup_render.dml_creds_name "payments") dml_url
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the DDL Secret is named by the shared constant"
+    true
+    (setup_mentions "payments-ddl-creds" ddl);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the DML Secret is named by the shared constant"
+    true
+    (setup_mentions "payments-dml-creds" dml);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the two classes do not share a name"
+    false
+    (String.equal
+       (Sol_cli_database_setup_render.ddl_creds_name "payments")
+       (Sol_cli_database_setup_render.dml_creds_name "payments"));
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the DDL Secret carries the DDL URL under POSTGRES_URL"
+    true
+    (setup_mentions ddl_url ddl);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the DML Secret carries the DML URL"
+    true
+    (setup_mentions dml_url dml);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the master is nowhere in the output Secrets"
+    false
+    (setup_mentions "postgres:master" (ddl ^ dml))
+;;
+
+(* The ownership gate and the namespace scoping are the two decisions that keep an
+   externally bound database out of Sol's DDL/DML credential writing. Both are asked of
+   the resolution that already exists; these assert the answers the wiring depends on. *)
+let%test
+    "database setup: only a Sol-provisioned postgres runs the step, scoped by resource \
+     name"
+  =
+  let binding ~ownership ~typ ~resource =
+    { Sol_cli_resource_binding.resource
+    ; typ
+    ; ownership
+    ; store = None
+    ; keys = []
+    ; connection = []
+    }
+  in
+  let open Sol_cli_config in
+  let sol = binding ~ownership:Ownership_sol ~typ:"postgres" ~resource:"app_db" in
+  let externally_bound =
+    binding ~ownership:Ownership_external ~typ:"postgres" ~resource:"reports_db"
+  in
+  Windtrap.equal
+    (Windtrap.option Windtrap.string)
+    ~msg:"a Sol-owned postgres resource is the provisioned database"
+    (Some "app_db")
+    (Option.map
+       (fun b -> b.Sol_cli_resource_binding.resource)
+       (Sol_cli_resource_binding.provisioned_database [ sol ]));
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"an externally bound postgres resource is not provisioned"
+    false
+    (Sol_cli_resource_binding.provisions ~typ:"postgres" [ externally_bound ]);
+  Windtrap.equal
+    (Windtrap.option Windtrap.string)
+    ~msg:"an externally bound postgres resource is not the provisioned database"
+    None
+    (Option.map
+       (fun b -> b.Sol_cli_resource_binding.resource)
+       (Sol_cli_resource_binding.provisioned_database [ externally_bound ]));
+  let service name uses =
+    { name
+    ; typ = None
+    ; path = None
+    ; uses
+    ; scale_min = None
+    ; scale_max = None
+    ; language = None
+    ; omit = false
+    }
+  in
+  let resource name =
+    { name
+    ; typ = Some "postgres"
+    ; partition_key = None
+    ; sort_key = None
+    ; indexes = []
+    ; size = None
+    ; omit = false
+    ; binding = None
+    }
+  in
+  let declared =
+    { services =
+        [ service "pool_consumer" [ "app_db" ]
+        ; service "external_consumer" [ "reports_db" ]
+        ]
+    ; resources = [ resource "app_db"; resource "reports_db" ]
+    ; profile = None
+    }
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"a consumer of the Sol-provisioned resource is included"
+    true
+    (Sol_cli_deployment_plan.service_uses_resource
+       (Some declared)
+       "pool_consumer"
+       "app_db");
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:
+      "a consumer of an external resource is excluded from the provisioned resource's \
+       DML set"
+    false
+    (Sol_cli_deployment_plan.service_uses_resource
+       (Some declared)
+       "external_consumer"
+       "app_db")
 ;;

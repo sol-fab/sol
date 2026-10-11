@@ -628,6 +628,20 @@ let service_uses_resource_type declared service_name typ =
              resource.name = name && resource.typ = Some typ)))
 ;;
 
+let service_uses_resource declared service_name resource_name =
+  match declared with
+  | None -> false
+  | Some cfg ->
+    (match
+       cfg.Sol_cli_config.services
+       |> List.find_opt (fun (service : Sol_cli_config.service) ->
+         service.name = service_name)
+     with
+     | None -> false
+     | Some service ->
+       List.exists (fun ref -> resource_name_of_ref ref = Some resource_name) service.uses)
+;;
+
 let derive_consumer_groups ?declared workspace services =
   List.filter_map
     (fun s ->
