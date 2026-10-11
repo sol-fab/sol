@@ -41,11 +41,13 @@ let setup_name target = target ^ "-db-setup"
 let script_name target = target ^ "-db-setup-script"
 
 (** Where the database CA is mounted: the trust anchor [sslmode=verify-full] verifies the
-    endpoint against ({!ca_cert_path} is what the connection URL names). *)
-let ca_mount_path = "/etc/sol/db-ca"
+    endpoint against ({!ca_cert_path} is what the connection URL names). Defined once, with
+    the manifest's other mount contracts: the setup Job, the workload pods and the URL must
+    all name the same path. *)
+let ca_mount_path = Sol_cli_manifest_cluster_env.db_ca_mount_path
 
-let ca_file_name = "ca.pem"
-let ca_cert_path = ca_mount_path ^ "/" ^ ca_file_name
+let ca_file_name = Sol_cli_manifest_cluster_env.db_ca_file_name
+let ca_cert_path = Sol_cli_manifest_cluster_env.db_ca_file
 
 (** The database CA, as a ConfigMap. A provider's public root is not a secret, so a
     ConfigMap is the right object rather than a Secret. The same name is mounted by the

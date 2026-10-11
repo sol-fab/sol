@@ -11,6 +11,8 @@ val plan_of_services
   -> ?declared:Sol_cli_config.declared
   -> ?image_refs:(string * string) list
   -> ?inventory:Sol_cli_manifest.service list
+  -> ?target:string
+  -> ?provisioned_database:string
   -> Sol_cli_manifest.service list
   -> (Sol_cli_deployment_plan.t, string) result
 
@@ -25,6 +27,8 @@ type request =
   { env : Sol_cli_deployment_plan.env_config
   ; requested_scope : string option
   ; declared : Sol_cli_config.declared option
+  ; target : string option
+  ; provisioned_database : string option
   }
 
 val run

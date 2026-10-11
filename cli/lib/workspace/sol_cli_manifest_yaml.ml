@@ -53,6 +53,11 @@ module Workload_spec = struct
     ; domain : string
     ; primitive : string
     ; release_id : Sol_cli_release_id.t
+    ; (* 2d: the CA ConfigMap to mount when this unit consumes a Sol-provisioned database,
+         so the pod can run `sslmode=verify-full`. [None] when it consumes none. The mount
+         is **prep**: nothing reads the anchor until 2b switches the unit's reader to its
+         already-parameterized class Secret, so that switch does not also add the mount. *)
+      db_ca_configmap : string option
     }
 end
 
@@ -406,6 +411,7 @@ let pod_template
       ; domain
       ; primitive
       ; release_id
+      ; db_ca_configmap
       ; _
       }
   =
@@ -514,6 +520,16 @@ let pod_template
       ]
     else []
   in
+  let db_ca_volumes =
+    match db_ca_configmap with
+    | None -> []
+    | Some configmap ->
+      [ Y.map
+          [ "name", Y.string db_ca_volume
+          ; "configMap", Y.map [ "name", Y.string configmap ]
+          ]
+      ]
+  in
   let kafka_ca_mount =
     if kafka_tls
     then
@@ -525,6 +541,20 @@ let pod_template
       ]
     else []
   in
+  (* 2d: the database CA. Mounted only by units that consume the Sol-provisioned database,
+     because only their namespaces hold the ConfigMap the deploy writes. **Prep**: the
+     anchor is inert until 2b points the unit at its already-parameterized class Secret. *)
+  let db_ca_mount =
+    match db_ca_configmap with
+    | None -> []
+    | Some _ ->
+      [ Y.map
+          [ "name", Y.string db_ca_volume
+          ; "mountPath", Y.string db_ca_mount_path
+          ; "readOnly", Y.bool true
+          ]
+      ]
+  in
   let container =
     Y.map
       ([ "name", Y.string name
@@ -535,7 +565,7 @@ let pod_template
        ]
        @ non_empty_list
            "volumeMounts"
-           (volume_mounts @ projected_identity_mounts @ kafka_ca_mount)
+           (volume_mounts @ projected_identity_mounts @ kafka_ca_mount @ db_ca_mount)
        @ non_empty_list "env" (secret_key_refs ~name ~secret_sources secret_keys)
        @ [ "envFrom", env_from ~name; "resources", resources ~cpu ~memory ]
        @ probes ~shape ~consumes_kafka ~readiness_path)
@@ -551,7 +581,10 @@ let pod_template
            @ spread
            @ non_empty_list
                "volumes"
-               (pod_volumes @ projected_identity_volumes @ kafka_ca_volumes)
+               (pod_volumes
+                @ projected_identity_volumes
+                @ kafka_ca_volumes
+                @ db_ca_volumes)
            @ [ "containers", Y.list [ container ] ]) )
     ]
 ;;
@@ -835,6 +868,9 @@ module Scheduled_workload_spec = struct
     ; workspace : string
     ; domain : string
     ; release_id : Sol_cli_release_id.t
+    ; (* 2d: see {!Workload_spec.db_ca_configmap}; a scheduled unit consumes the database
+         the same way a service does. *)
+      db_ca_configmap : string option
     }
 end
 
@@ -856,6 +892,7 @@ let cronjob_doc (workload : Scheduled_workload_spec.t) =
       ; workspace
       ; domain
       ; release_id
+      ; db_ca_configmap
       }
     =
     workload
@@ -913,8 +950,19 @@ let cronjob_doc (workload : Scheduled_workload_spec.t) =
       ]
     else []
   in
+  let db_ca_mounts =
+    match db_ca_configmap with
+    | None -> []
+    | Some _ ->
+      [ Y.map
+          [ "name", Y.string db_ca_volume
+          ; "mountPath", Y.string db_ca_mount_path
+          ; "readOnly", Y.bool true
+          ]
+      ]
+  in
   let kafka_ca =
-    match kafka_ca_mounts @ projected_identity_mounts with
+    match kafka_ca_mounts @ db_ca_mounts @ projected_identity_mounts with
     | [] -> []
     | mounts -> [ "volumeMounts", Y.list mounts ]
   in
@@ -940,8 +988,18 @@ let cronjob_doc (workload : Scheduled_workload_spec.t) =
       ]
     else []
   in
+  let db_ca_volume_items =
+    match db_ca_configmap with
+    | None -> []
+    | Some configmap ->
+      [ Y.map
+          [ "name", Y.string db_ca_volume
+          ; "configMap", Y.map [ "name", Y.string configmap ]
+          ]
+      ]
+  in
   let kafka_ca_volumes =
-    match kafka_ca_volume_items @ projected_identity_volumes with
+    match kafka_ca_volume_items @ db_ca_volume_items @ projected_identity_volumes with
     | [] -> []
     | volumes -> [ "volumes", Y.list volumes ]
   in

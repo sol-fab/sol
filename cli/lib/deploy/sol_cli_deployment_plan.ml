@@ -67,6 +67,13 @@ type service_spec =
   ; called_by : service_call list
   ; extra_labels : (string * string) list
   ; progressive_delivery : Sol_cli_toml.progressive_delivery option
+  ; (* 2d: the target whose Sol-provisioned database this unit consumes, if any. The
+       semantic fact — *this* unit reads *that* target's database — not a resource name: the
+       renderer derives the CA ConfigMap's name from it
+       ({!Sol_cli_database_setup_render.ca_configmap_name}), so the plan never names an
+       object the renderer owns. [None] for a unit that consumes no database, or one bound
+       to an external database Sol does not write credentials for. *)
+    db_ca_target : string option
   }
 
 type profile_claim =
@@ -1000,8 +1007,20 @@ let of_services_result
       ?declared
       ?(image_refs = [])
       ?inventory
+      ?target
+      ?provisioned_database
       services
   =
+  (* 2d: a unit gets a CA mount when it consumes the database *this target provisions*, so
+     the two facts are read together. An externally bound database is deliberately not
+     this: its consumers read a credential Sol never wrote, and mounting an anchor the
+     deploy will not publish would wedge their pods on a missing ConfigMap. *)
+  let db_ca_target service_name =
+    match target, provisioned_database with
+    | Some target, Some resource when service_uses_resource declared service_name resource
+      -> Some target
+    | _ -> None
+  in
   let platform_shape =
     Sol_cli_profile.platform_shape
       (match declared with
@@ -1207,6 +1226,7 @@ let of_services_result
       ; called_by = []
       ; extra_labels = toml.extra_labels
       ; progressive_delivery = toml.progressive_delivery
+      ; db_ca_target = db_ca_target svc.Sol_cli_manifest.name
       }
     in
     let* () = validate_persistence spec in

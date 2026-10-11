@@ -23,6 +23,15 @@ let kafka_transport_of_config config =
 let kafka_ca_mount_path = "/etc/sol/kafka"
 let kafka_ca_file = kafka_ca_mount_path ^ "/ca.crt"
 let kafka_ca_volume = "kafka-ca"
+
+(* 2d: the managed database's CA. Declared once because three things must name the same
+   path — the ConfigMap key the deploy writes, the mount every consumer pod gets, and the
+   `sslrootcert` its connection URL carries. The DB CA is Kafka's counterpart: a trust
+   anchor the deploy distributes to the cluster, not a per-secret value. *)
+let db_ca_mount_path = "/etc/sol/db-ca"
+let db_ca_file_name = "ca.pem"
+let db_ca_file = db_ca_mount_path ^ "/" ^ db_ca_file_name
+let db_ca_volume = "db-ca"
 let kafka_ca_secret_key = "KAFKA_SSL_CA_CERT"
 let kafka_sasl_password_key = "KAFKA_SASL_PASSWORD"
 let kafka_sasl_username = "sol-workloads"

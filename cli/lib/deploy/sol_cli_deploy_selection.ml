@@ -206,6 +206,17 @@ let plan (input : Planning_input.t) =
         Option.value config.target.cluster_issuer ~default:"letsencrypt-prod"
     }
   in
+  (* 2d: the plan carries the target's sanitized identity and whether Sol provisions the
+     database; the renderer derives any object name from both. Resolving ownership here,
+     once, keeps the plan free of the binding resolution. *)
+  let target = Sol_cli_kubernetes_name.sanitize_name config.target.name in
+  let* provisioned_database =
+    Sol_cli_resource_binding.resolve config
+    |> Result.map (fun bindings ->
+      Sol_cli_resource_binding.provisioned_database bindings
+      |> Option.map (fun (database : Sol_cli_resource_binding.t) -> database.resource))
+    |> refused
+  in
   let* plan =
     Sol_cli_factory.plan_of_services
       ~workspace
@@ -215,6 +226,8 @@ let plan (input : Planning_input.t) =
       ~declared:(Sol_cli_config.declared_of_config config)
       ~image_refs
       ~inventory
+      ~target
+      ?provisioned_database
       services
     |> refused
   in
