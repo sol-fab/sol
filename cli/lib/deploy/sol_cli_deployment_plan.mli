@@ -183,6 +183,16 @@ val primitive_to_string : primitive -> string
 val primitive_of_string : string -> (primitive, string) result
 val effective_rollout_strategy : service_spec -> effective_rollout_strategy
 val effective_rollout_strategy_to_string : effective_rollout_strategy -> string
+
+(** Whether a declared service uses a resource of [typ], read from its [uses]
+    declaration. Already asked for kafka; the database setup step asks it for postgres to
+    find the namespaces that receive the DML credential. *)
+val service_uses_resource_type
+  :  Sol_cli_config.declared option
+  -> string
+  -> string
+  -> bool
+
 val resource_of_spec : service_spec -> string
 val external_secret_of_spec : service_spec -> (string * string) option
 val release_workload_of_spec : service_spec -> Sol_cli_release_id.workload

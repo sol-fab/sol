@@ -138,6 +138,30 @@ let cleanup ~ctx ~namespace ~job_name ~configmap_name ~secret_name =
   | exn -> Sol_cli_report.warn "warning: cleanup raised: %s" (Printexc.to_string exn)
 ;;
 
+(** The namespaces that must receive the DML credential: one per unit that declares it
+    uses a `postgres` resource.
+
+    This is the declared signal, not a resolved one. Deriving consumers from
+    `POSTGRES_URL` in a unit's resolved secrets would not work today: `default_secrets`
+    still adds `POSTGRES_URL` to *every* unit, so that enumeration would name every
+    namespace. It becomes meaningful only after 2b — and 2b is what consumes these
+    Secrets, so the resolved signal cannot be what gates them.
+
+    `uses` already exists in the workspace model, and the plan already asks this exact
+    question for kafka ([service_uses_resource_type]), so nothing new is needed to
+    answer it for postgres. *)
+let dml_namespaces ~declared (plan : Sol_cli_deployment_plan.t) =
+  plan.Sol_cli_deployment_plan.services
+  |> List.filter (fun (spec : Sol_cli_deployment_plan.service_spec) ->
+    Sol_cli_deployment_plan.service_uses_resource_type
+      declared
+      spec.source_name
+      "postgres")
+  |> List.map (fun (spec : Sol_cli_deployment_plan.service_spec) ->
+    Sol_cli_deployment_plan.namespace_to_string spec.namespace)
+  |> List.sort_uniq String.compare
+;;
+
 let wait_interval_s = 2.
 
 (** 300s, matching the migration Job ([cmd_migrate], [Sol_cli_contract]) rather than the
