@@ -333,6 +333,8 @@ let no_deploy_identity_lines ~target ~infra_dir =
   @ [ ""; Printf.sprintf "Then re-run `sol deploy %s`." target ]
 ;;
 
+(** Resolve the destination, and carry the reconciled environment's root directory out with
+    it: the database setup step reads the provisioning connection from that root's outputs. *)
 let environment_destination ~target ~cluster ~infra_dir =
   match cluster with
   | None ->
@@ -347,7 +349,7 @@ let environment_destination ~target ~cluster ~infra_dir =
             target))
   | Some cluster ->
     (match cluster.Sol_cli_cluster.deploy_access () with
-     | Ok (Some destination) -> Ok destination
+     | Ok (Some destination) -> Ok (destination, infra_dir)
      | Ok None ->
        eprint_guided (no_deploy_identity_lines ~target ~infra_dir);
        Error (Sol_cli_exit.reported ~code:1 ())
@@ -494,6 +496,13 @@ let reconcile_environment_for_deploy
       (Sol_cli_exit.failure ("\n" ^ Sol_cli_environment_stage.failure_to_string failure))
 ;;
 
+(** The destination, whether this run established the environment, and — when it did — the
+    root directory it reconciled.
+
+    The root directory is [None] on every path that did not reconcile an environment: a
+    target whose destination is already declared and reachable. There is no provisioning
+    root to read there, which the database setup step treats as "nothing to reconcile",
+    not as an absent database. *)
 let destination_or_environment_stage
       ~planning
       ~target
@@ -512,10 +521,10 @@ let destination_or_environment_stage
     | None -> false
   in
   let first_run () =
-    let* destination =
+    let* destination, infra_dir =
       first_run ~target ~target_cfg ~action ~await_delegation ~run_log ()
     in
-    Ok (destination, true)
+    Ok (destination, true, Some infra_dir)
   in
   if
     action = Sol_cli_command_request.Deploy_apply
@@ -528,12 +537,12 @@ let destination_or_environment_stage
       ~await_delegation
       ~confirm_ecr_removal
       ()
-    |> Result.map (fun destination -> destination, true)
+    |> Result.map (fun (destination, infra_dir) -> destination, true, Some infra_dir)
   else (
     match Sol_cli_config.destination_of_target target_cfg with
-    | Ok destination when not (allow_setup action) -> Ok (destination, false)
+    | Ok destination when not (allow_setup action) -> Ok (destination, false, None)
     | Ok destination when Sol_cli_target_report.context_is_configured destination ->
-      Ok (destination, false)
+      Ok (destination, false, None)
     | Ok _ -> first_run ()
     | Error message when declared_context -> Error (Sol_cli_exit.error message)
     | Error _ when allow_setup action -> first_run ()
@@ -653,6 +662,144 @@ let check_effective_access
   |> Result.map_error (fun (failure : Sol_cli_exit.failure) -> failure.text)
 ;;
 
+(** The refusal ADR 0007 condition 6 exists to make loud: a target that declares a
+    Sol-provisioned database must take its master from the cluster root's output, never from
+    an operator's environment. Stated in full on every path where it can fail, because the
+    fallback this replaces — [ensure_postgres_url] reading [POSTGRES_URL] — is exactly the
+    manual copy the condition removes. *)
+let database_master_unavailable ~target detail =
+  Printf.sprintf
+    "could not obtain the database master for target %s from the cluster output: %s.\n\
+     ADR 0007 condition 6: a Sol-provisioned database's master is delivered from the \
+     cluster root's `postgres_url` output, not from an operator's POSTGRES_URL \
+     environment variable. Fix the output (or re-run the environment reconcile) and \
+     retry; Sol does not fall back to POSTGRES_URL."
+    target
+    detail
+;;
+
+(** The 2c database setup step, run once per target between the deploy prerequisites and the
+    workloads. It is a no-op unless the target provisions its own database:
+
+    - no postgres resource, or one that is externally bound: nothing to do. An external
+      database owns its own roles; Sol writing DDL/DML credentials for it would invent a
+      contract the external authority never agreed to.
+    - a Sol-provisioned postgres resource: the master must come from the cluster root's
+      [postgres_url] output. A run that did not reconcile the environment, an unreadable
+      output, and a null output are all failures — never a silent fallback.
+
+    The credentials land in the two class Secrets ([Sol_cli_database_setup_render]): DDL in
+    the migration namespace, DML in each namespace that consumes this resource. The master
+    itself lives only in the Job's transient Secret, which the coordinator deletes. *)
+let run_database_setup_step
+      ~(planning : Sol_cli_deploy_selection.Target_plan_input.t)
+      ~ctx
+      ~infra_dir
+      ~plan
+  =
+  let open Result.Syntax in
+  (* [target.name] is the resolved target path ([<env>/<provider>/<region>]), which is not a
+     Kubernetes name: the setup Job, its Secret and the output Secrets are named from a
+     sanitized form. The path itself stays in the diagnostics. *)
+  let target_path =
+    planning.Sol_cli_deploy_selection.Target_plan_input.config.target.name
+  in
+  let target = Sol_cli_kubernetes_name.sanitize_name target_path in
+  let* bindings =
+    Sol_cli_resource_binding.resolve planning.config
+    |> Result.map_error (fun message ->
+      Printf.sprintf
+        "could not resolve resource ownership for the database setup step: %s"
+        message)
+  in
+  match Sol_cli_resource_binding.provisioned_database bindings with
+  | None -> Ok ()
+  | Some (database : Sol_cli_resource_binding.t) ->
+    let* master_url =
+      match infra_dir with
+      | None ->
+        Error
+          (database_master_unavailable
+             ~target
+             "this run did not reconcile the environment, so there is no cluster root to \
+              read")
+      | Some infra_dir ->
+        let* output =
+          Sol_cli_terraform.output_json ~chdir:infra_dir ()
+          |> Result.map_error (fun error ->
+            database_master_unavailable
+              ~target
+              (Printf.sprintf
+                 "reading the cluster output failed: %s"
+                 (Sol_cli_process.error_to_string error)))
+        in
+        let* postgres_url =
+          Sol_cli_provider_registry.postgres_url_of_outputs
+            planning.config.target.provider
+            output.Sol_cli_process.stdout
+          |> Result.map_error (fun failure ->
+            database_master_unavailable
+              ~target
+              (Printf.sprintf
+                 "parsing the cluster output failed: %s"
+                 (Sol_cli_provider_registry.resolution_failure_to_string failure)))
+        in
+        (match postgres_url with
+         | Some url -> Ok url
+         | None ->
+           Error
+             (database_master_unavailable
+                ~target
+                "the `postgres_url` output is null, so the provisioning configuration \
+                 reports no database"))
+    in
+    let* image =
+      Sol_cli_database_setup.setup_image ()
+      |> Result.map_error (fun message ->
+        "the database setup image could not be resolved: " ^ message)
+    in
+    let* migration_namespace =
+      Sol_cli_migration_job.job_namespace
+        ~workspace:planning.workspace
+        ~services:planning.services
+    in
+    let ddl_password = Sol_cli_database_setup_password.generate () in
+    let dml_password = Sol_cli_database_setup_password.generate () in
+    let ddl_url = Sol_cli_database_setup_url.ddl ~password:ddl_password master_url in
+    let dml_url = Sol_cli_database_setup_url.dml ~password:dml_password master_url in
+    let declared = Sol_cli_config.declared_of_config planning.config in
+    let dml_namespaces =
+      Sol_cli_database_setup_run.dml_namespaces
+        ~declared:(Some declared)
+        ~resource:database.resource
+        plan
+    in
+    let ddl_secret =
+      Sol_cli_database_setup_render.output_secret_doc
+        ~ns:migration_namespace
+        ~name:(Sol_cli_database_setup_render.ddl_creds_name target)
+        ~postgres_url:ddl_url
+    in
+    let dml_secrets =
+      List.map
+        (fun ns ->
+           Sol_cli_database_setup_render.output_secret_doc
+             ~ns
+             ~name:(Sol_cli_database_setup_render.dml_creds_name target)
+             ~postgres_url:dml_url)
+        dml_namespaces
+    in
+    Sol_cli_database_setup_run.run
+      ~ctx
+      ~namespace:migration_namespace
+      ~target
+      ~master_url
+      ~ddl_password
+      ~dml_password
+      ~image
+      ~output_secrets:(ddl_secret :: dml_secrets)
+;;
+
 let run_apply
       ~planning
       ~context_of
@@ -680,7 +827,7 @@ let run_apply
       ~image_refs:planning.Sol_cli_deploy_selection.Target_plan_input.image_refs
     |> Sol_cli_exit.of_msg
   in
-  let* destination, established =
+  let* destination, established, infra_dir =
     destination_or_environment_stage
       ~planning
       ~target
@@ -716,6 +863,9 @@ let run_apply
   in
   let ctx : Sol_cli_deploy_run.context = context_of ~destination in
   let* plan = project_trusted_workload_issuer ctx.target_cfg plan in
+  let database_setup () =
+    run_database_setup_step ~planning ~ctx:ctx.execution.cluster ~infra_dir ~plan
+  in
   Sol_cli_deploy_run.apply
     ctx
     ~present_plan:(present_plan ctx)
@@ -730,6 +880,7 @@ let run_apply
           ~await_delegation
         |> ignore)
     ~confirm_group_change
+    ~database_setup
     ~push_events:
       (push_deploy_events
          ~ctx:ctx.execution.cluster
@@ -830,7 +981,7 @@ let run (req : Sol_cli_command_request.deploy_request) =
       ~await_delegation
       ()
   | Deploy_dry_run { emit_to } ->
-    let* destination, _ =
+    let* destination, _, _ =
       destination_or_environment_stage
         ~planning
         ~target:req.target
@@ -842,7 +993,7 @@ let run (req : Sol_cli_command_request.deploy_request) =
     in
     run_dry_run (context_of ~destination) ~emit_to ~await_delegation
   | Deploy_emit_to dir ->
-    let* destination, _ =
+    let* destination, _, _ =
       destination_or_environment_stage
         ~planning
         ~target:req.target

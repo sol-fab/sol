@@ -1832,3 +1832,147 @@ let%test "database setup url: credentials substituted, query parameters preserve
     true
     (setup_mentions "db.internal:5432/app" ddl)
 ;;
+
+(* The output Secrets: one per class, named by the shared constants, carrying the derived
+   URL and never the master. *)
+let%test "database setup render: the class Secrets carry the derived URL, not the master" =
+  let ddl_url = "postgresql://sol_migrator:ddl-pw@db.internal:5432/app?sslmode=require" in
+  let dml_url = "postgresql://sol_app:dml-pw@db.internal:5432/app?sslmode=require" in
+  let render ~name url =
+    Sol_cli_yaml.render
+      [ Sol_cli_database_setup_render.output_secret_doc
+          ~ns:"myapp-payments"
+          ~name
+          ~postgres_url:url
+      ]
+  in
+  let ddl =
+    render ~name:(Sol_cli_database_setup_render.ddl_creds_name "payments") ddl_url
+  in
+  let dml =
+    render ~name:(Sol_cli_database_setup_render.dml_creds_name "payments") dml_url
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the DDL Secret is named by the shared constant"
+    true
+    (setup_mentions "payments-ddl-creds" ddl);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the DML Secret is named by the shared constant"
+    true
+    (setup_mentions "payments-dml-creds" dml);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the two classes do not share a name"
+    false
+    (String.equal
+       (Sol_cli_database_setup_render.ddl_creds_name "payments")
+       (Sol_cli_database_setup_render.dml_creds_name "payments"));
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the DDL Secret carries the DDL URL under POSTGRES_URL"
+    true
+    (setup_mentions ddl_url ddl);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the DML Secret carries the DML URL"
+    true
+    (setup_mentions dml_url dml);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the master is nowhere in the output Secrets"
+    false
+    (setup_mentions "postgres:master" (ddl ^ dml))
+;;
+
+(* The ownership gate and the namespace scoping are the two decisions that keep an
+   externally bound database out of Sol's DDL/DML credential writing. Both are asked of
+   the resolution that already exists; these assert the answers the wiring depends on. *)
+let%test
+    "database setup: only a Sol-provisioned postgres runs the step, scoped by resource \
+     name"
+  =
+  let binding ~ownership ~typ ~resource =
+    { Sol_cli_resource_binding.resource
+    ; typ
+    ; ownership
+    ; store = None
+    ; keys = []
+    ; connection = []
+    }
+  in
+  let open Sol_cli_config in
+  let sol = binding ~ownership:Ownership_sol ~typ:"postgres" ~resource:"app_db" in
+  let externally_bound =
+    binding ~ownership:Ownership_external ~typ:"postgres" ~resource:"reports_db"
+  in
+  Windtrap.equal
+    (Windtrap.option Windtrap.string)
+    ~msg:"a Sol-owned postgres resource is the provisioned database"
+    (Some "app_db")
+    (Option.map
+       (fun b -> b.Sol_cli_resource_binding.resource)
+       (Sol_cli_resource_binding.provisioned_database [ sol ]));
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"an externally bound postgres resource is not provisioned"
+    false
+    (Sol_cli_resource_binding.provisions ~typ:"postgres" [ externally_bound ]);
+  Windtrap.equal
+    (Windtrap.option Windtrap.string)
+    ~msg:"an externally bound postgres resource is not the provisioned database"
+    None
+    (Option.map
+       (fun b -> b.Sol_cli_resource_binding.resource)
+       (Sol_cli_resource_binding.provisioned_database [ externally_bound ]));
+  let service name uses =
+    { name
+    ; typ = None
+    ; path = None
+    ; uses
+    ; scale_min = None
+    ; scale_max = None
+    ; language = None
+    ; omit = false
+    }
+  in
+  let resource name =
+    { name
+    ; typ = Some "postgres"
+    ; partition_key = None
+    ; sort_key = None
+    ; indexes = []
+    ; size = None
+    ; omit = false
+    ; binding = None
+    }
+  in
+  let declared =
+    { services =
+        [ service "pool_consumer" [ "app_db" ]
+        ; service "external_consumer" [ "reports_db" ]
+        ]
+    ; resources = [ resource "app_db"; resource "reports_db" ]
+    ; profile = None
+    }
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"a consumer of the Sol-provisioned resource is included"
+    true
+    (Sol_cli_deployment_plan.service_uses_resource
+       (Some declared)
+       "pool_consumer"
+       "app_db");
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:
+      "a consumer of an external resource is excluded from the provisioned resource's \
+       DML set"
+    false
+    (Sol_cli_deployment_plan.service_uses_resource
+       (Some declared)
+       "external_consumer"
+       "app_db")
+;;

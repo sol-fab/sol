@@ -113,6 +113,30 @@ let of_root provider ~target ~chdir =
                (Sol_cli_process.error_to_string e))))
 ;;
 
+(** The provisioning configuration's [postgres_url], read through the same provider reader
+    that builds the cluster. It is separate from {!of_root} because the cluster value
+    projection drops fields a consumer does not need, and the database setup step needs
+    exactly this one; parsing it here keeps the provider dispatch out of the deploy command
+    and the [postgres_url] contract in one place per provider.
+
+    [None] means the output is null — the root created no database (it is conditional on
+    [has_postgres]). An unreadable output is an error, not [None]: those are different
+    outcomes and the caller fails closed on both, but only one of them means "no database". *)
+let postgres_url_of_outputs provider text =
+  match provider with
+  | Sol_cli_provider.Byo -> Error (No_root byo_no_root)
+  | Sol_cli_provider.Aws ->
+    Sol_cli_aws_cluster.of_outputs_json text
+    |> Result.map (fun (outputs : Sol_cli_aws_cluster.aws_outputs) ->
+      outputs.postgres_url)
+    |> Result.map_error (fun message -> Outputs_unreadable message)
+  | Sol_cli_provider.Gcp ->
+    Sol_cli_gcp_cluster.of_outputs_json text
+    |> Result.map (fun (outputs : Sol_cli_gcp_cluster.gcp_outputs) ->
+      outputs.postgres_url)
+    |> Result.map_error (fun message -> Outputs_unreadable message)
+;;
+
 let destruction provider context =
   match provider with
   | Sol_cli_provider.Aws -> Sol_cli_aws_destruction.destruction context

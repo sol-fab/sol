@@ -633,6 +633,7 @@ let run_apply
                (Sol_cli_deployment_plan.contract_change_to_string change)));
         Ok ())
       ~gates:(fun _ -> Ok ())
+      ~database_setup:(fun () -> Ok ())
       ~before_apply:(fun _ -> Ok ())
       ~apply:(fun ~lease ~release_id:_ plan ->
         apply_plan
