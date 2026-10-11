@@ -33,18 +33,6 @@ prod:
   targets:
     aws/us-east-1:
       cluster_name: pluto-prod
-      secrets:
-        checkout/checkout_svc:
-        payments/charge_svc:
-        payments/orders_svc:
-        comms/notify_worker:
-        comms/fulfilment_worker:
-        demo_ts/order_svc:
-          POSTGRES_URL:
-            authority: sol
-        demo_ts/fulfillment_worker:
-          POSTGRES_URL:
-            authority: sol
 
 # Selects the production-single-region profile explicitly.
 #
@@ -95,15 +83,11 @@ pilot:
           KAFKA_SSL_CA_CERT:
             authority: sol
         demo_ts/order_svc:
-          POSTGRES_URL:
-            authority: sol
           KAFKA_SASL_PASSWORD:
             authority: sol
           KAFKA_SSL_CA_CERT:
             authority: sol
         demo_ts/fulfillment_worker:
-          POSTGRES_URL:
-            authority: sol
           KAFKA_SASL_PASSWORD:
             authority: sol
           KAFKA_SSL_CA_CERT:
@@ -132,17 +116,15 @@ dev:
       omit: true
     fulfilment_worker:
       omit: true
+    # These consume `app_db`, which this environment omits, so their binding has
+    # no resource to select here either.
+    order_svc:
+      omit: true
+    fulfillment_worker:
+      omit: true
   targets:
     aws/us-east-1:
       cluster_name: pluto-dev
-      secrets:
-        checkout/checkout_svc:
-        demo_ts/order_svc:
-          POSTGRES_URL:
-            authority: sol
-        demo_ts/fulfillment_worker:
-          POSTGRES_URL:
-            authority: sol
 
 # The customer-cloud environment the tutorial deploys to (docs/guides/TUTORIAL.md,
 # "Ingress"). Replace the domain and contact address with your own; pass
@@ -155,31 +137,7 @@ customer_cloud:
   targets:
     aws/us-east-1:
       cluster_name: pluto-customer
-      secrets:
-        checkout/checkout_svc:
-        payments/charge_svc:
-        payments/orders_svc:
-        comms/notify_worker:
-        comms/fulfilment_worker:
-        demo_ts/order_svc:
-          POSTGRES_URL:
-            authority: sol
-        demo_ts/fulfillment_worker:
-          POSTGRES_URL:
-            authority: sol
     # BYO targets use an existing cluster; cloud lifecycle commands refuse them.
     byo/onprem:
       kube_context: pluto-customer
       registry: registry.example.com/pluto
-      secrets:
-        checkout/checkout_svc:
-        payments/charge_svc:
-        payments/orders_svc:
-        comms/notify_worker:
-        comms/fulfilment_worker:
-        demo_ts/order_svc:
-          POSTGRES_URL:
-            authority: sol
-        demo_ts/fulfillment_worker:
-          POSTGRES_URL:
-            authority: sol

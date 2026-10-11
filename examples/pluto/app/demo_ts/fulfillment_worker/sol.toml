@@ -6,8 +6,8 @@
 # memory   = "256Mi"
 
 [infra.env]
-# This unit declares POSTGRES_URL as an application secret: it does not consume the
-# target's `app_db` resource (`uses:`), so the value stays unit-scoped and is delivered
-# from the environment's `secrets` mapping.
-secrets = ["POSTGRES_URL"]
+# This unit consumes the workspace's `app_db` resource in sol.yml, so the deploy
+# delivers its database connection from the target's DML class Secret — no
+# POSTGRES_URL declaration or environment mapping.
+# secrets = []
 # config  = {}

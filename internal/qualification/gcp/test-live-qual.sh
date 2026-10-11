@@ -389,6 +389,15 @@ case "$*" in
   "get secret redpanda-default-cert"*)
     printf '%s' 'ca-certificate-for-tests' | base64
     exit 0 ;;
+  # 2b: the deploy delivers the database as class Secrets; the row lists them across
+  # namespaces and checks the consumer's own Secret for the master copy it no longer holds.
+  "get secret -A"*)
+    printf '%s\n' \
+      "${STUB_DML_NAMESPACE:-pluto-payments} ${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-dml-creds" \
+      "${STUB_DDL_NAMESPACE:-pluto-comms} ${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-ddl-creds"
+    exit 0 ;;
+  "get secret orders-svc-secrets"*)
+    exit 0 ;;
   "get pods --all-namespaces -o json")
     if [ "${STUB_PROJECTED_TOKENS:-0}" = "1" ]; then
       printf '{"items":[{"metadata":{"namespace":"pluto-payments","name":"charge-svc-abc123"},"spec":{"volumes":[{"name":"api-token","projected":{"sources":[{"serviceAccountToken":{"audience":"order-svc","expirationSeconds":3600}}]}}]}}]}\n'
@@ -816,14 +825,17 @@ has "including the TypeScript namespace's service" \
   "$TMP/app-ok.argv"
 lacks "no mutable tag is passed to a profile that requires immutable artifacts" \
   "--image-tag" "$TMP/app-ok.argv"
-has "the runtime secret is supplied through sol secret set" \
-  "secret set POSTGRES_URL --target qual/gcp/us-central1 --domain payments" "$TMP/app-ok.argv"
+lacks "no operator POSTGRES_URL is set for the migration path" \
+  "secret set POSTGRES_URL" "$TMP/app-ok.argv"
 has "and the Kafka credential and CA" \
   "secret set KAFKA_SSL_CA_CERT --target qual/gcp/us-central1 --domain comms" "$TMP/app-ok.argv"
 lacks "no secret value is passed on a command line" \
   "testpass" "$TMP/app-ok.argv"
 has "the supplied keys are recorded without their values" \
-  "runtime_secret_values: never recorded" "$TMP/app-ok.logs/prerequisites.txt"
+  "secret_values: never recorded" "$TMP/app-ok.logs/prerequisites.txt"
+has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
+  "database_delivery: qual-gcp-us-central1-ddl-creds (migration Job), qual-gcp-us-central1-dml-creds@pluto-payments (unit consumer)" \
+  "$TMP/app-ok.logs/prerequisites.txt"
 has "the run identity records the bundle version" \
   "sol_version: $VERSION" "$TMP/app-ok.logs/sol-identity.txt"
 has "and the bundle's digest-pinned migration runner" \
@@ -854,10 +866,13 @@ has "and for the TypeScript namespace" "$(printf 'TypeScript\tB1\trun')" \
 has "the scenario drives the orders path" "/orders" "$CURL_LOG"
 lacks "and never the legacy charges path the old app phase exercised" "/charges" "$CURL_LOG"
 lacks "nor its notification read-back" "/notifications" "$CURL_LOG"
-present "$TMP/app-ok.logs/app-runtime-secrets.txt" "the operator's runtime secrets step is recorded"
-has "the database URL is redacted, because the bundle must never carry the password" "://***@" \
+present "$TMP/app-ok.logs/app-runtime-secrets.txt" "the deploy's database source step is recorded"
+has "as the cluster root's postgres_url output, which the deploy reads" \
+  "database master source: the cluster root postgres_url output" \
   "$TMP/app-ok.logs/app-runtime-secrets.txt"
-lacks "and never in the clear" "qual-secret" "$TMP/app-ok.logs/app-runtime-secrets.txt"
+lacks "and the harness records no connection string at all" "://" \
+  "$TMP/app-ok.logs/app-runtime-secrets.txt"
+lacks "and never the password in the clear" "qual-secret" "$TMP/app-ok.logs/app-runtime-secrets.txt"
 lacks "only a unit that protects /metrics declares the API key, so it is not a workspace runtime secret" "SOL_API_KEY:" \
   "$TMP/app-ok.logs/app-runtime-secrets.txt"
 

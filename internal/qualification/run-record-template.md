@@ -65,11 +65,11 @@ and nothing else may be modified.
   # 2: …
   ```
 
-- **Environment prerequisites actually present at start.** State which were set,
-  and for the credential that it was percent-encoded:
+- **Environment prerequisites actually present at start.** State which were set:
   - `AWS_PROFILE` / `AWS_REGION` / `CLUSTER` (or the GCP equivalents):
-  - `POSTGRES_URL` set: yes/no — password percent-encoded: yes/no
   - `SOL_API_KEY` set: yes/no
+  - Database class Secrets present after the deploy (`<target>-ddl-creds`, `<target>-dml-creds`): yes/no
+    (no `POSTGRES_URL` is an operator input; the deploy delivers it from the target binding)
   - Registry to publish the workload image: `<repo>`
 
 ## 3. Step log (one block per step, in order)

@@ -103,8 +103,9 @@ command's output.
    `SOL_HOME` unset, `sol --version` reports the tag, `sol assets` reports every asset
    present. `SOL=<bundle>/bin/sol` selects it for the harness.
 4. Runtime inputs, never in the repository: `TF_VAR_db_password` (≥ 8 characters, no `/`,
-   `@`, `"`), `SOL_API_KEY`, and `POSTGRES_URL` with the password percent-encoded. The
-   harness reads `POSTGRES_URL` from the cluster root's own `postgres_url` output.
+   `@`, `"`) and `SOL_API_KEY`. No `POSTGRES_URL` is held: the deploy reads the cluster
+   root's own `postgres_url` output and delivers `<target>-ddl-creds` to the migration Job
+   and `<target>-dml-creds` to a consuming unit (2b).
 5. The durable bootstrap root applied: the state bucket and lock table, and the delegated
    `qual-aws.sol-fab.dev` zone with `manage_dns_zone=true`. The zone is durable and outlives
    the target.

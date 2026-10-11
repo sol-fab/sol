@@ -147,7 +147,9 @@ The transaction is the causal path, not a health check: the scenario's POST retu
 row only passes when the application's own read-back shows the worker's effect (`charges`: the id in
 GET /notifications; `orders`: the status reaching fulfilled or confirmed), which cannot happen
 unless the worker consumed the Kafka event and wrote PostgreSQL. AWS_PROFILE and TF_VAR_db_password
-must be in the environment; POSTGRES_URL comes from the cluster root's own postgres_url output.
+must be in the environment. The database connection is not an operator input: the deploy reads the
+cluster root's own `postgres_url` output and delivers `<target>-ddl-creds` to the migration Job and
+`<target>-dml-creds` to a consuming unit, which the row verifies before the transaction.
 
 With TRANSPORT=1 the transaction runs through the qualification transport: `transport` establishes
 the `sol:qualifiers` capability and verifies its effective surface, and the harness probes the
@@ -571,10 +573,11 @@ app_secret_set() {
   done
 }
 
-# Production secrets are operator-supplied: Sol's migrate and deploy verify them
-# and fail closed. The harness stands in for the operator, supplying the values it
-# already holds through the supported `sol secret set`, which writes the runtime
-# Secret and every workload Secret in the target's namespaces.
+# Production secrets are operator-supplied: Sol's deploy verifies the ones a unit or a Job
+# declares and fails closed. The harness stands in for the operator, supplying the
+# application value and the Kafka platform inputs through the supported `sol secret set`.
+# The database is *not* one of them: the deploy delivers it from the target's binding
+# (2b), so the harness neither holds nor sets a POSTGRES_URL.
 app_supply_secrets() {
   local password ca
   if ! password="$(app_read_platform_password)"; then
@@ -586,8 +589,6 @@ app_supply_secrets() {
     say "could not read the Redpanda CA from redpanda/redpanda-default-cert"
     return 1
   fi
-  export SOL_SECRET_VALUE="$POSTGRES_URL"
-  app_secret_set POSTGRES_URL || return 1
   export SOL_SECRET_VALUE="$SOL_API_KEY"
   app_secret_set SOL_API_KEY || return 1
   export SOL_SECRET_VALUE="$password"
@@ -596,11 +597,47 @@ app_supply_secrets() {
   app_secret_set KAFKA_SSL_CA_CERT || return 1
   unset SOL_SECRET_VALUE
   {
-    printf 'runtime_secret_keys: POSTGRES_URL SOL_API_KEY KAFKA_SASL_PASSWORD KAFKA_SSL_CA_CERT\n'
-    printf 'runtime_secret_sources: the cluster postgres_url output; this run; redpanda/redpanda-users; redpanda/redpanda-default-cert\n'
-    printf 'runtime_secret_values: never recorded\n'
+    printf 'unit_secret_keys: SOL_API_KEY\n'
+    printf 'platform_secret_keys: KAFKA_SASL_PASSWORD KAFKA_SSL_CA_CERT\n'
+    printf 'secret_values: never recorded\n'
+    printf 'database_delivery: delivered by the deploy from the target binding; no operator copy\n'
   } >>"$LOG_DIR/prerequisites.txt"
-  say "supplied the operator's runtime and workload secrets through sol secret set; their values are never recorded"
+  say "supplied the operator's application and Kafka secrets through sol secret set; the database is delivered by the deploy"
+}
+
+app_class_credential_name() { printf '%s' "$TARGET" | tr '[:upper:]/' '[:lower:]-'; }
+
+# 2b: the migration Job reads <target>-ddl-creds and a consuming unit reads
+# <target>-dml-creds, both written by the deploy's database setup step. This asserts the
+# delivered form exists and that the consumer did not also receive an operator's master
+# copy — the "value nothing reads" failure this arc removes.
+app_verify_database_delivery() {
+  local name secrets ddl dml consumer
+  name="$(app_class_credential_name)"
+  secrets="$(kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get secret -A \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null)"
+  ddl="$(printf '%s\n' "$secrets" | awk -v n="$name-ddl-creds" '$2 == n { print $1 }' | head -1)"
+  dml="$(printf '%s\n' "$secrets" | awk -v n="$name-dml-creds" '$2 == n { print $1 }' | head -1)"
+  if [ -z "$ddl" ]; then
+    say "the migration Job's $name-ddl-creds class Secret is absent"
+    return 1
+  fi
+  if [ -z "$dml" ]; then
+    say "no consuming namespace carries the $name-dml-creds class Secret"
+    return 1
+  fi
+  consumer="$APP_SERVICE-secrets"
+  if kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get secret "$consumer" -n "$APP_NS" \
+    -o jsonpath='{.data.POSTGRES_URL}' 2>/dev/null | grep -q .; then
+    say "$consumer still carries POSTGRES_URL; the unit is not reading the class Secret"
+    return 1
+  fi
+  {
+    printf 'database_delivery: %s (migration Job), %s@%s (unit consumer)\n' \
+      "$name-ddl-creds" "$name-dml-creds" "$dml"
+    printf 'database_delivery_assertion: the consumer unit Secret carries no POSTGRES_URL\n'
+  } >>"$LOG_DIR/prerequisites.txt"
+  say "the deploy delivered the database as $name-ddl-creds / $name-dml-creds; the consumer's unit Secret carries no master copy"
 }
 
 phase_app() {
@@ -613,13 +650,15 @@ phase_app() {
   local url
   url="$(jq -r '.outputs.postgres_url.value // empty' "$LOG_DIR/state/cloud.tfstate" 2>/dev/null)"
   if [ -z "$url" ]; then
-    say "could not read the cluster root's postgres_url output, so POSTGRES_URL cannot be established"
+    say "could not read the cluster root's postgres_url output, so the deploy's database setup has no master"
     return 1
   fi
-  export POSTGRES_URL="$url"
+  # The cluster root's postgres_url output is the *deploy's* input: the database setup step
+  # derives <target>-ddl-creds / <target>-dml-creds from it. The harness records the source
+  # redacted and never feeds the value to `sol secret set`.
   export SOL_API_KEY="${SOL_API_KEY:-$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 20)}"
   {
-    printf 'POSTGRES_URL: %s\n' "$(printf '%s' "$url" | sed 's#://[^@]*@#://***@#')"
+    printf 'database master source: the cluster root postgres_url output (never recorded in the clear)\n'
     printf 'SOL_API_KEY: %s*** (generated for this run)\n' "$(printf '%s' "$SOL_API_KEY" | cut -c1-2)"
   } >"$LOG_DIR/app-runtime-secrets.txt" 2>&1
   local image_ref_args=""
@@ -652,6 +691,7 @@ phase_app() {
   app_supply_secrets || return 1
   run migrate-apply bash -c "cd '$WORKSPACE' && exec '$SOL' migrate apply '$TARGET'" || return 1
   run app-deploy bash -c "cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args" || return 1
+  app_verify_database_delivery || return 1
   for ns in $deploy_namespaces; do
     if ! kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get rolebinding sol-deploy -n "$ns" >/dev/null 2>&1; then
       say "the deploy completed into $ns without establishing its scoped deploy RBAC"
