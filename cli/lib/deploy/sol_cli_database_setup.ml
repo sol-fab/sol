@@ -183,5 +183,18 @@ ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA public
     the transient master Secret it owns. This is the *backstop*: Sol deletes the Job
     after completion or failure itself, and the TTL covers the case where Sol's process
     dies between applying and deleting. Long enough to read the Job's logs for evidence
-    before it disappears. *)
+    before it disappears.
+
+    The TTL only starts once the Job *finishes*: a Job that never finishes is never
+    collected, which is what {!active_deadline_seconds} bounds. *)
 let crash_backstop_seconds = 3600
+
+(** How long the Job may live in total — including image pull, connecting, and the SQL run.
+
+    It must strictly exceed the coordinator's wait window ([wait_interval_s] ×
+    [wait_attempts] in {!Sol_cli_database_setup_run}), because the two bound different
+    things: the waiter giving up is not the Job being over. Setting them equal kills a
+    slow-but-succeeding setup at exactly the moment the waiter stops looking — which is
+    indistinguishable from the failure the deadline exists to bound. 600s is the 300s
+    window plus 300s for the pull, the connection and the run. *)
+let active_deadline_seconds = 600
