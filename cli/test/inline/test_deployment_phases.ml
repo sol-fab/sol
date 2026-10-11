@@ -1583,7 +1583,7 @@ let read_file path =
     (fun () -> really_input_string ic (in_channel_length ic))
 ;;
 
-let setup_fake_kubectl ~fail_verb f =
+let setup_fake_kubectl ?(mode = "none") ~fail_verb f =
   let dir = Filename.temp_file "sol-setup-kubectl-" "" in
   Sys.remove dir;
   Unix.mkdir dir 0o755;
@@ -1597,15 +1597,23 @@ case "$*" in
   *apply*)
     prev=""
     for a in "$@"; do
-      [ "$prev" = "-f" ] && cat "$a" >> %s.manifests
+      if [ "$prev" = "-f" ]; then
+        cat "$a" >> %s.manifests
+        case "$SETUP_MODE" in
+          output) grep -q "payments-ddl-creds" "$a" && exit 1 ;;
+          job) grep -q "kind: Job" "$a" && exit 1 ;;
+        esac
+      fi
       prev="$a"
     done
     exit 0 ;;
   *"get job"*)
     case "$*" in
       *metadata.uid*) echo uid-1234 ;;
-      *status.succeeded*) echo 1 ;;
-      *status.failed*) echo 0 ;;
+      *status.succeeded*)
+        if [ "$SETUP_MODE" = "wait" ]; then echo 0; else echo 1; fi ;;
+      *status.failed*)
+        if [ "$SETUP_MODE" = "wait" ]; then echo 1; else echo 0; fi ;;
     esac
     exit 0 ;;
 esac
@@ -1627,9 +1635,15 @@ exit 0
     | Not_found -> ""
   in
   Unix.putenv "PATH" (dir ^ ":" ^ old_path);
+  let old_mode =
+    try Sys.getenv "SETUP_MODE" with
+    | Not_found -> ""
+  in
+  Unix.putenv "SETUP_MODE" mode;
   Fun.protect
     ~finally:(fun () ->
       Unix.putenv "PATH" old_path;
+      Unix.putenv "SETUP_MODE" old_mode;
       List.iter
         (fun p ->
            try Sys.remove p with
@@ -1722,4 +1736,31 @@ let%test "database setup run: applies before the Job and deletes only what it ow
 
 let%test "database setup run: cleanup runs even when the owner patch fails" =
   test_database_setup_cleans_up_when_the_patch_fails ()
+;;
+
+(* The failure paths, which is where the master leaks: every one of them must still
+   delete the transient Secret. *)
+let assert_cleanup_after_failure ~mode =
+  setup_fake_kubectl ~mode ~fail_verb:"zzz-never" (fun ~log ->
+    (match run_database_setup () with
+     | Ok () -> Windtrap.failf "expected the phase to fail at %s" mode
+     | Error _ -> ());
+    let calls = read_file log in
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:(Printf.sprintf "the transient Secret is deleted after a failure at %s" mode)
+      true
+      (setup_mentions "delete secret" calls))
+;;
+
+let%test "database setup run: cleanup runs when an output Secret fails to apply" =
+  assert_cleanup_after_failure ~mode:"output"
+;;
+
+let%test "database setup run: cleanup runs when the Job fails to apply" =
+  assert_cleanup_after_failure ~mode:"job"
+;;
+
+let%test "database setup run: cleanup runs when the wait reports failure" =
+  assert_cleanup_after_failure ~mode:"wait"
 ;;

@@ -92,28 +92,44 @@ let own_secret_with_job ~ctx ~namespace ~job_name ~secret_name =
 ;;
 
 (** Best effort, and the code says so: a failure here is a warning, not an error. The
-    cost differs by object. For the script it is nothing. For the transient Secret it is
-    the master surviving until the next deploy of this target — or until the Job's
-    [ttlSecondsAfterFinished] cascade collects it, if the owner reference was patched
-    before Sol died. *)
-let delete ~ctx ~namespace what name =
-  kubectl
-    ~ctx
-    [ "delete"; what; name; "-n"; namespace; "--ignore-not-found"; "--wait=false" ]
-  |> Result.iter_error (fun e ->
-    Sol_cli_report.warn
-      "warning: could not delete %s/%s: %s"
-      namespace
-      name
-      (Sol_cli_process.error_to_string e))
+    cost differs by object, so the caller passes the consequence rather than the operation.
+    For the script it is nothing. For the transient Secret it is the master surviving
+    until the next deploy of this target — or until the Job's [ttlSecondsAfterFinished]
+    cascade collects it, if the owner reference was patched before Sol died — and the
+    warning says that, because a reader needs the risk, not the failed verb. *)
+let delete ~ctx ~namespace ~what ?risk name =
+  let warn reason =
+    match risk with
+    | Some risk -> Sol_cli_report.warn "warning: %s (%s)" risk reason
+    | None ->
+      Sol_cli_report.warn "warning: could not delete %s/%s: %s" namespace name reason
+  in
+  (* This runs from [~finally], where an exception would replace the phase's own error
+     with a cleanup error and hide what actually went wrong. *)
+  try
+    kubectl
+      ~ctx
+      [ "delete"; what; name; "-n"; namespace; "--ignore-not-found"; "--wait=false" ]
+    |> Result.iter_error (fun e -> warn (Sol_cli_process.error_to_string e))
+  with
+  | exn -> warn (Printexc.to_string exn)
 ;;
 
 (** Delete exactly what the Job owned: the Job, its script, and the transient Secret.
     The output Secrets are deliberately **not** here — 2b delivers them. *)
 let cleanup ~ctx ~namespace ~job_name ~configmap_name ~secret_name =
-  delete ~ctx ~namespace "job" job_name;
-  delete ~ctx ~namespace "configmap" configmap_name;
-  delete ~ctx ~namespace "secret" secret_name
+  delete ~ctx ~namespace ~what:"job" job_name;
+  delete ~ctx ~namespace ~what:"configmap" configmap_name;
+  delete
+    ~ctx
+    ~namespace
+    ~what:"secret"
+    ~risk:
+      (Printf.sprintf
+         "the database master credential may still be present at Secret %s/%s"
+         namespace
+         secret_name)
+    secret_name
 ;;
 
 let wait_interval_s = 2.
@@ -148,7 +164,7 @@ let run
   let job_doc = Render.job_doc ~ns:namespace ~target ~image in
   (* Re-deploy: a Job's pod template is immutable, so an existing one is removed rather
      than patched. A first deploy finds nothing and this is a no-op. *)
-  delete ~ctx ~namespace "job" job_name;
+  delete ~ctx ~namespace ~what:"job" job_name;
   (* Every path from the first apply runs [cleanup], including every early return. A
      [let*] chain that returned early would leave the transient Secret — the master — in
      the cluster with no owner and no later delete, which is the exact leak this step
