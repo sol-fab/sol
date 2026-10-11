@@ -1,5 +1,9 @@
 type t
 
+(** Whether a reference is [<image>@sha256:<64 hex>]. Shared with the database setup
+    step, which pins a public image the same way the runner is pinned: a tag can move. *)
+val is_digest_ref : string -> bool
+
 type form =
   | Checkout
   | Installed of { version : string }

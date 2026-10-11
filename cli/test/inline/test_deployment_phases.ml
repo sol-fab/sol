@@ -1354,3 +1354,109 @@ let%test "path_consistency: all paths start from same workspace" =
 let%test "path_consistency: up execution descriptor uses host push image" =
   test_up_execution_descriptor_uses_host_push_image ()
 ;;
+
+(* The database setup step (ADR 0007, 2c). *)
+
+let setup_mentions needle text =
+  let n = String.length needle in
+  let t = String.length text in
+  let rec go i =
+    i + n <= t && (String.equal (String.sub text i n) needle || go (i + 1))
+  in
+  go 0
+;;
+
+let with_setup_image value f =
+  let name = Sol_cli_database_setup.image_env in
+  let previous = Sol_cli_string.env name in
+  (match value with
+   | Some v -> Unix.putenv name v
+   | None -> Unix.putenv name "");
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv
+        name
+        (match previous with
+         | Some p -> p
+         | None -> ""))
+    f
+;;
+
+let test_database_setup_image_requires_a_digest () =
+  let digest = "postgres@sha256:" ^ String.make 64 'a' in
+  with_setup_image (Some "postgres:16") (fun () ->
+    match Sol_cli_database_setup.setup_image () with
+    | Ok _ -> Windtrap.fail "a floating tag must be refused: this Job runs as the master"
+    | Error message ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the refusal names the configured variable"
+        true
+        (setup_mentions Sol_cli_database_setup.image_env message));
+  with_setup_image (Some digest) (fun () ->
+    match Sol_cli_database_setup.setup_image () with
+    | Error message -> Windtrap.fail message
+    | Ok resolved ->
+      Windtrap.equal Windtrap.string ~msg:"the digest is used" digest resolved);
+  with_setup_image None (fun () ->
+    match Sol_cli_database_setup.setup_image () with
+    | Ok _ -> Windtrap.fail "an unset image must not resolve"
+    | Error message ->
+      (* Unlike the runner, there is nothing for Sol to publish: the message must name
+         the variable to pin, not an artifact to build. *)
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the message names what to set"
+        true
+        (setup_mentions Sol_cli_database_setup.image_env message))
+;;
+
+let test_database_setup_sql_is_idempotent () =
+  let sql = Sol_cli_database_setup.role_sql in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"a re-run changes an existing role rather than recreating it"
+    true
+    (setup_mentions "IF NOT EXISTS" sql);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"nothing is ever dropped"
+    false
+    (setup_mentions "DROP" sql);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"passwords arrive as psql variables"
+    true
+    (setup_mentions ":'ddl_password'" sql);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"no password literal is embedded in the manifest"
+    false
+    (setup_mentions "PASSWORD '" sql);
+  (* The grants are the difference between roles that exist and roles that work: without
+     them the migration cannot create anything and the application cannot read what it
+     creates. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"both roles can use the schema"
+    true
+    (setup_mentions "GRANT USAGE ON SCHEMA public" sql);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the DDL role can create in it"
+    true
+    (setup_mentions "GRANT CREATE ON SCHEMA public" sql);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"objects the migration creates default to the DML role"
+    true
+    (setup_mentions "ALTER DEFAULT PRIVILEGES FOR ROLE" sql)
+;;
+
+let%test "database setup: the image must be a digest reference" =
+  test_database_setup_image_requires_a_digest ()
+;;
+
+let%test "database setup: the role SQL is idempotent and carries no secret" =
+  test_database_setup_sql_is_idempotent ()
+;;
