@@ -12,6 +12,7 @@ let plan_of_services
       ?image_refs
       ?inventory
       ?target
+      ?target_database
       ?provisioned_database
       services
   =
@@ -24,6 +25,7 @@ let plan_of_services
     ?image_refs
     ?inventory
     ?target
+    ?target_database
     ?provisioned_database
     services
   |> Result.map_error Sol_cli_deployment_plan.plan_error_to_string
@@ -38,8 +40,11 @@ type request =
   ; requested_scope : string option
   ; declared : Sol_cli_config.declared option
   ; (* 2d: see {!Sol_cli_deployment_plan.of_services_result}; [target] is the sanitized
-       target a CA mount would be named for, [provisioned_database] the resource Sol owns. *)
+       target a CA mount would be named for, [provisioned_database] the resource Sol owns.
+       2b: [target_database] is the target's postgres resource whatever its ownership, so
+       the reader routes `POSTGRES_URL` to `<target>-dml-creds` for both. *)
     target : string option
+  ; target_database : string option
   ; provisioned_database : string option
   }
 
@@ -53,6 +58,7 @@ let run execution ~(request : request) ~mode ~facts services =
       ?requested_scope:request.requested_scope
       ?declared:request.declared
       ?target:request.target
+      ?target_database:request.target_database
       ?provisioned_database:request.provisioned_database
       services
   in

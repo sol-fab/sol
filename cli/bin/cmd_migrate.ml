@@ -136,7 +136,7 @@ let active_services path =
   Ok (List.map (fun (s : Sol_cli_config.service) -> s.name) (Sol_cli_config.services cfg))
 ;;
 
-let run_apply_in_cluster ~ctx ~dir ~table ~active =
+let run_apply_in_cluster ~ctx ~dir ~table ~target_path ~active =
   let workspace = Sol_cli_workspace.current_name () in
   let* facts = Sol_cli_workspace_model.load_cwd () in
   let services =
@@ -158,7 +158,24 @@ let run_apply_in_cluster ~ctx ~dir ~table ~active =
   then (
     Printf.printf "(no migration files found in %s -- nothing to do)\n" dir;
     Ok ())
-  else
+  else (
+    (* 2b: the migration Job reads `<target>-ddl-creds`. The reader does not branch on
+       ownership; only the CA mount does, because an externally bound database publishes no
+       Sol CA ConfigMap. *)
+    let target = Sol_cli_kubernetes_name.sanitize_name target_path in
+    let* provisions_database =
+      Sol_cli_config.load_for_target ~target:target_path
+      |> Result.map_error Sol_cli_config.error_to_string
+      |> Result.map (fun config ->
+        match Sol_cli_resource_binding.resolve config with
+        | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
+        | Error _ -> false)
+    in
+    let ca_configmap =
+      if provisions_database
+      then Some (Sol_cli_database_setup_render.ca_configmap_name target)
+      else None
+    in
     let* image = Sol_cli_migration_job.runner_image () in
     let* job =
       Sol_cli_migration_job.submit
@@ -169,8 +186,11 @@ let run_apply_in_cluster ~ctx ~dir ~table ~active =
         ~image
         ~args:[ "migrate"; "apply"; "--dir"; "/migrations"; "--table"; table ]
         ~files
+        ~ddl_creds_name:(Sol_cli_database_setup_render.ddl_creds_name target)
+        ?ca_configmap
+        ()
     in
-    run_migration_job ~ctx ~namespace job
+    run_migration_job ~ctx ~namespace job)
 ;;
 
 let require_valid_migrations dir = Sol_cli_migration.required ~dir |> Result.map ignore
@@ -257,7 +277,7 @@ let run_apply ~ctx dir table dry_run target =
     | None -> run_apply_local ~ctx dir table
     | Some path ->
       let* active = active_services path in
-      run_apply_in_cluster ~ctx ~dir ~table ~active)
+      run_apply_in_cluster ~ctx ~dir ~table ~target_path:path ~active)
 ;;
 
 let run_apply_term dir table dry_run target =

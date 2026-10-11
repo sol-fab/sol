@@ -144,14 +144,12 @@ let ensure ~workloads ~ctx ~namespaces ~manages_database : (unit, string) result
               workloads would have no route to it. Reconcile the environment for this \
               target so the platform install publishes the range, then retry.")
     in
-    namespaces
-    |> List.find_map (fun ns ->
-      match Sol_cli_secret.verify_runtime_secret ~ctx ~namespace:ns with
-      | Ok () -> None
-      | Error message -> Some message)
-    |> (function
-     | None -> Ok ()
-     | Some message -> Error message)
+    (* 2b removed the check that required `POSTGRES_URL` in the workspace's `sol-secrets`:
+       a unit now receives the database connection from the target's DML class Secret, which
+       the database setup step writes *after* this prerequisite, and the migration Job reads
+       the DDL class Secret. The substrate still owns the namespaces and their scoped RBAC;
+       it no longer owns the operator's copy of the master. *)
+    Ok ()
 ;;
 
 let established ~ctx ~namespaces : (unit, string) result =

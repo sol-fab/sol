@@ -199,7 +199,8 @@ let decode_workload ~release_id ~workspace (w : Sol_cli_release.workload) =
     ; (* 2d: a rollback reconstructs each workload from the release record, which does not
          carry the target's database ownership, so no CA mount is re-derived here. The
          release schema would have to carry it for a rollback to restore the anchor. *)
-      db_ca_target = None
+      db_uses_target = None
+    ; db_ca_target = None
     }
   in
   let* () =

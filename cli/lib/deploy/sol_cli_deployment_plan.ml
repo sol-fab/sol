@@ -67,12 +67,21 @@ type service_spec =
   ; called_by : service_call list
   ; extra_labels : (string * string) list
   ; progressive_delivery : Sol_cli_toml.progressive_delivery option
-  ; (* 2d: the target whose Sol-provisioned database this unit consumes, if any. The
-       semantic fact — *this* unit reads *that* target's database — not a resource name: the
-       renderer derives the CA ConfigMap's name from it
+  ; (* 2b: the target whose postgres resource this unit consumes, whatever its ownership.
+       The routing signal is the capability — this unit declared the resource in `uses:` —
+       not the key name, so both a Sol-provisioned and an externally bound database route
+       the unit's `POSTGRES_URL` to `<target>-dml-creds`. The renderer derives that Secret's
+       name from it ({!Sol_cli_database_setup_render.dml_creds_name}), so the plan never
+       names an object the renderer owns. [None] for a unit that consumes no database, or
+       one that merely declares `POSTGRES_URL` as an application secret: that key stays
+       unit-scoped. *)
+    db_uses_target : string option
+  ; (* 2d: the target whose *Sol-provisioned* database this unit consumes, if any. The CA
+       ConfigMap exists only where Sol's setup step writes it, so this stays [None] for a
+       consumer of an externally bound database — its anchor is not Sol's to publish. The
+       renderer derives the ConfigMap's name from it
        ({!Sol_cli_database_setup_render.ca_configmap_name}), so the plan never names an
-       object the renderer owns. [None] for a unit that consumes no database, or one bound
-       to an external database Sol does not write credentials for. *)
+       object the renderer owns. *)
     db_ca_target : string option
   }
 
@@ -1008,13 +1017,30 @@ let of_services_result
       ?(image_refs = [])
       ?inventory
       ?target
+      ?target_database
       ?provisioned_database
       services
   =
-  (* 2d: a unit gets a CA mount when it consumes the database *this target provisions*, so
-     the two facts are read together. An externally bound database is deliberately not
-     this: its consumers read a credential Sol never wrote, and mounting an anchor the
-     deploy will not publish would wedge their pods on a missing ConfigMap. *)
+  (* 2b: [db_uses_target] is the reader's routing signal — the unit consumes *the target's*
+     postgres resource, whatever its ownership — so `POSTGRES_URL` from `uses:` reads
+     `<target>-dml-creds` for a Sol-provisioned and an externally bound database alike. A
+     unit that declares `POSTGRES_URL` without consuming a resource gets [None] and keeps it
+     unit-scoped. [target_database] defaults to [provisioned_database] so a Sol-provisioned
+     target's consumers route without a caller restating the resource. *)
+  let target_database =
+    match target_database with
+    | Some _ -> target_database
+    | None -> provisioned_database
+  in
+  (* 2d: a unit gets a CA mount only when it consumes the database *this target provisions*:
+     the ConfigMap is what Sol's setup step writes, so an externally bound database has none
+     to mount, and mounting one the deploy will not publish would wedge the pod. *)
+  let db_uses_target service_name =
+    match target, target_database with
+    | Some target, Some resource when service_uses_resource declared service_name resource
+      -> Some target
+    | _ -> None
+  in
   let db_ca_target service_name =
     match target, provisioned_database with
     | Some target, Some resource when service_uses_resource declared service_name resource
@@ -1226,6 +1252,7 @@ let of_services_result
       ; called_by = []
       ; extra_labels = toml.extra_labels
       ; progressive_delivery = toml.progressive_delivery
+      ; db_uses_target = db_uses_target svc.Sol_cli_manifest.name
       ; db_ca_target = db_ca_target svc.Sol_cli_manifest.name
       }
     in

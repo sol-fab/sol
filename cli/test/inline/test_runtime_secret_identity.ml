@@ -63,7 +63,10 @@ let test_workload_secrets_keep_their_own_convention () =
     "charge-svc-secrets-secrets"
 ;;
 
-let test_migration_job_reads_the_runtime_identity () =
+(* 2b: the migration Job is a DDL consumer, so its credential is the target's DDL class
+   Secret, not the workspace runtime Secret. The runtime Secret survives for Kafka. *)
+let test_migration_job_reads_the_ddl_class_secret () =
+  let ddl_creds = Sol_cli_database_setup_render.ddl_creds_name "pluto" in
   let job =
     Sol_cli_yaml.render
       [ Sol_cli_manifest.migration_job_doc
@@ -72,6 +75,8 @@ let test_migration_job_reads_the_runtime_identity () =
           ~image:"runner:1"
           ~args:[ "migrate"; "up" ]
           ~configmap_name:"sol-migrate-files-x"
+          ~ddl_creds_name:ddl_creds
+          ()
       ]
   in
   let secret_ref =
@@ -97,8 +102,8 @@ let test_migration_job_reads_the_runtime_identity () =
   in
   Windtrap.equal
     (Windtrap.option Windtrap.string)
-    ~msg:"the Job's secretRef is the runtime Secret"
-    (Some Sol_cli_manifest.runtime_secret_name)
+    ~msg:"the Job's secretRef is the target's DDL class Secret"
+    (Some ddl_creds)
     secret_ref
 ;;
 
@@ -110,6 +115,6 @@ let%test "infra-040: workload Secrets keep their own convention" =
   test_workload_secrets_keep_their_own_convention ()
 ;;
 
-let%test "infra-040: the migration Job reads the runtime identity" =
-  test_migration_job_reads_the_runtime_identity ()
+let%test "2b: the migration Job reads the target's DDL class Secret" =
+  test_migration_job_reads_the_ddl_class_secret ()
 ;;

@@ -417,6 +417,7 @@ let render_deployment ~secret_keys =
     ; domain = "payments"
     ; primitive = "svc"
     ; release_id
+    ; db_dml_creds_name = None
     ; db_ca_configmap = None
     }
   in

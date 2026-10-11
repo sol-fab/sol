@@ -83,7 +83,17 @@ val default_secrets : (string * string) list
 val runtime_secret_name : string
 val workload_secret_name : string -> string
 val external_secret_name : string -> string
-val required_secret_keys : ?transport:kafka_transport -> string list -> string list
+
+(** The key the database class Secrets carry; equal to
+    {!Sol_cli_database_setup_render.postgres_url_key}. *)
+val postgres_url_key : string
+
+val required_secret_keys
+  :  ?transport:kafka_transport
+  -> ?db_dml_creds_name:string
+  -> string list
+  -> string list
+
 val config_hash : (string * string) list -> (string * string) list -> string
 val sanitize_label_value : string -> string
 val namespace_doc : ns:string -> Sol_cli_yaml.document
@@ -143,9 +153,12 @@ module Workload_spec : sig
     ; domain : string
     ; primitive : string
     ; release_id : Sol_cli_release_id.t
-    ; (* 2d: the CA ConfigMap to mount when this unit consumes a Sol-provisioned database.
-         Prep: see {!Sol_cli_manifest_yaml.Workload_spec}. *)
+    ; (* 2d: the CA ConfigMap to mount when this unit consumes a Sol-provisioned database;
+         2b's reader delivers a class Secret whose URL names this path as `sslrootcert`. *)
       db_ca_configmap : string option
+    ; (* 2b: the `<target>-dml-creds` Secret this unit reads `POSTGRES_URL` from when it
+         consumes the target's database; see {!Sol_cli_manifest_yaml.Workload_spec}. *)
+      db_dml_creds_name : string option
     }
 end
 
@@ -215,6 +228,8 @@ module Scheduled_workload_spec : sig
     ; release_id : Sol_cli_release_id.t
     ; (* 2d: see {!Workload_spec.t}. *)
       db_ca_configmap : string option
+    ; (* 2b: see {!Workload_spec.t}. *)
+      db_dml_creds_name : string option
     }
 end
 
@@ -232,6 +247,9 @@ val migration_job_doc
   -> image:string
   -> args:string list
   -> configmap_name:string
+  -> ddl_creds_name:string
+  -> ?ca_configmap:string
+  -> unit
   -> Sol_cli_yaml.document
 
 val contract_job_doc

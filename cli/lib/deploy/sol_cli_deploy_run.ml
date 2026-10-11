@@ -105,6 +105,22 @@ let migration_prerequisite ctx ~plan ~live =
          in [substrate_prerequisite], before this gate. Migration verification must not
          re-enter that establishment: a second call would be duplicate lifecycle work
          and would let the two steps drift apart. *)
+      (* 2b: the migration Job is a DDL consumer, so it reads `<target>-ddl-creds` — the class
+       Secret the setup step (or ESO, for an externally bound database) writes. The reader
+       never learns the ownership; the only ownership-shaped decision here is whether the
+       target publishes a CA ConfigMap, which only Sol's setup step does. *)
+      let target = Sol_cli_kubernetes_name.sanitize_name ctx.target_name in
+      let provisions_database =
+        match Sol_cli_resource_binding.resolve ctx.resolved_config with
+        | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
+        | Error _ -> false
+      in
+      let ca_configmap =
+        if provisions_database
+        then Some (Sol_cli_database_setup_render.ca_configmap_name target)
+        else None
+      in
+      let ddl_creds_name = Sol_cli_database_setup_render.ddl_creds_name target in
       Sol_cli_migration_gate.reconcile_operator_bindings
         ~ctx:ctx.execution.cluster
         ~workspace:ctx.execution.workspace
@@ -115,6 +131,9 @@ let migration_prerequisite ctx ~plan ~live =
           ~workspace:ctx.execution.workspace
           ~dir
           ~services:ctx.inventory
+          ~ddl_creds_name
+          ?ca_configmap
+          ()
       with
       | Sol_cli_migration_gate.No_migrations -> Ok ()
       | Sol_cli_migration_gate.Satisfied applied ->

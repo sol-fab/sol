@@ -93,7 +93,13 @@ let run_locked ~lease ~ctx ~local ~workspace ~facts release_id : (unit, string) 
             ~workspace
             ~dir:migrations_dir
             ~table:(Sol_cli_migration.table_name ~workspace)
-            ~services:(Sol_cli_workspace_model.services facts))
+            ~services:(Sol_cli_workspace_model.services facts)
+              (* 2b switches the deploy and `sol migrate apply` readers to the target's DDL
+               class Secret. Rollback's reader stays on the workspace runtime Secret until
+               rollback itself moves to current target bindings; passing the runtime Secret
+               name here keeps that path's behaviour unchanged. *)
+            ~ddl_creds_name:Sol_cli_manifest.runtime_secret_name
+            ())
     ; apply =
         apply_specs
           ~ensure_held:(fun () -> Sol_cli_boundary_lease.ensure_held lease)

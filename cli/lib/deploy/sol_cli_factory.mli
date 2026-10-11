@@ -12,6 +12,7 @@ val plan_of_services
   -> ?image_refs:(string * string) list
   -> ?inventory:Sol_cli_manifest.service list
   -> ?target:string
+  -> ?target_database:string
   -> ?provisioned_database:string
   -> Sol_cli_manifest.service list
   -> (Sol_cli_deployment_plan.t, string) result
@@ -28,6 +29,7 @@ type request =
   ; requested_scope : string option
   ; declared : Sol_cli_config.declared option
   ; target : string option
+  ; target_database : string option
   ; provisioned_database : string option
   }
 
