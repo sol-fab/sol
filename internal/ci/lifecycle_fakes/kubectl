@@ -185,6 +185,13 @@ case " $* " in
     esac
 esac
 case " $* " in
+  *" get secret "*"-db-credentials "*)
+    # The password authority. Absent is a first deploy: the setup step bootstraps and
+    # records it. Nothing here models a second deploy, because a real authority outlives
+    # the run and this fake is rebuilt for each one.
+    printf 'Error from server (NotFound): secrets "db-credentials" not found\n' >&2
+    exit 1
+    ;;
   *" get secret sol-secrets "*)
     printf '{"data":{"POSTGRES_URL":"cG9zdGdyZXNxbDovL2xpZmVjeWNsZTpvZmZsaW5lQGxvY2FsaG9zdDo1NDMyL3Rlc3Q=","SOL_API_KEY":"b2ZmbGluZS1zZWNyZXQ="}}\n'
     exit 0

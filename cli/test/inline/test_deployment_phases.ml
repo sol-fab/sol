@@ -1415,7 +1415,7 @@ let test_database_setup_image_requires_a_digest () =
 ;;
 
 let test_database_setup_sql_is_idempotent () =
-  let sql = Sol_cli_database_setup.role_sql in
+  let sql = Sol_cli_database_setup.sql ~operation:Sol_cli_database_setup.Repair in
   Windtrap.equal
     Windtrap.bool
     ~msg:"a re-run changes an existing role rather than recreating it"
@@ -1502,6 +1502,7 @@ let render_setup () =
   Sol_cli_database_setup_render.docs
     ~ns:"myapp-payments"
     ~target:"payments"
+    ~operation:Sol_cli_database_setup.Bootstrap
     ~master_url:"postgresql://postgres:masterpw@db.internal:5432/app"
     ~ddl_password:"ddl-pw"
     ~dml_password:"dml-pw"
@@ -1674,6 +1675,15 @@ case "$*" in
         if [ "$SETUP_MODE" = "wait" ]; then echo 1; else echo 0; fi ;;
     esac
     exit 0 ;;
+  *"get secret "*"-db-credentials"*)
+    # The password authority. Absent is a first deploy (bootstrap); present is an ordinary
+    # deploy (repair), which must reuse these values rather than generate new ones.
+    if [ "$SETUP_MODE" = "authority" ]; then
+      printf 'ddl-pw\ndml-pw\n'
+      exit 0
+    fi
+    echo 'Error from server (NotFound): secrets "payments-db-credentials" not found' >&2
+    exit 1 ;;
 esac
 case "$*" in
   *%s*) exit 1 ;;
@@ -1720,32 +1730,49 @@ let setup_output_secret () =
        ])
 ;;
 
-let run_database_setup () =
+let run_database_setup
+      ?(operation = Sol_cli_database_setup.Bootstrap)
+      ?(ddl_password = "ddl-pw")
+      ?(dml_password = "dml-pw")
+      ()
+  =
   Sol_cli_database_setup_run.run
     ~ctx:Sol_cli_kube_destination.local_context
     ~namespace:"myapp-payments"
     ~ca_namespaces:[ "myapp-payments" ]
     ~target:"payments"
     ~master_url:"postgresql://postgres:masterpw@db.internal:5432/app"
-    ~ddl_password:"ddl-pw"
-    ~dml_password:"dml-pw"
+    ~operation
+    ~ddl_password
+    ~dml_password
     ~ca_cert:"-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n"
     ~image:("postgres@sha256:" ^ String.make 64 'a')
     ~output_secrets:[ setup_output_secret () ]
 ;;
 
-let test_database_setup_applies_before_the_job_and_keeps_the_output_secrets () =
+let test_database_setup_bootstrap_orders_by_verification () =
   setup_fake_kubectl ~fail_verb:"zzz-never" (fun ~log ->
-    match run_database_setup () with
+    match run_database_setup ~operation:Sol_cli_database_setup.Bootstrap () with
     | Error message -> Windtrap.fail message
     | Ok () ->
       let calls = read_file log in
       let manifests = read_file (log ^ ".manifests") in
+      (* A bootstrap records the passwords before Postgres is touched, so an interruption
+         leaves something to repair from rather than roles whose password nobody knows. *)
       Windtrap.equal
         Windtrap.bool
-        ~msg:"the Secret is applied before the Job"
+        ~msg:"the authority is persisted before the Job"
         true
-        (setup_index "kind: Secret" manifests < setup_index "kind: Job" manifests);
+        (setup_index "payments-db-credentials" manifests
+         < setup_index "kind: Job" manifests);
+      (* And the projections — what consumers actually read — only once Postgres has accepted
+         the passwords they carry. This is the whole defect: written first, a replacement
+         password reaches pods that can restart before the server knows it. *)
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the class credential is written only after the Job"
+        true
+        (setup_index "kind: Job" manifests < setup_index "payments-ddl-creds" manifests);
       Windtrap.equal
         Windtrap.bool
         ~msg:"the Job is deleted"
@@ -1761,20 +1788,161 @@ let test_database_setup_applies_before_the_job_and_keeps_the_output_secrets () =
         ~msg:"the script is deleted"
         true
         (setup_mentions "delete configmap" calls);
-      (* The surviving resource: 2b consumes the output Secrets, so a change that added
-         them to cleanup would break it while still passing every "cleanup ran" test. *)
+      (* The surviving resources: 2b consumes the class credentials and a later deploy
+         repairs from the authority, so a change that added either to cleanup would break
+         both while still passing every "cleanup ran" test. *)
       Windtrap.equal
         Windtrap.bool
-        ~msg:"the output Secret is never deleted"
+        ~msg:"the class credential is never deleted"
         false
         (setup_mentions "delete secret payments-ddl-creds" calls);
       Windtrap.equal
         Windtrap.bool
-        ~msg:"the Secret is owned before cleanup reaches it"
+        ~msg:"the authority is never deleted"
+        false
+        (setup_mentions "delete secret payments-db-credentials" calls);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the transient Secret is owned before cleanup reaches it"
         true
         (* "delete secret" happens only in cleanup; "delete job" also appears in the
            re-deploy pre-delete, which correctly precedes the patch. *)
         (setup_index "patch secret" calls < setup_index "delete secret" calls))
+;;
+
+(* Where the passwords come from: the authority, not a fresh generation. *)
+let resolve_passwords ~ctx () =
+  Sol_cli_database_setup_run.resolve ~ctx ~namespace:"myapp-payments" ~target:"payments"
+;;
+
+let test_database_setup_bootstraps_only_without_a_record () =
+  setup_fake_kubectl ~fail_verb:"zzz-never" (fun ~log:_ ->
+    let ctx = Sol_cli_kube_destination.local_context in
+    match resolve_passwords ~ctx () with
+    | Error message -> Windtrap.fail message
+    | Ok (operation, ddl_password, dml_password) ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"no recorded authority is a bootstrap"
+        true
+        (operation = Sol_cli_database_setup.Bootstrap);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"a bootstrap generates two distinct, non-blank passwords"
+        true
+        ((not (Sol_cli_string.is_blank ddl_password))
+         && (not (Sol_cli_string.is_blank dml_password))
+         && not (String.equal ddl_password dml_password)))
+;;
+
+let test_database_setup_repair_reuses_the_record () =
+  setup_fake_kubectl ~mode:"authority" ~fail_verb:"zzz-never" (fun ~log:_ ->
+    let ctx = Sol_cli_kube_destination.local_context in
+    match resolve_passwords ~ctx () with
+    | Error message -> Windtrap.fail message
+    | Ok (operation, ddl_password, dml_password) ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"a recorded authority is a repair, not a bootstrap"
+        true
+        (operation = Sol_cli_database_setup.Repair);
+      Windtrap.equal
+        Windtrap.string
+        ~msg:"the DDL password is the recorded one, not a new one"
+        "ddl-pw"
+        ddl_password;
+      Windtrap.equal
+        Windtrap.string
+        ~msg:"the DML password is the recorded one, not a new one"
+        "dml-pw"
+        dml_password)
+;;
+
+let test_database_setup_repair_does_not_rewrite_the_record () =
+  (* An ordinary deploy re-applies what is recorded. It must not write the authority: an
+     unverified replacement over the record is exactly what the ordering prevents. *)
+  setup_fake_kubectl ~mode:"authority" ~fail_verb:"zzz-never" (fun ~log ->
+    match
+      run_database_setup
+        ~operation:Sol_cli_database_setup.Repair
+        ~ddl_password:"ddl-pw"
+        ~dml_password:"dml-pw"
+        ()
+    with
+    | Error message -> Windtrap.fail message
+    | Ok () ->
+      let manifests = read_file (log ^ ".manifests") in
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"a repair does not rewrite the authority"
+        false
+        (setup_mentions "payments-db-credentials" manifests);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"a repair still writes the class credential"
+        true
+        (setup_mentions "payments-ddl-creds" manifests))
+;;
+
+let test_database_setup_failure_leaves_the_projections_alone () =
+  (* The Job fails. The previous projections must be exactly as they were, because the
+     password they carry is still the one Postgres accepts. *)
+  setup_fake_kubectl ~mode:"wait" ~fail_verb:"zzz-never" (fun ~log ->
+    match run_database_setup () with
+    | Ok () -> Windtrap.fail "a failed setup Job must fail the step"
+    | Error _ ->
+      let manifests = read_file (log ^ ".manifests") in
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the class credential is not written when the Job fails"
+        false
+        (setup_mentions "payments-ddl-creds" manifests);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the authority was persisted before the Job"
+        true
+        (setup_mentions "payments-db-credentials" manifests))
+;;
+
+let test_database_setup_operations_differ () =
+  let bootstrap =
+    Sol_cli_database_setup.sql ~operation:Sol_cli_database_setup.Bootstrap
+  in
+  let repair = Sol_cli_database_setup.sql ~operation:Sol_cli_database_setup.Repair in
+  (* Bootstrap must refuse an existing role: with no recorded authority, a replacement
+     password would silently invalidate the credential its consumers already hold. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"a bootstrap refuses a role that already exists"
+    true
+    (setup_mentions "RAISE EXCEPTION" bootstrap && setup_mentions "pg_roles" bootstrap);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"a bootstrap never alters an existing role"
+    false
+    (setup_mentions "ALTER ROLE" bootstrap);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the refusal names the recovery"
+    true
+    (setup_mentions "Recover the authority Secret" bootstrap);
+  (* Repair re-applies the recorded value, and can create a role that has gone missing
+     because the password it uses is the recorded one. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"a repair re-applies the recorded password"
+    true
+    (setup_mentions "ALTER ROLE" repair);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"a repair recreates a role that has gone missing"
+    true
+    (setup_mentions "IF NOT EXISTS" repair);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"a repair is not a rotation: it fails closed on an existing role only never"
+    false
+    (setup_mentions "Recover the authority Secret" repair)
 ;;
 
 let test_database_setup_cleans_up_when_the_patch_fails () =
@@ -1797,8 +1965,31 @@ let test_database_setup_cleans_up_when_the_patch_fails () =
         (setup_mentions "delete job" calls))
 ;;
 
-let%test "database setup run: applies before the Job and deletes only what it owns" =
-  test_database_setup_applies_before_the_job_and_keeps_the_output_secrets ()
+let%test "database setup run: a bootstrap orders by verification and deletes only its own"
+  =
+  test_database_setup_bootstrap_orders_by_verification ()
+;;
+
+let%test "database setup: only a target with no recorded authority bootstraps" =
+  test_database_setup_bootstraps_only_without_a_record ()
+;;
+
+let%test "database setup: a repair reuses the recorded passwords" =
+  test_database_setup_repair_reuses_the_record ()
+;;
+
+let%test "database setup run: a repair never rewrites the recorded authority" =
+  test_database_setup_repair_does_not_rewrite_the_record ()
+;;
+
+let%test "database setup run: a failed Job leaves the class credentials untouched" =
+  test_database_setup_failure_leaves_the_projections_alone ()
+;;
+
+let%test
+    "database setup: bootstrap refuses an existing role, repair re-applies the record"
+  =
+  test_database_setup_operations_differ ()
 ;;
 
 let%test "database setup run: cleanup runs even when the owner patch fails" =

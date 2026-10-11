@@ -1,11 +1,20 @@
 (** Renders the database setup step — ADR 0007.
 
-    **Write ordering.** Sol is the sole password authority: it generates the DDL and DML
-    passwords and writes them, together with the master connection, into the transient
-    Secret *and* into the output Secrets, **before** the Job runs. The Job only applies
-    the roles. So a Job that fails leaves output Secrets that are present but unused, and
-    a re-run overwrites them — rather than a Job that succeeded followed by a Sol write
-    that failed, leaving consumers with no credential at all.
+    **Write ordering: the authority first, the projections last.** Sol is the sole password
+    authority. The DDL and DML passwords are generated once and recorded in the target's
+    authority Secret ({!authority_name}), which is the durable source of truth for every
+    later deploy: an ordinary deploy reuses the recorded passwords instead of generating
+    new ones, and a projection an operator deleted is rebuilt from the authority rather
+    than regenerated.
+
+    The order follows from what has been *verified* at each step. A bootstrap writes the
+    authority **before** Postgres is touched, so an interruption leaves a recoverable record
+    instead of roles whose password nobody knows. The output Secrets — the projections
+    consumers actually read — are written **after** the Job succeeds, because only then has
+    Postgres accepted the password they carry. Writing them first hands a replacement
+    password to pods that can restart before the server knows it, which is how a running
+    release breaks on the next deploy. A failed Job now leaves the previous projections
+    untouched, and the authority makes the next deploy a repair rather than a loss.
 
     **The rendered output carries the passwords in plaintext** ([stringData]), so
     where it goes matters. It is rendered in memory and handed to the existing apply
@@ -39,6 +48,16 @@ let automount_service_account_token = false
 
 let setup_name target = target ^ "-db-setup"
 let script_name target = target ^ "-db-setup-script"
+
+(** The **password authority**: the target's record of the DDL and DML passwords, and the
+    only place they are generated. It is durable — it outlives the Job, which is deleted
+    with its transient Secret — because it is what makes a later deploy a *repair* (re-apply
+    the recorded passwords) rather than a rotation (generate new ones and invalidate what is
+    running).
+
+    It lives in the migration namespace, beside the credentials it authorizes. It is not a
+    consumer projection: consumers read the class Secrets, which are derived from this. *)
+let authority_name target = target ^ "-db-credentials"
 
 (** Where the database CA is mounted: the trust anchor [sslmode=verify-full] verifies the
     endpoint against ({!ca_cert_path} is what the connection URL names). Defined once, with
@@ -117,14 +136,40 @@ let transient_secret_doc ~ns ~target ~master_url ~ddl_password ~dml_password =
     ]
 ;;
 
-(** The script, as a ConfigMap. It carries no secret: the passwords arrive through the
-    environment, and the script reads them with [\getenv]. *)
-let script_configmap_doc ~ns ~target =
+(** The authority Secret, written on a bootstrap only — an ordinary deploy reads it and
+    re-applies what it records.
+
+    It carries the same two values the transient Secret carries and **not** the master: the
+    master is never persisted, so this object does not widen what a cluster compromise
+    reaches. It is durable by design, so it is not collected by the Job's cleanup. *)
+let authority_secret_doc ~ns ~target ~ddl_password ~dml_password =
+  resource
+    ~api_version:"v1"
+    ~kind:"Secret"
+    [ "metadata", metadata ~ns ~name:(authority_name target)
+    ; "type", Y.string "Opaque"
+    ; ( "stringData"
+      , Y.map
+          [ "SOL_DDL_PASSWORD", Y.quoted ddl_password
+          ; "SOL_DML_PASSWORD", Y.quoted dml_password
+          ] )
+    ]
+;;
+
+(** The script for one operation. The ConfigMap name does not change with the operation,
+    because the coordinator re-creates the Job on every deploy anyway; the operation is
+    recorded in the ConfigMap so "which operation did this run?" is answerable from the
+    cluster rather than from a log. *)
+let script_configmap_doc ~ns ~target ~operation =
   resource
     ~api_version:"v1"
     ~kind:"ConfigMap"
     [ "metadata", metadata ~ns ~name:(script_name target)
-    ; "data", Y.map [ "setup.sql", Y.literal Sol_cli_database_setup.role_sql ]
+    ; ( "data"
+      , Y.map
+          [ "setup.sql", Y.literal (Sol_cli_database_setup.sql ~operation)
+          ; "operation", Y.string (Sol_cli_database_setup.operation_to_string operation)
+          ] )
     ]
 ;;
 
@@ -218,10 +263,15 @@ let job_doc ~ns ~target ~image =
     ]
 ;;
 
-(** In write order: the Secret Sol writes first, then the script and the CA, then the Job. *)
-let docs ~ns ~target ~master_url ~ddl_password ~dml_password ~ca_cert ~image =
+(** In write order: the transient Secret Sol writes first, then the script and the CA, then
+    the Job.
+
+    Neither the authority nor the projections are here. Both are ordered by verification
+    rather than by this list: the authority is written only on a bootstrap, and before the
+    Job; the projections only after it succeeds. See {!Sol_cli_database_setup_run.run}. *)
+let docs ~ns ~target ~operation ~master_url ~ddl_password ~dml_password ~ca_cert ~image =
   [ transient_secret_doc ~ns ~target ~master_url ~ddl_password ~dml_password
-  ; script_configmap_doc ~ns ~target
+  ; script_configmap_doc ~ns ~target ~operation
   ; ca_configmap_doc ~ns ~target ~ca_cert
   ; job_doc ~ns ~target ~image
   ]
