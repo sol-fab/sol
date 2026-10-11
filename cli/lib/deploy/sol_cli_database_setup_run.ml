@@ -161,6 +161,80 @@ let dml_namespaces ~declared ~resource (plan : Sol_cli_deployment_plan.t) =
   |> List.sort_uniq String.compare
 ;;
 
+(** The target's recorded DDL and DML passwords. *)
+type authority =
+  { ddl_password : string
+  ; dml_password : string
+  }
+
+(** Read the authority back from the cluster.
+
+    [Ok None] is a first deploy — nothing recorded yet. A Secret that exists but does not
+    carry both values is an **error, not a bootstrap**: treating it as one would generate a
+    replacement password for a role that already exists, silently invalidating what its
+    consumers hold.
+
+    The values are decoded by kubectl's [base64decode] rather than in Sol, because the
+    Secret's stored form is base64 and nothing here should grow a second encoding. *)
+let read_authority ~ctx ~namespace ~target =
+  let name = Sol_cli_database_setup_render.authority_name target in
+  let template =
+    "{{index .data \"SOL_DDL_PASSWORD\" | base64decode}}{{\"\\n\"}}{{index .data \
+     \"SOL_DML_PASSWORD\" | base64decode}}"
+  in
+  let unreadable detail =
+    Printf.sprintf
+      "could not read the target's password authority (Secret %s in namespace %s): %s. \
+       The authority is what makes this deploy a repair rather than a rotation, so Sol \
+       will not continue past a value it cannot read."
+      name
+      namespace
+      detail
+  in
+  match
+    Sol_cli_kubectl.get_if_present
+      ~ctx
+      ~args:[ "get"; "secret"; name; "-n"; namespace; "-o"; "go-template=" ^ template ]
+  with
+  | Error e -> Error (unreadable (Sol_cli_process.error_to_string e))
+  | Ok None -> Ok None
+  | Ok (Some text) ->
+    (match String.split_on_char '\n' (String.trim text) with
+     | [ ddl_password; dml_password ]
+       when (not (Sol_cli_string.is_blank ddl_password))
+            && not (Sol_cli_string.is_blank dml_password) ->
+       Ok (Some { ddl_password; dml_password })
+     | _ ->
+       Error
+         (unreadable
+            (Printf.sprintf
+               "it does not carry both SOL_DDL_PASSWORD and SOL_DML_PASSWORD")))
+;;
+
+(** Which operation this deploy performs, and the passwords it uses.
+
+    An ordinary deploy **reuses** what is recorded: it re-applies the passwords the
+    consumers already hold, so Postgres and the projections stay in agreement and nothing a
+    running release depends on changes. Only a target with no recorded authority bootstraps,
+    and then the passwords are generated exactly once — persisted by the caller's apply,
+    before the Job touches Postgres.
+
+    Rotation is deliberately absent: PostgreSQL invalidates the previous password the moment
+    [ALTER] runs, so it needs overlapping credentials or an explicitly disruptive procedure,
+    and that is an operator decision rather than a side effect of a deploy. *)
+let resolve ~ctx ~namespace ~target =
+  let open Result.Syntax in
+  let* recorded = read_authority ~ctx ~namespace ~target in
+  match recorded with
+  | Some authority ->
+    Ok (Sol_cli_database_setup.Repair, authority.ddl_password, authority.dml_password)
+  | None ->
+    Ok
+      ( Sol_cli_database_setup.Bootstrap
+      , Sol_cli_database_setup_password.generate ()
+      , Sol_cli_database_setup_password.generate () )
+;;
+
 let wait_interval_s = 2.
 
 (** 300s, matching the migration Job ([cmd_migrate], [Sol_cli_contract]) rather than the
@@ -174,6 +248,7 @@ let run
       ~ca_namespaces
       ~target
       ~master_url
+      ~operation
       ~ddl_password
       ~dml_password
       ~ca_cert
@@ -195,7 +270,10 @@ let run
       ~ddl_password
       ~dml_password
   in
-  let script = Render.script_configmap_doc ~ns:namespace ~target in
+  let authority =
+    Render.authority_secret_doc ~ns:namespace ~target ~ddl_password ~dml_password
+  in
+  let script = Render.script_configmap_doc ~ns:namespace ~target ~operation in
   let job_doc = Render.job_doc ~ns:namespace ~target ~image in
   (* The CA is a durable trust anchor, not a per-run credential: the Job mounts it, and the
      consuming units mount the same object after 2b delivers their class Secrets. So it is
@@ -220,10 +298,19 @@ let run
   Fun.protect
     ~finally:(fun () -> cleanup ~ctx ~namespace ~job_name ~configmap_name ~secret_name)
     (fun () ->
-       (* Sol writes, before the Job runs, both the credentials the Job *consumes* (the
-         transient Secret) and the credentials consumers will consume (the output
-         Secrets). The Job produces the roles those credentials belong to; it does not
-         receive them. *)
+       (* A bootstrap persists the passwords *before* Postgres is touched, so an interruption
+         leaves a recorded authority and the next deploy repairs from it — rather than roles
+         whose password nobody has. A repair writes nothing here: the authority it is
+         re-applying is already the record. *)
+       let* () =
+         match operation with
+         | Sol_cli_database_setup.Bootstrap ->
+           apply_doc ~ctx ~what:"password authority" authority
+         | Sol_cli_database_setup.Repair -> Ok ()
+       in
+       (* Before the Job: what the Job *consumes* (the transient Secret), the script that
+         consumes it, and the trust anchor it verifies the server against. The Job produces
+         the roles; it does not receive the class credentials. *)
        let* () =
          List.fold_left
            (fun acc (what, doc) ->
@@ -231,8 +318,7 @@ let run
               apply_doc ~ctx ~what doc)
            (Ok ())
            ([ "transient secret", transient; "setup script", script ]
-            @ List.map (fun doc -> "database CA", doc) ca_docs
-            @ List.map (fun doc -> "output secret", doc) output_secrets)
+            @ List.map (fun doc -> "database CA", doc) ca_docs)
        in
        let* () = apply_doc ~ctx ~what:"setup job" job_doc in
        let* () = own_secret_with_job ~ctx ~namespace ~job_name ~secret_name in
@@ -244,7 +330,18 @@ let run
            job
        in
        match outcome with
-       | Sol_cli_migration_job.Succeeded -> Ok ()
+       | Sol_cli_migration_job.Succeeded ->
+         (* Only now has Postgres accepted these passwords, so only now do the projections
+            consumers read carry a value that works. Writing them before the Job would hand
+            a replacement password to pods that can restart before the server knows it.
+            A failed Job therefore leaves the previous projections exactly as they were,
+            and the recorded authority makes the next deploy a repair. *)
+         List.fold_left
+           (fun acc doc ->
+              let* () = acc in
+              apply_doc ~ctx ~what:"class credential" doc)
+           (Ok ())
+           output_secrets
        | Sol_cli_migration_job.Failed ->
          Error
            (Printf.sprintf

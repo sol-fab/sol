@@ -175,9 +175,18 @@ phase creates; but the guarantee is "the Job is outside the workload policy", no
   waits, and records the generated credentials. It reuses the existing Job mechanics rather than
   introducing a runner concept — but it is new code and is the cost of this decision. There is no
   Terraform-only path: no role resource exists, and the database is unreachable from Terraform.
-- **Storage.** The generated DDL and DML passwords are Sol-managed secrets in the target's Kubernetes
-  Secret for v1 — the store the model names (§3.1). Their durability and any move to a provider store
-  belong to #1360.
+- **Storage, and when a password changes.** The DDL and DML passwords are generated **once**, when the
+  target has no record, and recorded in the target's authority Secret (`<target>-db-credentials`) in the
+  migration namespace — the store the model names (§3.1). Every later deploy **reuses** what is recorded
+  and re-applies it, so Postgres and the class projections agree and nothing a running release holds
+  changes. The projections consumers read are written only *after* the setup Job has succeeded: written
+  first, they carry a password Postgres has not accepted yet, and a pod that restarts in that window
+  fails against the credential it just read. A target whose roles exist but whose record is missing
+  **fails with a recovery instruction** rather than generating a replacement. **Rotation — changing a
+  password that is in use — is a third operation and deliberately not one of these:** PostgreSQL
+  invalidates the previous password the moment `ALTER` runs, so rotation needs overlapping credentials or
+  an explicitly disruptive procedure, which is an operator decision and not a side effect of a deploy.
+  Their durability and any move to a provider store belong to #1360.
 - **The plan gains a class refusal**, not a new declaration.
 - **The migration Job's inputs change** from the master `POSTGRES_URL` to the DDL credential, and
   `default_secrets`' `POSTGRES_URL` entry goes away.

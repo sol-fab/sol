@@ -857,8 +857,13 @@ let run_database_setup_step
         ~ca_cert_path:Sol_cli_database_setup_render.ca_cert_path
         master_url
     in
-    let ddl_password = Sol_cli_database_setup_password.generate () in
-    let dml_password = Sol_cli_database_setup_password.generate () in
+    (* The passwords come from the target's authority, not from a fresh generation: an
+       ordinary deploy re-applies what its consumers already hold, so Postgres and the class
+       projections stay in agreement. Only a target with no recorded authority bootstraps,
+       and then the values are generated once and persisted before the Job touches Postgres. *)
+    let* operation, ddl_password, dml_password =
+      Sol_cli_database_setup_run.resolve ~ctx ~namespace:migration_namespace ~target
+    in
     let ddl_url = Sol_cli_database_setup_url.ddl ~password:ddl_password master_url in
     let dml_url = Sol_cli_database_setup_url.dml ~password:dml_password master_url in
     let declared = Sol_cli_config.declared_of_config planning.config in
@@ -889,6 +894,7 @@ let run_database_setup_step
       ~ca_namespaces:(migration_namespace :: dml_namespaces)
       ~target
       ~master_url
+      ~operation
       ~ddl_password
       ~dml_password
       ~ca_cert
