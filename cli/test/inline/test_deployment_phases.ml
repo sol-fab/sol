@@ -1460,3 +1460,120 @@ let%test "database setup: the image must be a digest reference" =
 let%test "database setup: the role SQL is idempotent and carries no secret" =
   test_database_setup_sql_is_idempotent ()
 ;;
+
+(* The renderer, asserted on its rendered output. *)
+
+let render_setup () =
+  Sol_cli_database_setup_render.docs
+    ~ns:"myapp-payments"
+    ~workload:"charge-svc"
+    ~master_url:"postgresql://postgres:masterpw@db.internal:5432/app"
+    ~ddl_password:"ddl-pw"
+    ~dml_password:"dml-pw"
+    ~image:("postgres@sha256:" ^ String.make 64 'a')
+  |> Sol_cli_yaml.render
+;;
+
+let setup_index needle text =
+  let n = String.length needle in
+  let t = String.length text in
+  let rec go i =
+    if i + n > t
+    then Windtrap.failf "expected %S in the rendered setup" needle
+    else if String.equal (String.sub text i n) needle
+    then i
+    else go (i + 1)
+  in
+  go 0
+;;
+
+let test_database_setup_renders_the_fail_closed_job () =
+  let text = render_setup () in
+  (* The pod makes no API calls, so it carries no token it could not use. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the setup pod does not mount a service-account token"
+    true
+    (setup_mentions "automountServiceAccountToken: false" text);
+  (* The crash backstop, and the guarantee carried by the script rather than the
+     invocation. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the Job carries the backstop TTL"
+    true
+    (setup_mentions
+       (Printf.sprintf
+          "ttlSecondsAfterFinished: %d"
+          Sol_cli_database_setup.crash_backstop_seconds)
+       text);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"ON_ERROR_STOP travels with the script"
+    true
+    (setup_mentions "ON_ERROR_STOP" text);
+  (* psql reads a file; it is never handed the SQL through argv or -c, which the
+     dollar-quoted block and \getenv require. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"psql runs from a file"
+    true
+    (setup_mentions "--file=/sql/setup.sql" text);
+  (* The CA mount is present but empty: 2d populates it without reshaping the pod. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the CA mount exists and is empty"
+    true
+    (setup_mentions "projected:" text);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"it declares no sources yet"
+    true
+    (setup_mentions "sources: []" text);
+  (* The Job spec must not embed a credential: it references the transient Secret. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the Job takes its inputs by reference"
+    true
+    (setup_mentions "secretKeyRef" text);
+  (* Sol writes the Secret first, then the Job. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the Secret is written before the Job"
+    true
+    (setup_index "kind: Secret" text < setup_index "kind: Job" text)
+;;
+
+let test_database_setup_keeps_credentials_out_of_the_job () =
+  let text = render_setup () in
+  (* Every credential appears once, in the Secret's stringData. A second occurrence would
+     mean the Job spec carries it too. *)
+  let occurrences needle =
+    let n = String.length needle in
+    let t = String.length text in
+    let rec go i count =
+      if i + n > t
+      then count
+      else
+        go
+          (i + 1)
+          (if String.equal (String.sub text i n) needle then count + 1 else count)
+    in
+    go 0 0
+  in
+  List.iter
+    (fun credential ->
+       Windtrap.equal
+         Windtrap.int
+         ~msg:(Printf.sprintf "%s appears only in the transient Secret" credential)
+         1
+         (occurrences credential))
+    [ "postgresql://postgres:masterpw@db.internal:5432/app"; "ddl-pw"; "dml-pw" ]
+;;
+
+let%test "database setup render: the Job is fail-closed and mounted empty of the CA" =
+  test_database_setup_renders_the_fail_closed_job ()
+;;
+
+let%test "database setup render: credentials live only in the transient Secret" =
+  test_database_setup_keeps_credentials_out_of_the_job ()
+;;
