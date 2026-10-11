@@ -5,6 +5,8 @@ type t =
   ; store : string option
   ; keys : (string * string) list
   ; connection : (string * string) list
+  ; (* Class name -> remote path, for a contract with credential classes. Empty otherwise. *)
+    credentials : (string * string) list
   }
 
 let of_resource (r : Sol_cli_config.resource) =
@@ -24,6 +26,7 @@ let of_resource (r : Sol_cli_config.resource) =
          ; store = None
          ; keys = []
          ; connection = []
+         ; credentials = []
          }
      | Some b ->
        Ok
@@ -33,6 +36,7 @@ let of_resource (r : Sol_cli_config.resource) =
          ; store = b.store
          ; keys = b.keys
          ; connection = b.connection
+         ; credentials = b.credentials
          })
 ;;
 

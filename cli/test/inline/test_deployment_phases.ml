@@ -1991,6 +1991,7 @@ let%test
     ; store = None
     ; keys = []
     ; connection = []
+    ; credentials = []
     }
   in
   let open Sol_cli_config in
@@ -2066,4 +2067,123 @@ let%test
        (Some declared)
        "external_consumer"
        "app_db")
+;;
+
+(* The external owner's writer: ESO delivers the class Secrets Sol would have written,
+   because the reader asks for the same names whatever the ownership is. *)
+
+let external_binding ?(store = Some "vault-production") credentials
+  : Sol_cli_resource_binding.t
+  =
+  { resource = "app_db"
+  ; typ = "postgres"
+  ; ownership = Sol_cli_config.Ownership_external
+  ; store
+  ; keys = []
+  ; connection = []
+  ; credentials
+  }
+;;
+
+let count_occurrences needle text =
+  let n = String.length needle in
+  let t = String.length text in
+  let rec go i acc =
+    if i + n > t
+    then acc
+    else go (i + 1) (if String.equal (String.sub text i n) needle then acc + 1 else acc)
+  in
+  go 0 0
+;;
+
+let test_external_database_delivers_the_class_secrets () =
+  let binding =
+    external_binding
+      [ Sol_cli_database_setup_render.ddl_class, "secret/production/app-db-migrator"
+      ; Sol_cli_database_setup_render.dml_class, "secret/production/app-db-app"
+      ]
+  in
+  match
+    Sol_cli_database_setup_run.external_credential_docs
+      ~target:"payments"
+      ~migration_namespace:"myapp-payments"
+      ~dml_namespaces:[ "myapp-comms" ]
+      ~binding
+  with
+  | Error message -> Windtrap.fail message
+  | Ok docs ->
+    let text = Sol_cli_yaml.render docs in
+    let present msg needle =
+      Windtrap.equal Windtrap.bool ~msg true (setup_mentions needle text)
+    in
+    present "ESO is the writer" "kind: ExternalSecret";
+    (* The names are the reader's, taken from the one definition the Sol writer uses: the
+       reader does not branch on ownership. *)
+    present
+      "the DDL class targets the reader's DDL Secret"
+      ("name: " ^ Sol_cli_database_setup_render.ddl_creds_name "payments");
+    present
+      "the DML class targets the reader's DML Secret"
+      ("name: " ^ Sol_cli_database_setup_render.dml_creds_name "payments");
+    present
+      "the key is the one the reader reads"
+      ("secretKey: " ^ Sol_cli_database_setup_render.postgres_url_key);
+    present "the DDL remote path is the binding's" "secret/production/app-db-migrator";
+    present "the DML remote path is the binding's" "secret/production/app-db-app";
+    present "the store is the binding's" "name: vault-production";
+    present "the DDL credential lands where migrations run" "namespace: myapp-payments";
+    present "the DML credential lands where it is consumed" "namespace: myapp-comms";
+    Windtrap.equal
+      Windtrap.int
+      ~msg:"one ExternalSecret per class, not one per key"
+      2
+      (count_occurrences "kind: ExternalSecret" text);
+    (* The classes are separate objects: the migrator's remote path must not reach the
+       application's Secret. *)
+    Windtrap.equal
+      Windtrap.int
+      ~msg:"the DDL remote path appears exactly once"
+      1
+      (count_occurrences "secret/production/app-db-migrator" text)
+;;
+
+let test_external_database_requires_every_class () =
+  let refuses ?(store = Some "vault-production") credentials needle =
+    match
+      Sol_cli_database_setup_run.external_credential_docs
+        ~target:"payments"
+        ~migration_namespace:"myapp-payments"
+        ~dml_namespaces:[ "myapp-comms" ]
+        ~binding:(external_binding ~store credentials)
+    with
+    | Ok _ -> Windtrap.fail (Printf.sprintf "expected a refusal mentioning %S" needle)
+    | Error message ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:("the refusal mentions " ^ needle)
+        true
+        (setup_mentions needle message)
+  in
+  (* Every class must be delivered: a missing one is indistinguishable from a target with
+     no database at all. *)
+  refuses
+    [ Sol_cli_database_setup_render.ddl_class, "secret/production/app-db-migrator" ]
+    Sol_cli_database_setup_render.dml_class;
+  refuses
+    [ Sol_cli_database_setup_render.dml_class, "secret/production/app-db-app" ]
+    Sol_cli_database_setup_render.ddl_class;
+  refuses
+    ~store:None
+    [ Sol_cli_database_setup_render.ddl_class, "secret/production/app-db-migrator"
+    ; Sol_cli_database_setup_render.dml_class, "secret/production/app-db-app"
+    ]
+    "names no store"
+;;
+
+let%test "external database: every class is delivered as the reader's Secret" =
+  test_external_database_delivers_the_class_secrets ()
+;;
+
+let%test "external database: a missing class or store is refused, naming it" =
+  test_external_database_requires_every_class ()
 ;;

@@ -733,7 +733,48 @@ let run_database_setup_step
         message)
   in
   match Sol_cli_resource_binding.provisioned_database bindings with
-  | None -> Ok ()
+  | None ->
+    (* No Sol-provisioned database: either the database is bound externally, in which case
+       the class Secrets are still delivered — by ESO, from the store the binding names —
+       or there is no database and there is nothing to do. *)
+    let externally_bound =
+      Sol_cli_resource_binding.of_type bindings ~typ:"postgres"
+      |> List.filter (fun (binding : Sol_cli_resource_binding.t) ->
+        binding.ownership = Sol_cli_config.Ownership_external)
+    in
+    (match externally_bound with
+     | [] -> Ok ()
+     | [ binding ] ->
+       let* migration_namespace =
+         Sol_cli_migration_job.job_namespace
+           ~workspace:planning.workspace
+           ~services:planning.services
+       in
+       let declared = Sol_cli_config.declared_of_config planning.config in
+       let dml_namespaces =
+         Sol_cli_database_setup_run.dml_namespaces
+           ~declared:(Some declared)
+           ~resource:binding.Sol_cli_resource_binding.resource
+           plan
+       in
+       Sol_cli_database_setup_run.run_external_credentials
+         ~ctx
+         ~target
+         ~migration_namespace
+         ~dml_namespaces
+         ~binding
+     | externals ->
+       Error
+         (Printf.sprintf
+            "target %s binds more than one database externally (%s). The credential \
+             class Secrets are named for the target, so two externally bound databases \
+             cannot be told apart by their consumers; bind one database per target."
+            target_path
+            (String.concat
+               ", "
+               (List.map
+                  (fun (binding : Sol_cli_resource_binding.t) -> binding.resource)
+                  externals))))
   | Some (database : Sol_cli_resource_binding.t) ->
     let* master_url, ca_cert =
       match infra_dir with

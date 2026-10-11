@@ -145,6 +145,31 @@ permission DSL and no new declaration.
 A resource therefore has one identity and several consumer credentials, one per class — which is the
 model's "one writer per delivered object" rule applied per class.
 
+**The writer differs by ownership; the delivered objects do not.** Sol writes the class Secrets for a
+database it provisions, from the provisioning output. When the database is bound externally, the
+target names the store and a remote path **per class**, and the delivery controller writes the *same
+objects* — the same names, under the same consumer key — from that store:
+
+```yaml
+# the target, e.g. sol/prod/aws/us-east-1.yml
+target:
+  resources:
+    app_db:
+      binding:
+        ownership: external
+        store: vault-production
+        credentials:
+          ddl: secret/production/app-db-migrator
+          dml: secret/production/app-db-app
+```
+
+The class is the outer dimension of that selection — one delivered object per class — because a
+contract with classes resolves one contract key to a *different* remote path per class: the database
+URL is the migrator's in `ddl` and the application's in `dml`. **Every class the contract has must be
+delivered**: a consumer credential that is simply absent is indistinguishable from a target that has
+no database at all. The reader asks for a class Secret by name and never learns the ownership; a
+consumer that branched on ownership would be the dual-interpretation this model rejects.
+
 ### 3.3 Ownership transitions
 
 **Changing a binding never authorizes destroying or relinquishing the previous database.** With

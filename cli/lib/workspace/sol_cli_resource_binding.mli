@@ -15,6 +15,8 @@ type t =
   ; store : string option
   ; keys : (string * string) list
   ; connection : (string * string) list
+  ; (* Class name -> remote path, for a contract with credential classes. *)
+    credentials : (string * string) list
   }
 
 (** Resolve every effective resource for a target. Fails when a resource has no type, or

@@ -2589,6 +2589,44 @@ let%test "resource binding: external requires store and keys" =
   test_external_binding_requires_store_and_keys ()
 ;;
 
+(* The class dimension: a contract with credential classes resolves one contract key to a
+   different remote path per class, so the class is the outer dimension of the selection. *)
+let test_external_binding_credentials_are_per_class () =
+  with_temp_dir (fun () ->
+    match
+      load_with_binding
+        {|target:
+  resources:
+    app_db:
+      binding:
+        ownership: external
+        store: vault-production
+        credentials:
+          ddl: secret/production/app-db-migrator
+          dml: secret/production/app-db-app
+|}
+    with
+    | Error error -> Windtrap.fail (Sol_cli_config.error_to_string error)
+    | Ok config ->
+      (match Sol_cli_resource_binding.resolve config with
+       | Error message -> Windtrap.fail message
+       | Ok bindings ->
+         (match Sol_cli_resource_binding.of_type bindings ~typ:"postgres" with
+          | [ binding ] ->
+            Windtrap.equal
+              (Windtrap.list (Windtrap.pair Windtrap.string Windtrap.string))
+              ~msg:"the per-class remote paths are resolved"
+              [ "ddl", "secret/production/app-db-migrator"
+              ; "dml", "secret/production/app-db-app"
+              ]
+              binding.credentials
+          | _ -> Windtrap.fail "expected one postgres binding")))
+;;
+
+let%test "resource binding: external credentials are per class" =
+  test_external_binding_credentials_are_per_class ()
+;;
+
 let%test "resource binding: two provisioned databases are refused" =
   test_two_provisioned_databases_are_refused ()
 ;;

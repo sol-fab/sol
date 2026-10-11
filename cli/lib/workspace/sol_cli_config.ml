@@ -56,6 +56,13 @@ type resource_binding =
   ; store : string option
   ; keys : (string * string) list
   ; connection : (string * string) list
+  ; (* Where an externally bound resource's *credential-class* values come from: class
+       name -> remote path. The class is the outer dimension — one output Secret per class —
+       because a contract that has classes resolves the *same* contract key to a different
+       remote path per class (a database's `POSTGRES_URL` is the migrator's in `ddl` and the
+       application's in `dml`). [keys] stays for contracts with no classes, where one key has
+       one remote path. *)
+    credentials : (string * string) list
   }
 
 type resource =
@@ -616,7 +623,9 @@ let decode_layer ~path ~context ~top_level (fields : (string * Yaml.yaml) list) 
     let* () =
       match
         List.filter
-          (fun (k, _) -> not (List.mem k [ "ownership"; "store"; "keys"; "connection" ]))
+          (fun (k, _) ->
+             not
+               (List.mem k [ "ownership"; "store"; "keys"; "connection"; "credentials" ]))
           fields
       with
       | (k, _) :: _ -> refuse (Printf.sprintf "%s: unknown key %S" what k)
@@ -657,18 +666,25 @@ let decode_layer ~path ~context ~top_level (fields : (string * Yaml.yaml) list) 
       | None -> Ok []
       | Some v -> string_map ~what:(what ^ " connection") v
     in
+    let* credentials =
+      match List.assoc_opt "credentials" fields with
+      | None -> Ok []
+      | Some v -> string_map ~what:(what ^ " credentials") v
+    in
     let* () =
-      match store, keys with
-      | None, _ -> refuse (Printf.sprintf "%s: an external binding requires store" what)
-      | Some _, [] ->
+      match store, keys, credentials with
+      | None, _, _ ->
+        refuse (Printf.sprintf "%s: an external binding requires store" what)
+      | Some _, [], [] ->
         refuse
           (Printf.sprintf
-             "%s: an external binding requires keys — one remote path per sensitive \
-              contract key"
+             "%s: an external binding requires keys or credentials — a remote path per \
+              sensitive contract key, or per credential class for a contract that has \
+              classes"
              what)
-      | Some _, _ -> Ok ()
+      | Some _, _, _ -> Ok ()
     in
-    Ok { ownership; store; keys; connection }
+    Ok { ownership; store; keys; connection; credentials }
   in
   let decode_resource (name, v) =
     let* fields = members ~path ~where:(Printf.sprintf " in resource %S" name) v in
