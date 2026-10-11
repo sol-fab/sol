@@ -118,22 +118,32 @@ let delete ~ctx ~namespace ~what ?risk name =
 (** Delete exactly what the Job owned: the Job, its script, and the transient Secret.
     The output Secrets are deliberately **not** here — 2b delivers them. *)
 let cleanup ~ctx ~namespace ~job_name ~configmap_name ~secret_name =
-  delete ~ctx ~namespace ~what:"job" job_name;
-  delete ~ctx ~namespace ~what:"configmap" configmap_name;
-  delete
-    ~ctx
-    ~namespace
-    ~what:"secret"
-    ~risk:
-      (Printf.sprintf
-         "the database master credential may still be present at Secret %s/%s"
-         namespace
-         secret_name)
-    secret_name
+  (* [delete] already swallows its own exceptions. This wraps the whole body anyway:
+     this function runs from [~finally], where anything that escapes replaces the phase's
+     own error with a cleanup error and hides the real cause. *)
+  try
+    delete ~ctx ~namespace ~what:"job" job_name;
+    delete ~ctx ~namespace ~what:"configmap" configmap_name;
+    delete
+      ~ctx
+      ~namespace
+      ~what:"secret"
+      ~risk:
+        (Printf.sprintf
+           "the database master credential may still be present at Secret %s/%s"
+           namespace
+           secret_name)
+      secret_name
+  with
+  | exn -> Sol_cli_report.warn "warning: cleanup raised: %s" (Printexc.to_string exn)
 ;;
 
 let wait_interval_s = 2.
-let wait_attempts = 90
+
+(** 300s, matching the migration Job ([cmd_migrate], [Sol_cli_contract]) rather than the
+    migration *gate*'s 120s: this runs DDL against the database, the same class of work,
+    and a false timeout fails a deploy that was about to succeed. *)
+let wait_attempts = 150
 
 let run
       ~ctx
@@ -163,7 +173,9 @@ let run
   let script = Render.script_configmap_doc ~ns:namespace ~target in
   let job_doc = Render.job_doc ~ns:namespace ~target ~image in
   (* Re-deploy: a Job's pod template is immutable, so an existing one is removed rather
-     than patched. A first deploy finds nothing and this is a no-op. *)
+     than patched. A first deploy finds nothing and this is a no-op. Deliberately outside
+     the [Fun.protect] below: nothing has been created yet, so there is nothing this call
+     can leak. *)
   delete ~ctx ~namespace ~what:"job" job_name;
   (* Every path from the first apply runs [cleanup], including every early return. A
      [let*] chain that returned early would leave the transient Secret — the master — in
@@ -200,17 +212,17 @@ let run
        | Sol_cli_migration_job.Failed ->
          Error
            (Printf.sprintf
-              "database setup for %s failed; the roles were not created"
+              "database setup for target %s failed; the roles were not created"
               namespace)
        | Sol_cli_migration_job.Timed_out _ ->
          Error
            (Printf.sprintf
-              "database setup for %s timed out; the roles may be partially created"
+              "database setup for target %s timed out; the roles may be partially created"
               namespace)
        | Sol_cli_migration_job.Unstartable { reason; detail } ->
          Error
            (Printf.sprintf
-              "database setup for %s could not start: %s%s"
+              "database setup for target %s could not start: %s%s"
               namespace
               reason
               (match detail with

@@ -1701,6 +1701,13 @@ let test_database_setup_applies_before_the_job_and_keeps_the_output_secrets () =
         ~msg:"the script is deleted"
         true
         (setup_mentions "delete configmap" calls);
+      (* The surviving resource: 2b consumes the output Secrets, so a change that added
+         them to cleanup would break it while still passing every "cleanup ran" test. *)
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the output Secret is never deleted"
+        false
+        (setup_mentions "delete secret payments-ddl-creds" calls);
       Windtrap.equal
         Windtrap.bool
         ~msg:"the Secret is owned before cleanup reaches it"
