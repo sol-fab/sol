@@ -6,5 +6,8 @@
 # memory   = "256Mi"
 
 [infra.env]
-# secrets = []
+# This unit declares POSTGRES_URL as an application secret: it does not consume the
+# target's `app_db` resource (`uses:`), so the value stays unit-scoped and is delivered
+# from the environment's `secrets` mapping.
+secrets = ["POSTGRES_URL"]
 # config  = {}

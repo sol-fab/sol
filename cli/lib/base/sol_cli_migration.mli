@@ -35,6 +35,7 @@ val drift_of_row : status_row -> drift option
 val parse_status_json : string -> (applied_status, string) result
 val unsatisfied : required:prerequisite list -> applied:int list -> prerequisite list
 val to_string : prerequisite -> string
+val pending_files : applied:int list -> (string * string) list -> (string * string) list
 val drift_message : drift -> string
 val status_json : table:string -> status_row list -> string
 

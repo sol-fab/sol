@@ -212,13 +212,11 @@ let check_contract ~facts ~services =
   if Sol_cli_check.has_errors findings then Error (Sol_cli_exit.reported ()) else Ok ()
 ;;
 
-let ensure_postgres_url () =
-  match Sol_cli_string.env "POSTGRES_URL" with
-  | None ->
-    Unix.putenv
-      "POSTGRES_URL"
-      "postgresql://postgres:dev@postgresql.postgresql.svc.cluster.local:5432/dev"
-  | Some _ -> ()
+(* 2b: local development has no target binding, so `sol local deploy` supplies the local
+   cluster's Postgres as `POSTGRES_URL` to a unit that declares it. It is a local delivery
+   default, not an operator environment variable to copy in. *)
+let local_postgres_url =
+  "postgresql://postgres:dev@postgresql.postgresql.svc.cluster.local:5432/dev"
 ;;
 
 let to_manifest_primitive = Sol_cli_up_execution.manifest_primitive
@@ -407,6 +405,13 @@ let load_local_secret_values ~root ~facts services =
     let* values =
       Sol_cli_local_secret_input.load ~root ~unit_address
       |> Result.map_error (fun error -> service.name ^ ": " ^ error)
+    in
+    (* 2b: a unit that declares `POSTGRES_URL` receives the local cluster's database here,
+       so local development does not require the operator to set the value by hand. *)
+    let values =
+      if List.mem "POSTGRES_URL" required && not (List.mem_assoc "POSTGRES_URL" values)
+      then ("POSTGRES_URL", local_postgres_url) :: values
+      else values
     in
     let missing =
       required
@@ -609,7 +614,6 @@ let run_apply
       ~secret_values
   =
   let* () = check_contract ~facts ~services in
-  ensure_postgres_url ();
   print_header ~workspace ~sha ~dry_run:false;
   let* plan = build_plan ~requested_scope ~workspace ~sha ~facts ~declared ~services in
   let pf_failed = ref false in

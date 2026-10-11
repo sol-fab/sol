@@ -584,3 +584,22 @@ let%test "failure evidence (INFRA-040): both observations together" =
 let%test "failure evidence (INFRA-040): nothing observed, nothing reported" =
   test_evidence_report_is_empty_without_observations ()
 ;;
+
+(* 2b: `sol migrate apply <target> --dry-run` reads the applied set with an in-cluster
+   status Job and prints exactly the local files that set does not name. This filter
+   decides what it prints, so a mutation that keeps an applied file or drops a pending
+   one fails here. The down-migration is excluded by the filename authority. *)
+let%test "2b: a dry run lists only migrations the applied set does not name" =
+  let files =
+    [ "0001_notifications.sql", "select 1"
+    ; "0002_sol_outbox.sql", "select 2"
+    ; "0003_later.sql", "select 3"
+    ; "0002_sol_outbox.down.sql", "select down"
+    ]
+  in
+  Windtrap.equal
+    (Windtrap.list (Windtrap.pair Windtrap.string Windtrap.string))
+    ~msg:"only the unapplied up-migrations, in file order"
+    [ "0002_sol_outbox.sql", "select 2"; "0003_later.sql", "select 3" ]
+    (M.pending_files ~applied:[ 1 ] files)
+;;

@@ -35,20 +35,10 @@ prod:
       cluster_name: pluto-prod
       secrets:
         checkout/checkout_svc:
-          POSTGRES_URL:
-            authority: sol
         payments/charge_svc:
-          POSTGRES_URL:
-            authority: sol
         payments/orders_svc:
-          POSTGRES_URL:
-            authority: sol
         comms/notify_worker:
-          POSTGRES_URL:
-            authority: sol
         comms/fulfilment_worker:
-          POSTGRES_URL:
-            authority: sol
         demo_ts/order_svc:
           POSTGRES_URL:
             authority: sol
@@ -80,36 +70,26 @@ pilot:
       registry: 123456789012.dkr.ecr.us-east-1.amazonaws.com
       secrets:
         payments/charge_svc:
-          POSTGRES_URL:
-            authority: sol
           KAFKA_SASL_PASSWORD:
             authority: sol
           KAFKA_SSL_CA_CERT:
             authority: sol
         payments/orders_svc:
-          POSTGRES_URL:
-            authority: sol
           KAFKA_SASL_PASSWORD:
             authority: sol
           KAFKA_SSL_CA_CERT:
             authority: sol
         comms/notify_worker:
-          POSTGRES_URL:
-            authority: sol
           KAFKA_SASL_PASSWORD:
             authority: sol
           KAFKA_SSL_CA_CERT:
             authority: sol
         comms/fulfilment_worker:
-          POSTGRES_URL:
-            authority: sol
           KAFKA_SASL_PASSWORD:
             authority: sol
           KAFKA_SSL_CA_CERT:
             authority: sol
         checkout/checkout_svc:
-          POSTGRES_URL:
-            authority: sol
           KAFKA_SASL_PASSWORD:
             authority: sol
           KAFKA_SSL_CA_CERT:
@@ -157,8 +137,6 @@ dev:
       cluster_name: pluto-dev
       secrets:
         checkout/checkout_svc:
-          POSTGRES_URL:
-            authority: sol
         demo_ts/order_svc:
           POSTGRES_URL:
             authority: sol
@@ -179,20 +157,10 @@ customer_cloud:
       cluster_name: pluto-customer
       secrets:
         checkout/checkout_svc:
-          POSTGRES_URL:
-            authority: sol
         payments/charge_svc:
-          POSTGRES_URL:
-            authority: sol
         payments/orders_svc:
-          POSTGRES_URL:
-            authority: sol
         comms/notify_worker:
-          POSTGRES_URL:
-            authority: sol
         comms/fulfilment_worker:
-          POSTGRES_URL:
-            authority: sol
         demo_ts/order_svc:
           POSTGRES_URL:
             authority: sol
@@ -205,20 +173,10 @@ customer_cloud:
       registry: registry.example.com/pluto
       secrets:
         checkout/checkout_svc:
-          POSTGRES_URL:
-            authority: sol
         payments/charge_svc:
-          POSTGRES_URL:
-            authority: sol
         payments/orders_svc:
-          POSTGRES_URL:
-            authority: sol
         comms/notify_worker:
-          POSTGRES_URL:
-            authority: sol
         comms/fulfilment_worker:
-          POSTGRES_URL:
-            authority: sol
         demo_ts/order_svc:
           POSTGRES_URL:
             authority: sol

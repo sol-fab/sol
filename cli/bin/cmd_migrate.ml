@@ -136,13 +136,74 @@ let active_services path =
   Ok (List.map (fun (s : Sol_cli_config.service) -> s.name) (Sol_cli_config.services cfg))
 ;;
 
-let run_apply_in_cluster ~ctx ~dir ~table ~target_path ~active =
+(* 2b: what the in-cluster migration paths need, computed once — the target's services and
+   the class Secret the Job reads. The reader never branches on ownership; only the CA mount
+   does, because an externally bound database publishes no Sol CA ConfigMap. *)
+let in_cluster_context ~target_path ~active =
   let workspace = Sol_cli_workspace.current_name () in
   let* facts = Sol_cli_workspace_model.load_cwd () in
   let services =
     Sol_cli_migration_job.services_of_target
       ~all:(Sol_cli_workspace_model.services facts)
       ~active
+  in
+  let target = Sol_cli_kubernetes_name.sanitize_name target_path in
+  let* provisions_database =
+    Sol_cli_config.load_for_target ~target:target_path
+    |> Result.map_error Sol_cli_config.error_to_string
+    |> Result.map (fun config ->
+      match Sol_cli_resource_binding.resolve config with
+      | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
+      | Error _ -> false)
+  in
+  let ca_configmap =
+    if provisions_database
+    then Some (Sol_cli_database_setup_render.ca_configmap_name target)
+    else None
+  in
+  Ok
+    ( workspace
+    , services
+    , Sol_cli_database_setup_render.ddl_creds_name target
+    , ca_configmap )
+;;
+
+let print_pending_files ~dir applied files =
+  match Sol_cli_migration.pending_files ~applied files with
+  | [] -> Printf.printf "(no pending migrations in %s)\n" dir
+  | pending ->
+    List.iter
+      (fun (fname, content) -> Printf.printf "-- %s\n%s\n\n" fname content)
+      pending
+;;
+
+(* A dry run against a target reads the applied set with the same read-only in-cluster
+   status Job the deploy gate uses, then prints the local files that Job reports pending. It
+   never connects from the operator's machine, so it needs no credential in the operator's
+   environment — the Job reads the target's DDL class Secret. *)
+let run_dry_run_in_cluster ~ctx ~dir ~table ~target_path ~active =
+  let* workspace, services, ddl_creds_name, ca_configmap =
+    in_cluster_context ~target_path ~active
+  in
+  let* applied =
+    Sol_cli_migration_gate.read_applied
+      ~ctx
+      ~workspace
+      ~dir
+      ~table
+      ~services
+      ~ddl_creds_name
+      ?ca_configmap
+      ()
+  in
+  let* files = Sol_cli_migration_gate.migration_files dir in
+  print_pending_files ~dir applied files;
+  Ok ()
+;;
+
+let run_apply_in_cluster ~ctx ~dir ~table ~target_path ~active =
+  let* workspace, services, ddl_creds_name, ca_configmap =
+    in_cluster_context ~target_path ~active
   in
   let* namespace = Sol_cli_migration_job.job_namespace ~workspace ~services in
   let* () =
@@ -158,24 +219,7 @@ let run_apply_in_cluster ~ctx ~dir ~table ~target_path ~active =
   then (
     Printf.printf "(no migration files found in %s -- nothing to do)\n" dir;
     Ok ())
-  else (
-    (* 2b: the migration Job reads `<target>-ddl-creds`. The reader does not branch on
-       ownership; only the CA mount does, because an externally bound database publishes no
-       Sol CA ConfigMap. *)
-    let target = Sol_cli_kubernetes_name.sanitize_name target_path in
-    let* provisions_database =
-      Sol_cli_config.load_for_target ~target:target_path
-      |> Result.map_error Sol_cli_config.error_to_string
-      |> Result.map (fun config ->
-        match Sol_cli_resource_binding.resolve config with
-        | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
-        | Error _ -> false)
-    in
-    let ca_configmap =
-      if provisions_database
-      then Some (Sol_cli_database_setup_render.ca_configmap_name target)
-      else None
-    in
+  else
     let* image = Sol_cli_migration_job.runner_image () in
     let* job =
       Sol_cli_migration_job.submit
@@ -186,11 +230,11 @@ let run_apply_in_cluster ~ctx ~dir ~table ~target_path ~active =
         ~image
         ~args:[ "migrate"; "apply"; "--dir"; "/migrations"; "--table"; table ]
         ~files
-        ~ddl_creds_name:(Sol_cli_database_setup_render.ddl_creds_name target)
+        ~ddl_creds_name
         ?ca_configmap
         ()
     in
-    run_migration_job ~ctx ~namespace job)
+    run_migration_job ~ctx ~namespace job
 ;;
 
 let require_valid_migrations dir = Sol_cli_migration.required ~dir |> Result.map ignore
@@ -262,16 +306,16 @@ let run_rollback ~ctx dir table () =
 let run_apply ~ctx dir table dry_run target =
   let* () = require_valid_migrations dir in
   if dry_run
-  then
-    let* url =
-      match target with
-      | None -> get_postgres_url ~ctx ()
-      | Some _ ->
-        (match Sol_cli_string.env "POSTGRES_URL" with
-         | Some url -> Ok url
-         | None -> Error "--dry-run for a target requires POSTGRES_URL for that database")
-    in
-    with_pool url (fun ~fs pool -> print_pending_sql ~url ~fs pool ~table dir)
+  then (
+    match target with
+    | None ->
+      let* url = get_postgres_url ~ctx () in
+      with_pool url (fun ~fs pool -> print_pending_sql ~url ~fs pool ~table dir)
+    | Some path ->
+      (* 2b: no operator-held POSTGRES_URL. A target's pending set is read by an in-cluster
+         read-only status Job and compared with the local files. *)
+      let* active = active_services path in
+      run_dry_run_in_cluster ~ctx ~dir ~table ~target_path:path ~active)
   else (
     match target with
     | None -> run_apply_local ~ctx dir table
@@ -364,7 +408,13 @@ let dry_run_flag =
   Arg.(
     value
     & flag
-    & info [ "dry-run" ] ~doc:"Print pending migration SQL to stdout without applying")
+    & info
+        [ "dry-run" ]
+        ~doc:
+          "Print pending migration SQL to stdout without applying. With a target, the \
+           applied set is read by a read-only in-cluster status Job (the same one the \
+           deploy gate uses) and compared with the local files; with no target, the \
+           local dev cluster is read directly.")
 ;;
 
 let target_arg =
@@ -373,9 +423,11 @@ let target_arg =
       "Deployment target path: <env>/<provider>/<region>. When given, migrations run \
        from a one-shot Kubernetes Job inside the target's cluster instead of connecting \
        directly from this machine — required for any real deployment whose database \
-       (e.g. RDS) isn't reachable from outside its network by design (FRIC-012). Omit \
-       for the local dev cluster, which remains directly reachable via kubectl \
-       port-forward."
+       (e.g. RDS) isn't reachable from outside its network by design (FRIC-012). \
+       **Requires a deploy to have run first**: the Job reads the target's DDL \
+       credential from `<target>-ddl-creds`, which the deploy's database setup step \
+       writes. Omit for the local dev cluster, which remains directly reachable via \
+       kubectl port-forward."
 ;;
 
 let apply_cmd =
@@ -413,7 +465,11 @@ let rollback_cmd =
 
 let cmd =
   Cmd.group
-    (Cmd.info "migrate" ~doc:"Run database migrations against POSTGRES_URL")
+    (Cmd.info
+       "migrate"
+       ~doc:
+         "Run database migrations. A target's Job reads the deploy-delivered \
+          `<target>-ddl-creds`; the local dev cluster is reached by port-forward.")
     ~default:Term.(const run_apply_term $ dir_arg $ table_arg $ dry_run_flag $ target_arg)
     [ apply_cmd; status_cmd; rollback_cmd ]
 ;;

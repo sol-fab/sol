@@ -140,7 +140,8 @@ This is the self-contained factory path for local smoke tests.
 Pipeline:
 
 1. Discover services (`Sol_cli_manifest.discover_services`).
-2. Pre-flight: validate `POSTGRES_URL` (injected from in-cluster value if against k3d).
+2. Pre-flight: validate the workspace contract. Local delivery supplies the local
+   cluster's `POSTGRES_URL` to a unit that declares it; the operator sets no value.
 3. Construct env_target with `Sol_cli_env_target.local_defaults`.
 4. **Plan:** `Sol_cli_deployment_plan.of_services_result` → `plan`.
 5. Consumer group removal guard: compare `Sol_cli_deployment_state.load_deployed_groups`
@@ -169,7 +170,8 @@ synthesis; customer CI or a future `sol build` owns image production.
 Pipeline:
 
 1. Discover services.
-2. Pre-flight: validate `POSTGRES_URL` (skipped for `--dry-run` and `--emit-to`).
+2. Pre-flight: validate the workspace contract. Database delivery comes from the
+   target's binding, not an operator-supplied `POSTGRES_URL`.
 3. Construct env_target with `Sol_cli_env_target.customer_cloud_defaults` (requires
    `--registry`).
 4. Resolve every declared per-key secret authority. Sol-owned values reference the unit Secret;
@@ -242,10 +244,12 @@ network by design (e.g. RDS with `publicly_accessible = false`), currently
 2. Render a ConfigMap from every file in `db/migrations/` and a one-shot
    `batch/v1` Job that mounts it at `/migrations`, uses that image, and runs
    `sol migrate apply --dir /migrations --table <table>` inside the cluster
-   (`envFrom` the workspace's `sol-secrets` Secret, so `POSTGRES_URL`
-   resolves the same way a deployed service's does) — i.e. the Job re-enters
-   local mode from inside the network where the database is actually
-   reachable. Runs in the namespace of the first domain `discover_services`
+   (`envFrom` the target's `<target>-ddl-creds` class Secret, so the DDL
+   credential resolves; it mounts `<target>-db-ca` when Sol provisions the
+   database) — i.e. the Job re-enters local mode from inside the network where
+   the database is actually reachable. Running `sol migrate apply <target>`
+   therefore requires a deploy to have run first, so the class Secret exists.
+   Runs in the namespace of the first domain `discover_services`
    finds; migrations aren't domain-scoped, and RDS reachability is enforced
    at the VPC/security-group level, not per-namespace.
 3. Apply both, poll the Job's `status.succeeded`/`status.failed` fields

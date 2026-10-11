@@ -257,8 +257,8 @@ let test_platform_set_writes_only_the_runtime_secret () =
       Sol_cli_secret.set_platform_key
         ~ctx
         ~namespaces:[ "payments"; "orders" ]
-        ~key:"POSTGRES_URL"
-        ~value:"postgres://platform-db"
+        ~key:"KAFKA_SASL_PASSWORD"
+        ~value:"kafka-sasl"
     with
     | Error message -> Windtrap.failf "platform secret set failed: %s" message
     | Ok _ ->
@@ -273,6 +273,25 @@ let test_platform_set_writes_only_the_runtime_secret () =
         ~msg:"application Secrets are not written"
         false
         (Sol_cli_string.contains ~needle:"charge-svc-secrets" manifests))
+;;
+
+(* 2b: POSTGRES_URL is no longer a platform Job input, so the shared-scope writer
+   that used to carry it must refuse it and the Kafka credential must still work. *)
+let test_platform_set_refuses_postgres_url () =
+  match
+    Sol_cli_secret.set_platform_key
+      ~ctx
+      ~namespaces:[ "payments" ]
+      ~key:"POSTGRES_URL"
+      ~value:"postgres://platform-db"
+  with
+  | Ok _ -> Windtrap.fail "POSTGRES_URL must no longer be a platform Job input"
+  | Error message ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the refusal names the class-Secret replacement"
+      true
+      (Sol_cli_string.contains ~needle:"not a supported Sol platform Job secret" message)
 ;;
 
 let test_platform_preflight_checks_all_namespaces_before_secret_writes () =
@@ -544,6 +563,8 @@ let%test "verify: an absent Secret fails" = test_verify_rejects_an_absent_secret
 let%test "scope: platform writes only the shared Job Secret" =
   test_platform_set_writes_only_the_runtime_secret ()
 ;;
+
+let%test "2b: platform refuses POSTGRES_URL" = test_platform_set_refuses_postgres_url ()
 
 let%test "scope: platform secret destinations preflight as a target" =
   test_platform_preflight_checks_all_namespaces_before_secret_writes ()

@@ -106,18 +106,20 @@ example, `payments/charge_svc` receives values from `charge-svc-secrets` in the
 changes only that Secret and restarts the unit when it is a long-running
 Deployment. It never writes the platform Secret or another unit's Secret.
 
-Sol's internal Jobs use a separate fixed-name Secret, `sol-secrets`. Migration
-Jobs read `POSTGRES_URL` from it. When a contract Job runs against a SASL_SSL
-target, it also reads `KAFKA_SASL_PASSWORD` and mounts `KAFKA_SSL_CA_CERT` from
-it. `sol secret set TARGET @platform/KEY` writes only these platform Job inputs
-to `sol-secrets` objects in the target's active workload namespaces. It does
-not fan values out to application Secrets.
+Sol's internal Jobs use a separate fixed-name Secret, `sol-secrets`, for platform
+inputs that no unit owns. A TLS contract Job reads `KAFKA_SASL_PASSWORD` and
+mounts `KAFKA_SSL_CA_CERT` from it; `sol secret set TARGET @platform/KEY` writes
+only these Kafka platform Job inputs to `sol-secrets` objects in the target's
+active workload namespaces. It does not fan values out to application Secrets.
+Database connections are not a platform input: a unit that declares
+`uses: [app_db]` reads the deploy-delivered `<target>-dml-creds` class Secret,
+and the migration Job reads `<target>-ddl-creds`.
 
-The substrate checks the shared database input before proceeding, and the TLS
-contract Job checks its Kafka inputs before it starts. Application Secrets
-contain the unit's declared keys plus the workload default `POSTGRES_URL`.
-`sol secret status TARGET` reports owners and presence without
-printing values.
+The substrate checks the platform inputs a Job consumes before proceeding. An
+application Secret contains exactly the unit's declared keys; a unit-scoped
+`POSTGRES_URL` is one it declares itself, while a unit that consumes the target's
+database reads the class Secret instead. `sol secret status TARGET` reports
+owners and presence without printing values.
 
 Each required application key must declare `sol` or `external` authority in the
 target. Sol can write only `sol` keys. External values are delivered by ESO into

@@ -266,9 +266,9 @@ command line verbatim, so the value would be written to a file. The module
 carries the same precondition on `aws_db_instance.postgres`, so the constraint
 holds even when terraform is driven directly. Nothing writes the password to a
 plan, an output, a log or a release record; the module's `postgres_url` output
-(which does contain it) is `sensitive`, and it exists so an operator can place
-the connection string in their secret store for the runtime Secret that
-workloads read as `POSTGRES_URL`.
+(which does contain it) is `sensitive`, and it exists so the deploy's database
+setup step can derive the class credentials (`<target>-ddl-creds`,
+`<target>-dml-creds`) from it. No operator copies the master into a secret store.
 
 **`cluster_issuer` belongs to the base platform layer.** `sol plan`, `sol deploy` and `sol destroy` pass each Terraform root only the variables it declares.
 `cluster_issuer` names a cert-manager `ClusterIssuer`, so Sol routes it to
@@ -320,13 +320,13 @@ Two operator steps make the transport usable, and both fail closed:
    supplied out of band: Sol never reads it, and it never enters Terraform
    state, a command line, a release artifact or a run log.
 
-2. **Provide platform Job inputs separately from application values.** Migration
-   Jobs read `POSTGRES_URL` from the target's `sol-secrets` objects. For a TLS
-   profile, contract Jobs also read the Kafka password and CA there:
+2. **Provide platform Job inputs separately from application values.** Database
+   access is not a platform input: the deploy delivers `<target>-dml-creds` to a
+   unit that declares `uses: [app_db]` and `<target>-ddl-creds` to the migration
+   Job. For a TLS profile, contract Jobs read the Kafka password and CA from the
+   target's `sol-secrets` objects:
 
    ```bash
-   your-secret-tool get production-postgres-url \
-     | sol secret set prod/aws/us-east-1 @platform/POSTGRES_URL --from-stdin
    your-secret-tool get sol-kafka-sasl-password \
      | sol secret set prod/aws/us-east-1 @platform/KAFKA_SASL_PASSWORD --from-stdin
    kubectl get secret redpanda-default-cert -n redpanda \

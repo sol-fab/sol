@@ -210,13 +210,14 @@ the Secret is absent, naming it and the command that creates it. On a fresh
 target the order is `sol deploy pilot/aws/us-east-1`, create the Secret when
 the run names it, then `sol deploy pilot/aws/us-east-1` again to resume.
 Supply the platform Job inputs to the reserved target scope, then set the
-application values separately for each unit that declares them:
+application values separately for each unit that declares them. Database access
+is not a platform input: the deploy delivers `<target>-dml-creds` to a unit that
+declares `uses: [app_db]` and `<target>-ddl-creds` to the migration Job, so there
+is no `POSTGRES_URL` to supply here:
 
 ```bash
 kubectl create secret generic redpanda-users -n redpanda \
   --from-literal=users.txt="sol-workloads:$KAFKA_SASL_PASSWORD:SCRAM-SHA-256"
-printf '%s' "$POSTGRES_URL" \
-  | sol secret set pilot/aws/us-east-1 @platform/POSTGRES_URL --from-stdin
 printf '%s' "$KAFKA_SASL_PASSWORD" \
   | sol secret set pilot/aws/us-east-1 @platform/KAFKA_SASL_PASSWORD --from-stdin
 kubectl get secret redpanda-default-cert -n redpanda -o jsonpath='{.data.ca\.crt}' \

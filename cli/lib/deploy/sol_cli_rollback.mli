@@ -1,5 +1,6 @@
 val service_specs_of_release
-  :  Sol_cli_release.t
+  :  ?config:Sol_cli_config.t
+  -> Sol_cli_release.t
   -> ((Sol_cli_deployment_plan.service_spec * string) list, string) result
 
 type migration_check_error =
@@ -187,7 +188,11 @@ val pointer_report_ok : pointer_report -> bool
 val pointer_report_to_string : release:Sol_cli_release.t -> pointer_report -> string
 
 type transaction_deps =
-  { ensure_held : unit -> (unit, string) result
+  { (* 2b: the target's **current** config, from which the restored workloads' database
+       delivery is derived (historical requirements, current bindings). [None] for a local
+       rollback, where delivery stays unit-scoped. *)
+    config : Sol_cli_config.t option
+  ; ensure_held : unit -> (unit, string) result
   ; applied_migrations : unit -> (int list, string) result
   ; apply : (Sol_cli_deployment_plan.service_spec * string) list -> (unit, string) result
   ; live_workloads : unit -> ((workload_identity * string) list, string) result

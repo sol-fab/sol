@@ -412,7 +412,9 @@ let set_unit_key ~ctx ~namespace ~secret_name ~key ~value =
   set_named_key ~ctx ~namespace ~secret_name ~key ~value ()
 ;;
 
-let platform_secret_keys = [ "POSTGRES_URL"; "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ]
+(* 2b: the Kafka credentials are the only platform Job inputs left; a database
+   connection is delivered by the deploy as `<target>-dml-creds` / `<target>-ddl-creds`. *)
+let platform_secret_keys = [ "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ]
 
 let set_platform_key ~ctx ~namespaces ~key ~value =
   let* () = validate_key key in

@@ -100,22 +100,29 @@ The following substrate inputs must exist before running `sol deploy`.
 - Sol's workspace scan discovers topic intent from `events/**/sol.toml`, but
   it does not create an external Kafka cluster for you.
 
-### Postgres Connection Secret
+### Postgres Connection
 
-- A target platform Secret containing a `POSTGRES_URL` key with a valid libpq
-  connection string, e.g.
-  `postgresql://user:password@host:5432/dbname?sslmode=require`.
-- Migration Jobs read `POSTGRES_URL` from the target's `sol-secrets` object.
-  Populate it with `sol secret set <TARGET> @platform/POSTGRES_URL`. Application
-  workloads receive only the unit-scoped Secret objects for their declared keys;
-  GitOps artifacts contain references, never secret values or placeholders.
-- Sol does not create the database in the application deploy path, run
-  migrations at cluster startup, or manage credentials rotation. `sol migrate`
-  uses the target platform Secret after `POSTGRES_URL` is available.
+- A database is delivered to its consumers by the deploy, from the target's
+  `postgres` binding — Sol-provisioned or externally bound. There is no
+  operator-held `POSTGRES_URL` to set.
+- A Sol-provisioned database's setup step writes `<target>-db-credentials`
+  (the provisioning master, never delivered to a workload), `<target>-ddl-creds`
+  (the migration Job's namespace), `<target>-dml-creds` (consuming units'
+  namespaces) and the `<target>-db-ca` ConfigMap. A unit that declares
+  `uses: [app_db]` reads `POSTGRES_URL` from `<target>-dml-creds`; the migration
+  Job reads it from `<target>-ddl-creds`.
+- An externally bound database publishes the same class Secret names through an
+  ESO `ExternalSecret` per class, and no CA ConfigMap (the provider's own trust
+  chain applies). A unit that merely declares `POSTGRES_URL` as an application
+  secret keeps reading its own unit-scoped Secret.
 - The contract key is **`POSTGRES_URL`**, not `DATABASE_URL`. There are no
   `postgres_secret_name`, `kafka_secret_name`, or `tls_secret_name` fields in
   `sol.toml`; per-workload Secret names are derived as `<service>-secrets`, and
   `sol.toml` declares only secret *keys* under `[infra.env] secrets`.
+- Sol does not create the database in the application deploy path, run
+  migrations at cluster startup, or manage credentials rotation.
+  `sol migrate apply <target>` requires a deploy to have run first, so
+  `<target>-ddl-creds` exists.
 - **Runtime and build-time keys are separate declarations.**
   `[infra.env] secrets` lists the keys a workload needs while it runs; they are
   delivered through `<service>-secrets`. `[infra.env] build_secrets` lists the
@@ -186,7 +193,7 @@ not look) — and **an answer Sol could not obtain is never promoted to satisfie
 | Kubernetes cluster | a reachable cluster and a kubeconfig context that reaches it | `kubectl cluster-info` through the target's context; a connection-level failure is `Unmet`, a refused or unauthenticated answer is `UNKNOWN` | `sol target show <target> --check` |
 | Container registry | a registry prefix the cluster's nodes can pull from | the prefix is read from the target; **pullability is not observable from the CLI**, because only a node in the cluster pulls | `sol target show <target> --check` |
 | Kafka and schema registry | broker addresses and a schema-registry URL the workloads reach, with `KAFKA_SECURITY_PROTOCOL` set (`SEC-007`) | the addresses are workspace configuration (`[infra.env] config`); reachability and the broker's security posture are properties of the cluster's network, which the CLI does not sit in | `sol deploy` (the workloads observe it at runtime) |
-| Postgres connection | a `POSTGRES_URL` the workspace's runtime Secret carries | read from the live runtime Secret in the cluster; a deploy that cannot find the key, or finds it blank, refuses before applying rather than rendering one without it | `sol deploy`, `sol target show <target> --check` |
+| Postgres connection | a database delivered to its consumers by the deploy from the target's binding | the deploy writes the class Secrets (`<target>-dml-creds`, `<target>-ddl-creds`) and the consuming unit mounts them; `sol target show <target> --check` reports the database connection `UNKNOWN`, because the target surface does not observe whether the selected database accepts it | `sol deploy` (the workloads and migration Job observe it at runtime) |
 | Observability endpoints | Loki and Pushgateway endpoints the workloads reach | the URLs are workspace configuration; reachability is again a property of the cluster's network | `sol deploy` (the workloads observe it at runtime) |
 | Base domain and TLS | a certificate Issuer and a DNS entry when a service declares an ingress host | the Issuer lives in the cluster and the record in the DNS provider, neither of which the deploy check reads | `sol deploy` (`--check` reports it `UNKNOWN`, with the reason) |
 

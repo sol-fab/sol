@@ -444,11 +444,13 @@ LOKI_URL            http://loki.monitoring.svc.cluster.local:3100
 TEMPO_URL           http://tempo.monitoring.svc.cluster.local:4318
 ```
 
-Secrets such as `POSTGRES_URL` and `SOL_API_KEY` are delivered through each
-workload's Kubernetes Secret instead of the ConfigMap. `sol local deploy` reads
-the matching ignored file under `sol/secrets.local/`, applies only that unit's
-declared values, and verifies the rollout. A changed local value causes the
-affected workload to restart.
+Application secrets such as `SOL_API_KEY` are delivered through each workload's
+Kubernetes Secret instead of the ConfigMap. A unit that declares `uses: [app_db]`
+gets its database connection from the deploy-delivered `<target>-dml-creds` class
+Secret, not from a declared key. `sol local deploy` reads the matching ignored
+file under `sol/secrets.local/`, applies only that unit's declared values, and
+verifies the rollout. A changed local value causes the affected workload to
+restart.
 
 A secret that only the **build** needs is declared separately, in
 `[infra.env] build_secrets`, so it is never delivered to the running workload:
@@ -456,7 +458,7 @@ A secret that only the **build** needs is declared separately, in
 ```toml
 [infra.env]
 # runtime keys — delivered to the pod through <service>-secrets
-secrets       = ["POSTGRES_URL"]
+secrets       = ["SOL_API_KEY"]
 # build-time keys — named for the builder, exported in the plan, never shipped
 build_secrets = ["BUILD_REGISTRY_TOKEN"]
 ```
@@ -911,11 +913,13 @@ render the same references and never emit values or placeholder Secret objects. 
 verifies ESO sync, materialized keys and workload readiness. GitOps relies on Argo CD and ESO to
 reconcile the emitted resources.
 
-Sol platform Jobs use the reserved `@platform` scope for their own inputs, such
-as `POSTGRES_URL` for migration Jobs. For SASL_SSL targets, the contract Job also
-requires `KAFKA_SASL_PASSWORD` and `KAFKA_SSL_CA_CERT`. These values go only into
-the shared `sol-secrets` Secret used by Sol Jobs; they are never copied into
-application-unit Secrets.
+Sol platform Jobs use the reserved `@platform` scope for their own inputs. The
+database is not one of them — the deploy delivers `<target>-dml-creds` to a unit
+that declares `uses: [app_db]` and `<target>-ddl-creds` to the migration Job. For
+SASL_SSL targets, the contract Job requires `KAFKA_SASL_PASSWORD` and
+`KAFKA_SSL_CA_CERT` through `@platform`. These values go only into the shared
+`sol-secrets` Secret used by Sol Jobs; they are never copied into application-unit
+Secrets.
 
 The generated files contain the full manifest (Namespace, ServiceAccount, ConfigMap, Deployment/Service). If a service enables progressive delivery in `sol.toml`, Sol emits an Argo Rollouts `Rollout` instead of a Kubernetes `Deployment`. Argo CD applies these manifests with `ServerSideApply=true` and prunes resources that are removed.
 

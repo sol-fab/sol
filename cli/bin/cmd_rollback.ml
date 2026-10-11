@@ -64,7 +64,9 @@ let declared_external_secrets_of_release (release : Sol_cli_release.t) =
           }))
 ;;
 
-let run_locked ~lease ~ctx ~local ~workspace ~facts release_id : (unit, string) result =
+let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
+  : (unit, string) result
+  =
   let* release = Sol_cli_release_store.get ~ctx ~workspace ~release_id in
   Printf.printf "Rolling back %s to release %s\n%!" workspace release.release_id;
   let current_migrations =
@@ -84,8 +86,30 @@ let run_locked ~lease ~ctx ~local ~workspace ~facts release_id : (unit, string) 
         message;
       []
   in
+  (* 2b: the migration boundary read is a DDL consumer, so against a target it reads the
+     target's `<target>-ddl-creds` class Secret and mounts `<target>-db-ca` when Sol
+     provisions that database. A local rollback has no target binding and keeps the
+     workspace runtime Secret path. *)
+  let ddl_creds_name, ca_configmap =
+    match config with
+    | None -> Sol_cli_manifest.runtime_secret_name, None
+    | Some config ->
+      let target =
+        Sol_cli_kubernetes_name.sanitize_name config.Sol_cli_config.target.name
+      in
+      let provisions =
+        match Sol_cli_resource_binding.resolve config with
+        | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
+        | Error _ -> false
+      in
+      ( Sol_cli_database_setup_render.ddl_creds_name target
+      , if provisions
+        then Some (Sol_cli_database_setup_render.ca_configmap_name target)
+        else None )
+  in
   let deps : Sol_cli_rollback.transaction_deps =
-    { ensure_held = (fun () -> Sol_cli_boundary_lease.ensure_held lease)
+    { config
+    ; ensure_held = (fun () -> Sol_cli_boundary_lease.ensure_held lease)
     ; applied_migrations =
         (fun () ->
           Sol_cli_migration_gate.read_applied
@@ -94,11 +118,8 @@ let run_locked ~lease ~ctx ~local ~workspace ~facts release_id : (unit, string) 
             ~dir:migrations_dir
             ~table:(Sol_cli_migration.table_name ~workspace)
             ~services:(Sol_cli_workspace_model.services facts)
-              (* 2b switches the deploy and `sol migrate apply` readers to the target's DDL
-               class Secret. Rollback's reader stays on the workspace runtime Secret until
-               rollback itself moves to current target bindings; passing the runtime Secret
-               name here keeps that path's behaviour unchanged. *)
-            ~ddl_creds_name:Sol_cli_manifest.runtime_secret_name
+            ~ddl_creds_name
+            ?ca_configmap
             ())
     ; apply =
         apply_specs
@@ -150,7 +171,7 @@ let run_locked ~lease ~ctx ~local ~workspace ~facts release_id : (unit, string) 
   Ok ()
 ;;
 
-let run ~ctx ?(local = false) release_id =
+let run ~ctx ?(local = false) ?config release_id =
   let workspace = workspace_name () in
   Sol_cli_exit.of_msg
     (let* facts = Sol_cli_workspace_model.load_cwd () in
@@ -160,7 +181,7 @@ let run ~ctx ?(local = false) release_id =
        ~holder:Sol_cli_boundary_lease.Rollback
        ~ttl:ttl_s
        ~wait_s
-       (fun lease -> run_locked ~lease ~ctx ~local ~workspace ~facts release_id))
+       (fun lease -> run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id))
 ;;
 
 let release_id_arg =
@@ -185,7 +206,17 @@ let cmd =
       const (fun release_id target ->
         let result =
           let* ctx = Cmd_destination.remote ~command:"rollback" target in
-          run ~ctx release_id
+          (* 2b: the rollback's database delivery is derived from the target's **current**
+             bindings, so load them here rather than reading ownership from the release. *)
+          let* config =
+            match target with
+            | None ->
+              Error (Sol_cli_exit.error "rollback requires a target to resolve bindings")
+            | Some path ->
+              Sol_cli_config.load_for_target ~target:path
+              |> Sol_cli_exit.of_error Sol_cli_config.error_to_string
+          in
+          run ~ctx ~config release_id
         in
         Sol_cli_exit.exit_on result)
       $ release_id_arg
