@@ -2285,17 +2285,62 @@ let%test "database setup url: credentials substituted, query parameters preserve
 (* The master URL gains the TLS parameters, replacing any the provider left there rather
    than duplicating them (two `sslmode` keys would leave the effective one to libpq's
    parser). *)
-let%test "database setup url: with_tls requires verify-full and the mounted anchor" =
+(* The contract is provider-neutral; the mechanism is not. What must hold for every
+   provider is that the mode is explicit: none of these encrypts without authenticating the
+   server, and none lets the server talk the client down. *)
+let test_database_setup_sslmode_is_the_providers () =
+  let mode provider =
+    match Sol_cli_provider_registry.postgres_sslmode provider with
+    | Ok mode -> mode
+    | Error failure ->
+      Windtrap.fail (Sol_cli_provider_registry.resolution_failure_to_string failure)
+  in
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"AWS verifies the host against its pinned CA"
+    "verify-full"
+    (mode Sol_cli_provider.Aws);
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"GCP establishes identity with the instance's own CA over a private address"
+    "verify-ca"
+    (mode Sol_cli_provider.Gcp);
+  List.iter
+    (fun provider ->
+       Windtrap.equal
+         Windtrap.bool
+         ~msg:"the mode neither skips authentication nor yields to the server"
+         false
+         (List.mem (mode provider) [ "disable"; "allow"; "prefer"; "require" ]))
+    [ Sol_cli_provider.Aws; Sol_cli_provider.Gcp ];
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"a provider with no cluster root declares no mode"
+    true
+    (match Sol_cli_provider_registry.postgres_sslmode Sol_cli_provider.Byo with
+     | Ok _ -> false
+     | Error _ -> true)
+;;
+
+let%test "database setup: each provider's TLS mode is explicit, never a downgrade" =
+  test_database_setup_sslmode_is_the_providers ()
+;;
+
+let%test "database setup url: with_tls carries the provider's mode and the mounted anchor"
+  =
   let url =
     Sol_cli_database_setup_url.with_tls
+      ~sslmode:"verify-ca"
       ~ca_cert_path:Sol_cli_database_setup_render.ca_cert_path
       "postgresql://postgres:masterpw@db.internal:5432/app?sslmode=require&application_name=sol"
   in
+  (* The mode is whatever the provider declared, not a constant this module knows: asserting
+     the literal would re-introduce the coupling the argument removes. *)
   Windtrap.equal
     Windtrap.bool
-    ~msg:"verification is full"
+    ~msg:"the provider's mode is the one delivered"
     true
-    (setup_mentions "sslmode=verify-full" url);
+    (setup_mentions "sslmode=verify-ca" url);
   Windtrap.equal
     Windtrap.bool
     ~msg:"the anchor is the mounted CA"
