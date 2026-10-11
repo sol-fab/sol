@@ -47,46 +47,61 @@ let apply_doc ~ctx doc =
       (Sol_cli_process.error_to_string err))
 ;;
 
+(* The cluster fact the platform publishes: which ranges reach this target's managed
+   database, and on which port. It is a [result], not an [option], so a refused, unreachable
+   or malformed read is not silently "no database" — that conflation is what let a target
+   with a managed database deploy with no egress to it. An absent fact is still [Ok None];
+   [ensure] decides whether that is acceptable from the target's ownership, which this
+   function does not know. Returns [Ok None] when the fact carries no ranges (the platform's
+   publication for a target with no managed database). *)
 let platform_network_fact ~ctx =
+  let what = "ConfigMap kube-system/sol-platform-network" in
   match
-    Sol_cli_kubectl.get
+    Sol_cli_kubectl.get_if_present
       ~ctx
-      ~resource:"configmap"
-      ~name:"sol-platform-network"
-      ~namespace:"kube-system"
-      ~output:"json"
+      ~args:
+        [ "get"; "configmap"; "sol-platform-network"; "-n"; "kube-system"; "-o"; "json" ]
   with
-  | Error _ -> None
-  | Ok result ->
-    (match Yojson.Safe.from_string result.Sol_cli_process.stdout with
+  | Error error ->
+    Error
+      (Printf.sprintf
+         "could not read the cluster's database-egress fact (%s): %s"
+         what
+         (Sol_cli_process.error_to_string error))
+  | Ok None -> Ok None
+  | Ok (Some body) ->
+    (match Yojson.Safe.from_string body with
      | `Assoc fields ->
-       let data key =
+       let data =
          match List.assoc_opt "data" fields with
-         | Some (`Assoc entries) ->
-           (match List.assoc_opt key entries with
-            | Some (`String value) -> Some value
-            | _ -> None)
-         | _ -> None
+         | Some (`Assoc entries) -> entries
+         | _ -> []
        in
        let cidrs =
-         match data "database-egress-cidrs" with
-         | Some text -> String.split_on_char ',' text |> List.filter (fun c -> c <> "")
-         | None -> []
+         match List.assoc_opt "database-egress-cidrs" data with
+         | Some (`String text) ->
+           String.split_on_char ',' text
+           |> List.map String.trim
+           |> List.filter (fun cidr -> cidr <> "")
+         | _ -> []
        in
        let port =
-         match data "database-port" with
-         | Some text ->
-           (match int_of_string_opt text with
-            | Some port -> port
-            | None -> 5432)
-         | None -> 5432
+         match List.assoc_opt "database-port" data with
+         | Some (`String text) ->
+           Option.value (int_of_string_opt (String.trim text)) ~default:5432
+         | _ -> 5432
        in
-       if cidrs = [] then None else Some (cidrs, port)
-     | _ -> None
-     | exception Yojson.Json_error _ -> None)
+       if cidrs = [] then Ok None else Ok (Some (cidrs, port))
+     | _ -> Error (Printf.sprintf "the database-egress fact (%s) is not an object" what)
+     | exception Yojson.Json_error message ->
+       Error
+         (Printf.sprintf
+            "the database-egress fact (%s) is not valid JSON: %s"
+            what
+            message))
 ;;
 
-let ensure ~workloads ~ctx ~namespaces : (unit, string) result =
+let ensure ~workloads ~ctx ~namespaces ~manages_database : (unit, string) result =
   let open Result.Syntax in
   match List.find_opt (fun ns -> List.mem ns reserved_platform_namespaces) namespaces with
   | Some ns ->
@@ -109,14 +124,25 @@ let ensure ~workloads ~ctx ~namespaces : (unit, string) result =
     in
     let* () = create_all (docs_for_namespaces namespaces) in
     let* () =
-      match platform_network_fact ~ctx with
-      | None -> Ok ()
-      | Some (cidrs, port) ->
-        apply_all
-          (List.map
-             (fun (ns, name) ->
-                Sol_cli_manifest.managed_database_egress_doc ~cidrs ~port ~ns ~name)
-             workloads)
+      match workloads with
+      | [] -> Ok ()
+      | _ :: _ ->
+        let* fact = platform_network_fact ~ctx in
+        (match fact with
+         | Some (cidrs, port) ->
+           apply_all
+             (List.map
+                (fun (ns, name) ->
+                   Sol_cli_manifest.managed_database_egress_doc ~cidrs ~port ~ns ~name)
+                workloads)
+         | None when not manages_database -> Ok ()
+         | None ->
+           Error
+             "the target provisions a Sol-managed database, but the cluster has \
+              published no database-egress ranges (ConfigMap \
+              kube-system/sol-platform-network is absent, unreadable or empty), so the \
+              workloads would have no route to it. Reconcile the environment for this \
+              target so the platform install publishes the range, then retry.")
     in
     namespaces
     |> List.find_map (fun ns ->

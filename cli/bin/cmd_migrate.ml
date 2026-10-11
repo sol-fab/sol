@@ -145,7 +145,13 @@ let run_apply_in_cluster ~ctx ~dir ~table ~active =
       ~active
   in
   let* namespace = Sol_cli_migration_job.job_namespace ~workspace ~services in
-  let* () = Sol_cli_substrate.ensure ~ctx ~namespaces:[ namespace ] ~workloads:[] in
+  let* () =
+    Sol_cli_substrate.ensure
+      ~ctx
+      ~namespaces:[ namespace ]
+      ~workloads:[]
+      ~manages_database:false
+  in
   Sol_cli_migration_gate.reconcile_operator_bindings ~ctx ~workspace ~services;
   let* files = Sol_cli_migration_gate.migration_files dir in
   if files = []

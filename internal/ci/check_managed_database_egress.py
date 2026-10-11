@@ -10,7 +10,9 @@ exercised at all, which is how the GCP row passed while AWS hung); each cluster 
 range from the resource it created and publishes it; each platform root mirrors the variable; the
 shared module publishes it as a cluster fact with a read grant narrow enough to fetch that one
 object; and the deploy applies the allowance only when the fact carries ranges, only to those
-ranges, and only on the database port.
+ranges, and only on the database port. A target that provisions a database but publishes no
+ranges is refused rather than deployed without egress: an absent or unreadable fact and a
+target with no managed database must not look alike.
 """
 
 from __future__ import annotations
@@ -99,10 +101,17 @@ def check(root: pathlib.Path) -> list[str]:
             "cli/lib/deploy/sol_cli_substrate.ml: the deploy does not read the published fact, so "
             "no allowance is ever applied"
         )
-    if "if cidrs = [] then None else" not in substrate:
+    if "if cidrs = [] then Ok None else" not in substrate:
         problems.append(
             "cli/lib/deploy/sol_cli_substrate.ml: the fact is not treated as absent when it "
             "carries no ranges, which would apply an empty allowance where there is no database"
+        )
+    if "manages_database" not in substrate or "no route to it" not in substrate:
+        problems.append(
+            "cli/lib/deploy/sol_cli_substrate.ml: an absent or unreadable fact is not "
+            "distinguished from a target that provisions no database. A target with a managed "
+            "database must refuse the substrate rather than deploy the workloads with no route "
+            "to it (FND-0075)."
         )
 
     start = egress_doc.find("let managed_database_egress_doc")

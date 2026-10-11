@@ -131,10 +131,19 @@ def main():
     mutate(
         tmp,
         "cli/lib/deploy/sol_cli_substrate.ml",
-        "if cidrs = [] then None else",
-        "if false then None else",
+        "if cidrs = [] then Ok None else",
+        "if false then Ok None else",
     )
     cases.append(("empty-fact-still-applied", tmp, "carries no ranges"))
+
+    tmp = scratch()
+    mutate(
+        tmp,
+        "cli/lib/deploy/sol_cli_substrate.ml",
+        "no route to it",
+        "every route open",
+    )
+    cases.append(("managed-database-absent-fact-accepted", tmp, "must refuse the substrate"))
 
     tmp = scratch()
     mutate(

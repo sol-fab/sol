@@ -172,10 +172,21 @@ let substrate_prerequisite ctx ~plan ~live =
   then Ok ()
   else if live
   then
+    (* The substrate reads the cluster's database-egress fact and applies the allowance. It
+       must know whether this target provisions a database, because only then is an absent
+       fact a failure rather than "nothing to admit". That is the same ownership resolution
+       the database setup step and the Terraform variables use. *)
+    let* manages_database =
+      Sol_cli_resource_binding.resolve ctx.resolved_config
+      |> Result.map (fun bindings ->
+        Sol_cli_resource_binding.provisions bindings ~typ:"postgres")
+      |> Result.map_error (fun message -> Refused message)
+    in
     Sol_cli_substrate.ensure
       ~ctx:ctx.execution.cluster
       ~namespaces
       ~workloads:(plan_workloads plan)
+      ~manages_database
     |> Result.map_error (fun message -> Refused message)
   else
     Sol_cli_substrate.established ~ctx:ctx.execution.cluster ~namespaces

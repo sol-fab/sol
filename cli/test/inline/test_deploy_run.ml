@@ -270,6 +270,12 @@ esac
 case " $* " in
   *" get secret "*) printf '{"data":{"POSTGRES_URL":"postgres://user:pass@host/db","SOL_API_KEY":"test"}}'; exit 0 ;;
 esac
+case " $* " in
+  *" get configmap sol-platform-network "*)
+    printf 'Error from server (NotFound): configmaps "sol-platform-network" not found\n' >&2
+    exit 1
+    ;;
+esac
 %s
 case "$name" in
   sol-boundary-lease-*)
