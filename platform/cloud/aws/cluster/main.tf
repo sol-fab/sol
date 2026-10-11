@@ -191,6 +191,12 @@ resource "aws_db_instance" "postgres" {
   allocated_storage = var.rds_storage_gb
   storage_encrypted = true
 
+  # Pinned, not left to the account/region default. RDS presents a leaf signed by the CA
+  # this names, and `postgres_ca_cert` below carries the bundle that must contain it: the
+  # two are coupled and live here together, updated together when AWS retires a CA. Unless
+  # this is pinned, `sslmode=verify-full` verifies against a moving target.
+  ca_cert_identifier = "rds-ca-rsa2048-g1"
+
   db_name  = "app"
   username = "postgres"
   password = var.db_password

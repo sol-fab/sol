@@ -59,6 +59,11 @@ output "postgres_url" {
   sensitive   = true
 }
 
+output "postgres_ca_cert" {
+  description = "The trust anchor a client needs to verify the RDS endpoint's certificate under sslmode=verify-full: the committed Amazon RDS global bundle, which carries every region's root. RDS presents a leaf signed by the CA named in the instance's ca_cert_identifier, so the two are updated together. Null when no database is created."
+  value       = var.create_rds ? file("${path.module}/rds-global-bundle.pem") : null
+}
+
 output "database_egress_cidrs" {
   description = "The network ranges a workload must reach to use this target's managed database: the private subnets Sol places the instance in. Empty when no database is created."
   value       = var.create_rds ? module.vpc.private_subnets_cidr_blocks : []
