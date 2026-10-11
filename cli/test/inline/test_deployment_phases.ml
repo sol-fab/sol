@@ -1771,3 +1771,20 @@ let%test "database setup run: cleanup runs when the Job fails to apply" =
 let%test "database setup run: cleanup runs when the wait reports failure" =
   assert_cleanup_after_failure ~mode:"wait"
 ;;
+
+(* The credential generator. *)
+let%test "database setup password: hex, 64 chars, and different every call" =
+  let a = Sol_cli_database_setup_password.generate () in
+  let b = Sol_cli_database_setup_password.generate () in
+  Windtrap.equal Windtrap.int ~msg:"32 bytes hex-encoded" 64 (String.length a);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"hex only, so it is safe inside a URL, a shell and Postgres"
+    true
+    (String.for_all
+       (function
+         | '0' .. '9' | 'a' .. 'f' -> true
+         | _ -> false)
+       a);
+  Windtrap.equal Windtrap.bool ~msg:"not a constant" false (String.equal a b)
+;;
