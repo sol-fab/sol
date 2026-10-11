@@ -1788,3 +1788,47 @@ let%test "database setup password: hex, 64 chars, and different every call" =
        a);
   Windtrap.equal Windtrap.bool ~msg:"not a constant" false (String.equal a b)
 ;;
+
+(* The derived connection URLs. *)
+let%test "database setup url: credentials substituted, query parameters preserved" =
+  let master =
+    "postgresql://postgres:masterpw@db.internal:5432/app?sslmode=verify-full&sslrootcert=/etc/sol/db-ca/ca.pem"
+  in
+  let ddl = Sol_cli_database_setup_url.ddl ~password:"ddl-pw" master in
+  let dml = Sol_cli_database_setup_url.dml ~password:"dml-pw" master in
+  (* 2d's parameters must survive: a text substitution of user and password would drop
+     the query string, and the failure would be silent. *)
+  List.iter
+    (fun url ->
+       Windtrap.equal
+         Windtrap.bool
+         ~msg:"sslmode survives the derivation"
+         true
+         (setup_mentions "sslmode=verify-full" url);
+       Windtrap.equal
+         Windtrap.bool
+         ~msg:"sslrootcert survives the derivation"
+         true
+         (setup_mentions "sslrootcert=/etc/sol/db-ca/ca.pem" url))
+    [ ddl; dml ];
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the DDL URL carries the DDL role and password"
+    true
+    (setup_mentions "sol_migrator:ddl-pw@" ddl);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the DML URL carries the DML role and password"
+    true
+    (setup_mentions "sol_app:dml-pw@" dml);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the master credential is gone"
+    false
+    (setup_mentions "masterpw" ddl);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"host and database are untouched"
+    true
+    (setup_mentions "db.internal:5432/app" ddl)
+;;
