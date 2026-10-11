@@ -67,16 +67,22 @@ let ca_configmap_doc ~ns ~target ~ca_cert =
 let secret_name target = setup_name target
 let job_name target = setup_name target
 
-(** The output Secrets: what the classes consume after the Job, and what 2b delivers.
+(** The credential classes (ADR 0007) and the key every class Secret carries.
 
-    Two names, not one, because the classes are separate objects (ADR 0007 §4): a namespace
-    that needs both — the migration namespace is also usually a DML consumer — holds the
-    DDL and DML credentials in two Secrets rather than colliding on one [POSTGRES_URL] key.
-    The names are exported so the renderer and the test that asserts them share one
-    definition instead of two that can drift. *)
-let ddl_creds_name target = target ^ "-ddl-creds"
+    The class name *is* the output Secret's name suffix: one definition serves the Sol
+    writer, the external writer and the reader, so none of them can drift. *)
+let ddl_class = "ddl"
 
-let dml_creds_name target = target ^ "-dml-creds"
+let dml_class = "dml"
+
+(** Every class this contract has. Delivery must cover all of them: the reader asks for each
+    one and must not learn from a missing Secret that the target is externally bound. *)
+let postgres_classes = [ ddl_class; dml_class ]
+
+let postgres_url_key = "POSTGRES_URL"
+let creds_name ~credential_class target = target ^ "-" ^ credential_class ^ "-creds"
+let ddl_creds_name target = creds_name ~credential_class:ddl_class target
+let dml_creds_name target = creds_name ~credential_class:dml_class target
 
 (** One output Secret: a class's connection URL under the consumer key.
 
@@ -90,7 +96,47 @@ let output_secret_doc ~ns ~name ~postgres_url =
     ~kind:"Secret"
     [ "metadata", metadata ~ns ~name
     ; "type", Y.string "Opaque"
-    ; "stringData", Y.map [ "POSTGRES_URL", Y.quoted postgres_url ]
+    ; "stringData", Y.map [ postgres_url_key, Y.quoted postgres_url ]
+    ]
+;;
+
+(** The *external* owner's writer of the same object: ESO renders a class Secret from the
+    binding's remote path for that class.
+
+    One ExternalSecret per class, because the class is the outer dimension: a contract with
+    classes resolves one contract key ([POSTGRES_URL]) to a *different* remote path per
+    class — the migrator's in [ddl], the application's in [dml]. The object name and the
+    key are the ones {!ddl_creds_name} / {!dml_creds_name} and {!postgres_url_key} define,
+    so an external target delivers the same Secret the reader already asks for: the reader
+    does not branch on ownership.
+
+    [creationPolicy: Owner] makes the Secret the ExternalSecret's, so removing the
+    ExternalSecret removes the credential. *)
+let class_external_secret_doc ~ns ~target ~credential_class ~store ~remote_path =
+  let name = creds_name ~credential_class target in
+  resource
+    ~api_version:"external-secrets.io/v1"
+    ~kind:"ExternalSecret"
+    [ "metadata", metadata ~ns ~name
+    ; ( "spec"
+      , Y.map
+          [ "refreshInterval", Y.string "1h"
+          ; "target", Y.map [ "name", Y.string name; "creationPolicy", Y.string "Owner" ]
+          ; ( "data"
+            , Y.list
+                [ Y.map
+                    [ "secretKey", Y.string postgres_url_key
+                    ; "remoteRef", Y.map [ "key", Y.string remote_path ]
+                    ; ( "sourceRef"
+                      , Y.map
+                          [ ( "storeRef"
+                            , Y.map
+                                [ "name", Y.string store; "kind", Y.string "SecretStore" ]
+                            )
+                          ] )
+                    ]
+                ] )
+          ] )
     ]
 ;;
 

@@ -56,6 +56,9 @@ type resource_binding =
   ; store : string option
   ; keys : (string * string) list
   ; connection : (string * string) list
+  ; (* Class name -> remote path, for a contract whose credential classes resolve one
+       contract key to different remote paths. The class is the outer dimension. *)
+    credentials : (string * string) list
   }
 
 type resource =

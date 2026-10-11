@@ -265,3 +265,99 @@ let run
                | Some d -> " (" ^ d ^ ")"
                | None -> "")))
 ;;
+
+(** The external owner's half of the same contract.
+
+    A target may bind its database externally: the credential does not come from a Sol
+    provisioner, it comes from a store the binding names. The *output* is still the class
+    Secrets — the same object names, the same key — written by ESO from the remote path the
+    binding names per class. That is what keeps the reader one reader: it asks for
+    [`<target>-ddl-creds`]/[`<target>-dml-creds`] and does not branch on ownership (a
+    consumer branch on ownership is exactly the dual-interpretation the resource-bindings
+    design forbids).
+
+    The class is the outer dimension — one ExternalSecret per class — because a contract
+    with classes resolves one contract key to a *different* remote path per class. Every
+    class must be delivered: the reader asks for each one, so a missing class would be
+    indistinguishable from a target that has no database at all.
+
+    Nothing here runs for a Sol-provisioned database; that target's classes are written by
+    the setup Job's coordinator ([run]). *)
+
+(** The pure core: which ExternalSecrets an externally bound database needs, one per class
+    per namespace that reads it. Separate from the apply so the shape is testable without a
+    cluster. *)
+let external_credential_docs
+      ~target
+      ~migration_namespace
+      ~dml_namespaces
+      ~(binding : Sol_cli_resource_binding.t)
+  =
+  let module Render = Sol_cli_database_setup_render in
+  let* store =
+    match binding.Sol_cli_resource_binding.store with
+    | Some store -> Ok store
+    | None ->
+      Error
+        (Printf.sprintf
+           "the externally bound database %S names no store, so there is nowhere to read \
+            its credentials from"
+           binding.resource)
+  in
+  let* classes =
+    Sol_cli_result.map_list
+      (fun credential_class ->
+         match
+           List.assoc_opt credential_class binding.Sol_cli_resource_binding.credentials
+         with
+         | Some remote_path -> Ok (credential_class, remote_path)
+         | None ->
+           Error
+             (Printf.sprintf
+                "the externally bound database %S names no remote path for the %S \
+                 credential class (binding.credentials.%s), so that class would have no \
+                 credential at all"
+                binding.resource
+                credential_class
+                credential_class))
+      Render.postgres_classes
+  in
+  (* The DDL class is what the migration path reads, so it lands where migrations run; the
+     DML class lands wherever a unit declares it consumes the resource. *)
+  let namespaces_for_class credential_class =
+    if String.equal credential_class Render.ddl_class
+    then [ migration_namespace ]
+    else dml_namespaces
+  in
+  Ok
+    (List.concat_map
+       (fun (credential_class, remote_path) ->
+          namespaces_for_class credential_class
+          |> List.sort_uniq String.compare
+          |> List.map (fun ns ->
+            Render.class_external_secret_doc
+              ~ns
+              ~target
+              ~credential_class
+              ~store
+              ~remote_path))
+       classes)
+;;
+
+let run_external_credentials
+      ~ctx
+      ~target
+      ~migration_namespace
+      ~dml_namespaces
+      ~(binding : Sol_cli_resource_binding.t)
+  =
+  let* docs =
+    external_credential_docs ~target ~migration_namespace ~dml_namespaces ~binding
+  in
+  List.fold_left
+    (fun acc doc ->
+       let* () = acc in
+       apply_doc ~ctx ~what:"external database credential" doc)
+    (Ok ())
+    docs
+;;
