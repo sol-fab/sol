@@ -256,6 +256,18 @@ case " $* " in
     fi
     exit 0
     ;;
+  *" get job "*"-db-setup"*)
+    # 2c's database setup Job. The deploy creates it, waits on its status, then deletes it;
+    # the fake models the wait as an immediate success so the lifecycle reaches the steps
+    # after the setup step. The UID is what Sol patches the transient Secret's owner to.
+    case " $* " in
+      *" jsonpath={.metadata.uid} "*) printf 'db-setup-uid' ;;
+      *" jsonpath={.status.succeeded} "*) printf '1' ;;
+      *" jsonpath={.status.failed} "*) printf '0' ;;
+      *) printf '{"items":[]}\n' ;;
+    esac
+    exit 0
+    ;;
   *" get cronjob "*|*" get job "*)
     if [ "${CLUSTER_UNREACHABLE:-}" = 1 ]; then
       printf 'error: Unable to connect to the server: dial tcp 10.0.0.1:443: i/o timeout\n' >&2
