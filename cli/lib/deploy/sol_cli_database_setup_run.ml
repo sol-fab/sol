@@ -171,10 +171,12 @@ let wait_attempts = 150
 let run
       ~ctx
       ~namespace
+      ~ca_namespaces
       ~target
       ~master_url
       ~ddl_password
       ~dml_password
+      ~ca_cert
       ~image
       ~output_secrets
   =
@@ -195,6 +197,16 @@ let run
   in
   let script = Render.script_configmap_doc ~ns:namespace ~target in
   let job_doc = Render.job_doc ~ns:namespace ~target ~image in
+  (* The CA is a durable trust anchor, not a per-run credential: the Job mounts it, and the
+     consuming units mount the same object after 2b delivers their class Secrets. So it is
+     written for the migration namespace and every consuming namespace, and — unlike the
+     script and the transient Secret — it is deliberately not collected by [cleanup]. A
+     re-run with a rotated CA overwrites it in place. *)
+  let ca_docs =
+    ca_namespaces
+    |> List.sort_uniq String.compare
+    |> List.map (fun ns -> Render.ca_configmap_doc ~ns ~target ~ca_cert)
+  in
   (* Re-deploy: a Job's pod template is immutable, so an existing one is removed rather
      than patched. A first deploy finds nothing and this is a no-op. Deliberately outside
      the [Fun.protect] below: nothing has been created yet, so there is nothing this call
@@ -219,6 +231,7 @@ let run
               apply_doc ~ctx ~what doc)
            (Ok ())
            ([ "transient secret", transient; "setup script", script ]
+            @ List.map (fun doc -> "database CA", doc) ca_docs
             @ List.map (fun doc -> "output secret", doc) output_secrets)
        in
        let* () = apply_doc ~ctx ~what:"setup job" job_doc in

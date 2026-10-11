@@ -57,6 +57,7 @@ let svc_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_ca_target = None
   }
 ;;
 
@@ -90,6 +91,7 @@ let worker_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_ca_target = None
   }
 ;;
 

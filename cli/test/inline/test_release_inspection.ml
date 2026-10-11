@@ -65,6 +65,7 @@ let service
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery
+  ; db_ca_target = None
   }
 ;;
 

@@ -74,6 +74,9 @@ type service_spec =
   ; called_by : service_call list
   ; extra_labels : (string * string) list
   ; progressive_delivery : Sol_cli_toml.progressive_delivery option
+  ; (* 2d: the target whose Sol-provisioned database this unit consumes, if any. The
+       renderer derives the CA ConfigMap's name from it; the plan carries no object name. *)
+    db_ca_target : string option
   }
 
 type profile_claim =
@@ -236,5 +239,7 @@ val of_services_result
   -> ?declared:Sol_cli_config.declared
   -> ?image_refs:(string * string) list
   -> ?inventory:Sol_cli_manifest.service list
+  -> ?target:string
+  -> ?provisioned_database:string
   -> Sol_cli_manifest.service list
   -> (t, plan_error) result

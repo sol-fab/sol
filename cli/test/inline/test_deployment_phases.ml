@@ -78,6 +78,7 @@ let svc_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_ca_target = None
   }
 ;;
 
@@ -111,6 +112,7 @@ let worker_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_ca_target = None
   }
 ;;
 
@@ -144,6 +146,7 @@ let fn_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_ca_target = None
   }
 ;;
 
@@ -1502,6 +1505,7 @@ let render_setup () =
     ~master_url:"postgresql://postgres:masterpw@db.internal:5432/app"
     ~ddl_password:"ddl-pw"
     ~dml_password:"dml-pw"
+    ~ca_cert:"-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n"
     ~image:("postgres@sha256:" ^ String.make 64 'a')
   |> Sol_cli_yaml.render
 ;;
@@ -1550,12 +1554,20 @@ let test_database_setup_renders_the_fail_closed_job () =
     ~msg:"psql runs from a file"
     true
     (setup_mentions "--file=/sql/setup.sql" text);
-  (* The CA mount is present but empty: 2d populates it without reshaping the pod. *)
+  (* 2d: the CA mount is present and populated from the CA ConfigMap, so the Job runs
+     `sslmode=verify-full` against the provider's anchor rather than the image's trust
+     store. *)
   Windtrap.equal
     Windtrap.bool
-    ~msg:"the CA mount exists and is empty"
+    ~msg:"the CA mount exists"
     true
-    (setup_mentions "emptyDir: {}" text);
+    (setup_mentions "mountPath: /etc/sol/db-ca" text);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the Job's CA volume comes from the CA ConfigMap"
+    true
+    (setup_index "kind: ConfigMap" text < setup_index "name: payments-db-ca" text
+     && setup_mentions "configMap:" text);
   (* The Job spec must not embed a credential: it references the transient Secret. *)
   Windtrap.equal
     Windtrap.bool
@@ -1597,7 +1609,7 @@ let test_database_setup_keeps_credentials_out_of_the_job () =
     [ "postgresql://postgres:masterpw@db.internal:5432/app"; "ddl-pw"; "dml-pw" ]
 ;;
 
-let%test "database setup render: the Job is fail-closed and mounted empty of the CA" =
+let%test "database setup render: the Job is fail-closed and mounts the CA" =
   test_database_setup_renders_the_fail_closed_job ()
 ;;
 
@@ -1712,10 +1724,12 @@ let run_database_setup () =
   Sol_cli_database_setup_run.run
     ~ctx:Sol_cli_kube_destination.local_context
     ~namespace:"myapp-payments"
+    ~ca_namespaces:[ "myapp-payments" ]
     ~target:"payments"
     ~master_url:"postgresql://postgres:masterpw@db.internal:5432/app"
     ~ddl_password:"ddl-pw"
     ~dml_password:"dml-pw"
+    ~ca_cert:"-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n"
     ~image:("postgres@sha256:" ^ String.make 64 'a')
     ~output_secrets:[ setup_output_secret () ]
 ;;
@@ -1877,6 +1891,37 @@ let%test "database setup url: credentials substituted, query parameters preserve
     ~msg:"host and database are untouched"
     true
     (setup_mentions "db.internal:5432/app" ddl)
+;;
+
+(* The master URL gains the TLS parameters, replacing any the provider left there rather
+   than duplicating them (two `sslmode` keys would leave the effective one to libpq's
+   parser). *)
+let%test "database setup url: with_tls requires verify-full and the mounted anchor" =
+  let url =
+    Sol_cli_database_setup_url.with_tls
+      ~ca_cert_path:Sol_cli_database_setup_render.ca_cert_path
+      "postgresql://postgres:masterpw@db.internal:5432/app?sslmode=require&application_name=sol"
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"verification is full"
+    true
+    (setup_mentions "sslmode=verify-full" url);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the anchor is the mounted CA"
+    true
+    (setup_mentions "sslrootcert=/etc/sol/db-ca/ca.pem" url);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the provider's own parameters survive"
+    true
+    (setup_mentions "application_name=sol" url);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the weaker sslmode it replaced is gone"
+    false
+    (setup_mentions "sslmode=require" url)
 ;;
 
 (* The output Secrets: one per class, named by the shared constants, carrying the derived

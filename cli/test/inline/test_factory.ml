@@ -57,7 +57,12 @@ let test_run_without_cmdliner () =
            ~workspace:"myapp"
            ())
         ~request:
-          { Sol_cli_factory.env; requested_scope = Some "payments"; declared = None }
+          { Sol_cli_factory.env
+          ; requested_scope = Some "payments"
+          ; declared = None
+          ; target = None
+          ; provisioned_database = None
+          }
         ~mode:(Sol_cli_executor.Emit_to emit_dir)
         ~facts:(facts ())
         services

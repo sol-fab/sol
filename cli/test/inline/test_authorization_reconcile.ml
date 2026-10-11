@@ -417,6 +417,7 @@ let render_deployment ~secret_keys =
     ; domain = "payments"
     ; primitive = "svc"
     ; release_id
+    ; db_ca_configmap = None
     }
   in
   Sol_cli_manifest.deployment_doc ~workload () |> fun doc -> Sol_cli_yaml.render [ doc ]

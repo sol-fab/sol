@@ -137,6 +137,25 @@ let postgres_url_of_outputs provider text =
     |> Result.map_error (fun message -> Outputs_unreadable message)
 ;;
 
+(** The same provider dispatch for {!postgres_ca_cert}: the trust anchor [sslmode=verify-full]
+    needs, whose shape differs by provider (AWS a committed bundle, GCP the instance's server
+    CA). Kept beside {!postgres_url_of_outputs} and separate from {!of_root} for the same
+    reason: one contract per provider, in one place. *)
+let postgres_ca_cert_of_outputs provider text =
+  match provider with
+  | Sol_cli_provider.Byo -> Error (No_root byo_no_root)
+  | Sol_cli_provider.Aws ->
+    Sol_cli_aws_cluster.of_outputs_json text
+    |> Result.map (fun (outputs : Sol_cli_aws_cluster.aws_outputs) ->
+      outputs.postgres_ca_cert)
+    |> Result.map_error (fun message -> Outputs_unreadable message)
+  | Sol_cli_provider.Gcp ->
+    Sol_cli_gcp_cluster.of_outputs_json text
+    |> Result.map (fun (outputs : Sol_cli_gcp_cluster.gcp_outputs) ->
+      outputs.postgres_ca_cert)
+    |> Result.map_error (fun message -> Outputs_unreadable message)
+;;
+
 let destruction provider context =
   match provider with
   | Sol_cli_provider.Aws -> Sol_cli_aws_destruction.destruction context

@@ -306,6 +306,7 @@ let sample_plan () : Sol_cli_deployment_plan.t =
     ; called_by = []
     ; extra_labels = []
     ; progressive_delivery = None
+    ; db_ca_target = None
     }
   in
   { workspace = "myworkspace"
@@ -765,6 +766,7 @@ let make_worker_spec name domain =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_ca_target = None
   }
 ;;
 
@@ -2174,4 +2176,117 @@ let%test "contract: an incompatible change fails closed" =
 
 let%test "contract: added, removed and schema changes are reported" =
   test_contract_added_removed_and_schema_are_reported ()
+;;
+
+(* 2d: which units mount the database CA, end to end from the declared `uses:` to the
+   rendered pod. The discriminator is the *resource Sol provisions*, named by the caller;
+   the resource *type* would put the mount on a unit bound to an external postgres and
+   wedge its pod on a ConfigMap the deploy never writes. *)
+let postgres_config ~sol_consumers ~external_consumers : Sol_cli_config.t =
+  let service name uses =
+    { Sol_cli_config.name
+    ; typ = None
+    ; path = None
+    ; uses
+    ; scale_min = None
+    ; scale_max = None
+    ; language = None
+    ; omit = false
+    }
+  in
+  let resource name =
+    { Sol_cli_config.name
+    ; typ = Some "postgres"
+    ; partition_key = None
+    ; sort_key = None
+    ; indexes = []
+    ; size = None
+    ; omit = false
+    ; binding = None
+    }
+  in
+  { project = Some "ws"
+  ; target = Result.get_ok (Sol_cli_config.parse_target "prod/aws/us-east-1")
+  ; resources = [ resource "app_db"; resource "legacy_db" ]
+  ; services =
+      List.map (fun name -> service name [ "app_db" ]) sol_consumers
+      @ List.map (fun name -> service name [ "legacy_db" ]) external_consumers
+      @ [ service "plain_svc" [] ]
+  }
+;;
+
+let test_the_ca_mount_follows_the_sol_provisioned_resource () =
+  let tmp = Filename.temp_dir "sol_test_db_ca_mount" "" in
+  with_cwd tmp (fun () ->
+    let unit name = worker_unit ~domain:"payments" ~name in
+    List.iter
+      (fun (s : Sol_cli_manifest.service) ->
+         mkdirs s.dir;
+         write_file (Filename.concat s.dir "sol.toml") "")
+      [ unit "charge_svc"; unit "legacy_svc"; unit "plain_svc" ];
+    let declared =
+      Sol_cli_config.declared_of_config
+        (postgres_config
+           ~sol_consumers:[ "charge_svc" ]
+           ~external_consumers:[ "legacy_svc" ])
+    in
+    match
+      Sol_cli_deployment_plan.of_services_result
+        ~workspace:"myworkspace"
+        ~env:deploy_env
+        ~facts:(facts ())
+        ~declared
+        ~target:"prod-aws-us-east-1"
+        ~provisioned_database:"app_db"
+        [ unit "charge_svc"; unit "legacy_svc"; unit "plain_svc" ]
+    with
+    | Error err -> Windtrap.fail (Sol_cli_deployment_plan.plan_error_to_string err)
+    | Ok plan ->
+      let spec name =
+        List.find
+          (fun (s : Sol_cli_deployment_plan.service_spec) -> s.source_name = name)
+          plan.Sol_cli_deployment_plan.services
+      in
+      let workload_yaml spec =
+        match
+          Sol_cli_deployment_render.render_spec
+            ~workspace:"myworkspace"
+            ~release_id:release_id_of_test
+            spec
+        with
+        | Ok bundle -> bundle.Sol_cli_manifest.workload_yaml
+        | Error e -> Windtrap.fail ("render_spec unexpectedly failed: " ^ e)
+      in
+      (* The name comes from the one definition the deploy writes with, so a rename moves
+         the writer and this renderer together. *)
+      let ca_configmap =
+        Sol_cli_database_setup_render.ca_configmap_name "prod-aws-us-east-1"
+      in
+      let mounts = Sol_cli_string.contains ~needle:("name: " ^ ca_configmap) in
+      let at_path =
+        Sol_cli_string.contains
+          ~needle:("mountPath: " ^ Sol_cli_manifest_cluster_env.db_ca_mount_path)
+      in
+      let charge = workload_yaml (spec "charge_svc") in
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"a consumer of the Sol-provisioned database mounts its CA"
+        true
+        (mounts charge && at_path charge);
+      let legacy = workload_yaml (spec "legacy_svc") in
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"a consumer of an externally bound database mounts no CA"
+        false
+        (mounts legacy || at_path legacy);
+      let plain = workload_yaml (spec "plain_svc") in
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"a unit that consumes no database mounts no CA"
+        false
+        (mounts plain || at_path plain))
+;;
+
+let%test "2d: the CA mount follows the resource Sol provisions, not the resource type" =
+  test_the_ca_mount_follows_the_sol_provisioned_resource ()
 ;;

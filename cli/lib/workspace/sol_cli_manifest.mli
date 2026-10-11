@@ -143,6 +143,9 @@ module Workload_spec : sig
     ; domain : string
     ; primitive : string
     ; release_id : Sol_cli_release_id.t
+    ; (* 2d: the CA ConfigMap to mount when this unit consumes a Sol-provisioned database.
+         Prep: see {!Sol_cli_manifest_yaml.Workload_spec}. *)
+      db_ca_configmap : string option
     }
 end
 
@@ -210,6 +213,8 @@ module Scheduled_workload_spec : sig
     ; workspace : string
     ; domain : string
     ; release_id : Sol_cli_release_id.t
+    ; (* 2d: see {!Workload_spec.t}. *)
+      db_ca_configmap : string option
     }
 end
 

@@ -115,6 +115,7 @@ let ledger_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = [ billing_as_caller ]
   ; extra_labels = [ "team", "payments" ]
   ; progressive_delivery = None
+  ; db_ca_target = None
   }
 ;;
 
@@ -167,6 +168,7 @@ let billing_spec : Sol_cli_deployment_plan.service_spec =
                ; Sol_cli_toml.Weight 100
                ]
            })
+  ; db_ca_target = None
   }
 ;;
 

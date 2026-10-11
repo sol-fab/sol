@@ -68,6 +68,9 @@ type gcp_outputs =
   ; database_egress_cidrs : string list
   ; (* See the AWS counterpart: null when no database was created. *)
     postgres_url : string option
+  ; (* The trust anchor a client needs for sslmode=verify-full; Cloud SQL's per-instance
+       server CA. Null when no database was created. See the AWS counterpart. *)
+    postgres_ca_cert : string option
   }
 
 let gcp_outputs_of_json text =
@@ -110,6 +113,7 @@ let gcp_outputs_of_json text =
   in
   let* provisioner_service_account = string "provisioner_service_account" in
   let* postgres_url = optional_string "postgres_url" in
+  let* postgres_ca_cert = optional_string "postgres_ca_cert" in
   Ok
     { cluster_name
     ; project_id
@@ -123,6 +127,7 @@ let gcp_outputs_of_json text =
     ; provisioner_service_account
     ; database_egress_cidrs
     ; postgres_url
+    ; postgres_ca_cert
     }
 ;;
 

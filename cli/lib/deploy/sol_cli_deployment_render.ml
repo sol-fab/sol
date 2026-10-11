@@ -9,6 +9,10 @@ type common_fields =
   ; secret_sources : (string * Sol_cli_secret_source.t) list
   ; calls : Sol_cli_deployment_plan.service_call list
   ; called_by : Sol_cli_deployment_plan.service_call list
+  ; (* 2d: the database-CA ConfigMap this unit mounts, derived from the plan's
+       [db_ca_target] by {!Sol_cli_database_setup_render.ca_configmap_name} — the one
+       definition the deploy writes with. *)
+    db_ca_configmap : string option
   }
 
 type deployment_fields =
@@ -62,6 +66,7 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
       ; secret_sources
       ; calls
       ; called_by
+      ; db_ca_configmap
       }
     =
     common
@@ -209,6 +214,7 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
              ; domain
              ; primitive
              ; release_id
+             ; db_ca_configmap
              }
            in
            let workload_resources =
@@ -319,6 +325,7 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
                ; workspace
                ; domain
                ; release_id
+               ; db_ca_configmap
                }
              in
              [ cronjob_doc workload ]
@@ -354,6 +361,8 @@ let render_spec
     ; secret_sources = s.secret_sources
     ; calls = s.calls
     ; called_by = s.called_by
+    ; db_ca_configmap =
+        Option.map Sol_cli_database_setup_render.ca_configmap_name s.db_ca_target
     }
   in
   let deployment =

@@ -40,10 +40,29 @@ let automount_service_account_token = false
 let setup_name target = target ^ "-db-setup"
 let script_name target = target ^ "-db-setup-script"
 
-(** Where the database CA will be mounted. Rendered **empty** today: 2d changes the cloud
-    output to [sslmode=verify-full&sslrootcert=...] and populates this volume, without
-    that change having to touch this renderer. *)
-let ca_mount_path = "/etc/sol/db-ca"
+(** Where the database CA is mounted: the trust anchor [sslmode=verify-full] verifies the
+    endpoint against ({!ca_cert_path} is what the connection URL names). Defined once, with
+    the manifest's other mount contracts: the setup Job, the workload pods and the URL must
+    all name the same path. *)
+let ca_mount_path = Sol_cli_manifest_cluster_env.db_ca_mount_path
+
+let ca_file_name = Sol_cli_manifest_cluster_env.db_ca_file_name
+let ca_cert_path = Sol_cli_manifest_cluster_env.db_ca_file
+
+(** The database CA, as a ConfigMap. A provider's public root is not a secret, so a
+    ConfigMap is the right object rather than a Secret. The same name is mounted by the
+    setup Job and, once 2b delivers the class credentials, by every consuming unit — so
+    downstream nothing knows which provider supplied the CA. *)
+let ca_configmap_name target = target ^ "-db-ca"
+
+let ca_configmap_doc ~ns ~target ~ca_cert =
+  resource
+    ~api_version:"v1"
+    ~kind:"ConfigMap"
+    [ "metadata", metadata ~ns ~name:(ca_configmap_name target)
+    ; "data", Y.map [ ca_file_name, Y.literal ca_cert ]
+    ]
+;;
 
 let secret_name target = setup_name target
 let job_name target = setup_name target
@@ -186,14 +205,12 @@ let job_doc ~ns ~target ~image =
                                 ; ( "configMap"
                                   , Y.map [ "name", Y.string (script_name target) ] )
                                 ]
-                            ; (* Empty on purpose: 2d supplies the CA here. An
-                                 emptyDir is unambiguously valid; a projected volume
-                                 with no sources is not worth relying on, and the test
-                                 could only assert the rendered text, not that the API
-                                 server accepts it. 2d changes this volume either way,
-                                 and a Job's pod template is immutable, so a shape
-                                 change is a re-create regardless. *)
-                              Y.map [ "name", Y.string "db-ca"; "emptyDir", Y.map [] ]
+                            ; Y.map
+                                [ "name", Y.string "db-ca"
+                                ; ( "configMap"
+                                  , Y.map [ "name", Y.string (ca_configmap_name target) ]
+                                  )
+                                ]
                             ] )
                       ] )
                 ] )
@@ -201,10 +218,11 @@ let job_doc ~ns ~target ~image =
     ]
 ;;
 
-(** In write order: the Secret Sol writes first, then the script, then the Job. *)
-let docs ~ns ~target ~master_url ~ddl_password ~dml_password ~image =
+(** In write order: the Secret Sol writes first, then the script and the CA, then the Job. *)
+let docs ~ns ~target ~master_url ~ddl_password ~dml_password ~ca_cert ~image =
   [ transient_secret_doc ~ns ~target ~master_url ~ddl_password ~dml_password
   ; script_configmap_doc ~ns ~target
+  ; ca_configmap_doc ~ns ~target ~ca_cert
   ; job_doc ~ns ~target ~image
   ]
 ;;
