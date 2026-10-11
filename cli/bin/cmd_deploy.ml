@@ -685,6 +685,19 @@ let database_master_unavailable ~target detail =
     detail
 ;;
 
+(** 2d: every consumer verifies the endpoint against this CA, so a null or unreadable one is
+    a failure, not a fallback to an unverified connection. *)
+let database_ca_unavailable ~target detail =
+  Printf.sprintf
+    "could not obtain the database CA for target %s from the cluster output: %s.\n\
+     ADR 0007 condition 6 / 2d: a Sol-provisioned database's clients run \
+     `sslmode=verify-full`, which needs the trust anchor the cluster root publishes as \
+     `postgres_ca_cert`. Fix the output (or re-run the environment reconcile) and retry; \
+     Sol does not fall back to an unverified connection."
+    target
+    detail
+;;
+
 (** The 2c database setup step, run once per target between the deploy prerequisites and the
     workloads. It is a no-op unless the target provisions its own database:
 
@@ -722,7 +735,7 @@ let run_database_setup_step
   match Sol_cli_resource_binding.provisioned_database bindings with
   | None -> Ok ()
   | Some (database : Sol_cli_resource_binding.t) ->
-    let* master_url =
+    let* master_url, ca_cert =
       match infra_dir with
       | None ->
         Error
@@ -731,6 +744,7 @@ let run_database_setup_step
              "this run did not reconcile the environment, so there is no cluster root to \
               read")
       | Some infra_dir ->
+        let provider = planning.config.target.provider in
         let* output =
           Sol_cli_terraform.output_json ~chdir:infra_dir ()
           |> Result.map_error (fun error ->
@@ -742,7 +756,7 @@ let run_database_setup_step
         in
         let* postgres_url =
           Sol_cli_provider_registry.postgres_url_of_outputs
-            planning.config.target.provider
+            provider
             output.Sol_cli_process.stdout
           |> Result.map_error (fun failure ->
             database_master_unavailable
@@ -751,14 +765,41 @@ let run_database_setup_step
                  "parsing the cluster output failed: %s"
                  (Sol_cli_provider_registry.resolution_failure_to_string failure)))
         in
-        (match postgres_url with
-         | Some url -> Ok url
-         | None ->
-           Error
-             (database_master_unavailable
-                ~target:target_path
-                "the `postgres_url` output is null, so the provisioning configuration \
-                 reports no database"))
+        let* master_url =
+          match postgres_url with
+          | Some url -> Ok url
+          | None ->
+            Error
+              (database_master_unavailable
+                 ~target:target_path
+                 "the `postgres_url` output is null, so the provisioning configuration \
+                  reports no database")
+        in
+        (* 2d: the CA is read and required alongside the master. Every consumer runs
+           `sslmode=verify-full`, so a missing anchor is a failure to state, not a reason
+           to connect unverified. *)
+        let* ca_cert =
+          Sol_cli_provider_registry.postgres_ca_cert_of_outputs
+            provider
+            output.Sol_cli_process.stdout
+          |> Result.map_error (fun failure ->
+            database_ca_unavailable
+              ~target:target_path
+              (Printf.sprintf
+                 "parsing the cluster output failed: %s"
+                 (Sol_cli_provider_registry.resolution_failure_to_string failure)))
+        in
+        let* ca_cert =
+          match ca_cert with
+          | Some cert -> Ok cert
+          | None ->
+            Error
+              (database_ca_unavailable
+                 ~target:target_path
+                 "the `postgres_ca_cert` output is null, so there is no trust anchor to \
+                  verify the database against")
+        in
+        Ok (master_url, ca_cert)
     in
     let* image =
       Sol_cli_database_setup.setup_image ()
@@ -769,6 +810,11 @@ let run_database_setup_step
       Sol_cli_migration_job.job_namespace
         ~workspace:planning.workspace
         ~services:planning.services
+    in
+    let master_url =
+      Sol_cli_database_setup_url.with_tls
+        ~ca_cert_path:Sol_cli_database_setup_render.ca_cert_path
+        master_url
     in
     let ddl_password = Sol_cli_database_setup_password.generate () in
     let dml_password = Sol_cli_database_setup_password.generate () in
@@ -799,10 +845,12 @@ let run_database_setup_step
     Sol_cli_database_setup_run.run
       ~ctx
       ~namespace:migration_namespace
+      ~ca_namespaces:(migration_namespace :: dml_namespaces)
       ~target
       ~master_url
       ~ddl_password
       ~dml_password
+      ~ca_cert
       ~image
       ~output_secrets:(ddl_secret :: dml_secrets)
 ;;

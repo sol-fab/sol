@@ -14,6 +14,10 @@ type aws_outputs =
        reports it. Null when no database was created. No code read this before; the
        database setup step is its first consumer. *)
     postgres_url : string option
+  ; (* The trust anchor a client needs for sslmode=verify-full. Null when no database was
+       created. The committed global RDS bundle, coupled to the instance's pinned
+       ca_cert_identifier. *)
+    postgres_ca_cert : string option
   }
 
 let aws_outputs_of_json text =
@@ -49,6 +53,7 @@ let aws_outputs_of_json text =
     | _ -> Error "AWS Terraform output \"database_egress_cidrs\" is not a list of strings"
   in
   let* postgres_url = optional_string "postgres_url" in
+  let* postgres_ca_cert = optional_string "postgres_ca_cert" in
   let managed_resource_dashboards = value "managed_resource_dashboards" in
   match managed_resource_dashboards with
   | `Assoc _ ->
@@ -65,6 +70,7 @@ let aws_outputs_of_json text =
       ; managed_resource_dashboards
       ; database_egress_cidrs
       ; postgres_url
+      ; postgres_ca_cert
       }
   | _ -> Error "AWS Terraform output \"managed_resource_dashboards\" is not an object"
 ;;

@@ -17,6 +17,27 @@ let with_credentials ~user ~password url =
   Uri.with_userinfo uri (Some (user ^ ":" ^ password)) |> Uri.to_string
 ;;
 
+(** Add the parameters every consumer carries once TLS is required: full verification
+    against the provider's CA, which the deploy has mounted at [ca_cert_path]. Both are
+    needed — [sslmode=require] would encrypt without checking the server's identity, which
+    is the gap this closes, and [sslmode=verify-full] without [sslrootcert] would verify
+    against the client image's own trust store, which does not carry the managed
+    provider's CA. Set on the master URL, so every derived URL carries them: this rebuilds
+    the URI rather than appending text, keeping whatever the provider already put in the
+    query string. *)
+let with_tls ~ca_cert_path url =
+  let uri = Uri.of_string url in
+  let without =
+    List.filter
+      (fun (key, _) -> not (List.mem key [ "sslmode"; "sslrootcert" ]))
+      (Uri.query uri)
+  in
+  let query =
+    [ "sslmode", [ "verify-full" ]; "sslrootcert", [ ca_cert_path ] ] @ without
+  in
+  Uri.with_query uri query |> Uri.to_string
+;;
+
 (** What the migration Job consumes. *)
 let ddl ~password master_url =
   with_credentials ~user:Sol_cli_database_setup.ddl_role ~password master_url

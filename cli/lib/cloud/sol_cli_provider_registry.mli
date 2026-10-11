@@ -20,6 +20,13 @@ val postgres_url_of_outputs
   -> string
   -> (string option, resolution_failure) result
 
+(** The same dispatch for [postgres_ca_cert], the trust anchor [sslmode=verify-full] needs.
+    [Ok None] is a null output — no database was created; [Error] is an unreadable output. *)
+val postgres_ca_cert_of_outputs
+  :  Sol_cli_provider.t
+  -> string
+  -> (string option, resolution_failure) result
+
 val destruction
   :  Sol_cli_provider.t
   -> Sol_cli_destruction.context
