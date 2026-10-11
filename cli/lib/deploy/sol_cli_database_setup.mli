@@ -37,5 +37,10 @@ val operation_to_string : operation -> string
 val sql : operation:operation -> string
 
 (** The backstop for collecting a finished Job — and, by cascade, the transient master
-    Secret it owns — when Sol's own deletion of the Job does not happen. *)
+    Secret it owns — when Sol's own deletion of the Job does not happen. It only starts
+    once the Job finishes, so it does not bound a Job that never finishes. *)
 val crash_backstop_seconds : int
+
+(** How long the Job may live in total. Strictly greater than the coordinator's wait
+    window: the waiter giving up is not the Job being over. *)
+val active_deadline_seconds : int

@@ -55,87 +55,64 @@ let job_uid ~ctx ~namespace ~job_name =
   | None -> Error (Printf.sprintf "job %s/%s has no uid" namespace job_name)
 ;;
 
-(** Give the transient Secret an owner, so that anything which deletes the Job — the
-    cascade, or the TTL backstop while Sol is not running — collects the Secret too.
+(** Delete one object, returning the reason if it could not be deleted.
 
-    **The crash window is real and is not hidden by this call:** Sol can die between
-    creating the Job and patching the Secret, and then nothing owns the Secret. It is
-    deleted explicitly below on the normal path; if Sol dies before that, it survives
-    until the next deploy of the same target replaces it. *)
-let own_secret_with_job ~ctx ~namespace ~job_name ~secret_name =
-  let* uid = job_uid ~ctx ~namespace ~job_name in
-  (* Built as a value rather than as a JSON string: the repository guards against
-     hand-built manifest text, and a patch is manifest text. *)
-  let patch =
-    `Assoc
-      [ ( "metadata"
-        , `Assoc
-            [ ( "ownerReferences"
-              , `List
-                  [ `Assoc
-                      [ "apiVersion", `String "batch/v1"
-                      ; "kind", `String "Job"
-                      ; "name", `String job_name
-                      ; "uid", `String uid
-                      ]
-                  ] )
-            ] )
-      ]
-    |> Yojson.Safe.to_string
-  in
-  kubectl
-    ~ctx
-    [ "patch"; "secret"; secret_name; "-n"; namespace; "--type=merge"; "-p"; patch ]
-  |> Result.map_error (fun e ->
-    Printf.sprintf "kubectl patch secret (owner): %s" (Sol_cli_process.error_to_string e))
-  |> Result.map (fun _ -> ())
-;;
-
-(** Best effort, and the code says so: a failure here is a warning, not an error. The
-    cost differs by object, so the caller passes the consequence rather than the operation.
-    For the script it is nothing. For the transient Secret it is the master surviving
-    until the next deploy of this target — or until the Job's [ttlSecondsAfterFinished]
-    cascade collects it, if the owner reference was patched before Sol died — and the
-    warning says that, because a reader needs the risk, not the failed verb. *)
+    The cost differs by object, so the caller passes the consequence rather than the
+    operation: for the script it is nothing, for the transient Secret it is the master
+    surviving. Either way the reason is *returned* and not only warned about — a warning
+    scrolls past, and material that outlived the step has to reach the step's own outcome.
+    A caller that discards it (the pre-delete) still gets the warning. *)
 let delete ~ctx ~namespace ~what ?risk name =
-  let warn reason =
+  let reason text =
     match risk with
-    | Some risk -> Sol_cli_report.warn "warning: %s (%s)" risk reason
-    | None ->
-      Sol_cli_report.warn "warning: could not delete %s/%s: %s" namespace name reason
+    | Some risk -> Printf.sprintf "%s (%s)" risk text
+    | None -> Printf.sprintf "could not delete %s/%s: %s" namespace name text
+  in
+  let note text = Printf.sprintf "delete %s %s" what name :: [ reason text ] in
+  let report text =
+    let message = String.concat ": " (note text) in
+    Sol_cli_report.warn "warning: %s" message;
+    message
   in
   (* This runs from [~finally], where an exception would replace the phase's own error
      with a cleanup error and hide what actually went wrong. *)
   try
-    kubectl
-      ~ctx
-      [ "delete"; what; name; "-n"; namespace; "--ignore-not-found"; "--wait=false" ]
-    |> Result.iter_error (fun e -> warn (Sol_cli_process.error_to_string e))
+    match
+      kubectl
+        ~ctx
+        [ "delete"; what; name; "-n"; namespace; "--ignore-not-found"; "--wait=false" ]
+    with
+    | Ok _ -> None
+    | Error e -> Some (report (Sol_cli_process.error_to_string e))
   with
-  | exn -> warn (Printexc.to_string exn)
+  | exn -> Some (report (Printexc.to_string exn))
 ;;
 
 (** Delete exactly what the Job owned: the Job, its script, and the transient Secret.
-    The output Secrets are deliberately **not** here — 2b delivers them. *)
+    The output Secrets are deliberately **not** here — 2b delivers them.
+    Collects whatever could not be removed, so the caller can report it.
+
+    [delete] already swallows its own exceptions; this wraps the whole body anyway, because
+    it runs from [~finally], where anything that escapes replaces the phase's own error. *)
 let cleanup ~ctx ~namespace ~job_name ~configmap_name ~secret_name =
-  (* [delete] already swallows its own exceptions. This wraps the whole body anyway:
-     this function runs from [~finally], where anything that escapes replaces the phase's
-     own error with a cleanup error and hides the real cause. *)
   try
-    delete ~ctx ~namespace ~what:"job" job_name;
-    delete ~ctx ~namespace ~what:"configmap" configmap_name;
-    delete
-      ~ctx
-      ~namespace
-      ~what:"secret"
-      ~risk:
-        (Printf.sprintf
-           "the database master credential may still be present at Secret %s/%s"
-           namespace
-           secret_name)
-      secret_name
+    List.filter_map
+      (fun note -> note)
+      [ delete ~ctx ~namespace ~what:"job" job_name
+      ; delete ~ctx ~namespace ~what:"configmap" configmap_name
+      ; delete
+          ~ctx
+          ~namespace
+          ~what:"secret"
+          ~risk:
+            (Printf.sprintf
+               "the database master credential may still be present at Secret %s/%s"
+               namespace
+               secret_name)
+          secret_name
+      ]
   with
-  | exn -> Sol_cli_report.warn "warning: cleanup raised: %s" (Printexc.to_string exn)
+  | exn -> [ Printf.sprintf "cleanup raised: %s" (Printexc.to_string exn) ]
 ;;
 
 (** The namespaces that must receive the DML credential: one per unit that declares it
@@ -159,6 +136,20 @@ let dml_namespaces ~declared ~resource (plan : Sol_cli_deployment_plan.t) =
   |> List.map (fun (spec : Sol_cli_deployment_plan.service_spec) ->
     Sol_cli_deployment_plan.namespace_to_string spec.namespace)
   |> List.sort_uniq String.compare
+;;
+
+(** What to say when the transient material outlived the step.
+
+    It is reported beside the step's outcome, never folded into it: the transient Secret
+    carries the master, so a leftover is its own event, and when the setup also failed the
+    caller needs both — the failure it can fix and the credential it must go looking for. *)
+let cleanup_report failures =
+  Printf.sprintf
+    "the service file carrying the master's parameters may still be in the cluster: its \
+     transient material could not be removed.\n\
+     %s\n\
+     Confirm it is gone before treating the target as clean."
+    (String.concat "\n" (List.map (fun note -> "  - " ^ note) failures))
 ;;
 
 (** The target's recorded DDL and DML passwords. *)
@@ -262,10 +253,13 @@ let run
   let job =
     Sol_cli_migration_job.{ namespace; job_name; configmap_name = Some configmap_name }
   in
-  let transient =
+  (* A function of the Job's UID: the Job is created first (see below), so the Secret can
+     carry its [ownerReference] from creation instead of being patched into one. *)
+  let transient ~job_uid =
     Render.transient_secret_doc
       ~ns:namespace
       ~target
+      ~job_uid
       ~master_url
       ~ddl_password
       ~dml_password
@@ -289,78 +283,101 @@ let run
      than patched. A first deploy finds nothing and this is a no-op. Deliberately outside
      the [Fun.protect] below: nothing has been created yet, so there is nothing this call
      can leak. *)
-  delete ~ctx ~namespace ~what:"job" job_name;
-  (* Every path from the first apply runs [cleanup], including every early return. A
-     [let*] chain that returned early would leave the transient Secret — the master — in
-     the cluster with no owner and no later delete, which is the exact leak this step
-     exists to prevent. The failure that matters most is [own_secret_with_job] failing:
-     the Job exists, the Secret is not owned by it, and only this [finally] collects it. *)
-  Fun.protect
-    ~finally:(fun () -> cleanup ~ctx ~namespace ~job_name ~configmap_name ~secret_name)
-    (fun () ->
-       (* A bootstrap persists the passwords *before* Postgres is touched, so an interruption
+  ignore (delete ~ctx ~namespace ~what:"job" job_name);
+  (* Every path from the first apply runs [cleanup], including every early return, and its
+     result is reported beside the step's own outcome rather than only warned about: the
+     transient Secret carries the master, so material that outlived the step is a security
+     event and not a footnote.
+
+     What this [finally] is *not* covering any more: the Secret is created owned, so there
+     is no unowned window for a crash to fall into. If Sol dies between creating the Job and
+     creating the Secret, nothing has been written — the Job's deadline and TTL collect the
+     Job, and the Secret never existed. *)
+  let cleanup_failures = ref [] in
+  let result =
+    Fun.protect
+      ~finally:(fun () ->
+        cleanup_failures := cleanup ~ctx ~namespace ~job_name ~configmap_name ~secret_name)
+      (fun () ->
+         (* A bootstrap persists the passwords *before* Postgres is touched, so an interruption
          leaves a recorded authority and the next deploy repairs from it — rather than roles
          whose password nobody has. A repair writes nothing here: the authority it is
          re-applying is already the record. *)
-       let* () =
-         match operation with
-         | Sol_cli_database_setup.Bootstrap ->
-           apply_doc ~ctx ~what:"password authority" authority
-         | Sol_cli_database_setup.Repair -> Ok ()
-       in
-       (* Before the Job: what the Job *consumes* (the transient Secret), the script that
-         consumes it, and the trust anchor it verifies the server against. The Job produces
-         the roles; it does not receive the class credentials. *)
-       let* () =
-         List.fold_left
-           (fun acc (what, doc) ->
-              let* () = acc in
-              apply_doc ~ctx ~what doc)
-           (Ok ())
-           ([ "transient secret", transient; "setup script", script ]
-            @ List.map (fun doc -> "database CA", doc) ca_docs)
-       in
-       let* () = apply_doc ~ctx ~what:"setup job" job_doc in
-       let* () = own_secret_with_job ~ctx ~namespace ~job_name ~secret_name in
-       let outcome =
-         Sol_cli_migration_job.wait
-           ~ctx
-           ~interval_s:wait_interval_s
-           ~attempts:wait_attempts
-           job
-       in
-       match outcome with
-       | Sol_cli_migration_job.Succeeded ->
-         (* Only now has Postgres accepted these passwords, so only now do the projections
+         let* () =
+           match operation with
+           | Sol_cli_database_setup.Bootstrap ->
+             apply_doc ~ctx ~what:"password authority" authority
+           | Sol_cli_database_setup.Repair -> Ok ()
+         in
+         (* Before the Job: the script it consumes and the trust anchor it verifies the
+         server against. The Job produces the roles; it does not receive the class
+         credentials. *)
+         let* () =
+           List.fold_left
+             (fun acc (what, doc) ->
+                let* () = acc in
+                apply_doc ~ctx ~what doc)
+             (Ok ())
+             ([ "setup script", script ]
+              @ List.map (fun doc -> "database CA", doc) ca_docs)
+         in
+         (* **The Job first, before the Secret it needs exists.** Its pod sits in
+          [CreateContainerConfigError] until the Secret appears — which is the intended
+          state, not a hang: [backoffLimit: 0] means there is no stuck pod for the Job to
+          retry, and [activeDeadlineSeconds] is what bounds how long it can wait before the
+          Job fails and the TTL collects it. This ordering is what lets the Secret be
+          *created* with its owner rather than patched into one, so there is no moment at
+          which the master exists unowned. *)
+         let* () = apply_doc ~ctx ~what:"setup job" job_doc in
+         let* job_uid = job_uid ~ctx ~namespace ~job_name in
+         let* () = apply_doc ~ctx ~what:"transient secret" (transient ~job_uid) in
+         let outcome =
+           Sol_cli_migration_job.wait
+             ~ctx
+             ~interval_s:wait_interval_s
+             ~attempts:wait_attempts
+             job
+         in
+         match outcome with
+         | Sol_cli_migration_job.Succeeded ->
+           (* Only now has Postgres accepted these passwords, so only now do the projections
             consumers read carry a value that works. Writing them before the Job would hand
             a replacement password to pods that can restart before the server knows it.
             A failed Job therefore leaves the previous projections exactly as they were,
             and the recorded authority makes the next deploy a repair. *)
-         List.fold_left
-           (fun acc doc ->
-              let* () = acc in
-              apply_doc ~ctx ~what:"class credential" doc)
-           (Ok ())
-           output_secrets
-       | Sol_cli_migration_job.Failed ->
-         Error
-           (Printf.sprintf
-              "database setup for target %s failed; the roles were not created"
-              namespace)
-       | Sol_cli_migration_job.Timed_out _ ->
-         Error
-           (Printf.sprintf
-              "database setup for target %s timed out; the roles may be partially created"
-              namespace)
-       | Sol_cli_migration_job.Unstartable { reason; detail } ->
-         Error
-           (Printf.sprintf
-              "database setup for target %s could not start: %s%s"
-              namespace
-              reason
-              (match detail with
-               | Some d -> " (" ^ d ^ ")"
-               | None -> "")))
+           List.fold_left
+             (fun acc doc ->
+                let* () = acc in
+                apply_doc ~ctx ~what:"class credential" doc)
+             (Ok ())
+             output_secrets
+         | Sol_cli_migration_job.Failed ->
+           Error
+             (Printf.sprintf
+                "database setup for target %s failed; the roles were not created"
+                namespace)
+         | Sol_cli_migration_job.Timed_out _ ->
+           Error
+             (Printf.sprintf
+                "database setup for target %s timed out; the roles may be partially \
+                 created"
+                namespace)
+         | Sol_cli_migration_job.Unstartable { reason; detail } ->
+           Error
+             (Printf.sprintf
+                "database setup for target %s could not start: %s%s"
+                namespace
+                reason
+                (match detail with
+                 | Some d -> " (" ^ d ^ ")"
+                 | None -> "")))
+  in
+  match result, !cleanup_failures with
+  | Ok (), [] -> Ok ()
+  | Ok (), failures -> Error (cleanup_report failures)
+  | Error message, [] -> Error message
+  | Error message, failures ->
+    Error (Printf.sprintf "%s\n%s" message (cleanup_report failures))
 ;;
 
 (** The external owner's half of the same contract.

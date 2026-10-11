@@ -1502,6 +1502,7 @@ let render_setup () =
   Sol_cli_database_setup_render.docs
     ~ns:"myapp-payments"
     ~target:"payments"
+    ~job_uid:"uid-1234"
     ~operation:Sol_cli_database_setup.Bootstrap
     ~master_url:"postgresql://postgres:masterpw@db.internal:5432/app"
     ~ddl_password:"ddl-pw"
@@ -1575,18 +1576,22 @@ let test_database_setup_renders_the_fail_closed_job () =
     ~msg:"the Job takes its inputs by reference"
     true
     (setup_mentions "secretKeyRef" text);
-  (* Sol writes the Secret first, then the Job. *)
+  (* The Job is written first, and the Secret it needs after it — which is what lets the
+     Secret carry its owner from creation instead of being patched into one. *)
   Windtrap.equal
     Windtrap.bool
-    ~msg:"the Secret is written before the Job"
+    ~msg:"the Job is written before the Secret it needs"
     true
-    (setup_index "kind: Secret" text < setup_index "kind: Job" text)
+    (setup_index "kind: Job" text < setup_index "pg_service.conf" text);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the Secret is owned by the Job from creation, so there is no unowned window"
+    true
+    (setup_mentions "ownerReferences" text && setup_mentions "uid: uid-1234" text)
 ;;
 
 let test_database_setup_keeps_credentials_out_of_the_job () =
   let text = render_setup () in
-  (* Every credential appears once, in the Secret's stringData. A second occurrence would
-     mean the Job spec carries it too. *)
   let occurrences needle =
     let n = String.length needle in
     let t = String.length text in
@@ -1600,6 +1605,28 @@ let test_database_setup_keeps_credentials_out_of_the_job () =
     in
     go 0 0
   in
+  (* The master connection string appears **nowhere**: not in argv, and not in the Secret
+     either. What the mount carries is the libpq service file whose contents are its parts. *)
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"the master connection string is never written down"
+    0
+    (occurrences "postgresql://postgres:masterpw@db.internal:5432/app");
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"the service file is the master's parameters"
+    1
+    (occurrences "password=masterpw");
+  List.iter
+    (fun part ->
+       Windtrap.equal
+         Windtrap.bool
+         ~msg:(Printf.sprintf "the service file carries %s" part)
+         true
+         (setup_mentions part text))
+    [ "host=db.internal"; "port=5432"; "dbname=app" ];
+  (* The role passwords are each written once, in the Secret's stringData. A second
+     occurrence would mean the Job spec carries them too. *)
   List.iter
     (fun credential ->
        Windtrap.equal
@@ -1607,11 +1634,84 @@ let test_database_setup_keeps_credentials_out_of_the_job () =
          ~msg:(Printf.sprintf "%s appears only in the transient Secret" credential)
          1
          (occurrences credential))
-    [ "postgresql://postgres:masterpw@db.internal:5432/app"; "ddl-pw"; "dml-pw" ]
+    [ "ddl-pw"; "dml-pw" ];
+  (* And nothing names the master connection variable at all. Keyed off the variable name
+     rather than the invocation: the YAML renderer escapes the quotes in a command string,
+     so a needle containing one silently matches nothing and the assertion goes inert. *)
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"no rendered object names the master connection variable"
+    0
+    (occurrences "POSTGRES_URL")
 ;;
 
 let%test "database setup render: the Job is fail-closed and mounts the CA" =
   test_database_setup_renders_the_fail_closed_job ()
+;;
+
+(* The service file is parsed by libpq, which treats an unquoted [#] as a comment and trims
+   unquoted values. A master password containing either would be silently truncated into a
+   different credential. *)
+let test_database_setup_service_file_quotes () =
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"a plain value is written as it is"
+    "db.internal"
+    (Sol_cli_database_setup_render.service_value "db.internal");
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"a value with a space is quoted"
+    "'two words'"
+    (Sol_cli_database_setup_render.service_value "two words");
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"a value with a hash is quoted, so it is not read as a comment"
+    "'pa#ss'"
+    (Sol_cli_database_setup_render.service_value "pa#ss");
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"a quote inside a quoted value is escaped"
+    "'pa\\'ss'"
+    (Sol_cli_database_setup_render.service_value "pa'ss");
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"a line break is quoted, so one entry does not become two"
+    "'a\nb'"
+    (Sol_cli_database_setup_render.service_value "a\nb");
+  (* The whole file, through the same path the renderer uses. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the file names the service, and every value is on its own line"
+    true
+    (setup_mentions
+       "[sol-setup]"
+       (Sol_cli_database_setup_render.service_file
+          ~master_url:
+            "postgresql://postgres:masterpw@db.internal:5432/app?sslmode=verify-full&sslrootcert=/etc/sol/db-ca/ca.pem"))
+;;
+
+let%test "database setup render: a service-file value that libpq could misread is quoted" =
+  test_database_setup_service_file_quotes ()
+;;
+
+(* The two bounds are different things: the waiter giving up is not the Job being over.
+   Equal deadlines kill a slow-but-succeeding setup exactly when the waiter stops looking. *)
+let test_database_setup_deadline_exceeds_the_wait () =
+  let wait_window =
+    int_of_float
+      (Sol_cli_database_setup_run.wait_interval_s
+       *. float_of_int Sol_cli_database_setup_run.wait_attempts)
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:
+      "the Job may outlive the wait window, so a slow success is not killed as a failure"
+    true
+    (Sol_cli_database_setup.active_deadline_seconds > wait_window)
+;;
+
+let%test "database setup: the Job's deadline exceeds the coordinator's wait window" =
+  test_database_setup_deadline_exceeds_the_wait ()
 ;;
 
 let%test "database setup render: credentials live only in the transient Secret" =
@@ -1812,13 +1912,15 @@ let test_database_setup_bootstrap_orders_by_verification () =
         ~msg:"the authority is never deleted"
         false
         (setup_mentions "delete secret payments-db-credentials" calls);
+      (* The owner is set at creation, not patched in afterwards: there is no window in
+         which the master Secret exists unowned, and therefore nothing for a crash to fall
+         into. Pinned as the absence of the patch, because a later "fix" that re-introduces
+         the two-step would otherwise pass everything above. *)
       Windtrap.equal
         Windtrap.bool
-        ~msg:"the transient Secret is owned before cleanup reaches it"
+        ~msg:"the Secret is created owned, with no owner patch"
         true
-        (* "delete secret" happens only in cleanup; "delete job" also appears in the
-           re-deploy pre-delete, which correctly precedes the patch. *)
-        (setup_index "patch secret" calls < setup_index "delete secret" calls))
+        (setup_mentions "ownerReferences" manifests && not (setup_mentions "patch" calls)))
 ;;
 
 (* Where the passwords come from: the authority, not a fresh generation. *)
@@ -2025,22 +2127,30 @@ let test_database_setup_operations_differ () =
     (setup_mentions "Recover the authority Secret" repair)
 ;;
 
-let test_database_setup_cleans_up_when_the_patch_fails () =
-  (* The failure that matters most: the Job exists, the Secret is never owned by it, so
-     the TTL cascade can never collect it. Cleanup must still run. *)
-  setup_fake_kubectl ~fail_verb:"patch" (fun ~log ->
+let test_database_setup_reports_a_failed_cleanup () =
+  (* The setup succeeded but the master could not be removed. That is its own event, not a
+     footnote: it has to reach the step's outcome, because the credential is still in the
+     cluster and only the operator can go and confirm it is gone. *)
+  setup_fake_kubectl ~fail_verb:"delete secret" (fun ~log ->
     match run_database_setup () with
-    | Ok () -> Windtrap.fail "a failed owner patch must fail the phase"
-    | Error _ ->
+    | Ok () -> Windtrap.fail "a failed cleanup must fail the phase"
+    | Error message ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the failure says the master's parameters may still be in the cluster"
+        true
+        (setup_mentions
+           "service file carrying the master's parameters may still be in the cluster"
+           message);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"...and names the delete that failed"
+        true
+        (setup_mentions "delete secret" message);
       let calls = read_file log in
       Windtrap.equal
         Windtrap.bool
-        ~msg:"the transient Secret is still deleted when the patch fails"
-        true
-        (setup_mentions "delete secret" calls);
-      Windtrap.equal
-        Windtrap.bool
-        ~msg:"the Job is still deleted when the patch fails"
+        ~msg:"the Job is still deleted"
         true
         (setup_mentions "delete job" calls))
 ;;
@@ -2080,8 +2190,8 @@ let%test
   test_database_setup_operations_differ ()
 ;;
 
-let%test "database setup run: cleanup runs even when the owner patch fails" =
-  test_database_setup_cleans_up_when_the_patch_fails ()
+let%test "database setup run: a failed cleanup is reported, not swallowed" =
+  test_database_setup_reports_a_failed_cleanup ()
 ;;
 
 (* The failure paths, which is where the master leaks: every one of them must still
