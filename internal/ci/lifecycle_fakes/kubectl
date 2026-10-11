@@ -205,6 +205,23 @@ case " $* " in
     printf 'secret/redpanda-users\n'
     exit 0
     ;;
+  *" get configmap sol-platform-network "*)
+    # The cluster fact the platform publishes: which ranges reach this target's managed
+    # database, and on which port. The substrate reads it before it applies the workload
+    # egress allowance, and distinguishes it from a target that provisions no database —
+    # so the fake must answer it (blank output is not JSON) and must be able to report the
+    # absent and refused cases for the destinations that assert them.
+    if [ "${PLATFORM_NETWORK_FACT_ABSENT:-}" = 1 ]; then
+      printf 'Error from server (NotFound): configmaps "sol-platform-network" not found\n' >&2
+      exit 1
+    fi
+    if [ "${PLATFORM_NETWORK_FACT_FORBIDDEN:-}" = 1 ]; then
+      printf 'Error from server (Forbidden): configmaps "sol-platform-network" is forbidden\n' >&2
+      exit 1
+    fi
+    printf '{"data":{"database-egress-cidrs":"10.0.0.0/16","database-port":"5432"}}\n'
+    exit 0
+    ;;
   *" get configmap sol-release-"*)
     # The release-boundary ConfigMaps a seeded harness writes through
     # print_release_record.exe. Without one, the workspace has no recorded UID evidence, so
