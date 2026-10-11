@@ -1573,6 +1573,20 @@ let%test "database setup render: credentials live only in the transient Secret" 
   test_database_setup_keeps_credentials_out_of_the_job ()
 ;;
 
+(* How the setup Job reaches the database. The workload NetworkPolicies are pod-scoped by
+   design (an empty podSelector would make the namespace egress-default-deny for every pod
+   in it); the Job's pod template carries no `app` label, so no policy selects it and
+   Kubernetes leaves its egress unrestricted — the same reason the migration Job reaches the
+   database today. If this Job ever gains a matching label it becomes selected and would
+   need its own allowance, so the absence is pinned here. *)
+let%test "database setup render: the Job is outside the workload egress policy" =
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the setup Job carries no workload `app` label, so no NetworkPolicy selects it"
+    false
+    (setup_mentions "app:" (render_setup ()))
+;;
+
 (* The sequence, against a fake kubectl. This is where the master leaks, so these are the
    assertions that matter: the order, and that cleanup runs on the failure path. *)
 

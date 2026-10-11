@@ -720,7 +720,7 @@ let run_database_setup_step
       | None ->
         Error
           (database_master_unavailable
-             ~target
+             ~target:target_path
              "this run did not reconcile the environment, so there is no cluster root to \
               read")
       | Some infra_dir ->
@@ -728,7 +728,7 @@ let run_database_setup_step
           Sol_cli_terraform.output_json ~chdir:infra_dir ()
           |> Result.map_error (fun error ->
             database_master_unavailable
-              ~target
+              ~target:target_path
               (Printf.sprintf
                  "reading the cluster output failed: %s"
                  (Sol_cli_process.error_to_string error)))
@@ -739,7 +739,7 @@ let run_database_setup_step
             output.Sol_cli_process.stdout
           |> Result.map_error (fun failure ->
             database_master_unavailable
-              ~target
+              ~target:target_path
               (Printf.sprintf
                  "parsing the cluster output failed: %s"
                  (Sol_cli_provider_registry.resolution_failure_to_string failure)))
@@ -749,7 +749,7 @@ let run_database_setup_step
          | None ->
            Error
              (database_master_unavailable
-                ~target
+                ~target:target_path
                 "the `postgres_url` output is null, so the provisioning configuration \
                  reports no database"))
     in
