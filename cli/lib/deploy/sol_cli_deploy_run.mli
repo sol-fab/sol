@@ -85,6 +85,7 @@ val run_lifecycle
   -> present_plan:(Sol_cli_deployment_plan.t -> (unit, string) result)
   -> gates:(Sol_cli_deployment_plan.t -> (unit, string) result)
   -> database_setup:(unit -> (unit, string) result)
+  -> post_setup_gates:(Sol_cli_deployment_plan.t -> (unit, string) result)
   -> before_apply:(Sol_cli_deployment_plan.t -> (unit, string) result)
   -> apply:
        (lease:Sol_cli_boundary_lease.held

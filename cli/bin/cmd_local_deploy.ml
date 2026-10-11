@@ -634,6 +634,7 @@ let run_apply
         Ok ())
       ~gates:(fun _ -> Ok ())
       ~database_setup:(fun () -> Ok ())
+      ~post_setup_gates:(fun _ -> Ok ())
       ~before_apply:(fun _ -> Ok ())
       ~apply:(fun ~lease ~release_id:_ plan ->
         apply_plan

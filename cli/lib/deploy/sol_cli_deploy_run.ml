@@ -569,6 +569,7 @@ let run_lifecycle
       ~present_plan
       ~gates
       ~database_setup
+      ~post_setup_gates
       ~before_apply
       ~apply
       ~report_success
@@ -590,6 +591,16 @@ let run_lifecycle
           substrate it needs — and before the workloads, whose migration Jobs consume the
           DDL role it creates. Under the lease, because it mutates the target. *)
        let* () = database_setup () in
+       (* The migration verification runs *after* the setup, and this is the whole point of
+          the phase: it verifies a schema the DDL role owns, and the reader switch has it read
+          `<target>-ddl-creds` — which is exactly what the setup creates. Verifying before
+          the setup would refuse a first deploy for a Secret that is about to exist, and
+          would leave the operator with a remedy (`sol migrate apply`) whose own credential
+          the setup has not yet written.
+
+          The authority check stays in [gates], *before* the setup: it is read-only, and
+          mutating before establishing authority is worse than after. *)
+       let* () = post_setup_gates plan in
        record_plan run_log plan;
        let* () =
          confirm_consumer_groups ~ctx:cluster ~workspace ~confirm_group_change plan
@@ -666,12 +677,10 @@ let apply
     ~keep_releases:ctx.keep_releases
     ~confirm_group_change
     ~present_plan
-    ~gates:(fun plan ->
-      let* () =
-        run_gate ~on_refused:(fun _ -> ()) (migration_prerequisite ctx ~plan ~live:true)
-      in
-      effective_access ())
+    ~gates:(fun _plan -> effective_access ())
     ~database_setup
+    ~post_setup_gates:(fun plan ->
+      run_gate ~on_refused:(fun _ -> ()) (migration_prerequisite ctx ~plan ~live:true))
     ~before_apply:(fun plan -> contract_reconciliation ctx plan)
     ~apply:(fun ~lease ~release_id:_ plan ->
       let* results =
