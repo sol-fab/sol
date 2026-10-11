@@ -169,6 +169,20 @@ isolate the Job, and it would then need an explicit rule; nothing in Sol renders
 belongs after the prerequisites rather than beside the cloud apply, because it needs the namespace that
 phase creates; but the guarantee is "the Job is outside the workload policy", not "the Job runs under it".
 
+### 8. Transport: authenticated server identity
+
+The contract is **encrypted transport with authenticated server identity**. Each provider satisfies it
+by its own mechanism: AWS with `verify-full` against a pinned RDS CA, GCP with `verify-ca` against the
+instance's per-instance CA. Both are explicit modes; neither permits downgrade. The mode is delivered
+with the connection (a provider-derived property of the target, not a user declaration), so consumers
+do not branch.
+
+`verify-full` is stronger than GCP's case requires, not the property itself: it adds hostname matching,
+which matters when a CA is shared across servers or DNS can be redirected. Cloud SQL's per-instance CA
+is bound to the instance alone, and the connection is a private address inside the VPC, so neither
+precondition applies there. A uniform client code path is a preference; the security property is the
+requirement, and a per-provider mechanism satisfies it.
+
 ## Consequences
 
 - **New machinery: one in-cluster database setup step.** It applies a Job with the master credential,

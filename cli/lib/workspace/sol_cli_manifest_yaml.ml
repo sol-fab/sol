@@ -54,7 +54,7 @@ module Workload_spec = struct
     ; primitive : string
     ; release_id : Sol_cli_release_id.t
     ; (* 2d: the CA ConfigMap to mount when this unit consumes a Sol-provisioned database,
-         so the pod can run `sslmode=verify-full`. [None] when it consumes none. The mount
+         so the pod can run the provider's `sslmode`. [None] when it consumes none. The mount
          is **prep**: nothing reads the anchor until 2b switches the unit's reader to its
          already-parameterized class Secret, so that switch does not also add the mount. *)
       db_ca_configmap : string option

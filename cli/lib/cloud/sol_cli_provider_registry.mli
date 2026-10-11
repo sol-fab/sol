@@ -20,12 +20,18 @@ val postgres_url_of_outputs
   -> string
   -> (string option, resolution_failure) result
 
-(** The same dispatch for [postgres_ca_cert], the trust anchor [sslmode=verify-full] needs.
+(** The same dispatch for [postgres_ca_cert], the trust anchor [postgres_sslmode] verifies
+    against.
     [Ok None] is a null output — no database was created; [Error] is an unreadable output. *)
 val postgres_ca_cert_of_outputs
   :  Sol_cli_provider.t
   -> string
   -> (string option, resolution_failure) result
+
+(** The mode this provider's connection authenticates the server with. The contract —
+    encrypted transport with authenticated server identity — is provider-neutral; the
+    mechanism is not. Both modes are explicit, so neither permits a downgrade. *)
+val postgres_sslmode : Sol_cli_provider.t -> (string, resolution_failure) result
 
 val destruction
   :  Sol_cli_provider.t

@@ -14,7 +14,8 @@ type aws_outputs =
        reports it. Null when no database was created. No code read this before; the
        database setup step is its first consumer. *)
     postgres_url : string option
-  ; (* The trust anchor a client needs for sslmode=verify-full. Null when no database was
+  ; (* The trust anchor a client needs for this provider's sslmode (see
+       Sol_cli_provider_registry.postgres_sslmode). Null when no database was
        created. The committed global RDS bundle, coupled to the instance's pinned
        ca_cert_identifier. *)
     postgres_ca_cert : string option

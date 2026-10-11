@@ -468,6 +468,27 @@ let run_external_credentials
   let* docs =
     external_credential_docs ~target ~migration_namespace ~dml_namespaces ~binding
   in
+  (* The ExternalSecret object is checked the same way the Secret projections are: absent or
+     Sol's. It is a delivered object like any other, and a target must not quietly take over
+     one another target's consumers still read. *)
+  let module Render = Sol_cli_database_setup_render in
+  (* Each class's ExternalSecret in the namespace that class is read from. *)
+  let guard ~namespace ~credential_class =
+    Sol_cli_secret.assert_destination_is_sol
+      ~ctx
+      ~resource:"externalsecret"
+      ~namespace
+      ~name:(Render.creds_name ~credential_class target)
+  in
+  let* () = guard ~namespace:migration_namespace ~credential_class:Render.ddl_class in
+  let* () =
+    List.fold_left
+      (fun acc ns ->
+         let* () = acc in
+         guard ~namespace:ns ~credential_class:Render.dml_class)
+      (Ok ())
+      dml_namespaces
+  in
   List.fold_left
     (fun acc doc ->
        let* () = acc in

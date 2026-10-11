@@ -137,8 +137,8 @@ let postgres_url_of_outputs provider text =
     |> Result.map_error (fun message -> Outputs_unreadable message)
 ;;
 
-(** The same provider dispatch for {!postgres_ca_cert}: the trust anchor [sslmode=verify-full]
-    needs, whose shape differs by provider (AWS a committed bundle, GCP the instance's server
+(** The same provider dispatch for {!postgres_ca_cert}: the trust anchor the provider's
+    {!postgres_sslmode} verifies against, whose shape differs by provider (AWS a committed bundle, GCP the instance's server
     CA). Kept beside {!postgres_url_of_outputs} and separate from {!of_root} for the same
     reason: one contract per provider, in one place. *)
 let postgres_ca_cert_of_outputs provider text =
@@ -154,6 +154,28 @@ let postgres_ca_cert_of_outputs provider text =
     |> Result.map (fun (outputs : Sol_cli_gcp_cluster.gcp_outputs) ->
       outputs.postgres_ca_cert)
     |> Result.map_error (fun message -> Outputs_unreadable message)
+;;
+
+(** The TLS mode this provider's database connection uses.
+
+    The contract is **encrypted transport with authenticated server identity**, and each
+    provider satisfies it by its own mechanism. AWS verifies the host against a pinned RDS CA
+    with a committed bundle — [verify-full]. GCP's connection is a private IP inside the VPC
+    with no name to match, and its trust anchor is the *per-instance* CA, which the instance
+    alone holds: the identity is established by the CA, so [verify-ca] is the mechanism that
+    expresses it. Both are explicit modes; neither permits opportunistic encryption or a
+    downgrade, and [verify-full] is stronger than GCP's case requires rather than the
+    property itself.
+
+    Declared here, beside {!postgres_url_of_outputs} and {!postgres_ca_cert_of_outputs},
+    because it is the same kind of fact: what this provider's connection contract is. It is
+    never a user-facing field — a target does not choose its mode, its provider has one — and
+    it travels to consumers in the delivered URL, so no client hardcodes either value. *)
+let postgres_sslmode provider =
+  match provider with
+  | Sol_cli_provider.Byo -> Error (No_root byo_no_root)
+  | Sol_cli_provider.Aws -> Ok "verify-full"
+  | Sol_cli_provider.Gcp -> Ok "verify-ca"
 ;;
 
 let destruction provider context =

@@ -68,7 +68,7 @@ type gcp_outputs =
   ; database_egress_cidrs : string list
   ; (* See the AWS counterpart: null when no database was created. *)
     postgres_url : string option
-  ; (* The trust anchor a client needs for sslmode=verify-full; Cloud SQL's per-instance
+  ; (* The trust anchor a client needs for this provider's sslmode; Cloud SQL's per-instance
        server CA. Null when no database was created. See the AWS counterpart. *)
     postgres_ca_cert : string option
   }

@@ -308,6 +308,50 @@ let refuse_external_secret_target ~ctx ~namespace ~secret_name =
   else Ok ()
 ;;
 
+(** Read any object of a kind, for an ownership check. [Ok None] is "not there". *)
+let get_named_object_json ~ctx ~resource ~namespace ~name =
+  match
+    Sol_cli_kubectl.get_if_present
+      ~ctx
+      ~args:[ "get"; resource; name; "-n"; namespace; "-o"; "json" ]
+  with
+  | Ok None -> Ok None
+  | Ok (Some json) ->
+    Sol_cli_json.decode ~what:(Printf.sprintf "%s %s/%s" resource namespace name) json
+    |> Result.map Option.some
+  | Error e ->
+    Error
+      (Printf.sprintf
+         "could not read %s %s/%s: %s"
+         resource
+         namespace
+         name
+         (Sol_cli_process.error_to_string e))
+;;
+
+(** The guard every delivered object goes through before Sol writes it.
+
+    What is already at the destination decides whether Sol may write there: nothing, or
+    something Sol owns. Anything else is refused — another manager's object, or one whose
+    ownership cannot be established — because overwriting it takes a credential out from
+    under whoever put it there, and the write would look like it succeeded.
+
+    A **Secret** is additionally refused where an ExternalSecret already targets it: two
+    writers for one object is a race ESO wins silently, and the loser is whichever writer
+    ran first. The external owner's own objects are checked the same way — the ExternalSecret
+    an external target publishes must be Sol's or absent, so a target cannot quietly take
+    over a projection another target still reads. *)
+let assert_destination_is_sol ~ctx ~resource ~namespace ~name =
+  let open Result.Syntax in
+  let* () =
+    if String.equal resource "secret"
+    then refuse_external_secret_target ~ctx ~namespace ~secret_name:name
+    else Ok ()
+  in
+  let* existing = get_named_object_json ~ctx ~resource ~namespace ~name in
+  verify_sol_managed_secret existing
+;;
+
 let verify_platform_secret_destinations ~ctx ~namespaces =
   let* () = require_namespaces namespaces in
   iter_namespaces namespaces ~f:(fun namespace ->
@@ -581,14 +625,6 @@ let synced_version_matches ~generation synced_version =
 
 let wait_for_external_secret_sync ~timeout_s ~poll_s ~ctx ~namespace ~external_name =
   let deadline = Unix.gettimeofday () +. timeout_s in
-  let warn_unverified reason =
-    Sol_cli_report.warn
-      "ESO did not publish a generation-bound synced version for %s/%s (%s); proceeding \
-       on Ready+SecretSynced without per-spec freshness verification"
-      namespace
-      external_name
-      reason
-  in
   let rec poll () =
     let* output =
       Sol_cli_kubectl.get_raw
@@ -624,28 +660,40 @@ let wait_for_external_secret_sync ~timeout_s ~poll_s ~ctx ~namespace ~external_n
       (match synced_version_matches ~generation synced_version with
        | Some true -> Ok ()
        | Some false ->
+         (* A *known* mismatch: what ESO published has not reached the spec this selection
+            asks for. Proceeding is how a changed binding quietly keeps serving the old
+            database — the previous ExternalSecret still reports Ready, its Secret still
+            carries the key, and a key check passes. *)
          if expired ()
-         then (
-           warn_unverified
+         then
+           Error
              (Printf.sprintf
-                "syncedResourceVersion %s has not reached generation %s"
+                "ExternalSecret %s/%s has not synced the spec this selection asks for: \
+                 syncedResourceVersion %s has not reached generation %s. Refusing to \
+                 treat the previous sync as evidence for this one."
+                namespace
+                external_name
                 (Option.value synced_version ~default:"unknown")
-                (Option.value generation ~default:"unknown"));
-           Ok ())
+                (Option.value generation ~default:"unknown"))
          else (
            Unix.sleepf poll_s;
            poll ())
-       (* markAsDone sets the Ready condition, RefreshTime and SyncedResourceVersion on one
-          status object, and the reconciler writes that status once (a deferred
-          Status().Update), so an absent version beside a Ready condition is deterministic
-          rather than a torn read: warn once instead of retrying. *)
        | None ->
-         warn_unverified
-           (match generation, synced_version with
-            | _, None -> "status.syncedResourceVersion is absent"
-            | None, _ -> "metadata.generation is absent"
-            | Some _, Some _ -> "the synced version is not a generation prefix");
-         Ok ())
+         (* No freshness evidence at all. "Unsupported" is not "fresh": without a
+            generation-bound version there is nothing that distinguishes this selection's
+            sync from an earlier one's, and the same silent substitution follows. Ready
+            alone is not evidence about *which* spec was synced. *)
+         Error
+           (Printf.sprintf
+              "ExternalSecret %s/%s reports Ready but carries no generation-bound synced \
+               version (%s), so there is no evidence the sync belongs to this selection. \
+               Refusing to proceed on readiness alone."
+              namespace
+              external_name
+              (match generation, synced_version with
+               | _, None -> "status.syncedResourceVersion is absent"
+               | None, _ -> "metadata.generation is absent"
+               | Some _, Some _ -> "the synced version is not a generation prefix")))
   in
   poll ()
 ;;

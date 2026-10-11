@@ -690,8 +690,8 @@ let database_master_unavailable ~target detail =
 let database_ca_unavailable ~target detail =
   Printf.sprintf
     "could not obtain the database CA for target %s from the cluster output: %s.\n\
-     ADR 0007 condition 6 / 2d: a Sol-provisioned database's clients run \
-     `sslmode=verify-full`, which needs the trust anchor the cluster root publishes as \
+     ADR 0007 condition 6 / 2d: a Sol-provisioned database's clients run the provider's \
+     `sslmode`, which needs the trust anchor the cluster root publishes as \
      `postgres_ca_cert`. Fix the output (or re-run the environment reconcile) and retry; \
      Sol does not fall back to an unverified connection."
     target
@@ -776,6 +776,9 @@ let run_database_setup_step
                   (fun (binding : Sol_cli_resource_binding.t) -> binding.resource)
                   externals))))
   | Some (database : Sol_cli_resource_binding.t) ->
+    let provider =
+      planning.Sol_cli_deploy_selection.Target_plan_input.config.target.provider
+    in
     let* master_url, ca_cert =
       match infra_dir with
       | None ->
@@ -785,7 +788,6 @@ let run_database_setup_step
              "this run did not reconcile the environment, so there is no cluster root to \
               read")
       | Some infra_dir ->
-        let provider = planning.config.target.provider in
         let* output =
           Sol_cli_terraform.output_json ~chdir:infra_dir ()
           |> Result.map_error (fun error ->
@@ -852,8 +854,20 @@ let run_database_setup_step
         ~workspace:planning.workspace
         ~services:planning.services
     in
+    (* The mode is the provider's, not a constant here: the contract is authenticated server
+       identity and each provider establishes it its own way. *)
+    let* sslmode =
+      Sol_cli_provider_registry.postgres_sslmode provider
+      |> Result.map_error (fun failure ->
+        database_master_unavailable
+          ~target:target_path
+          (Printf.sprintf
+             "the provider's TLS mode could not be resolved: %s"
+             (Sol_cli_provider_registry.resolution_failure_to_string failure)))
+    in
     let master_url =
       Sol_cli_database_setup_url.with_tls
+        ~sslmode
         ~ca_cert_path:Sol_cli_database_setup_render.ca_cert_path
         master_url
     in
@@ -878,6 +892,28 @@ let run_database_setup_step
         ~ns:migration_namespace
         ~name:(Sol_cli_database_setup_render.ddl_creds_name target)
         ~postgres_url:ddl_url
+    in
+    (* Every projection is checked before it is rendered: a class Secret may only be written
+       where nothing exists or where what exists is Sol's. The check is here rather than in
+       the coordinator because the names and namespaces are. *)
+    let* () =
+      Sol_cli_secret.assert_destination_is_sol
+        ~ctx
+        ~resource:"secret"
+        ~namespace:migration_namespace
+        ~name:(Sol_cli_database_setup_render.ddl_creds_name target)
+    in
+    let* () =
+      List.fold_left
+        (fun acc ns ->
+           let* () = acc in
+           Sol_cli_secret.assert_destination_is_sol
+             ~ctx
+             ~resource:"secret"
+             ~namespace:ns
+             ~name:(Sol_cli_database_setup_render.dml_creds_name target))
+        (Ok ())
+        dml_namespaces
     in
     let dml_secrets =
       List.map
