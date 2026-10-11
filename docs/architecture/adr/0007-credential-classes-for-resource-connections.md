@@ -105,6 +105,11 @@ reclassified later as a consumer that "happens to hold the master".
    path already holds it — the cluster root's output. That is delivery *to the provisioning path*, not
    to a consumer. The credential is used, the Job completes, and it is gone; nothing writes it into a
    target-owned Secret. Anything else creates a second place the master lives.
+
+   **"Not persisted" is proven, not asserted.** A lifetime is not a guarantee: the test asserts the
+   transient master Secret is **deleted after the Job completes**, not merely that it was created with
+   a lifetime, and crash-mid-Job cleanup is covered by an owner reference or equivalent so a Job that
+   dies before its own cleanup still has the Secret collected.
 2. **Idempotent.** Re-running against a target whose roles exist is safe: no recreate, no drop, no
    password churn. Existing roles are verified and the Job exits. If rotation is ever added, this is
    where it hooks.
@@ -115,6 +120,17 @@ reclassified later as a consumer that "happens to hold the master".
 5. **The generated passwords are target Kubernetes Secrets in v1.** Durability, rotation and any
    provider-store migration belong to #1360 — the same honest interim as the storage truth already
    stated in the model.
+6. **The master is delivered from the cluster output, not from an operator's environment variable.**
+   A target with a Sol-provisioned database obtains the master by reading the cluster root's
+   `postgres_url` output. **This is the property, not "the Job ran"** — and it is verified end-to-end on
+   a cloud target.
+
+   Stated as a condition because it is currently **false, not merely unverified**: no code reads the
+   output. The master reaches today's deploy path only because the operator copies the output by hand
+   and exports it (`ensure_postgres_url ()` requires `Sol_cli_string.env "POSTGRES_URL"`, and
+   `cmd_target.ml` reads the same variable), and reaches consumers through
+   `sol secret set @platform POSTGRES_URL`. Before 2c, the model's claim that the provisioning output is
+   projected at install describes a mechanism that does not exist; 2c builds the first real one.
 
 ### 7. Reachability and the phase sequence
 
@@ -175,6 +191,14 @@ prerequisites rather than beside the cloud apply.
   Review lens per PR: **2a** — no behavior change; if anything differs, it was not a refactor. **2c** — the
   five conditions in §6, which are its review criteria. **2b** — criterion 19 (credential class isolation)
   as the enforcement test, with "what does this delete?" as the discipline.
+- **2b's deletion list** — the delivery switch must *delete*, not only add:
+  - `default_secrets`' `POSTGRES_URL` entry — the mechanism that makes every unit require the master.
+  - the database's `@platform` path.
+  - **`ensure_postgres_url ()` and the `Sol_cli_string.env "POSTGRES_URL"` reads** (`cmd_deploy.ml`,
+    `cmd_target.ml`). If these survive, the manual copy the operator performs today survives with them,
+    and the model's claim stays false however well 2c delivered.
+  - the operator-facing documentation that instructs copying the Terraform output into CI secrets and
+    `sol.toml`.
 
 ## Alternatives considered
 
