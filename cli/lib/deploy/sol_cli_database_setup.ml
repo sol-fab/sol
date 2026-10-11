@@ -34,9 +34,11 @@ let setup_image () =
     Error
       (Printf.sprintf
          "no database setup image is configured. Set %s to an image pinned by digest, \
-          for example postgres@sha256:<64 hex> - `docker manifest inspect postgres:16` \
-          reports the current digest. Unlike the migration runner, this image is public: \
-          there is nothing to publish, only a digest to pin"
+          for example postgres@sha256:<64 hex> - `docker buildx imagetools inspect \
+          postgres:16` prints the current digest (the plain `docker manifest inspect` \
+          form prints the manifest JSON without a digest line). Unlike the migration \
+          runner, this image is public: there is nothing to publish, only a digest to \
+          pin"
          image_env)
 ;;
 
@@ -72,12 +74,19 @@ let dml_role = "sol_app"
     needs it explicitly or the migration cannot create anything. *)
 let role_sql =
   Printf.sprintf
-    {sql|\getenv ddl_password SOL_DDL_PASSWORD
+    {sql|\set ON_ERROR_STOP on
+\getenv ddl_password SOL_DDL_PASSWORD
 \getenv dml_password SOL_DML_PASSWORD
 SELECT set_config('sol.ddl_password', :'ddl_password', false) IS NOT NULL;
 SELECT set_config('sol.dml_password', :'dml_password', false) IS NOT NULL;
 DO $$
 BEGIN
+  IF coalesce(current_setting('sol.ddl_password', true), '') = '' THEN
+    RAISE EXCEPTION 'SOL_DDL_PASSWORD is empty; refusing to create a role with no password';
+  END IF;
+  IF coalesce(current_setting('sol.dml_password', true), '') = '' THEN
+    RAISE EXCEPTION 'SOL_DML_PASSWORD is empty; refusing to create a role with no password';
+  END IF;
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '%s') THEN
     EXECUTE format('CREATE ROLE %s LOGIN PASSWORD %%L', current_setting('sol.ddl_password'));
   ELSE
