@@ -64,11 +64,24 @@ let job_uid ~ctx ~namespace ~job_name =
     until the next deploy of the same target replaces it. *)
 let own_secret_with_job ~ctx ~namespace ~job_name ~secret_name =
   let* uid = job_uid ~ctx ~namespace ~job_name in
+  (* Built as a value rather than as a JSON string: the repository guards against
+     hand-built manifest text, and a patch is manifest text. *)
   let patch =
-    Printf.sprintf
-      {|{"metadata":{"ownerReferences":[{"apiVersion":"batch/v1","kind":"Job","name":"%s","uid":"%s"}]}}|}
-      job_name
-      uid
+    `Assoc
+      [ ( "metadata"
+        , `Assoc
+            [ ( "ownerReferences"
+              , `List
+                  [ `Assoc
+                      [ "apiVersion", `String "batch/v1"
+                      ; "kind", `String "Job"
+                      ; "name", `String job_name
+                      ; "uid", `String uid
+                      ]
+                  ] )
+            ] )
+      ]
+    |> Yojson.Safe.to_string
   in
   kubectl
     ~ctx
