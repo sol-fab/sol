@@ -1460,3 +1460,314 @@ let%test "database setup: the image must be a digest reference" =
 let%test "database setup: the role SQL is idempotent and carries no secret" =
   test_database_setup_sql_is_idempotent ()
 ;;
+
+(* The renderer, asserted on its rendered output. *)
+
+let render_setup () =
+  Sol_cli_database_setup_render.docs
+    ~ns:"myapp-payments"
+    ~target:"payments"
+    ~master_url:"postgresql://postgres:masterpw@db.internal:5432/app"
+    ~ddl_password:"ddl-pw"
+    ~dml_password:"dml-pw"
+    ~image:("postgres@sha256:" ^ String.make 64 'a')
+  |> Sol_cli_yaml.render
+;;
+
+let setup_index needle text =
+  let n = String.length needle in
+  let t = String.length text in
+  let rec go i =
+    if i + n > t
+    then Windtrap.failf "expected %S in the rendered setup" needle
+    else if String.equal (String.sub text i n) needle
+    then i
+    else go (i + 1)
+  in
+  go 0
+;;
+
+let test_database_setup_renders_the_fail_closed_job () =
+  let text = render_setup () in
+  (* The pod makes no API calls, so it carries no token it could not use. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the setup pod does not mount a service-account token"
+    true
+    (setup_mentions "automountServiceAccountToken: false" text);
+  (* The crash backstop, and the guarantee carried by the script rather than the
+     invocation. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the Job carries the backstop TTL"
+    true
+    (setup_mentions
+       (Printf.sprintf
+          "ttlSecondsAfterFinished: %d"
+          Sol_cli_database_setup.crash_backstop_seconds)
+       text);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"ON_ERROR_STOP travels with the script"
+    true
+    (setup_mentions "ON_ERROR_STOP" text);
+  (* psql reads a file; it is never handed the SQL through argv or -c, which the
+     dollar-quoted block and \getenv require. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"psql runs from a file"
+    true
+    (setup_mentions "--file=/sql/setup.sql" text);
+  (* The CA mount is present but empty: 2d populates it without reshaping the pod. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the CA mount exists and is empty"
+    true
+    (setup_mentions "emptyDir: {}" text);
+  (* The Job spec must not embed a credential: it references the transient Secret. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the Job takes its inputs by reference"
+    true
+    (setup_mentions "secretKeyRef" text);
+  (* Sol writes the Secret first, then the Job. *)
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the Secret is written before the Job"
+    true
+    (setup_index "kind: Secret" text < setup_index "kind: Job" text)
+;;
+
+let test_database_setup_keeps_credentials_out_of_the_job () =
+  let text = render_setup () in
+  (* Every credential appears once, in the Secret's stringData. A second occurrence would
+     mean the Job spec carries it too. *)
+  let occurrences needle =
+    let n = String.length needle in
+    let t = String.length text in
+    let rec go i count =
+      if i + n > t
+      then count
+      else
+        go
+          (i + 1)
+          (if String.equal (String.sub text i n) needle then count + 1 else count)
+    in
+    go 0 0
+  in
+  List.iter
+    (fun credential ->
+       Windtrap.equal
+         Windtrap.int
+         ~msg:(Printf.sprintf "%s appears only in the transient Secret" credential)
+         1
+         (occurrences credential))
+    [ "postgresql://postgres:masterpw@db.internal:5432/app"; "ddl-pw"; "dml-pw" ]
+;;
+
+let%test "database setup render: the Job is fail-closed and mounted empty of the CA" =
+  test_database_setup_renders_the_fail_closed_job ()
+;;
+
+let%test "database setup render: credentials live only in the transient Secret" =
+  test_database_setup_keeps_credentials_out_of_the_job ()
+;;
+
+(* The sequence, against a fake kubectl. This is where the master leaks, so these are the
+   assertions that matter: the order, and that cleanup runs on the failure path. *)
+
+let read_file path =
+  let ic = open_in_bin path in
+  Fun.protect
+    ~finally:(fun () -> close_in_noerr ic)
+    (fun () -> really_input_string ic (in_channel_length ic))
+;;
+
+let setup_fake_kubectl ?(mode = "none") ~fail_verb f =
+  let dir = Filename.temp_file "sol-setup-kubectl-" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o755;
+  let log = Filename.concat dir "calls.log" in
+  let bin = Filename.concat dir "kubectl" in
+  let script =
+    Printf.sprintf
+      {|#!/bin/sh
+echo "$*" >> %s
+case "$*" in
+  *apply*)
+    prev=""
+    for a in "$@"; do
+      if [ "$prev" = "-f" ]; then
+        cat "$a" >> %s.manifests
+        case "$SETUP_MODE" in
+          output) grep -q "payments-ddl-creds" "$a" && exit 1 ;;
+          job) grep -q "kind: Job" "$a" && exit 1 ;;
+        esac
+      fi
+      prev="$a"
+    done
+    exit 0 ;;
+  *"get job"*)
+    case "$*" in
+      *metadata.uid*) echo uid-1234 ;;
+      *status.succeeded*)
+        if [ "$SETUP_MODE" = "wait" ]; then echo 0; else echo 1; fi ;;
+      *status.failed*)
+        if [ "$SETUP_MODE" = "wait" ]; then echo 1; else echo 0; fi ;;
+    esac
+    exit 0 ;;
+esac
+case "$*" in
+  *%s*) exit 1 ;;
+esac
+exit 0
+|}
+      log
+      log
+      fail_verb
+  in
+  let oc = open_out bin in
+  output_string oc script;
+  close_out oc;
+  Unix.chmod bin 0o755;
+  let old_path =
+    try Sys.getenv "PATH" with
+    | Not_found -> ""
+  in
+  Unix.putenv "PATH" (dir ^ ":" ^ old_path);
+  let old_mode =
+    try Sys.getenv "SETUP_MODE" with
+    | Not_found -> ""
+  in
+  Unix.putenv "SETUP_MODE" mode;
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" old_path;
+      Unix.putenv "SETUP_MODE" old_mode;
+      List.iter
+        (fun p ->
+           try Sys.remove p with
+           | Sys_error _ -> ())
+        [ bin; log ];
+      try Unix.rmdir dir with
+      | Unix.Unix_error _ -> ())
+    (fun () -> f ~log)
+;;
+
+let setup_output_secret () =
+  Sol_cli_yaml.document
+    (Sol_cli_yaml.map
+       [ "kind", Sol_cli_yaml.string "Secret"
+       ; "metadata", Sol_cli_yaml.map [ "name", Sol_cli_yaml.string "payments-ddl-creds" ]
+       ])
+;;
+
+let run_database_setup () =
+  Sol_cli_database_setup_run.run
+    ~ctx:Sol_cli_kube_destination.local_context
+    ~namespace:"myapp-payments"
+    ~target:"payments"
+    ~master_url:"postgresql://postgres:masterpw@db.internal:5432/app"
+    ~ddl_password:"ddl-pw"
+    ~dml_password:"dml-pw"
+    ~image:("postgres@sha256:" ^ String.make 64 'a')
+    ~output_secrets:[ setup_output_secret () ]
+;;
+
+let test_database_setup_applies_before_the_job_and_keeps_the_output_secrets () =
+  setup_fake_kubectl ~fail_verb:"zzz-never" (fun ~log ->
+    match run_database_setup () with
+    | Error message -> Windtrap.fail message
+    | Ok () ->
+      let calls = read_file log in
+      let manifests = read_file (log ^ ".manifests") in
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the Secret is applied before the Job"
+        true
+        (setup_index "kind: Secret" manifests < setup_index "kind: Job" manifests);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the Job is deleted"
+        true
+        (setup_mentions "delete job" calls);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the transient Secret is deleted"
+        true
+        (setup_mentions "delete secret" calls);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the script is deleted"
+        true
+        (setup_mentions "delete configmap" calls);
+      (* The surviving resource: 2b consumes the output Secrets, so a change that added
+         them to cleanup would break it while still passing every "cleanup ran" test. *)
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the output Secret is never deleted"
+        false
+        (setup_mentions "delete secret payments-ddl-creds" calls);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the Secret is owned before cleanup reaches it"
+        true
+        (* "delete secret" happens only in cleanup; "delete job" also appears in the
+           re-deploy pre-delete, which correctly precedes the patch. *)
+        (setup_index "patch secret" calls < setup_index "delete secret" calls))
+;;
+
+let test_database_setup_cleans_up_when_the_patch_fails () =
+  (* The failure that matters most: the Job exists, the Secret is never owned by it, so
+     the TTL cascade can never collect it. Cleanup must still run. *)
+  setup_fake_kubectl ~fail_verb:"patch" (fun ~log ->
+    match run_database_setup () with
+    | Ok () -> Windtrap.fail "a failed owner patch must fail the phase"
+    | Error _ ->
+      let calls = read_file log in
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the transient Secret is still deleted when the patch fails"
+        true
+        (setup_mentions "delete secret" calls);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the Job is still deleted when the patch fails"
+        true
+        (setup_mentions "delete job" calls))
+;;
+
+let%test "database setup run: applies before the Job and deletes only what it owns" =
+  test_database_setup_applies_before_the_job_and_keeps_the_output_secrets ()
+;;
+
+let%test "database setup run: cleanup runs even when the owner patch fails" =
+  test_database_setup_cleans_up_when_the_patch_fails ()
+;;
+
+(* The failure paths, which is where the master leaks: every one of them must still
+   delete the transient Secret. *)
+let assert_cleanup_after_failure ~mode =
+  setup_fake_kubectl ~mode ~fail_verb:"zzz-never" (fun ~log ->
+    (match run_database_setup () with
+     | Ok () -> Windtrap.failf "expected the phase to fail at %s" mode
+     | Error _ -> ());
+    let calls = read_file log in
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:(Printf.sprintf "the transient Secret is deleted after a failure at %s" mode)
+      true
+      (setup_mentions "delete secret" calls))
+;;
+
+let%test "database setup run: cleanup runs when an output Secret fails to apply" =
+  assert_cleanup_after_failure ~mode:"output"
+;;
+
+let%test "database setup run: cleanup runs when the Job fails to apply" =
+  assert_cleanup_after_failure ~mode:"job"
+;;
+
+let%test "database setup run: cleanup runs when the wait reports failure" =
+  assert_cleanup_after_failure ~mode:"wait"
+;;
