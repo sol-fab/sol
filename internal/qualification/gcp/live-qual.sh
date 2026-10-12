@@ -1127,6 +1127,10 @@ $TARGET_ENV:
     $TARGET_KEY:
       cluster_name: $CLUSTER
       base_domain: $BASE_DOMAIN
+      # The installation the cloud phase created is durable and Sol-owned, and the app
+      # deploy re-establishes it before it deploys: without this the deploy refuses with
+      # "the target declares no dns_zone_ownership" and never reaches the app path.
+      dns_zone_ownership: sol
       letsencrypt_email: $LE_EMAIL
       cluster_issuer: $CLUSTER_ISSUER
       terraform_var_file: $TFVARS

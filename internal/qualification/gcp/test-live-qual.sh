@@ -862,6 +862,8 @@ has "the run identity records the bundle version" \
 has "and the bundle's digest-pinned migration runner" \
   "migration_runner_image: $RUNNER" "$TMP/app-ok.logs/sol-identity.txt"
 lacks "the app target selects no profile, so the row claims none of its guarantees" "profile:" "$TARGET_FILE"
+has "but it still declares the durable installation the cloud phase created" \
+  "dns_zone_ownership: sol" "$TARGET_FILE"
 has "the target declares the project the residue probe needs" "project_id: sol-qualification" "$TARGET_FILE"
 has "the target names the cluster's own kube context" \
   "kube_context: gke_sol-qualification_us-central1_test-cluster" "$TARGET_FILE"
