@@ -650,6 +650,7 @@ lacks "no destroy on the success path (the delegation boundary keeps the substra
 lacks "the cloud phase never runs an application deploy" "migrate apply" "$TMP/cloud-ok.argv"
 has "the target is written for the run" "cluster_name" "$TARGET_FILE"
 has "the generated target asks for TLS, which DEC-055 made installable on GCP" "cluster_issuer: letsencrypt-staging" "$TARGET_FILE"
+lacks "the cloud target selects no profile, so this row makes no profile claim" "profile:" "$TARGET_FILE"
 has "the cloud target declares the app database the enabled units use" "app_db:" "$TARGET_FILE"
 has "and the events resource" "events: {}" "$TARGET_FILE"
 has "and the OCaml units the alpha scenario runs" "orders_svc: {}" "$TARGET_FILE"
