@@ -45,7 +45,7 @@ let local_plan
     ~env
     ~facts
     ~declared
-    ~target:workspace
+    ~target:(Sol_cli_kubernetes_name.sanitize_name workspace)
     ?target_database
     services
 ;;
