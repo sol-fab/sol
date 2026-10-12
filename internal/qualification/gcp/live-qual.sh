@@ -29,7 +29,6 @@ export LOG_DIR
 RUN_KUBECONFIG="$LOG_DIR/run-kubeconfig.yaml"
 export KUBECONFIG="$RUN_KUBECONFIG"
 STATE_BUCKET="${STATE_BUCKET:-sol-qualification-tfstate}"
-PROFILE_NAME="${PROFILE_NAME:-production-single-region}"
 CLUSTER_ISSUER="${CLUSTER_ISSUER:-letsencrypt-staging}"
 APP_TAG="${APP_TAG:-qual-$(date -u +%Y%m%d-%H%M%S)}"
 export APP_TAG
@@ -248,7 +247,10 @@ $TARGET_ENV:
       cluster_name: $CLUSTER
       base_domain: $BASE_DOMAIN
       dns_zone_ownership: sol
-      profile: $PROFILE_NAME
+      # No profile is selected at any phase. This row qualifies the application path and
+      # claims nothing the production profile's guarantees would promise; the profile is
+      # AWS-qualified, so selecting it on GCP could only be refused by its preflight.
+      # write_app_target states the same for the phase that deploys the workloads.
       letsencrypt_email: $LE_EMAIL
       cluster_issuer: $CLUSTER_ISSUER
       terraform_var_file: $TFVARS
