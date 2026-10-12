@@ -54,6 +54,15 @@ if [ "${1:-}" = "--version" ]; then
   exit 0
 fi
 printf 'sol %s [runner=%s] [home=%s]\n' "$*" "${SOL_MIGRATION_RUNNER_IMAGE:-unset}" "${SOL_HOME:-unset}" >>"$SOL_LOG"
+# A cold target has no reachable release to inherit workload images from; the real `sol plan`
+# refuses, and the harness records the skip and continues (issue #1408).
+if [ "${1:-}" = "plan" ]; then
+  if [ "${STUB_COLD_PLAN:-0}" = "1" ]; then
+    printf 'error: cannot inherit workload images from the current release (exited with code 1: error: context "sol-qual-aws-2b-deploy" does not exist); supply --image-ref for every workload\n'
+    exit 1
+  fi
+  exit 0
+fi
 # The whole-target deploy reconciles the durable installation inline, so an installation
 # that cannot be established and a first deploy that reaches the substrate both surface
 # here. A fresh account's installation offer is interactive in the real command; the stub
@@ -842,6 +851,15 @@ has "the preview carries the row's var file" \
 has "and the whole-target deploy reconciles the environment by tag" \
   "deploy qualreg/aws/us-east-1 --registry $ECR --image-tag row-" "$TMP/cloudrun.sol"
 lacks "the removed partial cloud apply is never invoked" "cloud apply" "$TMP/cloudrun.sol"
+
+printf '\nscenario: a cold target records the plan skip instead of failing on the missing release\n'
+run_phase coldplan cloud STUB_COLD_PLAN=1
+is "exit 0" "$(cat "$TMP/coldplan.rc")" "0"
+has "the skip names the fresh target and the ordering follow-up" \
+  "cloud-plan: skipped (fresh target: no reachable release to inherit images, no digests to supply; harness ordering follow-up: #1408)" \
+  "$TMP/coldplan.logs/prerequisites.txt"
+has "and the phase still deploys the whole target" \
+  "deploy qualreg/aws/us-east-1 --registry $ECR --image-tag row-" "$TMP/coldplan.sol"
 
 printf '\nscenario: the harness supplies the platform credential the install names, then resumes\n'
 run_phase credential-boundary cloud STUB_APPLY_CREDENTIAL_MISSING=1

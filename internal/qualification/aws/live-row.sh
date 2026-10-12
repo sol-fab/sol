@@ -478,7 +478,31 @@ phase_cloud() {
   # `sol plan` is the read-only whole-target preview. `sol deploy` is the only command
   # that reconciles the substrate now: it establishes the durable installation inline and
   # applies the environment's cluster and platform roots.
-  run cloud-plan bash -c "cd '$WORKSPACE' && exec '$SOL' plan '$TARGET' --var-file '$TFVARS'" || return 1
+  #
+  # A plan needs either `--image-ref` for every selected workload or a reachable cluster to
+  # inherit the current release's images. A *cold* target has neither: this step runs before
+  # `cloud-apply` creates the cluster, and the ECR repositories that hold the digests are
+  # created by that same apply, so nothing can be published first. The refusal is correct -
+  # planning without digests on a production profile would misstate the deploy - so the
+  # harness records the skip and proceeds; a warm run, whose cluster already holds a release,
+  # still plans exactly as before (issue #1408 carries the reorder that restores cold coverage).
+  say "cloud-plan"
+  local plan_rc=0
+  if ! timeout "$PHASE_TIMEOUT" bash -c "cd '$WORKSPACE' && exec '$SOL' plan '$TARGET' --var-file '$TFVARS'" \
+    >"$LOG_DIR/cloud-plan.log" 2>&1; then
+    plan_rc=1
+  fi
+  if [ "$plan_rc" != 0 ]; then
+    if grep -qF 'cannot inherit workload images' "$LOG_DIR/cloud-plan.log" 2>/dev/null; then
+      say 'cloud-plan: skipped (fresh target: no reachable release to inherit images, no digests to supply; harness ordering follow-up: #1408)'
+      printf 'cloud-plan: skipped (fresh target: no reachable release to inherit images, no digests to supply; harness ordering follow-up: #1408)\n' \
+        >>"$LOG_DIR/prerequisites.txt"
+    else
+      say "FAILED: cloud-plan (last 40 lines; full log $LOG_DIR/cloud-plan.log)"
+      tail -n 40 "$LOG_DIR/cloud-plan.log"
+      return 1
+    fi
+  fi
   local deploy_rc=0
   bootstrap_deploy cloud-apply || deploy_rc=$?
   if cloud_mutated; then CLOUD_APPLIED=1; fi
