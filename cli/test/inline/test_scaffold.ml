@@ -271,6 +271,31 @@ let test_existing_files_still_generated () =
   check_bool "at least 21 files generated" true (!count >= 21)
 ;;
 
+(* The scaffolded apps open a Postgres pool, and since 2b the deploy delivers `POSTGRES_URL`
+   from the `uses` capability rather than by default. A scaffold whose services omit it deploys
+   them without the key and the local golden path crash-loops on `POSTGRES_URL is not set`. *)
+let test_scaffolded_services_declare_the_database_capability () =
+  in_temp_dir
+  @@ fun () ->
+  Sol_cli_cmd_new.new_workspace "testapp" |> Result.get_ok;
+  let services = Sol_cli_config.sol_yml_services ~root:"testapp" |> Result.get_ok in
+  [ "charge_svc"; "notify_worker" ]
+  |> List.iter (fun name ->
+    match
+      List.find_opt
+        (fun (s : Sol_cli_config.service) -> String.equal s.name name)
+        services
+    with
+    | None -> check_bool (Printf.sprintf "%s is declared in sol.yml" name) true false
+    | Some svc ->
+      check_bool
+        (Printf.sprintf
+           "%s declares uses: [app_db], so the deploy delivers its POSTGRES_URL"
+           name)
+        true
+        (List.mem "app_db" svc.uses))
+;;
+
 let test_scaffold_ignores_local_secret_input () =
   in_temp_dir
   @@ fun () ->
@@ -1053,6 +1078,10 @@ let%test
 
 let%test "existing_files: all prior files still present" =
   test_existing_files_still_generated ()
+;;
+
+let%test "scaffold: services declare the app_db capability" =
+  test_scaffolded_services_declare_the_database_capability ()
 ;;
 
 let%test "existing_files: has a real deploy target" =

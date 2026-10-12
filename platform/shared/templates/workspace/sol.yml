@@ -19,8 +19,18 @@ resources:
 # Every workload declares what it is implemented in, and nothing infers it from
 # a package.json, a dune file or a directory name. `sol new` records this for
 # each unit it creates; the two below are the units this workspace ships with.
+#
+# `uses` is how a unit receives a resource's credential: the app below opens a
+# Postgres pool, so it declares `app_db` and the deploy delivers `POSTGRES_URL`
+# from the target's credential class (`sol local deploy` supplies the local
+# cluster's). Without the declaration the unit is deployed without the key --
+# the unit's own declared secrets are the only other thing it receives.
 services:
   charge_svc:
     language: ocaml
+    uses:
+      - app_db
   notify_worker:
     language: ocaml
+    uses:
+      - app_db
