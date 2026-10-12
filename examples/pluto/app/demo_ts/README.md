@@ -157,6 +157,17 @@ itself, so Ctrl-C stops both. It also injects the local substrate's addresses
 (`KAFKA_BROKERS`, `SCHEMA_REGISTRY_URL`, `POSTGRES_URL`, `LOKI_URL`, `TEMPO_URL`,
 `KAFKA_SECURITY_PROTOCOL=plaintext`), which is what the units read.
 
+Locally `POSTGRES_URL` is a plain connection string. Deployed to a Sol-provisioned
+cluster it is a libpq URL that names the target's database CA and asks for chain
+verification — `?sslmode=verify-ca&sslrootcert=/etc/sol/db-ca/ca.pem`, with the CA
+mounted from the `<target>-db-ca` ConfigMap. `verify-ca` verifies the chain but not
+the hostname, because the provider issues the server certificate for the instance,
+not the address in the URL; node-postgres instead aliases `verify-ca` to
+`verify-full` and fails with `ERR_TLS_CERT_ALTNAME_INVALID`. Each unit's `db.ts`
+therefore reads the URL through `poolConfig`, which passes the CA to the driver and
+keeps libpq's semantics. A TypeScript consumer that builds its own pool must do the
+same.
+
 Under a Sol manifest — `sol local run` or `sol deploy` — Sol also injects the six
 semantic workload identity values (`SOL_WORKSPACE`, `SOL_ENV`, `SOL_DOMAIN`,
 `SOL_SERVICE`, `SOL_PRIMITIVE`, `SOL_RELEASE`), the same values it renders as pod
