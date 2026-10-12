@@ -35,9 +35,19 @@ let secret_authorities_for_plan ~config plan =
     (fun (spec : Sol_cli_deployment_plan.service_spec) ->
        let unit_address = spec.domain ^ "/" ^ spec.source_name in
        let transport = Sol_cli_manifest.kafka_transport_of_config spec.config in
-       let required =
-         Sol_cli_manifest.required_secret_keys ~transport (List.map fst spec.secrets)
+       (* 2b: when the unit consumes the target's database, `POSTGRES_URL` is supplied by
+          the binding (the target's DML class Secret), not by an authority mapping, so it is
+          not demanded here even if the unit also declares it. *)
+       let declared =
+         if Option.is_some spec.db_uses_target
+         then
+           List.filter
+             (fun key ->
+                not (String.equal key Sol_cli_database_setup_render.postgres_url_key))
+             (List.map fst spec.secrets)
+         else List.map fst spec.secrets
        in
+       let required = Sol_cli_manifest.required_secret_keys ~transport declared in
        let resolution =
          Sol_cli_config.resolve_secret_authorities
            config.Sol_cli_config.target
@@ -207,14 +217,17 @@ let plan (input : Planning_input.t) =
     }
   in
   (* 2d: the plan carries the target's sanitized identity and whether Sol provisions the
-     database; the renderer derives any object name from both. Resolving ownership here,
-     once, keeps the plan free of the binding resolution. *)
+     database; the renderer derives any object name from both. 2b adds the target's postgres
+     resource whatever its ownership, so a consumer's `POSTGRES_URL` routes to the class
+     Secret for a Sol-provisioned and an externally bound database alike. The binding module
+     owns *which* resource that is; the plan only carries the names. *)
   let target = Sol_cli_kubernetes_name.sanitize_name config.target.name in
-  let* provisioned_database =
+  let* provisioned_database, target_database =
     Sol_cli_resource_binding.resolve config
     |> Result.map (fun bindings ->
-      Sol_cli_resource_binding.provisioned_database bindings
-      |> Option.map (fun (database : Sol_cli_resource_binding.t) -> database.resource))
+      let resource_of (database : Sol_cli_resource_binding.t) = database.resource in
+      ( Option.map resource_of (Sol_cli_resource_binding.provisioned_database bindings)
+      , Option.map resource_of (Sol_cli_resource_binding.target_database bindings) ))
     |> refused
   in
   let* plan =
@@ -227,6 +240,7 @@ let plan (input : Planning_input.t) =
       ~image_refs
       ~inventory
       ~target
+      ?target_database
       ?provisioned_database
       services
     |> refused

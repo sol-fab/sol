@@ -178,8 +178,8 @@ let ca_cert_path = Sol_cli_manifest_cluster_env.db_ca_file
 
 (** The database CA, as a ConfigMap. A provider's public root is not a secret, so a
     ConfigMap is the right object rather than a Secret. The same name is mounted by the
-    setup Job and, once 2b delivers the class credentials, by every consuming unit — so
-    downstream nothing knows which provider supplied the CA. *)
+    setup Job and, since 2b, by every consuming unit — so downstream nothing knows which
+    provider supplied the CA. *)
 let ca_configmap_name target = target ^ "-db-ca"
 
 let ca_configmap_doc ~ns ~target ~ca_cert =

@@ -377,6 +377,18 @@ case " $* " in
     printf '%s' 'ca-certificate-for-tests' | base64
     exit 0
     ;;
+  # 2b: the deploy delivers the database as class Secrets. The row lists them across
+  # namespaces and checks the consumer's own Secret for the master copy it no longer
+  # carries.
+  *" get secret -A "*)
+    printf '%s\n' \
+      "${STUB_DML_NAMESPACE:-pluto-payments} ${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-dml-creds" \
+      "${STUB_DDL_NAMESPACE:-pluto-comms} ${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-ddl-creds"
+    exit 0
+    ;;
+  *" get secret charge-svc-secrets "*)
+    exit 0
+    ;;
   *" config view "*)
     kubeconfig="${KUBECONFIG:-}"
     while [ $# -gt 0 ]; do
@@ -664,16 +676,19 @@ has "and pins every selected workload by digest, not a mutable tag" \
   "image-ref charge_svc=$ECR/pluto/charge-svc@sha256:" "$TMP/ok.sol"
 lacks "no mutable tag is passed to a profile that requires immutable artifacts" \
   "--image-tag" "$TMP/ok.sol"
-has "the runtime secret is supplied through sol secret set" \
-  "secret set POSTGRES_URL --target qualreg/aws/us-east-1 --domain checkout" "$TMP/ok.sol"
-has "the workload API key too" \
+lacks "no operator POSTGRES_URL is set for the migration path" \
+  "secret set POSTGRES_URL" "$TMP/ok.sol"
+has "the workload API key is supplied through sol secret set" \
   "secret set SOL_API_KEY --target qualreg/aws/us-east-1 --domain payments" "$TMP/ok.sol"
 has "and the Kafka credential and CA" \
   "secret set KAFKA_SSL_CA_CERT --target qualreg/aws/us-east-1 --domain comms" "$TMP/ok.sol"
 lacks "no secret value is passed on a command line" \
   "testpass" "$TMP/ok.sol"
 has "the supplied keys are recorded without their values" \
-  "runtime_secret_values: never recorded" "$TMP/ok.logs/prerequisites.txt"
+  "secret_values: never recorded" "$TMP/ok.logs/prerequisites.txt"
+has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
+  "database_delivery: qualreg-aws-us-east-1-ddl-creds (migration Job), qualreg-aws-us-east-1-dml-creds@pluto-payments (unit consumer)" \
+  "$TMP/ok.logs/prerequisites.txt"
 has "the run identity records the bundle version" \
   "sol_version: $VERSION" "$TMP/ok.logs/sol-identity.txt"
 has "and the bundle's digest-pinned migration runner" \

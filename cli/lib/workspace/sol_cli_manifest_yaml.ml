@@ -54,27 +54,48 @@ module Workload_spec = struct
     ; primitive : string
     ; release_id : Sol_cli_release_id.t
     ; (* 2d: the CA ConfigMap to mount when this unit consumes a Sol-provisioned database,
-         so the pod can run the provider's `sslmode`. [None] when it consumes none. The mount
-         is **prep**: nothing reads the anchor until 2b switches the unit's reader to its
-         already-parameterized class Secret, so that switch does not also add the mount. *)
+         so the pod can run the provider's `sslmode`. [None] when it consumes none. 2b's
+         reader delivers a class Secret whose URL carries `sslrootcert` at this path, so the
+         mount is what makes the consumer's verification work. *)
       db_ca_configmap : string option
+    ; (* 2b: the `<target>-dml-creds` Secret this unit reads `POSTGRES_URL` from, when it
+         consumes the target's database resource. [None] for a unit that does not, so a unit
+         that merely declares `POSTGRES_URL` keeps reading its own Secret. The name is
+         computed by the deploy renderer from the plan's [db_uses_target], so the writer
+         ({!Sol_cli_database_setup_render}) and this reader share one definition. *)
+      db_dml_creds_name : string option
     }
 end
 
 open Sol_cli_manifest_cluster_env
 
-(* Every unit receives POSTGRES_URL until target capabilities replace it with a
-   projection of the database the target provides. SOL_API_KEY is not a workload
-   default: only a unit that serves or calls `Api_key` routes declares it, in its
-   sol.toml [infra.env] secrets, so the other units stop requiring a value they
-   never read. *)
-let default_secrets = [ "POSTGRES_URL", "" ]
+(* 2b: no unit receives `POSTGRES_URL` by default any more. It reaches a unit only from the
+   target's database binding — the `uses:` capability — as `<target>-dml-creds`, or as an
+   application secret the unit declares and the operator writes itself. `SOL_API_KEY` was
+   never a workload default either: only a unit that serves or calls `ApiKey` routes
+   declares it. *)
+let default_secrets = []
 let runtime_secret_name = "sol-secrets"
 
-let required_secret_keys ?(transport = Plaintext) declared =
+(** The key the database class Secrets carry and a consumer reads. It must equal
+    {!Sol_cli_database_setup_render.postgres_url_key}; the deploy renderer that computes the
+    class Secret name shares that definition, and a test asserts the two agree. *)
+let postgres_url_key = "POSTGRES_URL"
+
+(** The inputs the target's database binding supplies: `POSTGRES_URL`, and only for a unit
+    that consumes the target's database ([db_dml_creds_name] is [Some]). A unit that merely
+    declares `POSTGRES_URL` keeps it in its own Secret and is verified there. *)
+let database_secret_keys = function
+  | None -> []
+  | Some _ -> [ postgres_url_key ]
+;;
+
+let required_secret_keys ?(transport = Plaintext) ?db_dml_creds_name declared =
   List.sort_uniq
     String.compare
-    (List.map fst default_secrets @ declared @ kafka_required_secret_keys transport)
+    (declared
+     @ database_secret_keys db_dml_creds_name
+     @ kafka_required_secret_keys transport)
 ;;
 
 module Y = Sol_cli_yaml
@@ -179,11 +200,19 @@ let external_secret_name name = Printf.sprintf "%s-external-secrets" name
 
 (* The single routing decision: which Secret object holds a declared key. Every
    consumer must use it — the env [secretKeyRef] and the Kafka CA volume — or a key
-   declared external can be projected from one object and read from another. *)
-let secret_name_for_key ~name ~secret_sources key =
-  match List.assoc_opt key secret_sources with
-  | Some (External _) -> external_secret_name name
-  | Some Sol_managed | None -> workload_secret_name name
+   declared external can be projected from one object and read from another.
+
+   2b adds one case ahead of it: a unit that consumes the target's database reads
+   `POSTGRES_URL` from that target's DML class Secret, whatever the database's ownership.
+   The signal is the capability ([db_dml_creds_name] is [Some]), not the key name — a unit
+   that merely declares `POSTGRES_URL` falls through to its own Secret. *)
+let secret_name_for_key ~name ~secret_sources ~db_dml_creds_name key =
+  match db_dml_creds_name with
+  | Some creds when String.equal key postgres_url_key -> creds
+  | _ ->
+    (match List.assoc_opt key secret_sources with
+     | Some (External _) -> external_secret_name name
+     | Some Sol_managed | None -> workload_secret_name name)
 ;;
 
 let secret_doc
@@ -240,10 +269,10 @@ let external_secret_doc ~secret_refs ~ns ~name =
     ]
 ;;
 
-let secret_key_refs ~name ~secret_sources secret_keys =
+let secret_key_refs ~name ~secret_sources ~db_dml_creds_name secret_keys =
   secret_keys
   |> List.map (fun key ->
-    let secret_name = secret_name_for_key ~name ~secret_sources key in
+    let secret_name = secret_name_for_key ~name ~secret_sources ~db_dml_creds_name key in
     Y.map
       [ "name", Y.string key
       ; ( "valueFrom"
@@ -411,6 +440,7 @@ let pod_template
       ; domain
       ; primitive
       ; release_id
+      ; db_dml_creds_name
       ; db_ca_configmap
       ; _
       }
@@ -507,7 +537,11 @@ let pod_template
             , Y.map
                 [ ( "secretName"
                   , Y.string
-                      (secret_name_for_key ~name ~secret_sources kafka_ca_secret_key) )
+                      (secret_name_for_key
+                         ~name
+                         ~secret_sources
+                         ~db_dml_creds_name
+                         kafka_ca_secret_key) )
                 ; ( "items"
                   , Y.list
                       [ Y.map
@@ -566,7 +600,9 @@ let pod_template
        @ non_empty_list
            "volumeMounts"
            (volume_mounts @ projected_identity_mounts @ kafka_ca_mount @ db_ca_mount)
-       @ non_empty_list "env" (secret_key_refs ~name ~secret_sources secret_keys)
+       @ non_empty_list
+           "env"
+           (secret_key_refs ~name ~secret_sources ~db_dml_creds_name secret_keys)
        @ [ "envFrom", env_from ~name; "resources", resources ~cpu ~memory ]
        @ probes ~shape ~consumes_kafka ~readiness_path)
   in
@@ -871,6 +907,8 @@ module Scheduled_workload_spec = struct
     ; (* 2d: see {!Workload_spec.db_ca_configmap}; a scheduled unit consumes the database
          the same way a service does. *)
       db_ca_configmap : string option
+    ; (* 2b: see {!Workload_spec.db_dml_creds_name}. *)
+      db_dml_creds_name : string option
     }
 end
 
@@ -893,6 +931,7 @@ let cronjob_doc (workload : Scheduled_workload_spec.t) =
       ; domain
       ; release_id
       ; db_ca_configmap
+      ; db_dml_creds_name
       }
     =
     workload
@@ -975,7 +1014,11 @@ let cronjob_doc (workload : Scheduled_workload_spec.t) =
             , Y.map
                 [ ( "secretName"
                   , Y.string
-                      (secret_name_for_key ~name ~secret_sources kafka_ca_secret_key) )
+                      (secret_name_for_key
+                         ~name
+                         ~secret_sources
+                         ~db_dml_creds_name
+                         kafka_ca_secret_key) )
                 ; ( "items"
                   , Y.list
                       [ Y.map
@@ -1010,7 +1053,9 @@ let cronjob_doc (workload : Scheduled_workload_spec.t) =
        ; "imagePullPolicy", Y.string "Always"
        ; "securityContext", container_security
        ]
-       @ non_empty_list "env" (secret_key_refs ~name ~secret_sources secret_keys)
+       @ non_empty_list
+           "env"
+           (secret_key_refs ~name ~secret_sources ~db_dml_creds_name secret_keys)
        @ [ "envFrom", env_from ~name; "resources", resources ~cpu ~memory ]
        @ kafka_ca)
   in
@@ -1066,19 +1111,57 @@ let migration_configmap_doc ~name ~namespace files =
     [ "metadata", metadata ~ns:namespace ~name; "data", quoted_map files ]
 ;;
 
-let migration_job_doc ~name ~namespace ~image ~args ~configmap_name =
+(* 2b: the migration Job is a DDL consumer, so its `POSTGRES_URL` comes from
+   `<target>-ddl-creds`, never the workspace's `sol-secrets`. The reader asks for the class
+   Secret by name and never learns the database's ownership: a Sol-provisioned target's
+   setup step writes it, an externally bound target's ESO ExternalSecret does.
+
+   The DDL URL carries `sslrootcert`, so a Sol-provisioned target's Job also mounts
+   `<target>-db-ca` at the same path the setup Job and the workloads use. [ca_configmap] is
+   [None] for an externally bound database, which publishes no Sol CA ConfigMap — mounting
+   one that does not exist would leave the Job unstartable. *)
+let migration_job_doc
+      ~name
+      ~namespace
+      ~image
+      ~args
+      ~configmap_name
+      ~ddl_creds_name
+      ?ca_configmap
+      ()
+  =
+  let db_ca_volume_items =
+    match ca_configmap with
+    | None -> []
+    | Some configmap ->
+      [ Y.map
+          [ "name", Y.string db_ca_volume
+          ; "configMap", Y.map [ "name", Y.string configmap ]
+          ]
+      ]
+  in
+  let db_ca_mounts =
+    match ca_configmap with
+    | None -> []
+    | Some _ ->
+      [ Y.map
+          [ "name", Y.string db_ca_volume
+          ; "mountPath", Y.string db_ca_mount_path
+          ; "readOnly", Y.bool true
+          ]
+      ]
+  in
   let container =
     Y.map
       [ "name", Y.string "migrate"
       ; "image", Y.string image
       ; "args", Y.list (List.map Y.quoted args)
       ; ( "envFrom"
-        , Y.list [ Y.map [ "secretRef", Y.map [ "name", Y.string runtime_secret_name ] ] ]
-        )
+        , Y.list [ Y.map [ "secretRef", Y.map [ "name", Y.string ddl_creds_name ] ] ] )
       ; ( "volumeMounts"
         , Y.list
-            [ Y.map [ "name", Y.string "migrations"; "mountPath", Y.string "/migrations" ]
-            ] )
+            (Y.map [ "name", Y.string "migrations"; "mountPath", Y.string "/migrations" ]
+             :: db_ca_mounts) )
       ]
   in
   resource
@@ -1096,11 +1179,11 @@ let migration_job_doc ~name ~namespace ~image ~args ~configmap_name =
                       ; "containers", Y.list [ container ]
                       ; ( "volumes"
                         , Y.list
-                            [ Y.map
-                                [ "name", Y.string "migrations"
-                                ; "configMap", Y.map [ "name", Y.string configmap_name ]
-                                ]
-                            ] )
+                            (Y.map
+                               [ "name", Y.string "migrations"
+                               ; "configMap", Y.map [ "name", Y.string configmap_name ]
+                               ]
+                             :: db_ca_volume_items) )
                       ] )
                 ] )
           ] )

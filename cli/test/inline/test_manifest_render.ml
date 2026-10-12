@@ -78,6 +78,7 @@ let workload
   ; domain
   ; primitive
   ; release_id = release_id_of_test
+  ; db_dml_creds_name = None
   ; db_ca_configmap = None
   }
 ;;
@@ -164,8 +165,17 @@ let svc_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_uses_target = None
   ; db_ca_target = None
   }
+;;
+
+(* 2b: a unit that consumes the target's database reads `POSTGRES_URL` from that target's
+   DML class Secret, whatever the database's ownership. *)
+let db_consumer_spec = { svc_spec with db_uses_target = Some "prod-aws-us-east-1" }
+
+let db_consumer_dml_creds =
+  Sol_cli_database_setup_render.dml_creds_name "prod-aws-us-east-1"
 ;;
 
 let worker_spec : Sol_cli_deployment_plan.service_spec =
@@ -198,6 +208,7 @@ let worker_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_uses_target = None
   ; db_ca_target = None
   }
 ;;
@@ -232,6 +243,7 @@ let fn_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_uses_target = None
   ; db_ca_target = None
   }
 ;;
@@ -568,7 +580,7 @@ let test_postgres_url_not_in_configmap () =
 let test_live_render_emits_no_secret_values () =
   Unix.putenv "POSTGRES_URL" "postgresql://user:pass@db.example.com:5432/app";
   Unix.putenv "SOL_API_KEY" "dev-internal-key";
-  let _ns, workload = render_spec_ok svc_spec in
+  let _ns, workload = render_spec_ok db_consumer_spec in
   Unix.putenv "POSTGRES_URL" "";
   Unix.putenv "SOL_API_KEY" "";
   assert_absent
@@ -582,16 +594,21 @@ let test_live_render_emits_no_secret_values () =
     "postgresql://user:pass@db.example.com:5432/app";
   assert_absent "no SOL_API_KEY value" workload "dev-internal-key";
   assert_contains
-    "the workload still references its per-workload Secret"
+    "a database consumer references the target's DML class Secret"
     workload
-    "name: charge-svc-secrets"
+    ("name: " ^ db_consumer_dml_creds);
+  assert_contains "and reads POSTGRES_URL from it" workload "key: POSTGRES_URL"
 ;;
 
 let test_placeholder_render_redacts_values () =
   Unix.putenv "POSTGRES_URL" "postgresql://user:pass@db.example.com:5432/app";
-  let _ns, workload = render_spec_ok svc_spec in
+  let _ns, workload = render_spec_ok db_consumer_spec in
   Unix.putenv "POSTGRES_URL" "";
   assert_absent "GitOps emits no placeholder Secret" workload "kind: Secret";
+  assert_contains
+    "GitOps projects POSTGRES_URL from the class Secret"
+    workload
+    ("name: " ^ db_consumer_dml_creds);
   assert_contains "GitOps projects POSTGRES_URL" workload "key: POSTGRES_URL";
   assert_absent
     "a key no unit declares is not a workload default"
@@ -841,19 +858,31 @@ let test_multiple_user_secret_keys_in_secret_resource () =
   assert_contains "SENDGRID_API_KEY ref" workload "key: SENDGRID_API_KEY"
 ;;
 
-let test_default_secrets_preserved_with_user_secrets () =
-  let spec = { svc_spec with secrets = [ "STRIPE_KEY", "" ] } in
+(* 2b: `POSTGRES_URL` is no longer a workload default. It reaches a database consumer from
+   the target's DML class Secret, while a declared application secret stays unit-scoped. *)
+let test_database_url_routes_to_the_class_secret () =
+  let spec = { db_consumer_spec with secrets = [ "STRIPE_KEY", "" ] } in
   let _ns, workload = render_spec_ok spec in
   assert_absent "no Secret is rendered" workload "kind: Secret";
   assert_contains "POSTGRES_URL ref" workload "key: POSTGRES_URL";
-  assert_contains "STRIPE_KEY ref" workload "key: STRIPE_KEY"
+  assert_contains
+    "POSTGRES_URL routes to the class Secret"
+    workload
+    ("name: " ^ db_consumer_dml_creds);
+  assert_contains "STRIPE_KEY ref" workload "key: STRIPE_KEY";
+  assert_contains
+    "a declared unit secret stays unit-scoped"
+    workload
+    "name: charge-svc-secrets"
 ;;
 
 let test_gitops_redacts_all_secret_values () =
-  let spec = { svc_spec with secrets = [ "STRIPE_KEY", "sk_live_should_not_render" ] } in
+  let spec =
+    { db_consumer_spec with secrets = [ "STRIPE_KEY", "sk_live_should_not_render" ] }
+  in
   let _ns, workload = render_spec_ok spec in
   assert_absent "no placeholder Secret" workload "kind: Secret";
-  assert_contains "default POSTGRES_URL referenced" workload "key: POSTGRES_URL";
+  assert_contains "POSTGRES_URL referenced" workload "key: POSTGRES_URL";
   assert_contains "user STRIPE_KEY referenced" workload "key: STRIPE_KEY";
   assert_absent
     "default postgres value redacted"
@@ -2939,8 +2968,8 @@ let%test "svc: multiple user secret keys in Secret" =
   test_multiple_user_secret_keys_in_secret_resource ()
 ;;
 
-let%test "svc: default secrets preserved with user secrets" =
-  test_default_secrets_preserved_with_user_secrets ()
+let%test "svc: a DB consumer routes POSTGRES_URL to the class Secret" =
+  test_database_url_routes_to_the_class_secret ()
 ;;
 
 let%test "svc: GitOps redacts secret values" = test_gitops_redacts_all_secret_values ()

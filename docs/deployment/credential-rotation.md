@@ -42,18 +42,21 @@ unit and waits for rollout readiness. It neither updates `sol-secrets` nor write
 to another unit. Secret values are redacted from command output.
 
 Platform credentials used by Sol's internal Jobs have a separate target scope.
-For example, migrations read `POSTGRES_URL` from `sol-secrets`:
+Database credentials are no longer one of them: the deploy delivers
+`<target>-dml-creds` to consuming units and `<target>-ddl-creds` to the migration
+Job from the target's binding, so there is no `@platform/POSTGRES_URL` to rotate.
+For SASL_SSL targets, the contract Job still requires the platform Kafka
+password and CA certificate:
 
 ```bash
-your-secret-tool get production-postgres-url \
-  | sol secret set prod/aws/us-east-1 @platform/POSTGRES_URL --from-stdin
+your-secret-tool get kafka-sasl-password \
+  | sol secret set prod/aws/us-east-1 @platform/KAFKA_SASL_PASSWORD --from-stdin
 ```
 
-For SASL_SSL targets, the contract Job also requires the platform Kafka
-password and CA certificate. Platform writes update only `sol-secrets` objects
-in active target namespaces; they never copy values into application Secrets or
-restart application workloads. `sol secret status TARGET` reports key owners
-and presence without printing values.
+Platform writes update only `sol-secrets` objects in active target namespaces;
+they never copy values into application Secrets or restart application
+workloads. `sol secret status TARGET` reports key owners and presence without
+printing values.
 
 ### Deploy and rollback
 

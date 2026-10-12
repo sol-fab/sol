@@ -16,21 +16,7 @@ let check_contract ~facts ~services =
   if Sol_cli_check.has_errors findings then Error (Sol_cli_exit.reported ()) else Ok ()
 ;;
 
-let ensure_postgres_url () =
-  match Sol_cli_string.env "POSTGRES_URL" with
-  | None ->
-    Error
-      (Sol_cli_exit.error
-         "POSTGRES_URL is not set.\n\
-          Set it in your environment before running 'sol deploy':\n\
-         \  export POSTGRES_URL=postgresql://user:pass@host:5432/dbname")
-  | Some _ -> Ok ()
-;;
-
-let check_apply_environment ~facts ~services =
-  let* () = check_contract ~facts ~services in
-  ensure_postgres_url ()
-;;
+let check_apply_environment ~facts ~services = check_contract ~facts ~services
 
 let print_header ~workspace ~sha ?mode_line () =
   Printf.printf "\nWorkspace: %s  tag: %s\n" workspace sha;
@@ -671,9 +657,8 @@ let check_effective_access
 
 (** The refusal ADR 0007 condition 6 exists to make loud: a target that declares a
     Sol-provisioned database must take its master from the cluster root's output, never from
-    an operator's environment. Stated in full on every path where it can fail, because the
-    fallback this replaces — [ensure_postgres_url] reading [POSTGRES_URL] — is exactly the
-    manual copy the condition removes. *)
+    an operator's environment. 2b deleted the env fallback the condition removes, so this is
+    now the only source; the message stays explicit about what it replaced. *)
 let database_master_unavailable ~target detail =
   Printf.sprintf
     "could not obtain the database master for target %s from the cluster output: %s.\n\

@@ -248,25 +248,8 @@ let test_verify_rejects_an_absent_secret () =
       (Sol_cli_string.contains ~needle:"charge-svc-secrets" message)
 ;;
 
-let test_verify_runtime_secret_reads_the_substrate_secret () =
-  match
-    with_fake_kubectl ~mode:"present" (fun ~calls:_ ~manifests:_ ->
-      Sol_cli_secret.verify_runtime_secret ~ctx ~namespace:"payments")
-  with
-  | Ok () ->
-    Windtrap.fail "the substrate Secret lacks POSTGRES_URL; verification must fail"
-  | Error message ->
-    Windtrap.equal
-      Windtrap.bool
-      ~msg:"names the runtime Secret"
-      true
-      (Sol_cli_string.contains ~needle:"payments/sol-secrets" message);
-    Windtrap.equal
-      Windtrap.bool
-      ~msg:"names the missing contract key"
-      true
-      (Sol_cli_string.contains ~needle:"POSTGRES_URL" message)
-;;
+(* 2b: `verify_runtime_secret` (the substrate `POSTGRES_URL` check) is deleted; see the
+   note beside its former test registration. *)
 
 let test_platform_set_writes_only_the_runtime_secret () =
   with_fake_kubectl ~mode:"present" (fun ~calls:_ ~manifests ->
@@ -274,8 +257,8 @@ let test_platform_set_writes_only_the_runtime_secret () =
       Sol_cli_secret.set_platform_key
         ~ctx
         ~namespaces:[ "payments"; "orders" ]
-        ~key:"POSTGRES_URL"
-        ~value:"postgres://platform-db"
+        ~key:"KAFKA_SASL_PASSWORD"
+        ~value:"kafka-sasl"
     with
     | Error message -> Windtrap.failf "platform secret set failed: %s" message
     | Ok _ ->
@@ -290,6 +273,25 @@ let test_platform_set_writes_only_the_runtime_secret () =
         ~msg:"application Secrets are not written"
         false
         (Sol_cli_string.contains ~needle:"charge-svc-secrets" manifests))
+;;
+
+(* 2b: POSTGRES_URL is no longer a platform Job input, so the shared-scope writer
+   that used to carry it must refuse it and the Kafka credential must still work. *)
+let test_platform_set_refuses_postgres_url () =
+  match
+    Sol_cli_secret.set_platform_key
+      ~ctx
+      ~namespaces:[ "payments" ]
+      ~key:"POSTGRES_URL"
+      ~value:"postgres://platform-db"
+  with
+  | Ok _ -> Windtrap.fail "POSTGRES_URL must no longer be a platform Job input"
+  | Error message ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the refusal names the class-Secret replacement"
+      true
+      (Sol_cli_string.contains ~needle:"not a supported Sol platform Job secret" message)
 ;;
 
 let test_platform_preflight_checks_all_namespaces_before_secret_writes () =
@@ -388,6 +390,7 @@ let external_workload_spec () : Sol_cli_deployment_plan.service_spec =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_uses_target = None
   ; db_ca_target = None
   }
 ;;
@@ -502,15 +505,6 @@ let test_unit_set_writes_only_its_unit_secret () =
         (Sol_cli_string.contains ~needle:"name: sol-secrets" manifests))
 ;;
 
-let test_platform_readiness_requires_only_the_database_job_input () =
-  match
-    with_fake_kubectl ~mode:"runtime-valid" (fun ~calls:_ ~manifests:_ ->
-      Sol_cli_secret.verify_runtime_secret ~ctx ~namespace:"payments")
-  with
-  | Ok () -> ()
-  | Error message -> Windtrap.failf "valid platform Job input was rejected: %s" message
-;;
-
 let test_contract_readiness_names_missing_tls_job_input () =
   match
     with_fake_kubectl ~mode:"runtime-valid" (fun ~calls:_ ~manifests:_ ->
@@ -562,13 +556,15 @@ let%test "verify: a missing key fails and is named" = test_verify_names_the_miss
 let%test "verify: a blank value fails" = test_verify_rejects_a_blank_value ()
 let%test "verify: an absent Secret fails" = test_verify_rejects_an_absent_secret ()
 
-let%test "verify: runtime Secret check reads the substrate Secret" =
-  test_verify_runtime_secret_reads_the_substrate_secret ()
-;;
+(* 2b deleted the check that required `POSTGRES_URL` in the substrate `sol-secrets`: a unit
+   now reads the target's DML class Secret, and the substrate no longer owns the operator's
+   copy of the master. *)
 
 let%test "scope: platform writes only the shared Job Secret" =
   test_platform_set_writes_only_the_runtime_secret ()
 ;;
+
+let%test "2b: platform refuses POSTGRES_URL" = test_platform_set_refuses_postgres_url ()
 
 let%test "scope: platform secret destinations preflight as a target" =
   test_platform_preflight_checks_all_namespaces_before_secret_writes ()
@@ -578,9 +574,8 @@ let%test "scope: unit writes only the selected unit Secret" =
   test_unit_set_writes_only_its_unit_secret ()
 ;;
 
-let%test "verify: platform readiness checks the database Job input" =
-  test_platform_readiness_requires_only_the_database_job_input ()
-;;
+(* 2b deleted the substrate `POSTGRES_URL` readiness check; the migration Job's DDL class
+   Secret is now verified where it is written (the database setup step) and read. *)
 
 let%test "verify: TLS contract readiness checks both Kafka Job inputs" =
   test_contract_readiness_names_missing_tls_job_input ()

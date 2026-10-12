@@ -86,3 +86,16 @@ let provisioned_database bindings =
     (fun b -> String.equal b.typ "postgres" && b.ownership = Sol_cli_config.Ownership_sol)
     bindings
 ;;
+
+(* The one home for "which postgres resource is the target's": a provisioned database is
+   authoritative when Sol owns one; otherwise the single external postgres is the target's.
+   Two external postgres resources have no single target, so a consumer's `POSTGRES_URL`
+   stays unit-scoped. *)
+let target_database bindings =
+  match provisioned_database bindings with
+  | Some database -> Some database
+  | None ->
+    (match of_type bindings ~typ:"postgres" with
+     | [ database ] -> Some database
+     | _ -> None)
+;;

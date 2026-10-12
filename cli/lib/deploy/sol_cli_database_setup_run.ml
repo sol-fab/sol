@@ -118,11 +118,10 @@ let cleanup ~ctx ~namespace ~job_name ~configmap_name ~secret_name =
 (** The namespaces that must receive the DML credential: one per unit that declares it
     uses the Sol-provisioned `postgres` resource.
 
-    This is the declared signal, not a resolved one. Deriving consumers from
-    `POSTGRES_URL` in a unit's resolved secrets would not work today: `default_secrets`
-    still adds `POSTGRES_URL` to *every* unit, so that enumeration would name every
-    namespace. It becomes meaningful only after 2b — and 2b is what consumes these
-    Secrets, so the resolved signal cannot be what gates them.
+    This is the declared signal, not the resolved one. The writer runs before the units are
+    rendered and before the class Secrets it writes exist, so an enumeration derived from
+    the reader's routing would be circular; the declared `uses:` edge names the same units
+    without reading a projection this step is about to create.
 
     It names the resource, not the type, so a consumer of a *different*, externally bound
     postgres resource is not handed a Sol-written credential: the external database is

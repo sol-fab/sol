@@ -412,7 +412,9 @@ let set_unit_key ~ctx ~namespace ~secret_name ~key ~value =
   set_named_key ~ctx ~namespace ~secret_name ~key ~value ()
 ;;
 
-let platform_secret_keys = [ "POSTGRES_URL"; "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ]
+(* 2b: the Kafka credentials are the only platform Job inputs left; a database
+   connection is delivered by the deploy as `<target>-dml-creds` / `<target>-ddl-creds`. *)
+let platform_secret_keys = [ "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ]
 
 let set_platform_key ~ctx ~namespaces ~key ~value =
   let* () = validate_key key in
@@ -530,8 +532,19 @@ let verify_required_keys ~ctx ~namespace ~secret_name ~required_keys =
 
 let verify_workload_secret ~ctx (spec : Sol_cli_deployment_plan.service_spec) =
   let transport = Sol_cli_manifest.kafka_transport_of_config spec.config in
+  (* 2b: a unit that consumes the target's database reads `POSTGRES_URL` from the target's
+     DML class Secret, not from its own Secret, so it is not verified here. A unit that
+     merely declares `POSTGRES_URL` still is. *)
+  let declared =
+    if Option.is_some spec.db_uses_target
+    then
+      List.filter
+        (fun key -> not (String.equal key Sol_cli_manifest.postgres_url_key))
+        (List.map fst spec.secrets)
+    else List.map fst spec.secrets
+  in
   let required =
-    Sol_cli_manifest.required_secret_keys ~transport (List.map fst spec.secrets)
+    Sol_cli_manifest.required_secret_keys ~transport declared
     |> List.filter (fun key ->
       match List.assoc_opt key spec.secret_sources with
       | Some (Sol_cli_manifest.External _) -> false
@@ -895,14 +908,6 @@ let verify_external_secret_destination ~ctx (spec : Sol_cli_deployment_plan.serv
                declared ExternalSecret"
               namespace
               target_name))
-;;
-
-let verify_runtime_secret ~ctx ~namespace =
-  verify_required_keys
-    ~ctx
-    ~namespace
-    ~secret_name:Sol_cli_manifest.runtime_secret_name
-    ~required_keys:[ "POSTGRES_URL" ]
 ;;
 
 let verify_runtime_secret_keys ~ctx ~namespace ~required_keys =

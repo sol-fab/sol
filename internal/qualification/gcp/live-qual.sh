@@ -949,21 +949,55 @@ app_postgres_url() {
   jq -r '.outputs.postgres_url.value // empty' "$state" 2>/dev/null
 }
 
-app_redact_url() { printf '%s' "$1" | sed 's#://[^@]*@#://***@#'; }
-
-app_load_runtime_secrets() {
+# 2b: the cluster root's postgres_url output is the *deploy's* input — the database setup
+# step derives <target>-ddl-creds / <target>-dml-creds from it. The harness records the
+# source redacted and never feeds the value to `sol secret set`.
+app_capture_database_source() {
   capture_state_object cloud "sol/$TARGET/cloud.tfstate/default.tfstate"
   local url
   if ! url="$(app_postgres_url)" || [ -z "$url" ]; then
-    say "could not read the cluster root's postgres_url output, so POSTGRES_URL cannot be established"
+    say "could not read the cluster root's postgres_url output, so the deploy's database setup has no master"
     return 1
   fi
-  export POSTGRES_URL="$url"
   {
-    printf 'POSTGRES_URL: %s\n' "$(app_redact_url "$url")"
+    printf 'database master source: the cluster root postgres_url output (never recorded in the clear)\n'
   } >"$LOG_DIR/app-runtime-secrets.txt" 2>&1
-  say "the workspace's declared runtime secrets are established from the platform's own output"
-  say "  (POSTGRES_URL): $LOG_DIR/app-runtime-secrets.txt"
+  say "the deploy's database master is the platform's own output; the harness holds no POSTGRES_URL"
+  say "  database master source: $LOG_DIR/app-runtime-secrets.txt"
+}
+
+app_class_credential_name() { printf '%s' "$TARGET" | tr '[:upper:]/' '[:lower:]-'; }
+
+# 2b: the migration Job reads <target>-ddl-creds and a consuming unit reads
+# <target>-dml-creds, both written by the deploy's database setup step. Assert the delivered
+# form exists and that the consumer did not also receive an operator's master copy.
+app_verify_database_delivery() {
+  local name secrets ddl dml consumer
+  name="$(app_class_credential_name)"
+  secrets="$(kubectl get secret -A \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null)"
+  ddl="$(printf '%s\n' "$secrets" | awk -v n="$name-ddl-creds" '$2 == n { print $1 }' | head -1)"
+  dml="$(printf '%s\n' "$secrets" | awk -v n="$name-dml-creds" '$2 == n { print $1 }' | head -1)"
+  if [ -z "$ddl" ]; then
+    say "app: the migration Job's $name-ddl-creds class Secret is absent"
+    return 1
+  fi
+  if [ -z "$dml" ]; then
+    say "app: no consuming namespace carries the $name-dml-creds class Secret"
+    return 1
+  fi
+  consumer="orders-svc-secrets"
+  if kubectl get secret "$consumer" -n pluto-payments -o jsonpath='{.data.POSTGRES_URL}' 2>/dev/null |
+    grep -q .; then
+    say "app: $consumer still carries POSTGRES_URL; the unit is not reading the class Secret"
+    return 1
+  fi
+  {
+    printf 'database_delivery: %s (migration Job), %s@%s (unit consumer)\n' \
+      "$name-ddl-creds" "$name-dml-creds" "$dml"
+    printf 'database_delivery_assertion: the consumer unit Secret carries no POSTGRES_URL\n'
+  } >>"$LOG_DIR/prerequisites.txt"
+  say "app: the deploy delivered the database as $name-ddl-creds / $name-dml-creds; the consumer's unit Secret carries no master copy"
 }
 
 app_secret_failure() {
@@ -1007,9 +1041,10 @@ app_secret_set() {
   done
 }
 
-# Production secrets are operator-supplied: Sol's migrate and deploy verify them
-# and fail closed. The harness stands in for the operator, supplying the values it
-# already holds through the supported `sol secret set`.
+# Production secrets are operator-supplied: Sol's deploy verifies the Kafka inputs a TLS
+# contract Job declares and fails closed. The database is *not* one of them: the deploy
+# delivers it from the target's binding (2b), so the harness neither holds nor sets a
+# POSTGRES_URL.
 app_supply_secrets() {
   local password ca
   if ! password="$(app_read_platform_password)"; then
@@ -1021,19 +1056,17 @@ app_supply_secrets() {
     say "app: could not read the Redpanda CA from redpanda/redpanda-default-cert"
     return 1
   fi
-  export SOL_SECRET_VALUE="$POSTGRES_URL"
-  app_secret_set POSTGRES_URL || return 1
   export SOL_SECRET_VALUE="$password"
   app_secret_set KAFKA_SASL_PASSWORD || return 1
   export SOL_SECRET_VALUE="$ca"
   app_secret_set KAFKA_SSL_CA_CERT || return 1
   unset SOL_SECRET_VALUE
   {
-    printf 'runtime_secret_keys: POSTGRES_URL KAFKA_SASL_PASSWORD KAFKA_SSL_CA_CERT\n'
-    printf 'runtime_secret_sources: the cluster postgres_url output; redpanda/redpanda-users; redpanda/redpanda-default-cert\n'
-    printf 'runtime_secret_values: never recorded\n'
+    printf 'platform_secret_keys: KAFKA_SASL_PASSWORD KAFKA_SSL_CA_CERT\n'
+    printf 'secret_values: never recorded\n'
+    printf 'database_delivery: delivered by the deploy from the target binding; no operator copy\n'
   } >>"$LOG_DIR/prerequisites.txt"
-  say "app: supplied the operator's runtime and workload secrets through sol secret set; their values are never recorded"
+  say "app: supplied the Kafka platform secrets through sol secret set; the database is delivered by the deploy"
 }
 
 app_k8s_name() { printf '%s' "$1" | tr '_' '-'; }
@@ -1265,7 +1298,7 @@ phase_app() {
     return 1
   fi
   say "runner: release $SOL_BUNDLE_VERSION names $SOL_RUNNER_IMAGE; the publisher publishes nothing"
-  if ! app_load_runtime_secrets; then
+  if ! app_capture_database_source; then
     capture_app_evidence
     freeze_evidence
     finalise_bundle
@@ -1304,6 +1337,12 @@ phase_app() {
     return 1
   fi
   if ! run app-deploy "$SOL" deploy "$TARGET" --registry "$(app_registry)" $image_ref_args; then
+    capture_app_evidence
+    freeze_evidence
+    finalise_bundle
+    return 1
+  fi
+  if ! app_verify_database_delivery; then
     capture_app_evidence
     freeze_evidence
     finalise_bundle
@@ -1501,10 +1540,10 @@ phases
             The deploy identity has no registry-write authority (ADR 0002, SEC-011), and Sol
             refuses to run either step without a digest-pinned runner. The deploy is still
             given the target's registry for the
-            workspace's own images. The workspace's declared runtime secret
-            (POSTGRES_URL) comes from the operator's side of the contract -- the
-            cluster root's postgres_url output -- and the
-            bundle records it redacted, never in the clear.
+            workspace's own images. The database connection is not an operator input: the
+            deploy reads the cluster root's postgres_url output and delivers
+            `<target>-ddl-creds` to the migration Job and `<target>-dml-creds` to a consuming
+            unit, which the row asserts before the transaction.
             The target it writes selects no profile: this row qualifies the application path,
             and claims nothing the production profile's guarantees would promise.
   identity  capture the managed-secret and projected-token mechanism facts the VERIF-021 and

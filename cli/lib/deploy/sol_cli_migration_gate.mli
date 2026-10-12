@@ -19,6 +19,9 @@ val read_applied
   -> dir:string
   -> table:string
   -> services:Sol_cli_manifest.service list
+  -> ddl_creds_name:string
+  -> ?ca_configmap:string
+  -> unit
   -> (int list, string) result
 
 val verify
@@ -26,4 +29,7 @@ val verify
   -> workspace:string
   -> dir:string
   -> services:Sol_cli_manifest.service list
+  -> ddl_creds_name:string
+  -> ?ca_configmap:string
+  -> unit
   -> verification

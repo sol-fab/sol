@@ -69,6 +69,8 @@ let verify dir =
     ~workspace:"pluto"
     ~dir
     ~services:[]
+    ~ddl_creds_name:"pluto-ddl-creds"
+    ()
 ;;
 
 let test_verify_absent_and_empty_dirs_are_no_migrations () =

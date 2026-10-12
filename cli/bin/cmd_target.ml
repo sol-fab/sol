@@ -126,11 +126,7 @@ let substrate_status
     in
     Some
       (Sol_cli_substrate_contract.lines
-         { cluster
-         ; registry = target.registry
-         ; postgres_url = Sol_cli_string.env "POSTGRES_URL"
-         ; base_domain = target.base_domain
-         }))
+         { cluster; registry = target.registry; base_domain = target.base_domain }))
 ;;
 
 (* Live state, so it is read only under --check: how an operator or a harness reaches

@@ -9,13 +9,13 @@ prod:
     aws/us-east-1:
       # registry: <your-registry-url>
       secrets:
+        # 2b: no POSTGRES_URL copy. A unit that consumes the workspace's `app_db`
+        # resource reads the target's `<target>-dml-creds` class Secret, delivered by
+        # the deploy; declare `uses: [app_db]` on the service to receive it. Map only
+        # application secrets the unit declares under `[infra.env] secrets`.
         payments/charge_svc:
-          POSTGRES_URL:
-            authority: sol
           SOL_API_KEY:
             authority: sol
         comms/notify_worker:
-          POSTGRES_URL:
-            authority: sol
           SOL_API_KEY:
             authority: sol

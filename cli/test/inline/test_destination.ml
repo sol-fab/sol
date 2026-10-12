@@ -152,6 +152,36 @@ let test_resolution_is_deterministic () =
   | _ -> Windtrap.fail "resolution disagreed with itself"
 ;;
 
+(* 2b: rollback needs both the cluster and the target config to derive its database
+   bindings. `resolve_with_config` reads once, and the refusal a remote command shows for a
+   missing target is the same one `resolve` shows, so the command layer and the library
+   cannot disagree about a targetless rollback. *)
+let test_resolve_with_config_shares_the_refusal_and_returns_the_config () =
+  with_temp_dir (fun () ->
+    write_base ();
+    write_target (Some "prod-cluster");
+    let ctx, config =
+      ok_or_fail
+        (Sol_cli_destination.resolve_with_config
+           ~command:"rollback"
+           ~target:(Some "prod/aws/us-east-1"))
+    in
+    check_string "target's destination" "prod-cluster" (context_name ctx);
+    check_string
+      "the target config comes back with the cluster"
+      "pluto"
+      (Option.value ~default:"" config.Sol_cli_config.project));
+  let missing_target =
+    error_or_fail
+      (Sol_cli_destination.resolve_with_config ~command:"rollback" ~target:None)
+  in
+  let resolve_refused =
+    error_or_fail
+      (Sol_cli_destination.resolve ~command:"rollback" ~local:false ~target:None)
+  in
+  check_string "one refusal for both entry points" resolve_refused missing_target
+;;
+
 let%test "seam: local entry point is the literal local cluster" =
   test_local_entry_point_is_the_literal_local_cluster ()
 ;;
@@ -181,3 +211,7 @@ let%test "seam: a reserved-local target points at the local form" =
 ;;
 
 let%test "seam: resolution is deterministic" = test_resolution_is_deterministic ()
+
+let%test "2b: resolve_with_config returns the config and shares the refusal" =
+  test_resolve_with_config_shares_the_refusal_and_returns_the_config ()
+;;

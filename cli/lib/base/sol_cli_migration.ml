@@ -103,6 +103,20 @@ let required_if_present ~dir =
 
 let to_string (p : prerequisite) = Printf.sprintf "%03d_%s" p.version p.name
 
+(** [pending_files ~applied files] keeps the [(filename, content)] entries whose migration
+    version is absent from [applied]. [files] is a directory listing as
+    {!Sol_cli_migration_gate.migration_files} returns it. The version comes from
+    {!parse_version}, the same filename authority [Migration] uses, so a project's digit
+    convention is respected rather than reconstructed. *)
+let pending_files ~applied files =
+  List.filter
+    (fun (fname, _) ->
+       match parse_version fname with
+       | Some (version, _) -> not (List.mem version applied)
+       | None -> false)
+    files
+;;
+
 type status_row =
   { version : int
   ; name : string

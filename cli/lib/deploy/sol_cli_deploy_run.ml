@@ -105,6 +105,22 @@ let migration_prerequisite ctx ~plan ~live =
          in [substrate_prerequisite], before this gate. Migration verification must not
          re-enter that establishment: a second call would be duplicate lifecycle work
          and would let the two steps drift apart. *)
+      (* 2b: the migration Job is a DDL consumer, so it reads `<target>-ddl-creds` — the class
+       Secret the setup step (or ESO, for an externally bound database) writes. The reader
+       never learns the ownership; the only ownership-shaped decision here is whether the
+       target publishes a CA ConfigMap, which only Sol's setup step does. *)
+      let target = Sol_cli_kubernetes_name.sanitize_name ctx.target_name in
+      let provisions_database =
+        match Sol_cli_resource_binding.resolve ctx.resolved_config with
+        | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
+        | Error _ -> false
+      in
+      let ca_configmap =
+        if provisions_database
+        then Some (Sol_cli_database_setup_render.ca_configmap_name target)
+        else None
+      in
+      let ddl_creds_name = Sol_cli_database_setup_render.ddl_creds_name target in
       Sol_cli_migration_gate.reconcile_operator_bindings
         ~ctx:ctx.execution.cluster
         ~workspace:ctx.execution.workspace
@@ -115,6 +131,9 @@ let migration_prerequisite ctx ~plan ~live =
           ~workspace:ctx.execution.workspace
           ~dir
           ~services:ctx.inventory
+          ~ddl_creds_name
+          ?ca_configmap
+          ()
       with
       | Sol_cli_migration_gate.No_migrations -> Ok ()
       | Sol_cli_migration_gate.Satisfied applied ->
@@ -569,6 +588,7 @@ let run_lifecycle
       ~present_plan
       ~gates
       ~database_setup
+      ~post_setup_gates
       ~before_apply
       ~apply
       ~report_success
@@ -590,6 +610,16 @@ let run_lifecycle
           substrate it needs — and before the workloads, whose migration Jobs consume the
           DDL role it creates. Under the lease, because it mutates the target. *)
        let* () = database_setup () in
+       (* The migration verification runs *after* the setup, and this is the whole point of
+          the phase: it verifies a schema the DDL role owns, and the reader switch has it read
+          `<target>-ddl-creds` — which is exactly what the setup creates. Verifying before
+          the setup would refuse a first deploy for a Secret that is about to exist, and
+          would leave the operator with a remedy (`sol migrate apply`) whose own credential
+          the setup has not yet written.
+
+          The authority check stays in [gates], *before* the setup: it is read-only, and
+          mutating before establishing authority is worse than after. *)
+       let* () = post_setup_gates plan in
        record_plan run_log plan;
        let* () =
          confirm_consumer_groups ~ctx:cluster ~workspace ~confirm_group_change plan
@@ -666,12 +696,10 @@ let apply
     ~keep_releases:ctx.keep_releases
     ~confirm_group_change
     ~present_plan
-    ~gates:(fun plan ->
-      let* () =
-        run_gate ~on_refused:(fun _ -> ()) (migration_prerequisite ctx ~plan ~live:true)
-      in
-      effective_access ())
+    ~gates:(fun _plan -> effective_access ())
     ~database_setup
+    ~post_setup_gates:(fun plan ->
+      run_gate ~on_refused:(fun _ -> ()) (migration_prerequisite ctx ~plan ~live:true))
     ~before_apply:(fun plan -> contract_reconciliation ctx plan)
     ~apply:(fun ~lease ~release_id:_ plan ->
       let* results =

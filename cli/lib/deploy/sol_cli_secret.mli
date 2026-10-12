@@ -45,11 +45,6 @@ val verify_external_secret_destination
   -> Sol_cli_deployment_plan.service_spec
   -> (unit, string) result
 
-val verify_runtime_secret
-  :  ctx:Sol_cli_kube_destination.context
-  -> namespace:string
-  -> (unit, string) result
-
 val verify_runtime_secret_keys
   :  ctx:Sol_cli_kube_destination.context
   -> namespace:string

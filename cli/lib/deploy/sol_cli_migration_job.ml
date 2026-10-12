@@ -98,7 +98,18 @@ let submit_doc ~ctx ~namespace ~name_prefix ~label build_doc =
     e
 ;;
 
-let submit ~ctx ~namespace ~name_prefix ~label ~image ~args ~files =
+let submit
+      ~ctx
+      ~namespace
+      ~name_prefix
+      ~label
+      ~image
+      ~args
+      ~files
+      ~ddl_creds_name
+      ?ca_configmap
+      ()
+  =
   let run_id = Printf.sprintf "%.0f" (Unix.gettimeofday () *. 1000.) in
   let configmap_name = Printf.sprintf "%s-files-%s" name_prefix run_id in
   let job =
@@ -122,7 +133,10 @@ let submit ~ctx ~namespace ~name_prefix ~label ~image ~args ~files =
          ~namespace
          ~image
          ~args
-         ~configmap_name)
+         ~configmap_name
+         ~ddl_creds_name
+         ?ca_configmap
+         ())
   with
   | Ok () -> Ok job
   | Error _ as e ->

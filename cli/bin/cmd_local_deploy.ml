@@ -212,13 +212,11 @@ let check_contract ~facts ~services =
   if Sol_cli_check.has_errors findings then Error (Sol_cli_exit.reported ()) else Ok ()
 ;;
 
-let ensure_postgres_url () =
-  match Sol_cli_string.env "POSTGRES_URL" with
-  | None ->
-    Unix.putenv
-      "POSTGRES_URL"
-      "postgresql://postgres:dev@postgresql.postgresql.svc.cluster.local:5432/dev"
-  | Some _ -> ()
+(* 2b: local development has no target binding, so `sol local deploy` supplies the local
+   cluster's Postgres as `POSTGRES_URL` to a unit that declares it. It is a local delivery
+   default, not an operator environment variable to copy in. *)
+let local_postgres_url =
+  "postgresql://postgres:dev@postgresql.postgresql.svc.cluster.local:5432/dev"
 ;;
 
 let to_manifest_primitive = Sol_cli_up_execution.manifest_primitive
@@ -383,6 +381,30 @@ let observed_contract ~workspace =
   Sol_cli_release_store.deployed_contract ~ctx:cluster ~workspace
 ;;
 
+(* The local cluster provides the workspace's declared postgres resource, so a unit that
+   consumes it receives `POSTGRES_URL` in its own Secret — the local stand-in for the
+   cloud deploy's `<target>-dml-creds`. A unit that only declares `POSTGRES_URL` keeps its
+   operator-supplied value instead. *)
+let local_database_consumers ~root =
+  match Sol_cli_config.load_declared ~root with
+  | Error _ -> fun _ -> false
+  | Ok declared ->
+    let postgres =
+      List.filter_map
+        (fun (resource : Sol_cli_config.resource) ->
+           if resource.typ = Some "postgres" then Some resource.name else None)
+        declared.resources
+    in
+    fun name ->
+      (match
+         List.find_opt
+           (fun (service : Sol_cli_config.service) -> String.equal service.name name)
+           declared.services
+       with
+       | None -> false
+       | Some service -> List.exists (fun use -> List.mem use postgres) service.uses)
+;;
+
 let load_local_secret_values ~root ~facts services =
   services
   |> Sol_cli_result.map_list (fun (service : Sol_cli_manifest.service) ->
@@ -404,12 +426,25 @@ let load_local_secret_values ~root ~facts services =
       | Error error -> Error (Sol_cli_toml.parse_error_to_string error)
     in
     let required = Sol_cli_manifest.required_secret_keys secret_keys in
+    let consumes_database = local_database_consumers ~root service.name in
+    let effective =
+      if consumes_database
+      then "POSTGRES_URL" :: required |> List.sort_uniq String.compare
+      else required
+    in
     let* values =
       Sol_cli_local_secret_input.load ~root ~unit_address
       |> Result.map_error (fun error -> service.name ^ ": " ^ error)
     in
+    (* The database input is the local cluster's, unless the operator set one in the unit's
+       own `sol/secrets.local` file. *)
+    let values =
+      if consumes_database && not (List.mem_assoc "POSTGRES_URL" values)
+      then ("POSTGRES_URL", local_postgres_url) :: values
+      else values
+    in
     let missing =
-      required
+      effective
       |> List.filter (fun key ->
         match List.assoc_opt key values with
         | Some value when String.trim value <> "" -> false
@@ -417,7 +452,7 @@ let load_local_secret_values ~root ~facts services =
       |> List.sort_uniq String.compare
     in
     match missing with
-    | [] -> Ok (unit_address, List.filter (fun (key, _) -> List.mem key required) values)
+    | [] -> Ok (unit_address, List.filter (fun (key, _) -> List.mem key effective) values)
     | _ ->
       Error
         (Printf.sprintf
@@ -435,14 +470,10 @@ let apply_local_secret_values ~secret_values (plan : Sol_cli_deployment_plan.t) 
        (fun acc (spec : Sol_cli_deployment_plan.service_spec) ->
           let* changed_units = acc in
           let unit_address = spec.domain ^ "/" ^ spec.source_name in
-          let required =
-            Sol_cli_manifest.required_secret_keys
-              ~transport:(Sol_cli_manifest.kafka_transport_of_config spec.config)
-              (List.map fst spec.secrets)
-          in
+          (* The loader already selected exactly the keys this unit receives, including the
+             local database input for a consumer. *)
           let values =
             Option.value ~default:[] (List.assoc_opt unit_address secret_values)
-            |> List.filter (fun (key, _) -> List.mem key required)
           in
           let secret_name =
             Sol_cli_manifest.workload_secret_name
@@ -609,7 +640,6 @@ let run_apply
       ~secret_values
   =
   let* () = check_contract ~facts ~services in
-  ensure_postgres_url ();
   print_header ~workspace ~sha ~dry_run:false;
   let* plan = build_plan ~requested_scope ~workspace ~sha ~facts ~declared ~services in
   let pf_failed = ref false in
@@ -634,6 +664,7 @@ let run_apply
         Ok ())
       ~gates:(fun _ -> Ok ())
       ~database_setup:(fun () -> Ok ())
+      ~post_setup_gates:(fun _ -> Ok ())
       ~before_apply:(fun _ -> Ok ())
       ~apply:(fun ~lease ~release_id:_ plan ->
         apply_plan

@@ -9,6 +9,12 @@ type common_fields =
   ; secret_sources : (string * Sol_cli_secret_source.t) list
   ; calls : Sol_cli_deployment_plan.service_call list
   ; called_by : Sol_cli_deployment_plan.service_call list
+  ; (* 2b: the `<target>-dml-creds` Secret this unit reads `POSTGRES_URL` from, derived from
+       the plan's [db_uses_target] by {!Sol_cli_database_setup_render.dml_creds_name} — the
+       one definition the Sol writer, the external writer and the reader share. [None] when
+       the unit does not consume the target's database, so a unit that merely declares
+       `POSTGRES_URL` keeps reading its own Secret. *)
+    db_dml_creds_name : string option
   ; (* 2d: the database-CA ConfigMap this unit mounts, derived from the plan's
        [db_ca_target] by {!Sol_cli_database_setup_render.ca_configmap_name} — the one
        definition the deploy writes with. *)
@@ -66,6 +72,7 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
       ; secret_sources
       ; calls
       ; called_by
+      ; db_dml_creds_name
       ; db_ca_configmap
       }
     =
@@ -131,7 +138,10 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
   let cfg_hash = Sol_cli_manifest.config_hash base_cluster_env config in
   let kafka_tls_enabled = Sol_cli_manifest.kafka_tls transport in
   let secret_keys =
-    Sol_cli_manifest.required_secret_keys ~transport (List.map fst secrets)
+    Sol_cli_manifest.required_secret_keys
+      ~transport
+      ?db_dml_creds_name
+      (List.map fst secrets)
   in
   Sol_cli_manifest.(
     let ns_yaml = namespace_doc ~ns in
@@ -214,6 +224,7 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
              ; domain
              ; primitive
              ; release_id
+             ; db_dml_creds_name
              ; db_ca_configmap
              }
            in
@@ -325,6 +336,7 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
                ; workspace
                ; domain
                ; release_id
+               ; db_dml_creds_name
                ; db_ca_configmap
                }
              in
@@ -361,6 +373,8 @@ let render_spec
     ; secret_sources = s.secret_sources
     ; calls = s.calls
     ; called_by = s.called_by
+    ; db_dml_creds_name =
+        Option.map Sol_cli_database_setup_render.dml_creds_name s.db_uses_target
     ; db_ca_configmap =
         Option.map Sol_cli_database_setup_render.ca_configmap_name s.db_ca_target
     }

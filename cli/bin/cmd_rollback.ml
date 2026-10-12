@@ -64,7 +64,9 @@ let declared_external_secrets_of_release (release : Sol_cli_release.t) =
           }))
 ;;
 
-let run_locked ~lease ~ctx ~local ~workspace ~facts release_id : (unit, string) result =
+let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
+  : (unit, string) result
+  =
   let* release = Sol_cli_release_store.get ~ctx ~workspace ~release_id in
   Printf.printf "Rolling back %s to release %s\n%!" workspace release.release_id;
   let current_migrations =
@@ -84,8 +86,30 @@ let run_locked ~lease ~ctx ~local ~workspace ~facts release_id : (unit, string) 
         message;
       []
   in
+  (* 2b: the migration boundary read is a DDL consumer, so against a target it reads the
+     target's `<target>-ddl-creds` class Secret and mounts `<target>-db-ca` when Sol
+     provisions that database. A local rollback has no target binding and keeps the
+     workspace runtime Secret path. *)
+  let ddl_creds_name, ca_configmap =
+    match config with
+    | None -> Sol_cli_manifest.runtime_secret_name, None
+    | Some config ->
+      let target =
+        Sol_cli_kubernetes_name.sanitize_name config.Sol_cli_config.target.name
+      in
+      let provisions =
+        match Sol_cli_resource_binding.resolve config with
+        | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
+        | Error _ -> false
+      in
+      ( Sol_cli_database_setup_render.ddl_creds_name target
+      , if provisions
+        then Some (Sol_cli_database_setup_render.ca_configmap_name target)
+        else None )
+  in
   let deps : Sol_cli_rollback.transaction_deps =
-    { ensure_held = (fun () -> Sol_cli_boundary_lease.ensure_held lease)
+    { config
+    ; ensure_held = (fun () -> Sol_cli_boundary_lease.ensure_held lease)
     ; applied_migrations =
         (fun () ->
           Sol_cli_migration_gate.read_applied
@@ -93,7 +117,10 @@ let run_locked ~lease ~ctx ~local ~workspace ~facts release_id : (unit, string) 
             ~workspace
             ~dir:migrations_dir
             ~table:(Sol_cli_migration.table_name ~workspace)
-            ~services:(Sol_cli_workspace_model.services facts))
+            ~services:(Sol_cli_workspace_model.services facts)
+            ~ddl_creds_name
+            ?ca_configmap
+            ())
     ; apply =
         apply_specs
           ~ensure_held:(fun () -> Sol_cli_boundary_lease.ensure_held lease)
@@ -144,7 +171,7 @@ let run_locked ~lease ~ctx ~local ~workspace ~facts release_id : (unit, string) 
   Ok ()
 ;;
 
-let run ~ctx ?(local = false) release_id =
+let run ~ctx ?(local = false) ?config release_id =
   let workspace = workspace_name () in
   Sol_cli_exit.of_msg
     (let* facts = Sol_cli_workspace_model.load_cwd () in
@@ -154,7 +181,7 @@ let run ~ctx ?(local = false) release_id =
        ~holder:Sol_cli_boundary_lease.Rollback
        ~ttl:ttl_s
        ~wait_s
-       (fun lease -> run_locked ~lease ~ctx ~local ~workspace ~facts release_id))
+       (fun lease -> run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id))
 ;;
 
 let release_id_arg =
@@ -178,8 +205,15 @@ let cmd =
     Term.(
       const (fun release_id target ->
         let result =
-          let* ctx = Cmd_destination.remote ~command:"rollback" target in
-          run ~ctx release_id
+          (* 2b: the rollback's database delivery is derived from the target's **current**
+             bindings, so resolve the cluster and read that config once. A targetless rollback
+             is `sol local rollback` below, which passes no config and gets unit-scoped
+             delivery; this remote form has no target to fall back on and refuses one. *)
+          let* ctx, config =
+            Sol_cli_destination.resolve_with_config ~command:"rollback" ~target
+            |> Sol_cli_exit.of_msg
+          in
+          run ~ctx ~config release_id
         in
         Sol_cli_exit.exit_on result)
       $ release_id_arg

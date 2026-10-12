@@ -24,7 +24,6 @@ type cluster =
 type observations =
   { cluster : cluster
   ; registry : string option
-  ; postgres_url : string option
   ; base_domain : string option
   }
 

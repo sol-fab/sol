@@ -115,6 +115,7 @@ let ledger_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = [ billing_as_caller ]
   ; extra_labels = [ "team", "payments" ]
   ; progressive_delivery = None
+  ; db_uses_target = None
   ; db_ca_target = None
   }
 ;;
@@ -168,6 +169,7 @@ let billing_spec : Sol_cli_deployment_plan.service_spec =
                ; Sol_cli_toml.Weight 100
                ]
            })
+  ; db_uses_target = None
   ; db_ca_target = None
   }
 ;;
@@ -1365,7 +1367,8 @@ let recording_deps
         Ok []
   in
   let deps : Sol_cli_rollback.transaction_deps =
-    { ensure_held
+    { config = None
+    ; ensure_held
     ; applied_migrations
     ; apply =
         (fun _specs ->
@@ -2096,7 +2099,8 @@ let modelled_deps ~release ~cluster ?(fail_at = None) ()
        | Error _ as e -> e
        | Ok () -> apply_all (index + 1) rest)
   in
-  { Sol_cli_rollback.ensure_held = (fun () -> Ok ())
+  { config = None
+  ; Sol_cli_rollback.ensure_held = (fun () -> Ok ())
   ; applied_migrations = (fun () -> Ok [])
   ; apply = apply_all 0
   ; live_workloads = (fun () -> Ok cluster.live)
@@ -2677,4 +2681,78 @@ let%test "external_secret_prune: an undeclared ExternalSecret is an orphan" =
 
 let%test "external_secret_prune: only the UID match is removed" =
   test_prune_external_secrets_removes_only_the_uid_match ()
+;;
+
+(* 2b: a rollback's database delivery comes from the **current** target bindings, not from
+   the release record. The record names the unit; the current config says whether that unit
+   consumes the target's database, and current ownership decides the CA. *)
+let test_rollback_derives_database_delivery_from_current_bindings () =
+  let service name uses =
+    { Sol_cli_config.name
+    ; typ = None
+    ; path = None
+    ; uses
+    ; scale_min = None
+    ; scale_max = None
+    ; language = None
+    ; omit = false
+    }
+  in
+  let config =
+    { Sol_cli_config.project = Some "myapp"
+    ; target = Result.get_ok (Sol_cli_config.parse_target "prod/aws/us-east-1")
+    ; resources =
+        [ { Sol_cli_config.name = "app_db"
+          ; typ = Some "postgres"
+          ; partition_key = None
+          ; sort_key = None
+          ; indexes = []
+          ; size = None
+          ; omit = false
+          ; binding = None
+          }
+        ]
+    ; services = [ service "ledger_svc" [ "app_db" ]; service "billing_svc" [] ]
+    }
+  in
+  let release =
+    release_with_workloads
+      ~apply_mode:Sol_cli_release.Direct
+      [ ledger_spec; billing_spec ]
+  in
+  match Sol_cli_rollback.service_specs_of_release ~config release with
+  | Error message -> Windtrap.fail message
+  | Ok specs ->
+    let spec name =
+      List.find
+        (fun ((s : Sol_cli_deployment_plan.service_spec), _) ->
+           String.equal s.source_name name)
+        specs
+      |> fst
+    in
+    let target = "prod-aws-us-east-1" in
+    Windtrap.equal
+      (Windtrap.option Windtrap.string)
+      ~msg:"a released database consumer reads the target's class Secret again"
+      (Some target)
+      (spec "ledger_svc").db_uses_target;
+    Windtrap.equal
+      (Windtrap.option Windtrap.string)
+      ~msg:"and mounts the CA when Sol provisions that database"
+      (Some target)
+      (spec "ledger_svc").db_ca_target;
+    Windtrap.equal
+      (Windtrap.option Windtrap.string)
+      ~msg:"a released unit that consumes no database gets neither"
+      None
+      (spec "billing_svc").db_uses_target;
+    Windtrap.equal
+      (Windtrap.option Windtrap.string)
+      ~msg:"nor a CA"
+      None
+      (spec "billing_svc").db_ca_target
+;;
+
+let%test "2b: rollback derives database delivery from current bindings" =
+  test_rollback_derives_database_delivery_from_current_bindings ()
 ;;

@@ -31,3 +31,10 @@ val of_type : t list -> typ:string -> t list
 
 (** The single provisioned database, when there is one. *)
 val provisioned_database : t list -> t option
+
+(** The resource a target's database consumers read: the provisioned database when Sol owns
+    one (v1 allows at most one), otherwise the single externally bound postgres resource.
+    [None] when there is no postgres resource, or more than one external one — then no single
+    resource *is* the target's database, so a consumer's `POSTGRES_URL` cannot be routed and
+    the renderer leaves it unit-scoped. *)
+val target_database : t list -> t option

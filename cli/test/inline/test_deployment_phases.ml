@@ -78,6 +78,7 @@ let svc_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_uses_target = None
   ; db_ca_target = None
   }
 ;;
@@ -112,6 +113,7 @@ let worker_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_uses_target = None
   ; db_ca_target = None
   }
 ;;
@@ -146,6 +148,7 @@ let fn_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_uses_target = None
   ; db_ca_target = None
   }
 ;;
@@ -2409,6 +2412,17 @@ let%test "database setup render: the class Secrets carry the derived URL, not th
     ~msg:"the master is nowhere in the output Secrets"
     false
     (setup_mentions "postgres:master" (ddl ^ dml))
+;;
+
+(* 2b: the writer (Sol's setup step, and the external ESO path) and the reader (the
+   workload renderer) must agree on the one key the class Secret carries. They are two
+   definitions in two layers, so the agreement is asserted rather than assumed. *)
+let%test "2b: the writer and the reader share the POSTGRES_URL key" =
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"the manifest reader and the database setup renderer name the same key"
+    Sol_cli_database_setup_render.postgres_url_key
+    Sol_cli_manifest.postgres_url_key
 ;;
 
 (* The ownership gate and the namespace scoping are the two decisions that keep an

@@ -220,8 +220,9 @@ closed if it is not effective.
 infers a destination from the branch or the event (DEC-016). Workload secret values are never held
 by CI (FEAT-053). Seed Sol-owned values from a secret source through stdin, for example:
 `your-secret-tool get payment-api-key | sol secret set "$SOL_TARGET" payments/charge_svc/PAYMENT_API_KEY --from-stdin`.
-Provide migration Job database access separately with
-`your-secret-tool get production-postgres-url | sol secret set "$SOL_TARGET" @platform/POSTGRES_URL --from-stdin`.
+Database access needs no CI step: a unit that declares `uses: [app_db]` reads the target's
+`<target>-dml-creds` class Secret, and the migration Job reads `<target>-ddl-creds`, both delivered
+by the deploy from the target's binding — never from an operator-held `POSTGRES_URL`.
 Every required key has an explicit `sol` or `external` authority mapping in the target declaration.
 Sol-owned values live in that unit's Kubernetes Secret. For an external key, declare a namespaced
 `SecretStore` and remote key under the same unit, for example:

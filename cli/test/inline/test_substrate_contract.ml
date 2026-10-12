@@ -1,8 +1,6 @@
 open Sol_cli_substrate_contract
 
-let observed_cluster =
-  { cluster = `Reachable; registry = None; postgres_url = None; base_domain = None }
-;;
+let observed_cluster = { cluster = `Reachable; registry = None; base_domain = None }
 
 let verdict_of input observations =
   match List.assoc_opt input (evaluate observations) with
@@ -54,16 +52,16 @@ let test_a_cluster_that_cannot_be_looked_at_is_unknown () =
        { observed_cluster with cluster = `Unknown "kubectl is not installed" })
 ;;
 
-let test_a_missing_connection_is_a_named_unmet () =
+(* 2b: the database connection is no longer a substrate prerequisite an operator supplies
+   as an environment variable. The deploy delivers it from the target's binding, so this
+   surface reports it as unobservable rather than reading a copy that no longer exists. *)
+let test_a_database_the_deploy_delivers_is_unobservable () =
   check_verdict
-    "without POSTGRES_URL"
-    "Unmet: the deploy identity's environment has no POSTGRES_URL, so the workspace's \
-     runtime Secret cannot carry the key"
-    (verdict_of Postgres observed_cluster);
-  check_verdict
-    "with POSTGRES_URL"
-    "Established"
-    (verdict_of Postgres { observed_cluster with postgres_url = Some "postgres://db" })
+    "the database connection is unknown here, never Established or Unmet"
+    "UNKNOWN: the database connection is delivered by the deploy from the target's \
+     binding; this check reads the target surface, not whether the selected database \
+     accepts it"
+    (verdict_of Postgres observed_cluster)
 ;;
 
 let test_unobservable_inputs_are_never_satisfied () =
@@ -75,7 +73,7 @@ let test_unobservable_inputs_are_never_satisfied () =
            "%s is reported satisfied from the target surface, which cannot observe it"
            (name input)
        | Unmet _ | Unknown _ -> ())
-    [ Registry; Kafka; Observability; Domain ]
+    [ Registry; Kafka; Postgres; Observability; Domain ]
 ;;
 
 let test_an_unresolved_input_is_named () =
@@ -117,8 +115,8 @@ let%test "the contract (DEC-052): a cluster that cannot be looked at is UNKNOWN"
   test_a_cluster_that_cannot_be_looked_at_is_unknown ()
 ;;
 
-let%test "the contract (DEC-052): a missing connection is a named Unmet" =
-  test_a_missing_connection_is_a_named_unmet ()
+let%test "2b: the database connection the deploy delivers is UNKNOWN here" =
+  test_a_database_the_deploy_delivers_is_unobservable ()
 ;;
 
 let%test "the contract (DEC-052): unobservable inputs are never satisfied" =

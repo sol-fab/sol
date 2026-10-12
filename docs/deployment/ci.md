@@ -105,12 +105,15 @@ your-secret-tool get payment-api-key \
   | sol secret set "$SOL_TARGET" payments/charge_svc/PAYMENT_API_KEY --from-stdin
 ```
 
-Migration Jobs use a target-scoped platform input. Provision it from the same
-secret authority without placing its value in a command argument:
+Database access needs no CI step. A unit that declares `uses: [app_db]` reads the
+target's deploy-delivered `<target>-dml-creds` class Secret, and the migration
+Job reads `<target>-ddl-creds`; Sol does not accept an operator- or
+CI-supplied `POSTGRES_URL`. The only target-scoped platform inputs CI writes are
+the Kafka credentials a TLS contract Job needs, and only until #1344c binds them:
 
 ```bash
-your-secret-tool get production-postgres-url \
-  | sol secret set "$SOL_TARGET" @platform/POSTGRES_URL --from-stdin
+your-secret-tool get kafka-sasl-password \
+  | sol secret set "$SOL_TARGET" @platform/KAFKA_SASL_PASSWORD --from-stdin
 ```
 
 This writes only the target's `sol-secrets` objects used by internal Jobs. It

@@ -62,6 +62,7 @@ let svc_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_uses_target = None
   ; db_ca_target = None
   }
 ;;
@@ -96,6 +97,7 @@ let worker_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_uses_target = None
   ; db_ca_target = None
   }
 ;;
@@ -380,7 +382,9 @@ let test_apply_fails_closed_when_the_workload_secret_is_absent () =
         ~workspace:"myapp"
         ~release_id:release_id_of_test
         ~dry_run:false
-        svc_spec
+        (* 2b: `POSTGRES_URL` is no longer a workload default, so this spec declares the
+           required unit secret it is missing. The fail-closed check is unchanged. *)
+        { svc_spec with secrets = [ "SOL_API_KEY", "" ] }
     in
     (match outcome with
      | Error message ->
@@ -388,7 +392,7 @@ let test_apply_fails_closed_when_the_workload_secret_is_absent () =
          Windtrap.bool
          ~msg:"names the missing required key"
          true
-         (Sol_cli_string.contains ~needle:"POSTGRES_URL" message);
+         (Sol_cli_string.contains ~needle:"SOL_API_KEY" message);
        Windtrap.equal
          Windtrap.bool
          ~msg:"says deploy never writes values"

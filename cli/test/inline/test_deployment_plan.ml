@@ -306,6 +306,7 @@ let sample_plan () : Sol_cli_deployment_plan.t =
     ; called_by = []
     ; extra_labels = []
     ; progressive_delivery = None
+    ; db_uses_target = None
     ; db_ca_target = None
     }
   in
@@ -766,6 +767,7 @@ let make_worker_spec name domain =
   ; called_by = []
   ; extra_labels = []
   ; progressive_delivery = None
+  ; db_uses_target = None
   ; db_ca_target = None
   }
 ;;
@@ -2273,6 +2275,16 @@ let test_the_ca_mount_follows_the_sol_provisioned_resource () =
         ~msg:"a consumer of the Sol-provisioned database mounts its CA"
         true
         (mounts charge && at_path charge);
+      (* 2b: and reads POSTGRES_URL from the target's DML class Secret. *)
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"a consumer of the Sol-provisioned database reads the DML class Secret"
+        true
+        (Sol_cli_string.contains
+           ~needle:
+             ("name: " ^ Sol_cli_database_setup_render.dml_creds_name "prod-aws-us-east-1")
+           charge
+         && Sol_cli_string.contains ~needle:"key: POSTGRES_URL" charge);
       let legacy = workload_yaml (spec "legacy_svc") in
       Windtrap.equal
         Windtrap.bool
@@ -2289,4 +2301,195 @@ let test_the_ca_mount_follows_the_sol_provisioned_resource () =
 
 let%test "2d: the CA mount follows the resource Sol provisions, not the resource type" =
   test_the_ca_mount_follows_the_sol_provisioned_resource ()
+;;
+
+(* 2b: the reader routes `POSTGRES_URL` on the capability — the unit consumes the target's
+   postgres resource — not on the key name and not on the database's ownership. A unit that
+   merely declares `POSTGRES_URL` keeps it unit-scoped, and the CA mount stays Sol-only. *)
+let test_the_reader_routes_on_the_capability_not_the_key_name () =
+  let tmp = Filename.temp_dir "sol_test_db_reader" "" in
+  with_cwd tmp (fun () ->
+    let unit name = worker_unit ~domain:"payments" ~name in
+    let service name uses =
+      { Sol_cli_config.name
+      ; typ = None
+      ; path = None
+      ; uses
+      ; scale_min = None
+      ; scale_max = None
+      ; language = None
+      ; omit = false
+      }
+    in
+    let resource name =
+      { Sol_cli_config.name
+      ; typ = Some "postgres"
+      ; partition_key = None
+      ; sort_key = None
+      ; indexes = []
+      ; size = None
+      ; omit = false
+      ; binding = None
+      }
+    in
+    let declared =
+      Sol_cli_config.declared_of_config
+        { Sol_cli_config.project = Some "ws"
+        ; target = Result.get_ok (Sol_cli_config.parse_target "prod/aws/us-east-1")
+        ; resources = [ resource "app_db" ]
+        ; services =
+            [ service "charge_svc" [ "app_db" ]
+            ; service "declared_only" []
+            ; service "plain_svc" []
+            ]
+        }
+    in
+    let units = [ unit "charge_svc"; unit "declared_only"; unit "plain_svc" ] in
+    List.iter
+      (fun (s : Sol_cli_manifest.service) ->
+         mkdirs s.dir;
+         let body =
+           if String.equal s.name "declared_only"
+           then "[infra.env]\nsecrets = [\"POSTGRES_URL\"]\n"
+           else ""
+         in
+         write_file (Filename.concat s.dir "sol.toml") body)
+      units;
+    let plan ~provisioned_database =
+      match
+        Sol_cli_deployment_plan.of_services_result
+          ~workspace:"myworkspace"
+          ~env:deploy_env
+          ~facts:(facts ())
+          ~declared
+          ~target:"prod-aws-us-east-1"
+          ~target_database:"app_db"
+          ?provisioned_database
+          units
+      with
+      | Error err -> Windtrap.fail (Sol_cli_deployment_plan.plan_error_to_string err)
+      | Ok plan -> plan
+    in
+    let workload plan name =
+      let spec =
+        List.find
+          (fun (s : Sol_cli_deployment_plan.service_spec) -> s.source_name = name)
+          plan.Sol_cli_deployment_plan.services
+      in
+      match
+        Sol_cli_deployment_render.render_spec
+          ~workspace:"myworkspace"
+          ~release_id:release_id_of_test
+          spec
+      with
+      | Ok bundle -> bundle.Sol_cli_manifest.workload_yaml
+      | Error e -> Windtrap.fail ("render_spec unexpectedly failed: " ^ e)
+    in
+    let has needle text = Sol_cli_string.contains ~needle text in
+    let dml = Sol_cli_database_setup_render.dml_creds_name "prod-aws-us-east-1" in
+    let ca = Sol_cli_database_setup_render.ca_configmap_name "prod-aws-us-east-1" in
+    (* Sol provisions the target's database: the consumer reads the DML class Secret and
+       mounts the CA Sol publishes. *)
+    let sol = plan ~provisioned_database:(Some "app_db") in
+    let charge = workload sol "charge_svc" in
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"a Sol-provisioned consumer reads the DML class Secret"
+      true
+      (has ("name: " ^ dml) charge && has "key: POSTGRES_URL" charge);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"and mounts the Sol CA ConfigMap"
+      true
+      (has ("name: " ^ ca) charge);
+    let declared_only = workload sol "declared_only" in
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"a unit that merely declares POSTGRES_URL keeps it unit-scoped"
+      true
+      (has "name: declared-only-secrets" declared_only
+       && has "key: POSTGRES_URL" declared_only);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"and reads neither class Secret nor CA"
+      false
+      (has ("name: " ^ dml) declared_only || has ("name: " ^ ca) declared_only);
+    let plain = workload sol "plain_svc" in
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"a unit that consumes no database reads neither"
+      false
+      (has "key: POSTGRES_URL" plain
+       || has ("name: " ^ dml) plain
+       || has ("name: " ^ ca) plain);
+    (* The same target with the database bound externally: the reader is ownership-neutral,
+       but Sol publishes no CA ConfigMap for a database it does not own (2d). *)
+    let external_plan = plan ~provisioned_database:None in
+    let external_charge = workload external_plan "charge_svc" in
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"an externally bound consumer reads the same DML class Secret"
+      true
+      (has ("name: " ^ dml) external_charge && has "key: POSTGRES_URL" external_charge);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"and mounts no CA the deploy does not publish"
+      false
+      (has ("name: " ^ ca) external_charge))
+;;
+
+let%test "2b: the reader routes on the resource, not the key name or the owner" =
+  test_the_reader_routes_on_the_capability_not_the_key_name ()
+;;
+
+(* 2b: *which* postgres resource is the target's is selected in one place
+   (`Sol_cli_resource_binding.target_database`); the plan test above injects the result and
+   would pass even if the selection picked wrong. One externally bound postgres is the
+   target's database; two are ambiguous, so no consumer's `POSTGRES_URL` routes and each
+   unit keeps its own. *)
+let test_target_database_selects_one_external_and_refuses_two () =
+  let binding ?(ownership = Sol_cli_config.Ownership_sol) resource =
+    { Sol_cli_resource_binding.resource
+    ; typ = "postgres"
+    ; ownership
+    ; store = None
+    ; keys = []
+    ; connection = []
+    ; credentials = []
+    }
+  in
+  let selected bindings =
+    Sol_cli_resource_binding.target_database bindings
+    |> Option.map (fun (b : Sol_cli_resource_binding.t) -> b.resource)
+  in
+  Windtrap.equal
+    (Windtrap.option Windtrap.string)
+    ~msg:"one externally bound postgres is the target's database"
+    (Some "legacy_db")
+    (selected [ binding ~ownership:Sol_cli_config.Ownership_external "legacy_db" ]);
+  Windtrap.equal
+    (Windtrap.option Windtrap.string)
+    ~msg:"a Sol-provisioned database is authoritative beside an external one"
+    (Some "app_db")
+    (selected
+       [ binding "app_db"
+       ; binding ~ownership:Sol_cli_config.Ownership_external "legacy_db"
+       ]);
+  Windtrap.equal
+    (Windtrap.option Windtrap.string)
+    ~msg:"two externally bound postgres resources are ambiguous, so nothing routes"
+    None
+    (selected
+       [ binding ~ownership:Sol_cli_config.Ownership_external "first_db"
+       ; binding ~ownership:Sol_cli_config.Ownership_external "second_db"
+       ]);
+  Windtrap.equal
+    (Windtrap.option Windtrap.string)
+    ~msg:"and no postgres resource routes nothing"
+    None
+    (selected [])
+;;
+
+let%test "2b: the target database is the provisioned one, else exactly one external" =
+  test_target_database_selects_one_external_and_refuses_two ()
 ;;

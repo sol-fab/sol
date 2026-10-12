@@ -6,5 +6,8 @@
 # memory   = "256Mi"
 
 [infra.env]
+# This unit consumes the workspace's `app_db` resource in sol.yml, so the deploy
+# delivers its database connection from the target's DML class Secret — no
+# POSTGRES_URL declaration or environment mapping.
 # secrets = []
 # config  = {}

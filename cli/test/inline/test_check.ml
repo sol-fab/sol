@@ -579,6 +579,11 @@ let test_check_requires_and_accepts_explicit_secret_authorities () =
       ignore (Sol_cli_fs.mkdir_p (Filename.dirname path));
       Result.get_ok (Sol_cli_fs.write_atomic path body)
     in
+    (* 2b: POSTGRES_URL is supplied by the database binding, not an authority mapping, so
+       these units declare the application secret whose authority the check must demand. *)
+    let declare_api_key rel = write rel "[infra.env]\nsecrets = [\"SOL_API_KEY\"]\n" in
+    declare_api_key "app/payments/charge_svc/sol.toml";
+    declare_api_key "app/comms/notify_worker/sol.toml";
     write
       "sol/environments.yml"
       "prod:\n  targets:\n    aws/us-east-1:\n      secrets: {}\n";
@@ -588,7 +593,7 @@ let test_check_requires_and_accepts_explicit_secret_authorities () =
       Windtrap.bool
       ~msg:"check identifies the exact unit and missing mapping"
       true
-      (Sol_cli_string.contains ~needle:"payments/charge_svc/POSTGRES_URL" stderr);
+      (Sol_cli_string.contains ~needle:"payments/charge_svc/SOL_API_KEY" stderr);
     write
       "sol/environments.yml"
       "prod:\n\

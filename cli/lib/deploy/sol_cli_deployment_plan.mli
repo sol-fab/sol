@@ -74,8 +74,12 @@ type service_spec =
   ; called_by : service_call list
   ; extra_labels : (string * string) list
   ; progressive_delivery : Sol_cli_toml.progressive_delivery option
-  ; (* 2d: the target whose Sol-provisioned database this unit consumes, if any. The
-       renderer derives the CA ConfigMap's name from it; the plan carries no object name. *)
+  ; (* 2b: the target whose postgres resource this unit consumes, whatever its ownership.
+       Routes the unit's `POSTGRES_URL` to `<target>-dml-creds`; see the implementation
+       comment. [None] when the unit consumes no database. *)
+    db_uses_target : string option
+  ; (* 2d: the target whose *Sol-provisioned* database this unit consumes, if any; gates the
+       CA ConfigMap mount, which exists only where Sol's setup step writes it. *)
     db_ca_target : string option
   }
 
@@ -240,6 +244,7 @@ val of_services_result
   -> ?image_refs:(string * string) list
   -> ?inventory:Sol_cli_manifest.service list
   -> ?target:string
+  -> ?target_database:string
   -> ?provisioned_database:string
   -> Sol_cli_manifest.service list
   -> (t, plan_error) result

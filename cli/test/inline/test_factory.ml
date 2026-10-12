@@ -61,6 +61,7 @@ let test_run_without_cmdliner () =
           ; requested_scope = Some "payments"
           ; declared = None
           ; target = None
+          ; target_database = None
           ; provisioned_database = None
           }
         ~mode:(Sol_cli_executor.Emit_to emit_dir)

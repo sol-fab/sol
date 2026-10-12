@@ -129,12 +129,16 @@ let required_keys (target : Sol_cli_config.target) (toml : Sol_cli_toml.t) =
     toml.secret_keys
 ;;
 
+(* 2b: `POSTGRES_URL` is no longer a platform Job input. The database connection is
+   delivered by the deploy — `<target>-dml-creds` to a consumer unit and `<target>-ddl-creds`
+   to the migration Job — so there is no operator value to set or delete. Only the Kafka
+   credentials remain platform inputs until #1344c binds them. *)
 let platform_keys (target : Sol_cli_config.target) =
   match
     Sol_cli_manifest.kafka_transport (Sol_cli_profile.platform_shape target.profile)
   with
-  | Sol_cli_manifest.Plaintext -> [ "POSTGRES_URL" ]
-  | Sasl_ssl -> [ "POSTGRES_URL"; "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ]
+  | Sol_cli_manifest.Plaintext -> []
+  | Sasl_ssl -> [ "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ]
 ;;
 
 let target_namespaces ~config ~facts ~workspace =
@@ -147,7 +151,14 @@ let target_namespaces ~config ~facts ~workspace =
 ;;
 
 let check_platform_key config key =
-  if List.mem key (platform_keys config.Sol_cli_config.target)
+  if String.equal key "POSTGRES_URL"
+  then
+    Error
+      "POSTGRES_URL is not a platform Job input: a unit that consumes the target's \
+       database reads `<target>-dml-creds` and the migration Job reads \
+       `<target>-ddl-creds`, both delivered by the deploy. There is no operator value to \
+       set."
+  else if List.mem key (platform_keys config.Sol_cli_config.target)
   then Ok ()
   else Error (Printf.sprintf "%s is not required by this target's Sol platform Jobs" key)
 ;;
@@ -531,9 +542,11 @@ let set_cmd =
         "ADDRESS is either DOMAIN/UNIT/KEY for one application unit or @platform/KEY for \
          a Sol Job input."
     ; `P
-        "Platform keys are limited to POSTGRES_URL and, for TLS targets, \
-         KAFKA_SASL_PASSWORD and KAFKA_SSL_CA_CERT. Platform values are written only to \
-         sol-secrets objects in active target namespaces."
+        "Platform keys are the Kafka credentials of a TLS target, KAFKA_SASL_PASSWORD \
+         and KAFKA_SSL_CA_CERT. Platform values are written only to sol-secrets objects \
+         in active target namespaces. A database consumer reads the deploy-delivered \
+         `<target>-dml-creds` / `<target>-ddl-creds` class Secrets instead, so \
+         POSTGRES_URL is not a platform key."
     ]
   in
   Cmd.v

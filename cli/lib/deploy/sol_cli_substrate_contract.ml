@@ -28,7 +28,8 @@ let statement = function
   | Kafka ->
     "broker addresses and a schema-registry URL the workloads reach, with \
      KAFKA_SECURITY_PROTOCOL set (SEC-007)"
-  | Postgres -> "a POSTGRES_URL the workspace's runtime Secret carries"
+  | Postgres ->
+    "a database connection the deploy delivers to its consumers from the target's binding"
   | Observability -> "Loki and Pushgateway endpoints the workloads reach"
   | Domain ->
     "a certificate Issuer and a DNS entry when a service declares an ingress host"
@@ -43,7 +44,6 @@ type cluster =
 type observations =
   { cluster : cluster
   ; registry : string option
-  ; postgres_url : string option
   ; base_domain : string option
   }
 
@@ -68,12 +68,9 @@ let evaluate (observations : observations) : (input * verdict) list =
     | Some prefix -> Unknown (Printf.sprintf "the prefix is %s; %s" prefix pullability)
   in
   let postgres =
-    match observations.postgres_url with
-    | Some _ -> Established
-    | None ->
-      Unmet
-        "the deploy identity's environment has no POSTGRES_URL, so the workspace's \
-         runtime Secret cannot carry the key"
+    Unknown
+      "the database connection is delivered by the deploy from the target's binding; \
+       this check reads the target surface, not whether the selected database accepts it"
   in
   let domain =
     match observations.base_domain with
