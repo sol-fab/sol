@@ -857,6 +857,14 @@ has "the supplied keys are recorded without their values" \
 has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
   "database_delivery: qual-gcp-us-central1-ddl-creds (migration Job), qual-gcp-us-central1-dml-creds@pluto-payments (unit consumer)" \
   "$TMP/app-ok.logs/prerequisites.txt"
+# A profile-less deploy fires neither gate, so this row scopes them out and names the bug
+# that must make them fire on any deploy (#1403) rather than claiming them here.
+has "the secret-stop observation is scoped out, naming the gating bug" \
+  "scoped_out: \"Sol refuses absent operator secrets\" (a profile-less deploy has no required-secret stop; #1403)" \
+  "$TMP/app-ok.logs/prerequisites.txt"
+has "and the migration-gate observation too" \
+  "scoped_out: \"A deploy refuses to move workloads against an unapplied migration\" (a profile-less deploy has no migration gate; #1403)" \
+  "$TMP/app-ok.logs/prerequisites.txt"
 has "the run identity records the bundle version" \
   "sol_version: $VERSION" "$TMP/app-ok.logs/sol-identity.txt"
 has "and the bundle's digest-pinned migration runner" \
