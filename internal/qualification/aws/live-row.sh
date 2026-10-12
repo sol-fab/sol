@@ -40,6 +40,11 @@ STATE_BUCKET="${STATE_BUCKET:-sol-qual5-$ACCOUNT-tfstate}"
 LOCK_TABLE="${LOCK_TABLE:-sol-qual5-tflock}"
 BASE_DOMAIN="${BASE_DOMAIN:-qual-aws.sol-fab.dev}"
 ECR_REGISTRY="${ECR_REGISTRY:-$ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com}"
+# The in-cluster database setup step (ADR 0007) needs a digest-pinned image. It is public,
+# so the run pins the same digest the offline lifecycle test uses; a Sol-provisioned target's
+# deploy refuses to reach the consumers without it (issue #1402).
+SOL_SETUP_POSTGRES_IMAGE="${SOL_SETUP_POSTGRES_IMAGE:-postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d}"
+export SOL_SETUP_POSTGRES_IMAGE
 STATE_KEY="$LEDGER_PREFIX/$TARGET/cloud.tfstate"
 WORKSPACE_NAME="${WORKSPACE_NAME:-$(basename "$WORKSPACE")}"
 RETENTION="${RETENTION:-$(sed -n 's/^ *destroy_retention: *//p' "$TARGET_FILE" 2>/dev/null | head -1)}"
@@ -89,7 +94,7 @@ source "$ROOT/internal/qualification/candidate-binding.sh"
 source "$ROOT/internal/qualification/attempt.sh"
 
 case "${1:-}" in
-  cloud | app | destroy)
+  prepare | cloud | app | destroy)
     sol_under_test_resolve
     ;;
 esac
@@ -98,7 +103,7 @@ usage() {
   cat <<'USAGE'
 live-row.sh — the AWS regression row: the application contract GCP Attempt 28 established
 
-usage: live-row.sh PHASE      PHASE in: cloud | transport | app | destroy | verify
+usage: live-row.sh PHASE      PHASE in: prepare | cloud | transport | app | destroy | verify
 
 required
   ATTEMPT           a unique identity for this disposable run; the target, state key and
@@ -186,7 +191,15 @@ run() {
 bootstrap_deploy() {
   local name="$1"
   say "$name"
-  local command="cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' --image-tag '$APP_TAG'"
+  # A profiled target's preflight refuses a mutable tag, so the deploy names the digests
+  # `prepare` published. A cold target has none to inherit (issue #1408).
+  local image_ref_args
+  image_ref_args="$(app_image_ref_args)"
+  if [ -z "$image_ref_args" ]; then
+    say "no published image digests for $TARGET; run live-row.sh prepare before this phase"
+    return 1
+  fi
+  local command="cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args"
   if command -v script >/dev/null 2>&1; then
     printf 'y\n' | timeout "$PHASE_TIMEOUT" script -qec "$command" /dev/null \
       >"$LOG_DIR/$name.log" 2>&1
@@ -557,6 +570,57 @@ app_publish_images() {
   done
 }
 
+# The digests this run pins, as `sol deploy --image-ref` arguments. A profiled target's
+# preflight refuses a mutable tag, and on a cold target the digests cannot exist before the
+# ECR repositories do; `prepare` publishes them before `cloud`, and every later deploy names
+# them (the cold-target ordering, issue #1408).
+app_image_ref_args() {
+  local ref args=""
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    args="$args --image-ref $(printf '%q' "$ref")"
+  done <"$LOG_DIR/app-image-refs.txt"
+  printf '%s' "$args"
+}
+
+# The repositories the run publishes into. The cluster root creates them during a warm path's
+# `cloud`; `prepare` runs before that, so this stands in for the operator who creates them.
+ecr_ensure_repositories() {
+  local unit name
+  for unit in $APP_UNITS; do
+    name="pluto/$(k8s_name "$unit")"
+    if aws ecr describe-repositories --repository-names "$name" >/dev/null 2>&1; then
+      continue
+    fi
+    if ! run "ecr-create-$unit" aws ecr create-repository --repository-name "$name" \
+      >/dev/null 2>&1; then
+      say "could not create the ECR repository $name"
+      return 1
+    fi
+    say "  ecr repository: $name"
+  done
+}
+
+# Publish once per attempt: `app` reuses the digests the cloud deploy was given instead of
+# moving the target to new ones.
+app_ensure_images() {
+  if [ -s "$LOG_DIR/app-image-refs.txt" ]; then
+    say "app images were published for this attempt; reusing their digests"
+    return 0
+  fi
+  app_publish_images
+}
+
+# `prepare` runs before `cloud`: a profiled target's first deploy names immutable digests, and
+# on a cold target they cannot exist until this run has created its ECR repositories and
+# published. It touches no provider state, so `cloud` still sees a fresh specimen.
+phase_prepare() {
+  require_target_terraform_var_file || return 1
+  ecr_ensure_repositories || return 1
+  app_ensure_images || return 1
+  say "the run images are published; cloud deploys with their digests"
+}
+
 app_secret_failure() {
   grep -qF 'does not hold the required non-empty secret key(s)' "$1" 2>/dev/null
 }
@@ -668,7 +732,7 @@ phase_app() {
   require_target_terraform_var_file || return 1
   ensure_contexts || return 1
   verify_identity_boundary || return 1
-  app_publish_images || return 1
+  app_ensure_images || return 1
   say "runner: release $SOL_BUNDLE_VERSION names $SOL_RUNNER_IMAGE; the publisher publishes nothing"
   capture_state
   local url
@@ -772,6 +836,15 @@ case "${1:-}" in
     say "sol-under-test: release $SOL_BUNDLE_VERSION at $SOL_INSTALL"
     say "  migration runner: $SOL_RUNNER_IMAGE"
     ;;
+  prepare)
+    # `prepare` creates no provider state, so it records no specimen: the specimen belongs to
+    # the first phase that provisions one. `cloud` therefore still sees a fresh target.
+    attempt_begin 0
+    mkdir -p "$LOG_DIR/state"
+    sol_under_test_record_identity "$LOG_DIR"
+    say "sol-under-test: release $SOL_BUNDLE_VERSION at $SOL_INSTALL"
+    say "  migration runner: $SOL_RUNNER_IMAGE"
+    ;;
   app | destroy)
     attempt_begin 0
     mkdir -p "$LOG_DIR/state"
@@ -783,6 +856,7 @@ esac
 
 case "${1:-}" in
   cloud) phase_cloud ;;
+  prepare) phase_prepare ;;
   transport) phase_transport ;;
   app) phase_app ;;
   destroy) phase_destroy ;;
