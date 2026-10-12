@@ -507,6 +507,28 @@ exit 0
 STUB
 chmod +x "$TMP/bin/terraform"
 
+# `cloud` needs the run's digests published first. These scenarios are about the phases, not
+# the publishing, so they seed the digests directly; the prepare scenario exercises the real
+# `prepare` end to end. SKIP_PREPARE=1 leaves them absent for the refusal scenario.
+stub_prepare() {
+  local unit digest
+  mkdir -p "$LOG_DIR"
+  # The attempt identity a real prepare writes; without it the cloud run refuses a log dir
+  # that holds evidence for no attempt.
+  {
+    printf 'attempt=%s\n' "$ATTEMPT"
+    printf 'row=%s\n' "qualreg"
+    printf 'target=%s\n' "qualreg/aws/us-east-1"
+    printf 'state_key=%s\n' "sol/qualreg/aws/us-east-1/cloud.tfstate"
+  } >"$LOG_DIR/attempt.txt"
+  : >"$LOG_DIR/app-image-refs.txt"
+  for unit in checkout_svc charge_svc notify_worker orders_svc fulfilment_worker; do
+    digest="$(printf '%s' "$unit" | tr '_' '-')"
+    printf '%s=%s/pluto/%s@sha256:%s\n' \
+      "$unit" "$ECR" "$digest" "$(printf 'b%.0s' $(seq 1 64))" >>"$LOG_DIR/app-image-refs.txt"
+  done
+}
+
 run_row() {
   local name="$1"
   shift
@@ -553,8 +575,11 @@ run_phase() {
   : >"$TRANSPORT_LOG"
   : >"$ESTABLISH_LOG"
   : >"$TERRAFORM_LOG"
-  rm -rf "$LOG_DIR"
+  # `prepare` and `cloud` share one evidence directory: the digests `prepare` publishes are
+  # what `cloud`'s first deploy names. KEEP_LOG_DIR keeps it across the two invocations.
+  [ "${KEEP_LOG_DIR:-0}" = 1 ] || rm -rf "$LOG_DIR"
   rm -f "$TMP/credential-supplied"
+  if [ "$phase" = cloud ] && [ "${SKIP_PREPARE:-0}" != 1 ]; then stub_prepare "$name"; fi
   if [ -n "${PRESEED_FOREIGN_ATTEMPT:-}" ]; then
     mkdir -p "$LOG_DIR"
     printf 'attempt=%s\n' "$PRESEED_FOREIGN_ATTEMPT" >"$LOG_DIR/attempt.txt"
@@ -617,7 +642,8 @@ run_phase_sigterm() {
   : >"$TRANSPORT_LOG"
   : >"$ESTABLISH_LOG"
   : >"$TERRAFORM_LOG"
-  rm -rf "$LOG_DIR"
+  [ "${KEEP_LOG_DIR:-0}" = 1 ] || rm -rf "$LOG_DIR"
+  if [ "$phase" = cloud ] && [ "${SKIP_PREPARE:-0}" != 1 ]; then stub_prepare "$name"; fi
   env PATH="$TMP/bin:$PATH" \
     WORKSPACE="$WORKSPACE" TARGET=qualreg/aws/us-east-1 ECR_REGISTRY="$ECR" \
     CLUSTER=test-cluster DEPLOY_ROLE_ARN=arn:aws:iam::1:role/deploy \
@@ -654,13 +680,14 @@ run_transaction() {
 }
 
 printf '\nscenario: installation failure stops cloud lifecycle at the supported interface\n'
-run_phase bootstrap-refused cloud STUB_INSTALL_REFUSED=1
+KEEP_LOG_DIR=1 run_phase bootstrap-refused prepare
+KEEP_LOG_DIR=1 run_phase bootstrap-refused cloud STUB_INSTALL_REFUSED=1
 refused bootstrap-refused "an unresolved installation refuses the cloud phase"
 has "the whole-target preview runs first" \
   "sol plan qualreg/aws/us-east-1 --var-file $ROOT/internal/qualification/aws/qual-aws-row.tfvars" \
   "$TMP/bootstrap-refused.sol"
 has "and Sol owns durable reconciliation through the whole-target deploy" \
-  "sol deploy qualreg/aws/us-east-1 --registry $ECR --image-tag row-" "$TMP/bootstrap-refused.sol"
+  "sol deploy qualreg/aws/us-east-1 --registry $ECR --image-ref checkout_svc=$ECR/pluto/checkout-svc@sha256:" "$TMP/bootstrap-refused.sol"
 lacks "no removed cloud subcommand is invoked" "cloud bootstrap" "$TMP/bootstrap-refused.sol"
 lacks "and neither is the removed partial apply" "cloud apply" "$TMP/bootstrap-refused.sol"
 [ ! -s "$TMP/bootstrap-refused.terraform" ] && ok "no direct Terraform operation runs" \
@@ -843,26 +870,44 @@ has "and the refusal names the transport" \
   "the qualification transport did not open" "$TMP/txnoopen.out"
 
 printf '\nscenario: the cloud phase previews with the row var file and deploys the whole target\n'
-run_phase cloudrun cloud
+KEEP_LOG_DIR=1 run_phase cloudrun prepare
+KEEP_LOG_DIR=1 run_phase cloudrun cloud
 is "exit 0" "$(cat "$TMP/cloudrun.rc")" "0"
 has "the preview carries the row's var file" \
   "plan qualreg/aws/us-east-1 --var-file $ROOT/internal/qualification/aws/qual-aws-row.tfvars" \
   "$TMP/cloudrun.sol"
 has "and the whole-target deploy reconciles the environment by tag" \
-  "deploy qualreg/aws/us-east-1 --registry $ECR --image-tag row-" "$TMP/cloudrun.sol"
+  "deploy qualreg/aws/us-east-1 --registry $ECR --image-ref checkout_svc=$ECR/pluto/checkout-svc@sha256:" "$TMP/cloudrun.sol"
 lacks "the removed partial cloud apply is never invoked" "cloud apply" "$TMP/cloudrun.sol"
 
+printf '\nscenario: cloud refuses when nothing has been published for it\n'
+SKIP_PREPARE=1 run_phase noprep cloud
+refused noprep "a cold target's first deploy refuses without published digests"
+has "and names the prepare step and why" \
+  "run live-row.sh prepare before this phase" "$TMP/noprep.out"
+
+printf '\nscenario: prepare publishes the run digests before the first deploy\n'
+KEEP_LOG_DIR=1 run_phase prep prepare
+is "exit 0" "$(cat "$TMP/prep.rc")" "0"
+has "the operator stand-in makes sure each repository exists" \
+  "ecr describe-repositories --repository-names pluto/charge-svc" "$TMP/prep.aws"
+has "and the images are pushed" "docker push $ECR/pluto/charge-svc:row-" "$TMP/prep.docker"
+has "with their digests recorded for the deploys that name them" \
+  "charge_svc=$ECR/pluto/charge-svc@sha256:" "$TMP/prep.logs/app-image-refs.txt"
+
 printf '\nscenario: a cold target records the plan skip instead of failing on the missing release\n'
-run_phase coldplan cloud STUB_COLD_PLAN=1
+KEEP_LOG_DIR=1 run_phase coldplan prepare
+KEEP_LOG_DIR=1 run_phase coldplan cloud STUB_COLD_PLAN=1
 is "exit 0" "$(cat "$TMP/coldplan.rc")" "0"
 has "the skip names the fresh target and the ordering follow-up" \
   "cloud-plan: skipped (fresh target: no reachable release to inherit images, no digests to supply; harness ordering follow-up: #1408)" \
   "$TMP/coldplan.logs/prerequisites.txt"
 has "and the phase still deploys the whole target" \
-  "deploy qualreg/aws/us-east-1 --registry $ECR --image-tag row-" "$TMP/coldplan.sol"
+  "deploy qualreg/aws/us-east-1 --registry $ECR --image-ref checkout_svc=$ECR/pluto/checkout-svc@sha256:" "$TMP/coldplan.sol"
 
 printf '\nscenario: the harness supplies the platform credential the install names, then resumes\n'
-run_phase credential-boundary cloud STUB_APPLY_CREDENTIAL_MISSING=1
+KEEP_LOG_DIR=1 run_phase credential-boundary prepare
+KEEP_LOG_DIR=1 run_phase credential-boundary cloud STUB_APPLY_CREDENTIAL_MISSING=1
 is "exit 0" "$(cat "$TMP/credential-boundary.rc")" "0"
 has "the harness creates the documented Secret in the namespace the install named" \
   "create secret generic redpanda-users -n redpanda" "$TMP/credential-boundary.kubectl"
@@ -883,7 +928,8 @@ has "and that this run generated it" "platform_credential_source: generated-for-
 lacks "and never records the value" "SCRAM-SHA-256" "$TMP/credential-boundary.logs/prerequisites.txt"
 
 printf '\nscenario: a platform credential the harness cannot supply fails the run\n'
-run_phase credential-refused cloud STUB_APPLY_CREDENTIAL_MISSING=1 STUB_SECRET_CREATE_FAILS=1
+KEEP_LOG_DIR=1 run_phase credential-refused prepare
+KEEP_LOG_DIR=1 run_phase credential-refused cloud STUB_APPLY_CREDENTIAL_MISSING=1 STUB_SECRET_CREATE_FAILS=1
 refused credential-refused "the install does not proceed without the prerequisite the harness stands in for"
 has "and the failure names the input the harness could not create" "redpanda/redpanda-users" \
   "$TMP/credential-refused.out"
@@ -945,6 +991,7 @@ has "the harness writes its own narrative" "destroy returned success" \
   "$TMP/destroyclosed.logs/harness.log"
 
 printf '\nscenario: SIGTERM during cloud tears down and records the independent inventory\n'
+KEEP_LOG_DIR=1 run_phase cloudterm prepare
 run_phase_sigterm cloudterm TERM cloud STUB_SOL_SLEEP=2
 if [ "$(cat "$TMP/cloudterm.rc")" = "0" ]; then
   no "a terminated cloud run exits non-zero" "non-zero" "0"
@@ -956,7 +1003,7 @@ exists "the independent inventory is captured" "$TMP/cloudterm.logs/aws-inventor
 has "the harness records the signal" "received SIGTERM" "$TMP/cloudterm.logs/harness.log"
 
 printf '\nscenario: a repeated invocation cannot reuse an occupied disposable target\n'
-run_phase occupied cloud STUB_STATE_PRESENT=1
+SKIP_PREPARE=1 run_phase occupied cloud STUB_STATE_PRESENT=1
 refused occupied "an occupied state key is refused as a fresh target"
 has "the refusal names the occupied state key" "already exists" "$TMP/occupied.out"
 lacks "nothing is applied" "deploy qualreg/aws/us-east-1" "$TMP/occupied.sol"
@@ -968,12 +1015,14 @@ has "the refusal names the attempt the directory belongs to" "another-attempt" "
 lacks "nothing is applied" "deploy qualreg/aws/us-east-1" "$TMP/reused-dir.sol"
 
 printf '\nscenario: a credential for a replaced same-name cluster is refused\n'
-run_phase stale-endpoint cloud STUB_KUBECONFIG_STALE=1
+KEEP_LOG_DIR=1 run_phase stale-endpoint prepare
+KEEP_LOG_DIR=1 run_phase stale-endpoint cloud STUB_KUBECONFIG_STALE=1
 refused stale-endpoint "a credential for a replaced cluster is refused"
 has "the refusal names the endpoint binding" "not this cluster's current" "$TMP/stale-endpoint.out"
 
 printf '\nscenario: the run identity reaches the provider inventory\n'
-run_phase identitycloud cloud
+KEEP_LOG_DIR=1 run_phase identitycloud prepare
+KEEP_LOG_DIR=1 run_phase identitycloud cloud
 has "the fresh attempt records its identity" "state_key=sol/qualreg/aws/us-east-1/cloud.tfstate" \
   "$TMP/identitycloud.logs/attempt.txt"
 run_phase identitydestroy destroy
