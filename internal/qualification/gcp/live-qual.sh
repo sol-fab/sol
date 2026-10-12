@@ -1074,6 +1074,19 @@ app_secret_set() {
 # POSTGRES_URL.
 app_supply_secrets() {
   local password ca
+  # A profile-less target's platform publishes no broker credential Secret: its Kafka
+  # transport is the platform's default (plaintext), and the units require no Kafka keys
+  # (#1403). There is nothing to supply; record that instead of refusing the run.
+  if ! kubectl get secret redpanda-users -n redpanda >/dev/null 2>&1; then
+    {
+      printf 'platform_secret_keys: none (a profile-less target publishes no broker credential Secret; #1403)\n'
+      printf 'secret_values: never recorded\n'
+      printf 'database_delivery: delivered by the deploy from the target binding; no operator copy\n'
+      printf 'scoped_out: "the platform'"'"'s authenticated Kafka transport" (profile-derived; #1403)\n'
+    } >>"$LOG_DIR/prerequisites.txt"
+    say "app: this profile-less target publishes no broker credential, so there are no platform Kafka secrets to supply; the units require none"
+    return 0
+  fi
   if ! password="$(app_read_platform_password)"; then
     say "app: could not establish KAFKA_SASL_PASSWORD: set it in the environment, or ensure redpanda/redpanda-users exists"
     return 1

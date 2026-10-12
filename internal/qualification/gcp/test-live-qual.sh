@@ -394,6 +394,9 @@ case "$*" in
     printf 'secret/redpanda-users created\n'
     exit 0 ;;
   "get secret redpanda-users"*)
+    # A profile-less target's platform publishes no broker credential; the app phase must
+    # record that rather than fail (the units require no Kafka keys).
+    [ "${STUB_NO_BROKER_CRED:-0}" = "1" ] && exit 1
     printf '%s' 'sol-workloads:testpass:SCRAM-SHA-256' | base64
     exit 0 ;;
   "get secret redpanda-default-cert"*)
@@ -811,8 +814,20 @@ export DOCKER_LOG="$TMP/app-docker.argv"
 export CURL_LOG="$TMP/app-curl.argv"
 : >"$CURL_LOG"
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ok app
-mv "$TMP/bin/curl.delegation" "$TMP/bin/curl"
 is "the app phase exits 0 when every step succeeds" "$(cat "$TMP/app-ok.rc")" "0"
+# A profile-less target's platform publishes no broker credential and the units require no
+# Kafka keys, so there is nothing to supply; the phase records that and proceeds. Runs before
+# the delegation curl stub replaces the transaction one.
+printf '\nscenario: a profile-less target with no broker credential supplies nothing\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_NO_BROKER_CRED=1 run_case app-nobroker app
+is "the app phase exits 0 without a broker credential" "$(cat "$TMP/app-nobroker.rc")" "0"
+has "and records that there is nothing to supply" \
+  "platform_secret_keys: none (a profile-less target publishes no broker credential Secret; #1403)" \
+  "$TMP/app-nobroker.logs/prerequisites.txt"
+has "scoping out the authenticated transport it does not have" \
+  "scoped_out: \"the platform's authenticated Kafka transport\" (profile-derived; #1403)" \
+  "$TMP/app-nobroker.logs/prerequisites.txt"
+mv "$TMP/bin/curl.delegation" "$TMP/bin/curl"
 has "it builds each image from that service's own Dockerfile" \
   "docker build -f $TMP/app-ok.logs/app-build-context/app/payments/orders_svc/Dockerfile" "$DOCKER_LOG"
 has "including the TypeScript namespace's service from its own Dockerfile" \
