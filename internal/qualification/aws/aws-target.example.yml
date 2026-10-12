@@ -38,6 +38,37 @@ qual:
 
       destroy_retention: none
 
+      # This target selects a profile, and a profiled target requires an authority for every
+      # key its units need. The production profile's Kafka is authenticated, so every unit
+      # this target includes needs these two declared; the platform supplies them, so the
+      # authority is `sol`.
+      secrets:
+        checkout/checkout_svc:
+          KAFKA_SASL_PASSWORD:
+            authority: sol
+          KAFKA_SSL_CA_CERT:
+            authority: sol
+        payments/charge_svc:
+          KAFKA_SASL_PASSWORD:
+            authority: sol
+          KAFKA_SSL_CA_CERT:
+            authority: sol
+        payments/orders_svc:
+          KAFKA_SASL_PASSWORD:
+            authority: sol
+          KAFKA_SSL_CA_CERT:
+            authority: sol
+        comms/notify_worker:
+          KAFKA_SASL_PASSWORD:
+            authority: sol
+          KAFKA_SSL_CA_CERT:
+            authority: sol
+        comms/fulfilment_worker:
+          KAFKA_SASL_PASSWORD:
+            authority: sol
+          KAFKA_SSL_CA_CERT:
+            authority: sol
+
       # This profile qualifies OCaml workloads only.
       services:
         order_svc:

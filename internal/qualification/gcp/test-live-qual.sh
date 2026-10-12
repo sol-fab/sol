@@ -654,6 +654,16 @@ has "the cloud target declares the app database the enabled units use" "app_db:"
 has "and the events resource" "events: {}" "$TARGET_FILE"
 has "and the OCaml units the alpha scenario runs" "orders_svc: {}" "$TARGET_FILE"
 has "and the TypeScript units" "order_svc: {}" "$TARGET_FILE"
+# A profiled target requires an authority for every key its units need; the profile's
+# authenticated Kafka makes KAFKA_SASL_PASSWORD/KAFKA_SSL_CA_CERT required for each
+# included unit, so the written target must declare them or `sol check` refuses.
+has "the profiled target maps the platform Kafka keys the included OCaml units need" \
+  "payments/orders_svc:" "$TARGET_FILE"
+has "for the worker too" "comms/fulfilment_worker:" "$TARGET_FILE"
+has "and the TypeScript units the row includes" "demo_ts/order_svc:" "$TARGET_FILE"
+has "and its worker" "demo_ts/fulfillment_worker:" "$TARGET_FILE"
+has "with the platform as the authority" "authority: sol" "$TARGET_FILE"
+lacks "but does not map a unit the target omits" "payments/charge_svc:" "$TARGET_FILE"
 has "Sol validates the declarations in this phase" "sol check" "$TMP/cloud-ok.argv"
 has "installation lifecycle is exercised through Sol" "sol deploy $TARGET --registry" "$TMP/cloud-ok.argv"
 lacks "and the bootstrap deploy pins no digest that does not exist yet" "--image-ref" "$TMP/cloud-ok.argv"

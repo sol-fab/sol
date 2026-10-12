@@ -263,6 +263,32 @@ $TARGET_ENV:
 
       destroy_retention: none
 
+      # This target selects a profile, and a profiled target requires an authority for every
+      # key its units need. The production profile's Kafka is authenticated, so each unit the
+      # row includes needs these two declared; the platform supplies them, so the authority is
+      # sol. The same declaration the example's own profile target makes.
+      secrets:
+        payments/orders_svc:
+          KAFKA_SASL_PASSWORD:
+            authority: sol
+          KAFKA_SSL_CA_CERT:
+            authority: sol
+        comms/fulfilment_worker:
+          KAFKA_SASL_PASSWORD:
+            authority: sol
+          KAFKA_SSL_CA_CERT:
+            authority: sol
+        demo_ts/order_svc:
+          KAFKA_SASL_PASSWORD:
+            authority: sol
+          KAFKA_SSL_CA_CERT:
+            authority: sol
+        demo_ts/fulfillment_worker:
+          KAFKA_SASL_PASSWORD:
+            authority: sol
+          KAFKA_SSL_CA_CERT:
+            authority: sol
+
       resources:
         app_db:
           size: small
