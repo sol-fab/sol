@@ -1031,10 +1031,6 @@ app_verify_database_delivery() {
   say "app: the deploy delivered the database as $name-ddl-creds / $name-dml-creds; the consumer's unit Secret carries no master copy"
 }
 
-app_secret_failure() {
-  grep -qF 'does not hold the required non-empty secret key(s)' "$1" 2>/dev/null
-}
-
 app_read_platform_password() {
   local password
   if [ -n "${KAFKA_SASL_PASSWORD:-}" ]; then
@@ -1096,6 +1092,11 @@ app_supply_secrets() {
     printf 'platform_secret_keys: KAFKA_SASL_PASSWORD KAFKA_SSL_CA_CERT\n'
     printf 'secret_values: never recorded\n'
     printf 'database_delivery: delivered by the deploy from the target binding; no operator copy\n'
+    # This row's target selects no profile, and a profile-less deploy does not fire these two
+    # gates at all (#1403). They are scoped out of what this row claims, not bypassed by it;
+    # profile-carrying rows and the unit tests still exercise them.
+    printf 'scoped_out: "Sol refuses absent operator secrets" (a profile-less deploy has no required-secret stop; #1403)\n'
+    printf 'scoped_out: "A deploy refuses to move workloads against an unapplied migration" (a profile-less deploy has no migration gate; #1403)\n'
   } >>"$LOG_DIR/prerequisites.txt"
   say "app: supplied the Kafka platform secrets through sol secret set; the database is delivered by the deploy"
 }
@@ -1348,16 +1349,14 @@ phase_app() {
     return 1
   fi
   say "app-secrets-bootstrap"
+  # This target selects no profile (see write_app_target), so the deploy has neither the
+  # migration gate nor the required-secret stop a profile-carrying deploy has (#1403): it
+  # establishes the namespaces and their scoped RBAC, runs the database setup, and applies the
+  # workloads, which can fail on a rollout before the operator secrets exist. What the next
+  # steps need is the established namespaces; the exit is recorded, not gated on the secret
+  # refusal the profile used to produce.
   if ! run app-deploy-bootstrap "$SOL" deploy "$TARGET" --registry "$(app_registry)" $image_ref_args; then
-    if app_secret_failure "$LOG_DIR/app-deploy-bootstrap.log"; then
-      say "app: the deploy established the namespaces and their scoped RBAC, then refused the absent operator secrets (expected)"
-    else
-      say "app: the bootstrap deploy did not reach the secret prerequisite"
-      capture_app_evidence
-      freeze_evidence
-      finalise_bundle
-      return 1
-    fi
+    say "app: the bootstrap deploy did not complete; a profile-less deploy establishes namespaces and applies workloads with no profile gates (#1403), so the operator secrets are supplied next"
   fi
   if ! app_supply_secrets; then
     capture_app_evidence
