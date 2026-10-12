@@ -417,7 +417,10 @@ inventory() {
   provider_probe nat            absent  gcloud compute routers nats describe "$CLUSTER-nat" --router "$CLUSTER-router" --region "$REGION" --project "$PROJECT" --format='value(name)'
   provider_probe address-regional absent gcloud compute addresses list --project "$PROJECT" --filter="name~$CLUSTER" --format='value(name)'
   provider_probe address-global absent  gcloud compute addresses list --global --project "$PROJECT" --filter="name~$CLUSTER" --format='value(name)'
-  provider_probe disks          absent  gcloud compute disks list --project "$PROJECT" --filter="name~$CLUSTER" --format='value(name)'
+  # GKE's CSI disks are named `pvc-<uuid>`, so a `name` filter matches none of them and a
+  # destroyed cluster's volumes read as absent while they survive. The GKE-managed cluster
+  # label is what attributes a disk to this run.
+  provider_probe disks          absent  gcloud compute disks list --project "$PROJECT" --filter="labels.goog-k8s-cluster-name=$CLUSTER" --format='value(name)'
   provider_probe forwarding-rules absent gcloud compute forwarding-rules list --project "$PROJECT" --filter="name~$CLUSTER" --format='value(name)'
   provider_probe artifact-registry absent gcloud artifacts repositories describe "$CLUSTER" --location "$REGION" --project "$PROJECT" --format='value(name)'
   probe_service_account service-account-provisioner "$GCP_PROVISIONER_SA"

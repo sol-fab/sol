@@ -230,6 +230,16 @@ case "$*" in
     if [ "${STUB_QUOTA_GARBAGE:-0}" = "1" ]; then printf "not a quota document\n"; exit 0; fi
     if [ "${STUB_QUOTA_BUSY:-0}" = "1" ]; then printf "CPUS;IN_USE_ADDRESSES;SSD_TOTAL_GB;DISKS_TOTAL_GB;INSTANCES,4;0;0;0;1\n"; exit 0; fi
     printf "CPUS;IN_USE_ADDRESSES;SSD_TOTAL_GB;DISKS_TOTAL_GB;INSTANCES,0;0;0;0;0\n"; exit 0 ;;
+  # A GKE CSI disk is named `pvc-<uuid>`, so it is attributable only by the cluster label.
+  # The stub honors that filter, so the disk-absence scenario below fails against a `name`
+  # filter and passes against the label one.
+  *"compute disks list"*)
+    case " $* " in
+      *"labels.goog-k8s-cluster-name=$CLUSTER"*)
+        if [ "${STUB_DISK_RESIDUE:-0}" = "1" ]; then printf 'pvc-residue\n'; fi
+        exit 0 ;;
+    esac
+    exit 0 ;;
   *"compute instances list"*|*"compute disks list"*|*"compute snapshots list"*)
     case "$*" in
       *"--format=json"*)
@@ -1334,6 +1344,17 @@ else
   ok "the warning is not read as a resource"
 fi
 is "the warned verification still passes" "$(cat "$TMP/filter-warning.rc")" "0"
+
+# A destroyed cluster's CSI disks are named `pvc-<uuid>`, so only the GKE cluster label
+# attributes them. A `name` filter read them as absent; the label filter must fail the run.
+printf '\nscenario: a destroyed cluster'"'"'s CSI disks are visible to the absence probe\n'
+PRESEED_TARGET=1 run_case verify-disk-residue verify STUB_DISK_RESIDUE=1
+if [ "$(cat "$TMP/verify-disk-residue.rc")" = "0" ]; then
+  no "the disk residue fails verification" "non-zero" "0"
+else
+  ok "the disk residue fails verification"
+fi
+has "and the report names the disk class" "disks still exists" "$TMP/verify-disk-residue.out"
 
 printf '\nscenario: verify is read-only even when it fails\n'
 PRESEED_TARGET=1 run_case verify-fail verify STUB_TARGET_PRESENT=1
