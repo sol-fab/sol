@@ -46,7 +46,12 @@ output "postgres_url" {
 
 output "postgres_ca_cert" {
   description = "The trust anchor a client needs to verify the Cloud SQL endpoint's certificate under sslmode=verify-full: the instance's server CA, which Cloud SQL derives per instance rather than publishing through a shared bundle. Null when no database is created."
-  value       = var.create_database ? google_sql_database_instance.postgres[0].server_ca_cert[0].cert : null
+  # The provider marks the instance's `server_ca_cert` sensitive, so a root output that
+  # carries it must be marked too or Terraform refuses the root ("Output refers to sensitive
+  # values") and the target can neither apply nor destroy — as `postgres_url` above does.
+  # Sol reads the value from the outputs the same way it reads that one.
+  value     = var.create_database ? google_sql_database_instance.postgres[0].server_ca_cert[0].cert : null
+  sensitive = true
 }
 
 output "database_egress_cidrs" {
