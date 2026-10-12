@@ -94,7 +94,7 @@ source "$ROOT/internal/qualification/candidate-binding.sh"
 source "$ROOT/internal/qualification/attempt.sh"
 
 case "${1:-}" in
-  prepare | cloud | app | destroy)
+  prepare | cloud | app | destroy | cleanup)
     sol_under_test_resolve
     ;;
 esac
@@ -103,7 +103,7 @@ usage() {
   cat <<'USAGE'
 live-row.sh — the AWS regression row: the application contract GCP Attempt 28 established
 
-usage: live-row.sh PHASE      PHASE in: prepare | cloud | transport | app | destroy | verify
+usage: live-row.sh PHASE      PHASE in: prepare | cloud | transport | app | destroy | cleanup | verify
 
 required
   ATTEMPT           a unique identity for this disposable run; the target, state key and
@@ -271,7 +271,79 @@ supply_platform_credential() {
 }
 
 k8s_name() { printf '%s' "$1" | tr '_' '-'; }
-image_ref() { printf '%s/pluto/%s:%s' "$ECR_REGISTRY" "$(k8s_name "$1")" "$APP_TAG"; }
+# Sol's cluster root manages `pluto/<unit>`: the run must not create those names (two owners of
+# one name; Terraform refuses a repository it did not create), and on a cold target it cannot
+# wait for them either, because the profile's immutable-artifact preflight runs before the apply
+# that creates them (issue #1413). The run therefore publishes where it is the only owner.
+# Pushing into a repository Sol created is fine; creating one first is not.
+RUN_REPO_PREFIX="${RUN_REPO_PREFIX:-sol-runs/$ATTEMPT}"
+run_repo() { printf '%s/%s/%s' "$ECR_REGISTRY" "$RUN_REPO_PREFIX" "$(k8s_name "$1")"; }
+sol_repo() { printf '%s/pluto/%s' "$ECR_REGISTRY" "$(k8s_name "$1")"; }
+image_ref() { printf '%s:%s' "$(run_repo "$1")" "$APP_TAG"; }
+
+# Sol's own repositories, as its target inventory sees them: ABSENT before `cloud` creates them,
+# PRESENT after, ABSENT again after teardown.
+ecr_record_sol_repositories() {
+  local label="$1" unit name state
+  local out="$LOG_DIR/ecr-sol-repositories-$label.txt"
+  : >"$out"
+  for unit in $APP_UNITS; do
+    name="pluto/$(k8s_name "$unit")"
+    if aws ecr describe-repositories --repository-names "$name" >/dev/null 2>&1; then
+      state=PRESENT
+    else
+      state=ABSENT
+    fi
+    printf 'ecr-sol-repository[%s]: %s %s\n' "$label" "$name" "$state" >>"$out"
+  done
+  say "recorded Sol's repositories ($label) in $out"
+}
+
+# The run's own repositories are outside the target's inventory, so the run records and removes
+# them itself -- by prefix, not from what `prepare` happened to record, so a partial publish or
+# an interrupted attempt is still cleaned.
+ecr_run_repositories() {
+  aws ecr describe-repositories \
+    --query "repositories[?starts_with(repositoryName, '$RUN_REPO_PREFIX/')].repositoryName" \
+    --output text 2>/dev/null | tr '\t' '\n' | sed '/^$/d'
+}
+
+ecr_record_run_repositories() {
+  local label="$1" name found=0
+  local out="$LOG_DIR/ecr-run-repositories-$label.txt"
+  : >"$out"
+  for name in $(ecr_run_repositories); do
+    printf 'ecr-run-repository[%s]: %s PRESENT\n' "$label" "$name" >>"$out"
+    found=1
+  done
+  if [ "$found" = 0 ]; then printf 'ecr-run-repository[%s]: none ABSENT\n' "$label" >>"$out"; fi
+  say "recorded the run's repositories ($label) in $out"
+}
+
+cleanup_run_repositories() {
+  local name
+  for name in $(ecr_run_repositories); do
+    if run "ecr-delete-$(printf '%s' "$name" | tr '/' '-')" \
+      aws ecr delete-repository --repository-name "$name" --force >/dev/null 2>&1; then
+      say "  removed run-owned repository $name"
+    else
+      say "could not remove the run-owned repository $name"
+      return 1
+    fi
+  done
+  ecr_record_run_repositories absent
+  if grep -q PRESENT "$LOG_DIR/ecr-run-repositories-absent.txt" 2>/dev/null; then
+    say "a run-owned ECR repository survived cleanup"
+    return 1
+  fi
+}
+
+# `cleanup` is runnable on its own so a failed or interrupted attempt can be swept without a
+# target: it removes every repository under the run's prefix and records their absence.
+phase_cleanup() {
+  cleanup_run_repositories || return 1
+  say "the run's own repositories are absent; nothing outside the target inventory remains"
+}
 
 unit_dir() {
   local unit="$1" dir
@@ -488,33 +560,30 @@ phase_transport() {
 
 phase_cloud() {
   require_target_terraform_var_file || return 1
+  # A fixed repository name is not made fresh by a fresh target name, so record it on the way in.
+  ecr_record_sol_repositories before
   # `sol plan` is the read-only whole-target preview. `sol deploy` is the only command
   # that reconciles the substrate now: it establishes the durable installation inline and
   # applies the environment's cluster and platform roots.
   #
-  # A plan needs either `--image-ref` for every selected workload or a reachable cluster to
-  # inherit the current release's images. A *cold* target has neither: this step runs before
-  # `cloud-apply` creates the cluster, and the ECR repositories that hold the digests are
-  # created by that same apply, so nothing can be published first. The refusal is correct -
-  # planning without digests on a production profile would misstate the deploy - so the
-  # harness records the skip and proceeds; a warm run, whose cluster already holds a release,
-  # still plans exactly as before (issue #1408 carries the reorder that restores cold coverage).
+  # `prepare` has published every selected workload, so the whole-target preview names those
+  # digests. A cold target no longer skips the plan for want of images (issue #1408): the plan
+  # is reachable exactly as a warm run's is, with digests rather than an inherited release.
   say "cloud-plan"
-  local plan_rc=0
-  if ! timeout "$PHASE_TIMEOUT" bash -c "cd '$WORKSPACE' && exec '$SOL' plan '$TARGET' --var-file '$TFVARS'" \
+  local plan_image_refs plan_rc=0
+  plan_image_refs="$(app_image_ref_args)"
+  if [ -z "$plan_image_refs" ]; then
+    say "no published image digests for $TARGET; run live-row.sh prepare before this phase"
+    return 1
+  fi
+  if ! timeout "$PHASE_TIMEOUT" bash -c "cd '$WORKSPACE' && exec '$SOL' plan '$TARGET' --var-file '$TFVARS' $plan_image_refs" \
     >"$LOG_DIR/cloud-plan.log" 2>&1; then
     plan_rc=1
   fi
   if [ "$plan_rc" != 0 ]; then
-    if grep -qF 'cannot inherit workload images' "$LOG_DIR/cloud-plan.log" 2>/dev/null; then
-      say 'cloud-plan: skipped (fresh target: no reachable release to inherit images, no digests to supply; harness ordering follow-up: #1408)'
-      printf 'cloud-plan: skipped (fresh target: no reachable release to inherit images, no digests to supply; harness ordering follow-up: #1408)\n' \
-        >>"$LOG_DIR/prerequisites.txt"
-    else
-      say "FAILED: cloud-plan (last 40 lines; full log $LOG_DIR/cloud-plan.log)"
-      tail -n 40 "$LOG_DIR/cloud-plan.log"
-      return 1
-    fi
+    say "FAILED: cloud-plan (last 40 lines; full log $LOG_DIR/cloud-plan.log)"
+    tail -n 40 "$LOG_DIR/cloud-plan.log"
+    return 1
   fi
   local deploy_rc=0
   bootstrap_deploy cloud-apply || deploy_rc=$?
@@ -537,6 +606,9 @@ phase_cloud() {
   run nodes kubectl --kubeconfig "$ACCESS_KUBECONFIG" get nodes -o wide || return 1
   capture_kube_evidence
   capture_state
+  # Recorded, not asserted: whether the apply created them is Sol's business, and the reading
+  # that matters is the one after teardown (below), which must be ABSENT.
+  ecr_record_sol_repositories after
   say "the substrate and platform install completed; evidence in $LOG_DIR"
 }
 
@@ -588,7 +660,7 @@ app_image_ref_args() {
 ecr_ensure_repositories() {
   local unit name
   for unit in $APP_UNITS; do
-    name="pluto/$(k8s_name "$unit")"
+    name="$RUN_REPO_PREFIX/$(k8s_name "$unit")"
     if aws ecr describe-repositories --repository-names "$name" >/dev/null 2>&1; then
       continue
     fi
@@ -619,6 +691,18 @@ phase_prepare() {
   ecr_ensure_repositories || return 1
   app_ensure_images || return 1
   say "the run images are published; cloud deploys with their digests"
+}
+
+app_populate_sol_repositories() {
+  local unit
+  while IFS= read -r line; do
+    unit="${line%%=*}"
+    [ -n "$unit" ] || continue
+    run "app-populate-$unit" bash -c \
+      "docker tag '$(run_repo "$unit"):$APP_TAG' '$(sol_repo "$unit"):$APP_TAG' && docker push '$(sol_repo "$unit"):$APP_TAG'" \
+      || return 1
+  done <"$LOG_DIR/app-image-refs.txt"
+  say "published the run's images into Sol's repositories, so teardown removes populated ones"
 }
 
 app_secret_failure() {
@@ -780,6 +864,10 @@ phase_app() {
   run migrate-apply bash -c "cd '$WORKSPACE' && exec '$SOL' migrate apply '$TARGET'" || return 1
   run app-deploy bash -c "cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args" || return 1
   app_verify_database_delivery || return 1
+  # ADR 0004: destruction removes what the lifecycle created. The run's images live in its own
+  # repositories, so Sol's would be empty at teardown and a populated teardown would go
+  # untested. Push the same digests into the repositories Sol created.
+  app_populate_sol_repositories || return 1
   for ns in $deploy_namespaces; do
     if ! kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get rolebinding sol-deploy -n "$ns" >/dev/null 2>&1; then
       say "the deploy completed into $ns without establishing its scoped deploy RBAC"
@@ -817,8 +905,21 @@ phase_destroy() {
     say "destroy exited non-zero; the independent inventory decides absence"
   fi
   aws_inventory || verdict_rc=$?
+  # Sol's repositories are the target's, so teardown must remove them; the run's are not, so the
+  # run removes its own. Both are read back and recorded. NOT ASSERTED HERE: the row's stub
+  # cannot model Sol's repository lifecycle inside a phase, so a hard check would pass on the
+  # fixture rather than on Sol. Tighten when it can -- issue #1415.
+  ecr_record_sol_repositories after-destroy
+  local cleanup_rc=0
+  cleanup_run_repositories || cleanup_rc=1
   if [ "$verdict_rc" != 0 ]; then
     say "the independent inventory does not read ABSENT, so teardown is not complete"
+    return 1
+  fi
+  # The run's own repositories are outside the target inventory, so no independent probe will
+  # catch them; a destroy that cannot remove them must not report success. `cleanup` re-runs.
+  if [ "$cleanup_rc" != 0 ]; then
+    say "the run's own repositories could not all be removed; re-run live-row.sh cleanup"
     return 1
   fi
   return "$destroy_rc"
@@ -857,6 +958,7 @@ esac
 case "${1:-}" in
   cloud) phase_cloud ;;
   prepare) phase_prepare ;;
+  cleanup) phase_cleanup ;;
   transport) phase_transport ;;
   app) phase_app ;;
   destroy) phase_destroy ;;

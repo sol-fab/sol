@@ -68,6 +68,7 @@ fi
 # here. A fresh account's installation offer is interactive in the real command; the stub
 # accepts it and reports the reconciled environment `sol deploy` prints before workloads.
 if [ "${1:-}" = "deploy" ]; then
+  : >"${TMP:-/tmp}/ecr-sol-created"
   if [ "${STUB_INSTALL_REFUSED:-0}" = "1" ]; then
     printf 'the durable installation for %s could not be established with positive evidence\n' "${2:-}"
     exit 1
@@ -83,6 +84,7 @@ if [ "${1:-}" = "deploy" ]; then
   printf 'The environment for %s is reconciled.\n' "${2:-}"
   exit 0
 fi
+if [ "${1:-}" = "destroy" ]; then rm -f "${TMP:-/tmp}/ecr-sol-created"; fi
 if [ -n "${STUB_SOL_SLEEP:-}" ]; then sleep "$STUB_SOL_SLEEP"; fi
 exit 0
 STUB
@@ -217,6 +219,14 @@ case "$1 $2" in
       *) printf '123456789012\n' ;;
     esac
     ;;
+  "ecr delete-repository")
+    if [ "${STUB_ECR_DELETE_FAILS:-0}" = "1" ]; then
+      printf 'AccessDeniedException\n' >&2
+      exit 1
+    fi
+    printf '%s\n' "${4:-}" >>"${TMP:-/tmp}/run-ecr-deleted"
+    printf '{"repository":{}}\n'
+    ;;
   "s3api head-object")
     if [ "${STUB_STATE_PRESENT:-0}" = "1" ]; then exit 0; fi
     printf 'An error occurred (404) when calling the HeadObject operation: Not Found\n' >&2
@@ -298,11 +308,37 @@ case "$1 $2" in
     printf '{"TagDescriptions":[{"ResourceArn":"arn:aws:elbv2:us-east-1:123456789012:loadbalancer/app/k8s-live/1","Tags":[{"Key":"kubernetes.io/cluster/test-cluster","Value":"owned"}]}]}\n'
     ;;
   "ecr describe-repositories")
-    if [ "${STUB_LIVE_ECR:-0}" = "1" ]; then
-      printf '{"repositories":[{"repositoryName":"pluto/charge-svc"}]}\n'
-    else
-      printf '{"repositories":[]}\n'
-    fi
+    case "$*" in
+      *--query*)
+        local name
+        for name in ${STUB_RUN_ECR_REPOS:-}; do
+          grep -qxF "$name" "${TMP:-/tmp}/run-ecr-deleted" 2>/dev/null || printf '%s\n' "$name"
+        done
+        ;;
+      *)
+        # The lifecycle model is about *the target's own* repositories, which Sol names. The
+        # whole-account listing (the inventory's probe) keeps its own fixture.
+        case "$*" in
+          *--repository-names*)
+            if [ "${STUB_ECR_LIFECYCLE:-0}" = "1" ]; then
+              # Sol's repositories exist only once its apply created them, and go again with the
+              # destroy: the phases read absent -> present -> absent for real.
+              if [ -s "${TMP:-/tmp}/ecr-sol-created" ]; then
+                printf '{"repositories":[{"repositoryName":"pluto/charge-svc"}]}\n'
+                exit 0
+              fi
+              printf 'An error occurred (RepositoryNotFoundException) when calling the DescribeRepositories operation\n' >&2
+              exit 1
+            fi
+            ;;
+        esac
+        if [ "${STUB_LIVE_ECR:-0}" = "1" ]; then
+          printf '{"repositories":[{"repositoryName":"pluto/charge-svc"}]}\n'
+        else
+          printf '{"repositories":[]}\n'
+        fi
+        ;;
+    esac
     ;;
   "rds describe-db-subnet-groups")
     if [ "${STUB_LIVE_RDS_SUBNET_GROUP:-0}" = "1" ]; then
@@ -524,7 +560,7 @@ stub_prepare() {
   : >"$LOG_DIR/app-image-refs.txt"
   for unit in checkout_svc charge_svc notify_worker orders_svc fulfilment_worker; do
     digest="$(printf '%s' "$unit" | tr '_' '-')"
-    printf '%s=%s/pluto/%s@sha256:%s\n' \
+    printf '%s=%s/sol-runs/aws-self-test/%s@sha256:%s\n' \
       "$unit" "$ECR" "$digest" "$(printf 'b%.0s' $(seq 1 64))" >>"$LOG_DIR/app-image-refs.txt"
   done
 }
@@ -579,7 +615,16 @@ run_phase() {
   # what `cloud`'s first deploy names. KEEP_LOG_DIR keeps it across the two invocations.
   [ "${KEEP_LOG_DIR:-0}" = 1 ] || rm -rf "$LOG_DIR"
   rm -f "$TMP/credential-supplied"
+  # Sol's repository marker belongs to the scenario that ran the apply; leaving it makes the
+  # next scenario read this one's leftovers (issue #1415).
+  rm -f "$TMP/ecr-sol-created"
+  rm -f "$TMP/run-ecr-deleted"
   if [ "$phase" = cloud ] && [ "${SKIP_PREPARE:-0}" != 1 ]; then stub_prepare "$name"; fi
+  case "$phase" in
+    prepare | cloud | app | destroy | cleanup) STUB_ECR_LIFECYCLE=1 ;;
+    *) STUB_ECR_LIFECYCLE=0 ;;
+  esac
+  export STUB_ECR_LIFECYCLE
   if [ -n "${PRESEED_FOREIGN_ATTEMPT:-}" ]; then
     mkdir -p "$LOG_DIR"
     printf 'attempt=%s\n' "$PRESEED_FOREIGN_ATTEMPT" >"$LOG_DIR/attempt.txt"
@@ -644,6 +689,8 @@ run_phase_sigterm() {
   : >"$TERRAFORM_LOG"
   [ "${KEEP_LOG_DIR:-0}" = 1 ] || rm -rf "$LOG_DIR"
   if [ "$phase" = cloud ] && [ "${SKIP_PREPARE:-0}" != 1 ]; then stub_prepare "$name"; fi
+  STUB_ECR_LIFECYCLE=1
+  export STUB_ECR_LIFECYCLE
   env PATH="$TMP/bin:$PATH" \
     WORKSPACE="$WORKSPACE" TARGET=qualreg/aws/us-east-1 ECR_REGISTRY="$ECR" \
     CLUSTER=test-cluster DEPLOY_ROLE_ARN=arn:aws:iam::1:role/deploy \
@@ -687,7 +734,7 @@ has "the whole-target preview runs first" \
   "sol plan qualreg/aws/us-east-1 --var-file $ROOT/internal/qualification/aws/qual-aws-row.tfvars" \
   "$TMP/bootstrap-refused.sol"
 has "and Sol owns durable reconciliation through the whole-target deploy" \
-  "sol deploy qualreg/aws/us-east-1 --registry $ECR --image-ref checkout_svc=$ECR/pluto/checkout-svc@sha256:" "$TMP/bootstrap-refused.sol"
+  "sol deploy qualreg/aws/us-east-1 --registry $ECR --image-ref checkout_svc=$ECR/sol-runs/aws-self-test/checkout-svc@sha256:" "$TMP/bootstrap-refused.sol"
 lacks "no removed cloud subcommand is invoked" "cloud bootstrap" "$TMP/bootstrap-refused.sol"
 lacks "and neither is the removed partial apply" "cloud apply" "$TMP/bootstrap-refused.sol"
 [ ! -s "$TMP/bootstrap-refused.terraform" ] && ok "no direct Terraform operation runs" \
@@ -699,7 +746,7 @@ is "exit 0" "$(cat "$TMP/ok.rc")" "0"
 has "the installed bundle is named in the transcript" \
   "sol-under-test: release $VERSION at $INSTALL" "$TMP/ok.out"
 has "the application images are still built and pushed by the harness" \
-  "docker push $ECR/pluto/charge-svc:row-" "$TMP/ok.docker"
+  "docker push $ECR/sol-runs/aws-self-test/charge-svc:row-" "$TMP/ok.docker"
 lacks "but the harness publishes no migration runner" \
   "sol-migration-runner" "$TMP/ok.docker"
 has "Sol applies the workspace's migrations" \
@@ -707,9 +754,9 @@ has "Sol applies the workspace's migrations" \
 lacks "without being asked to publish or name a runner" \
   "migrate apply qualreg/aws/us-east-1 --registry" "$TMP/ok.sol"
 has "the deploy resolves the workspace's own images from the target's registry" \
-  "deploy qualreg/aws/us-east-1 --registry $ECR --image-ref checkout_svc=$ECR/pluto/checkout-svc@sha256:" "$TMP/ok.sol"
+  "deploy qualreg/aws/us-east-1 --registry $ECR --image-ref checkout_svc=$ECR/sol-runs/aws-self-test/checkout-svc@sha256:" "$TMP/ok.sol"
 has "and pins every selected workload by digest, not a mutable tag" \
-  "image-ref charge_svc=$ECR/pluto/charge-svc@sha256:" "$TMP/ok.sol"
+  "image-ref charge_svc=$ECR/sol-runs/aws-self-test/charge-svc@sha256:" "$TMP/ok.sol"
 lacks "no mutable tag is passed to a profile that requires immutable artifacts" \
   "--image-tag" "$TMP/ok.sol"
 lacks "no operator POSTGRES_URL is set for the migration path" \
@@ -877,8 +924,20 @@ has "the preview carries the row's var file" \
   "plan qualreg/aws/us-east-1 --var-file $ROOT/internal/qualification/aws/qual-aws-row.tfvars" \
   "$TMP/cloudrun.sol"
 has "and the whole-target deploy reconciles the environment by tag" \
-  "deploy qualreg/aws/us-east-1 --registry $ECR --image-ref checkout_svc=$ECR/pluto/checkout-svc@sha256:" "$TMP/cloudrun.sol"
+  "deploy qualreg/aws/us-east-1 --registry $ECR --image-ref checkout_svc=$ECR/sol-runs/aws-self-test/checkout-svc@sha256:" "$TMP/cloudrun.sol"
 lacks "the removed partial cloud apply is never invoked" "cloud apply" "$TMP/cloudrun.sol"
+
+printf '\nscenario: cleanup sweeps the run-owned repositories an interrupted attempt left\n'
+STUB_RUN_ECR_REPOS="sol-runs/aws-self-test/charge-svc" run_phase cleanuprun cleanup
+is "exit 0" "$(cat "$TMP/cleanuprun.rc")" "0"
+has "the run removes its own repository by name, not by what was recorded" \
+  "ecr delete-repository --repository-name sol-runs/aws-self-test/charge-svc --force" "$TMP/cleanuprun.aws"
+has "and reads the absence back rather than assuming it" \
+  "none ABSENT" "$TMP/cleanuprun.logs/ecr-run-repositories-absent.txt"
+
+printf '\nscenario: a sweep that cannot remove a run repository fails the phase\n'
+STUB_RUN_ECR_REPOS="sol-runs/aws-self-test/charge-svc" STUB_ECR_DELETE_FAILS=1 run_phase cleanupfail cleanup
+refused cleanupfail "a failed sweep is a failure, not a note"
 
 printf '\nscenario: cloud refuses when nothing has been published for it\n'
 SKIP_PREPARE=1 run_phase noprep cloud
@@ -890,20 +949,19 @@ printf '\nscenario: prepare publishes the run digests before the first deploy\n'
 KEEP_LOG_DIR=1 run_phase prep prepare
 is "exit 0" "$(cat "$TMP/prep.rc")" "0"
 has "the operator stand-in makes sure each repository exists" \
-  "ecr describe-repositories --repository-names pluto/charge-svc" "$TMP/prep.aws"
-has "and the images are pushed" "docker push $ECR/pluto/charge-svc:row-" "$TMP/prep.docker"
+  "ecr describe-repositories --repository-names sol-runs/aws-self-test/charge-svc" "$TMP/prep.aws"
+has "and the images are pushed" "docker push $ECR/sol-runs/aws-self-test/charge-svc:row-" "$TMP/prep.docker"
 has "with their digests recorded for the deploys that name them" \
-  "charge_svc=$ECR/pluto/charge-svc@sha256:" "$TMP/prep.logs/app-image-refs.txt"
+  "charge_svc=$ECR/sol-runs/aws-self-test/charge-svc@sha256:" "$TMP/prep.logs/app-image-refs.txt"
 
-printf '\nscenario: a cold target records the plan skip instead of failing on the missing release\n'
+printf '\nscenario: a plan that cannot resolve the run images fails, and is never skipped\n'
 KEEP_LOG_DIR=1 run_phase coldplan prepare
 KEEP_LOG_DIR=1 run_phase coldplan cloud STUB_COLD_PLAN=1
-is "exit 0" "$(cat "$TMP/coldplan.rc")" "0"
-has "the skip names the fresh target and the ordering follow-up" \
-  "cloud-plan: skipped (fresh target: no reachable release to inherit images, no digests to supply; harness ordering follow-up: #1408)" \
-  "$TMP/coldplan.logs/prerequisites.txt"
-has "and the phase still deploys the whole target" \
-  "deploy qualreg/aws/us-east-1 --registry $ECR --image-ref checkout_svc=$ECR/pluto/checkout-svc@sha256:" "$TMP/coldplan.sol"
+refused coldplan "a plan that cannot resolve the run images fails the phase"
+has "the failure is reported, not skipped" "FAILED: cloud-plan" "$TMP/coldplan.out"
+lacks "and the old cold-plan skip is gone" "cloud-plan: skipped" "$TMP/coldplan.out"
+lacks "and no deploy runs behind a plan that could not resolve images" \
+  "sol deploy" "$TMP/coldplan.sol"
 
 printf '\nscenario: the harness supplies the platform credential the install names, then resumes\n'
 KEEP_LOG_DIR=1 run_phase credential-boundary prepare
@@ -969,7 +1027,7 @@ has "the worker image too" \
   "docker push $ECR/pluto/fulfilment-worker:row-" "$TMP/alphaunits.docker"
 lacks "and no unselected image is built" "charge-svc" "$TMP/alphaunits.docker"
 has "and every selected unit is pinned by digest" \
-  "image-ref orders_svc=$ECR/pluto/orders-svc@sha256:" "$TMP/alphaunits.sol"
+  "image-ref orders_svc=$ECR/sol-runs/aws-self-test/orders-svc@sha256:" "$TMP/alphaunits.sol"
 
 printf '\nscenario: a checkout at another revision cannot qualify as the candidate\n'
 git -c user.name=qualification -c user.email=qualification@example.invalid \
