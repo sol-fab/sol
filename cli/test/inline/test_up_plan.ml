@@ -276,6 +276,62 @@ let test_undeclared_workloads_still_plan () =
        plan.Sol_cli_deployment_plan.consumer_groups)
 ;;
 
+(* 2b: local development routes the database credential exactly as the cloud does. A unit
+   whose sol.yml declares `uses: [app_db]` reads `POSTGRES_URL` from the *class* Secret the
+   renderer names -- produced by the same function from the same target string -- and the
+   local deploy writes that Secret. The unit's own Secret is not the source on any target. *)
+let test_local_plan_routes_the_database_credential_like_the_cloud () =
+  with_workspace workspace (fun () ->
+    let facts =
+      Sol_cli_workspace_model.load ~root:(Sys.getcwd ())
+      |> fail_on_error "workspace model"
+    in
+    let declared =
+      Sol_cli_config.load_declared ~root:(Sys.getcwd ())
+      |> Result.map_error Sol_cli_config.error_to_string
+      |> fail_on_error "load_declared"
+    in
+    (* The stand-in target is the workspace name; the underscore in a scaffolded workspace's
+       name must not reach the Secret name, which is an RFC 1123 subdomain. *)
+    let local =
+      Sol_cli_up_execution.local_plan
+        ~requested_scope:"workspace"
+        ~workspace:"ci_smoke"
+        ~sha:"sha"
+        ~facts
+        ~declared
+        (Sol_cli_workspace_model.services facts)
+      |> Result.map_error Sol_cli_deployment_plan.plan_error_to_string
+      |> fail_on_error "local_plan"
+    in
+    let charge_svc = spec_named local "charge_svc" in
+    check_bool
+      "the local plan's consumer carries the sanitized stand-in target"
+      true
+      (charge_svc.Sol_cli_deployment_plan.db_uses_target = Some "ci-smoke");
+    let rendered =
+      match
+        Sol_cli_deployment_render.render_spec
+          ~workspace:"ci_smoke"
+          ~release_id:
+            (Sol_cli_release_id.of_content
+               { workspace = "ci_smoke"
+               ; environment = None
+               ; workloads = []
+               ; contract = []
+               })
+          charge_svc
+      with
+      | Ok bundle -> bundle.prerequisites_yaml ^ bundle.workload_yaml
+      | Error e -> Windtrap.fail ("render_spec: " ^ e)
+    in
+    let class_secret = Sol_cli_database_setup_render.dml_creds_name "ci-smoke" in
+    check_bool
+      (Printf.sprintf "the pod reads POSTGRES_URL from the class Secret %s" class_secret)
+      true
+      (Sol_cli_string.contains ~needle:(Printf.sprintf "name: %s" class_secret) rendered))
+;;
+
 let%test
     "sol local deploy and sol deploy plan the same workspace (BUG-056): the two plans \
      agree on language, replicas and consumer groups"
@@ -302,4 +358,8 @@ let%test
      workspace still plans, as unknown"
   =
   test_undeclared_workloads_still_plan ()
+;;
+
+let%test "2b: the local plan routes POSTGRES_URL through the class Secret" =
+  test_local_plan_routes_the_database_credential_like_the_cloud ()
 ;;
