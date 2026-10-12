@@ -906,10 +906,9 @@ phase_destroy() {
   fi
   aws_inventory || verdict_rc=$?
   # Sol's repositories are the target's, so teardown must remove them; the run's are not, so the
-  # run removes its own. Both are read back and recorded. They are not yet asserted here: the
-  # row's stub cannot model Sol's repository lifecycle inside the phase, so a hard check would
-  # pass on the fixture rather than on Sol. Tighten once it can (issue #1413's window
-  # adaptation).
+  # run removes its own. Both are read back and recorded. NOT ASSERTED HERE: the row's stub
+  # cannot model Sol's repository lifecycle inside a phase, so a hard check would pass on the
+  # fixture rather than on Sol. Tighten when it can -- issue #1415.
   ecr_record_sol_repositories after-destroy
   cleanup_run_repositories || say "the run's own repositories could not all be removed"
   if [ "$verdict_rc" != 0 ]; then
