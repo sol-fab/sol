@@ -212,9 +212,10 @@ let check_contract ~facts ~services =
   if Sol_cli_check.has_errors findings then Error (Sol_cli_exit.reported ()) else Ok ()
 ;;
 
-(* 2b: local development has no target binding, so `sol local deploy` supplies the local
-   cluster's Postgres as `POSTGRES_URL` to a unit that declares it. It is a local delivery
-   default, not an operator environment variable to copy in. *)
+(* 2b: the local cluster's Postgres is the local stand-in for the target's master. It is
+   written to the consumer's *class* Secret (`<target>-dml-creds`), the same Secret the cloud
+   deploy writes and the renderer already points the pod's `secretKeyRef` at — never to the
+   unit's own Secret, and never as an operator value to copy in. *)
 let local_postgres_url =
   "postgresql://postgres:dev@postgresql.postgresql.svc.cluster.local:5432/dev"
 ;;
@@ -381,30 +382,6 @@ let observed_contract ~workspace =
   Sol_cli_release_store.deployed_contract ~ctx:cluster ~workspace
 ;;
 
-(* The local cluster provides the workspace's declared postgres resource, so a unit that
-   consumes it receives `POSTGRES_URL` in its own Secret — the local stand-in for the
-   cloud deploy's `<target>-dml-creds`. A unit that only declares `POSTGRES_URL` keeps its
-   operator-supplied value instead. *)
-let local_database_consumers ~root =
-  match Sol_cli_config.load_declared ~root with
-  | Error _ -> fun _ -> false
-  | Ok declared ->
-    let postgres =
-      List.filter_map
-        (fun (resource : Sol_cli_config.resource) ->
-           if resource.typ = Some "postgres" then Some resource.name else None)
-        declared.resources
-    in
-    fun name ->
-      (match
-         List.find_opt
-           (fun (service : Sol_cli_config.service) -> String.equal service.name name)
-           declared.services
-       with
-       | None -> false
-       | Some service -> List.exists (fun use -> List.mem use postgres) service.uses)
-;;
-
 let load_local_secret_values ~root ~facts services =
   services
   |> Sol_cli_result.map_list (fun (service : Sol_cli_manifest.service) ->
@@ -426,25 +403,12 @@ let load_local_secret_values ~root ~facts services =
       | Error error -> Error (Sol_cli_toml.parse_error_to_string error)
     in
     let required = Sol_cli_manifest.required_secret_keys secret_keys in
-    let consumes_database = local_database_consumers ~root service.name in
-    let effective =
-      if consumes_database
-      then "POSTGRES_URL" :: required |> List.sort_uniq String.compare
-      else required
-    in
     let* values =
       Sol_cli_local_secret_input.load ~root ~unit_address
       |> Result.map_error (fun error -> service.name ^ ": " ^ error)
     in
-    (* The database input is the local cluster's, unless the operator set one in the unit's
-       own `sol/secrets.local` file. *)
-    let values =
-      if consumes_database && not (List.mem_assoc "POSTGRES_URL" values)
-      then ("POSTGRES_URL", local_postgres_url) :: values
-      else values
-    in
     let missing =
-      effective
+      required
       |> List.filter (fun key ->
         match List.assoc_opt key values with
         | Some value when String.trim value <> "" -> false
@@ -452,7 +416,7 @@ let load_local_secret_values ~root ~facts services =
       |> List.sort_uniq String.compare
     in
     match missing with
-    | [] -> Ok (unit_address, List.filter (fun (key, _) -> List.mem key effective) values)
+    | [] -> Ok (unit_address, List.filter (fun (key, _) -> List.mem key required) values)
     | _ ->
       Error
         (Printf.sprintf
@@ -470,25 +434,45 @@ let apply_local_secret_values ~secret_values (plan : Sol_cli_deployment_plan.t) 
        (fun acc (spec : Sol_cli_deployment_plan.service_spec) ->
           let* changed_units = acc in
           let unit_address = spec.domain ^ "/" ^ spec.source_name in
-          (* The loader already selected exactly the keys this unit receives, including the
-             local database input for a consumer. *)
+          (* The loader selected exactly the keys this unit declares; the database credential
+             is not one of them on any target, so it is written below, to the class Secret. *)
           let values =
             Option.value ~default:[] (List.assoc_opt unit_address secret_values)
           in
+          let namespace = Sol_cli_deployment_plan.namespace_to_string spec.namespace in
           let secret_name =
             Sol_cli_manifest.workload_secret_name
               (Sol_cli_deployment_plan.k8s_name_to_string spec.k8s_name)
           in
           let* changed =
-            Sol_cli_secret.apply_unit_values
-              ~ctx:cluster
-              ~namespace:(Sol_cli_deployment_plan.namespace_to_string spec.namespace)
-              ~secret_name
-              values
+            Sol_cli_secret.apply_unit_values ~ctx:cluster ~namespace ~secret_name values
             |> Result.map_error (fun error ->
               Printf.sprintf "could not write local values for %s: %s" unit_address error)
           in
-          Ok (if changed then unit_address :: changed_units else changed_units))
+          (* 2b: a consumer's `POSTGRES_URL` comes from the class Secret the renderer already
+             names in the pod's `secretKeyRef`; locally that Secret carries the local
+             cluster's Postgres. *)
+          match spec.db_uses_target with
+          | None -> Ok (if changed then unit_address :: changed_units else changed_units)
+          | Some target ->
+            let class_secret = Sol_cli_database_setup_render.dml_creds_name target in
+            let* class_changed =
+              Sol_cli_secret.apply_unit_values
+                ~ctx:cluster
+                ~namespace
+                ~secret_name:class_secret
+                [ "POSTGRES_URL", local_postgres_url ]
+              |> Result.map_error (fun error ->
+                Printf.sprintf
+                  "could not write the local database credential %s for %s: %s"
+                  class_secret
+                  unit_address
+                  error)
+            in
+            Ok
+              (if changed || class_changed
+               then unit_address :: changed_units
+               else changed_units))
        (Ok [])
 ;;
 

@@ -14,15 +14,39 @@ type post_deploy_summary =
 
 let push_registry = "localhost:5000"
 
-let local_plan ~requested_scope ~workspace ~sha ~facts ~declared services =
+let local_plan
+      ~requested_scope
+      ~workspace
+      ~sha
+      ~facts
+      ~(declared : Sol_cli_config.declared)
+      services
+  =
   let env_target = Sol_cli_env_target.local_defaults ~image_tag:sha in
   let env = Sol_cli_env_target.to_env_config ~name:workspace env_target in
+  (* 2b: local development is a target like any other, so a unit that consumes the workspace's
+     postgres resource routes through the *same* signal the cloud path uses
+     ([db_dml_creds_name]) and reads the *same* class Secret name, produced by the same
+     function from the same target string. `sol local deploy` writes that Secret; there is no
+     second "is this unit a consumer" decision anywhere. The stand-in target is the workspace
+     name, so a workspace that later gains a real target path changes nothing here. *)
+  let target_database =
+    match
+      List.filter
+        (fun (resource : Sol_cli_config.resource) -> resource.typ = Some "postgres")
+        declared.resources
+    with
+    | [ resource ] -> Some resource.name
+    | _ -> None
+  in
   Sol_cli_deployment_plan.of_services_result
     ~requested_scope
     ~workspace
     ~env
     ~facts
     ~declared
+    ~target:workspace
+    ?target_database
     services
 ;;
 

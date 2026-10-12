@@ -276,6 +276,37 @@ let test_undeclared_workloads_still_plan () =
        plan.Sol_cli_deployment_plan.consumer_groups)
 ;;
 
+(* 2b: local development routes the database credential exactly as the cloud does. A unit
+   whose sol.yml declares `uses: [app_db]` reads `POSTGRES_URL` from the *class* Secret the
+   renderer names -- produced by the same function from the same target string -- and the
+   local deploy writes that Secret. The unit's own Secret is not the source on any target. *)
+let test_local_plan_routes_the_database_credential_like_the_cloud () =
+  with_workspace workspace (fun () ->
+    let local, _ = plans () in
+    let charge_svc = spec_named local "charge_svc" in
+    check_bool
+      "the local plan's consumer carries the stand-in target, so it has a class Secret"
+      true
+      (charge_svc.Sol_cli_deployment_plan.db_uses_target = Some "ws");
+    let rendered =
+      match
+        Sol_cli_deployment_render.render_spec
+          ~workspace:"ws"
+          ~release_id:
+            (Sol_cli_release_id.of_content
+               { workspace = "ws"; environment = None; workloads = []; contract = [] })
+          charge_svc
+      with
+      | Ok bundle -> bundle.prerequisites_yaml ^ bundle.workload_yaml
+      | Error e -> Windtrap.fail ("render_spec: " ^ e)
+    in
+    let class_secret = Sol_cli_database_setup_render.dml_creds_name "ws" in
+    check_bool
+      (Printf.sprintf "the pod reads POSTGRES_URL from the class Secret %s" class_secret)
+      true
+      (Sol_cli_string.contains ~needle:(Printf.sprintf "name: %s" class_secret) rendered))
+;;
+
 let%test
     "sol local deploy and sol deploy plan the same workspace (BUG-056): the two plans \
      agree on language, replicas and consumer groups"
@@ -302,4 +333,8 @@ let%test
      workspace still plans, as unknown"
   =
   test_undeclared_workloads_still_plan ()
+;;
+
+let%test "2b: the local plan routes POSTGRES_URL through the class Secret" =
+  test_local_plan_routes_the_database_credential_like_the_cloud ()
 ;;
