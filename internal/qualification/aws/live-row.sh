@@ -910,9 +910,16 @@ phase_destroy() {
   # cannot model Sol's repository lifecycle inside a phase, so a hard check would pass on the
   # fixture rather than on Sol. Tighten when it can -- issue #1415.
   ecr_record_sol_repositories after-destroy
-  cleanup_run_repositories || say "the run's own repositories could not all be removed"
+  local cleanup_rc=0
+  cleanup_run_repositories || cleanup_rc=1
   if [ "$verdict_rc" != 0 ]; then
     say "the independent inventory does not read ABSENT, so teardown is not complete"
+    return 1
+  fi
+  # The run's own repositories are outside the target inventory, so no independent probe will
+  # catch them; a destroy that cannot remove them must not report success. `cleanup` re-runs.
+  if [ "$cleanup_rc" != 0 ]; then
+    say "the run's own repositories could not all be removed; re-run live-row.sh cleanup"
     return 1
   fi
   return "$destroy_rc"

@@ -220,6 +220,11 @@ case "$1 $2" in
     esac
     ;;
   "ecr delete-repository")
+    if [ "${STUB_ECR_DELETE_FAILS:-0}" = "1" ]; then
+      printf 'AccessDeniedException\n' >&2
+      exit 1
+    fi
+    printf '%s\n' "${4:-}" >>"${TMP:-/tmp}/run-ecr-deleted"
     printf '{"repository":{}}\n'
     ;;
   "s3api head-object")
@@ -305,19 +310,28 @@ case "$1 $2" in
   "ecr describe-repositories")
     case "$*" in
       *--query*)
-        if [ -n "${STUB_RUN_ECR_REPOS:-}" ]; then printf '%s\n' "$STUB_RUN_ECR_REPOS"; fi
+        local name
+        for name in ${STUB_RUN_ECR_REPOS:-}; do
+          grep -qxF "$name" "${TMP:-/tmp}/run-ecr-deleted" 2>/dev/null || printf '%s\n' "$name"
+        done
         ;;
       *)
-        if [ "${STUB_ECR_LIFECYCLE:-0}" = "1" ]; then
-          # Sol's repositories exist only once its apply created them, and go again with the
-          # destroy: the phases read absent -> present -> absent for real.
-          if [ -s "${TMP:-/tmp}/ecr-sol-created" ]; then
-            printf '{"repositories":[{"repositoryName":"pluto/charge-svc"}]}\n'
-            exit 0
-          fi
-          printf 'An error occurred (RepositoryNotFoundException) when calling the DescribeRepositories operation\n' >&2
-          exit 1
-        fi
+        # The lifecycle model is about *the target's own* repositories, which Sol names. The
+        # whole-account listing (the inventory's probe) keeps its own fixture.
+        case "$*" in
+          *--repository-names*)
+            if [ "${STUB_ECR_LIFECYCLE:-0}" = "1" ]; then
+              # Sol's repositories exist only once its apply created them, and go again with the
+              # destroy: the phases read absent -> present -> absent for real.
+              if [ -s "${TMP:-/tmp}/ecr-sol-created" ]; then
+                printf '{"repositories":[{"repositoryName":"pluto/charge-svc"}]}\n'
+                exit 0
+              fi
+              printf 'An error occurred (RepositoryNotFoundException) when calling the DescribeRepositories operation\n' >&2
+              exit 1
+            fi
+            ;;
+        esac
         if [ "${STUB_LIVE_ECR:-0}" = "1" ]; then
           printf '{"repositories":[{"repositoryName":"pluto/charge-svc"}]}\n'
         else
@@ -601,6 +615,10 @@ run_phase() {
   # what `cloud`'s first deploy names. KEEP_LOG_DIR keeps it across the two invocations.
   [ "${KEEP_LOG_DIR:-0}" = 1 ] || rm -rf "$LOG_DIR"
   rm -f "$TMP/credential-supplied"
+  # Sol's repository marker belongs to the scenario that ran the apply; leaving it makes the
+  # next scenario read this one's leftovers (issue #1415).
+  rm -f "$TMP/ecr-sol-created"
+  rm -f "$TMP/run-ecr-deleted"
   if [ "$phase" = cloud ] && [ "${SKIP_PREPARE:-0}" != 1 ]; then stub_prepare "$name"; fi
   case "$phase" in
     prepare | cloud | app | destroy | cleanup) STUB_ECR_LIFECYCLE=1 ;;
@@ -909,6 +927,18 @@ has "and the whole-target deploy reconciles the environment by tag" \
   "deploy qualreg/aws/us-east-1 --registry $ECR --image-ref checkout_svc=$ECR/sol-runs/aws-self-test/checkout-svc@sha256:" "$TMP/cloudrun.sol"
 lacks "the removed partial cloud apply is never invoked" "cloud apply" "$TMP/cloudrun.sol"
 
+printf '\nscenario: cleanup sweeps the run-owned repositories an interrupted attempt left\n'
+STUB_RUN_ECR_REPOS="sol-runs/aws-self-test/charge-svc" run_phase cleanuprun cleanup
+is "exit 0" "$(cat "$TMP/cleanuprun.rc")" "0"
+has "the run removes its own repository by name, not by what was recorded" \
+  "ecr delete-repository --repository-name sol-runs/aws-self-test/charge-svc --force" "$TMP/cleanuprun.aws"
+has "and reads the absence back rather than assuming it" \
+  "none ABSENT" "$TMP/cleanuprun.logs/ecr-run-repositories-absent.txt"
+
+printf '\nscenario: a sweep that cannot remove a run repository fails the phase\n'
+STUB_RUN_ECR_REPOS="sol-runs/aws-self-test/charge-svc" STUB_ECR_DELETE_FAILS=1 run_phase cleanupfail cleanup
+refused cleanupfail "a failed sweep is a failure, not a note"
+
 printf '\nscenario: cloud refuses when nothing has been published for it\n'
 SKIP_PREPARE=1 run_phase noprep cloud
 refused noprep "a cold target's first deploy refuses without published digests"
@@ -969,9 +999,7 @@ else
 fi
 
 run_phase destroyrun destroy
-# The destroy phase's exit is not asserted here: it now also reads back Sol's repositories and
-# sweeps the run's own, and this stub cannot model Sol's repository lifecycle inside a phase, so
-# the assertion would test the fixture. The readings are recorded instead; see issue #1415.
+is "exit 0" "$(cat "$TMP/destroyrun.rc")" "0"
 has "the destroy carries the same var file, so teardown renders the applied shape" \
   "destroy qualreg/aws/us-east-1 --apply --var-file $ROOT/internal/qualification/aws/qual-aws-row.tfvars" \
   "$TMP/destroyrun.sol"
@@ -1014,8 +1042,7 @@ git -C "$WORKSPACE" reset -q --hard "$CANDIDATE_REVISION"
 
 printf '\nscenario: the destroy phase survives a closed stdout reader and records the inventory\n'
 run_phase_closed_stdout destroyclosed destroy
-# As above: the exit is not asserted until the stub can model Sol's repository lifecycle in a
-# phase (issue #1415).
+is "exit 0" "$(cat "$TMP/destroyclosed.rc")" "0"
 has "the teardown still ran" "destroy qualreg/aws/us-east-1 --apply" "$TMP/destroyclosed.sol"
 exists "the independent inventory is captured" "$TMP/destroyclosed.logs/aws-inventory.txt"
 has "the harness writes its own narrative" "destroy returned success" \
