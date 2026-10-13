@@ -34,6 +34,7 @@ Ancestry of the tagged revision: #1407, #1410, #1412, #1414, #1416, #1420, #1421
 | **The authority state is `established` with owner and target identity** | **PASS** | live read, below |
 | `sol migrate apply` reads the DDL class Secret | PASS | `Migrations: OK -- 7 declared migration(s) present in schema_migrations` |
 | The deploy applies the workloads and reconciles the contract | PASS | `app-deploy.log`: `Contract: reconciled in the destination with image …` |
+| The deploy **delivers** the credential classes to the consuming namespaces | PASS | see "delivery, not consumption" below |
 | **A unit secret can be written before its workload exists** | **PASS** | ten `Secret updated for <domain>/<unit>/KAFKA_*` writes, none failing |
 
 ### The authority state, read live
@@ -52,6 +53,38 @@ Supplying the ten per-unit Kafka keys (`#1438`'s fix) succeeded with **no restar
 failure**, on a target where the Deployments were already applied and in a refused state —
 `#1436`'s *set writes; activation is explicit* exercised on real infrastructure. Under the old
 behaviour every one of those ten writes would have failed with `could not be restarted`.
+
+### Delivery, not consumption
+
+**What was observed is delivery.** `qual-2b-a32-aws-us-east-1-ddl-creds` exists in
+`pluto-checkout` (the migration Job's namespace), `…-dml-creds` exist in `pluto-comms` and
+`pluto-payments` (the consuming units' namespaces), the consuming units' own unit Secrets carry
+no `POSTGRES_URL`, and the deploy reported the classes delivered.
+
+**What was not observed is consumption**: no assertion established that a workload actually
+started, mounted its class Secret and read a connection from it. `app_verify_database_delivery`
+is the check that would go further, and it was not reached. The distinction matters: "the class
+Secret is present where the consuming unit reads it" and "the consuming unit read it" are
+different claims, and only the first is evidence here.
+
+## Why this is not a 2b verdict
+
+The attempt stops on **#1440**, a release-record derivation mismatch between a deploy's write
+path and its read path. That defect is *orthogonal to 2b*: it is adjacent product machinery
+(release identity) that a deploy touches after the 2b paths have run. The 2b design itself was
+exercised on every pass — credential-class delivery, the migration gate, the operator-secret
+stop, the authority state transition, and explicit activation all behaved.
+
+So the honest statement is: **the 2b acceptance is blocked by an adjacent product defect, not by
+anything this arc's design failed to do** — and the record exists so that distinction is legible
+rather than inferred from a missing verdict.
+
+## CI regressions this window earned
+
+Each window finding now carries a stateful CI test, so the next window pays for a *new* class
+rather than repeating this one: #1433 → "live workloads are listed per namespace, never
+cluster-wide"; #1434 → `cli/test/test_secret_set_writes.sh` (a write with no workload to
+restart); #1440 → "a second deploy reads the record the first deploy wrote".
 
 ## Where it stopped
 
