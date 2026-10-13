@@ -97,6 +97,17 @@ let boundary_id ~workspace ~environment ~contract ~deployed ~inherited =
        ~inherited)
 ;;
 
+(* **The one derivation of a stored record's id**, used at write
+   ([of_plan_with_boundary]) and at read ([validate]). A record is valid exactly when its
+   stored id equals this. *)
+let derived_release_id (t : t) : Sol_cli_release_id.t =
+  Sol_cli_release_id.of_recorded_boundary
+    ~workspace:t.workspace
+    ~environment:t.environment
+    ~contract:t.contract
+    t.workloads
+;;
+
 let of_plan_with_boundary
       ?(owned = [])
       ~(apply_mode : apply_mode)
@@ -156,35 +167,41 @@ let of_plan_with_boundary
       ~deployed
       ~inherited:(List.map (fun w -> w.Sol_cli_release_id.spec, w.applied_by) inherited)
   in
-  { release_id
-  ; workspace = plan.workspace
-  ; environment = plan.environment.env
-  ; workloads =
-      List.map2
-        (fun (spec : Sol_cli_deployment_plan.service_spec) w ->
-           { (applied_by (Sol_cli_release_id.to_string plan.release_id) w) with
-             Sol_cli_release_id.owned = owned_for spec
-           })
-        plan.services
-        deployed
-      @ inherited
-  ; migrations = List.map Sol_cli_plan_ids.Migration_file.to_string plan.migrations
-  ; contract = plan.contract
-  ; apply_mode
-  ; encoding_version = Some Sol_cli_release_id.encoding_version
-  }
+  let record =
+    { release_id
+    ; workspace = plan.workspace
+    ; environment = plan.environment.env
+    ; workloads =
+        List.map2
+          (fun (spec : Sol_cli_deployment_plan.service_spec) w ->
+             { (applied_by (Sol_cli_release_id.to_string plan.release_id) w) with
+               Sol_cli_release_id.owned = owned_for spec
+             })
+          plan.services
+          deployed
+        @ inherited
+    ; migrations = List.map Sol_cli_plan_ids.Migration_file.to_string plan.migrations
+    ; contract = plan.contract
+    ; apply_mode
+    ; encoding_version = Some Sol_cli_release_id.encoding_version
+    }
+  in
+  (* The record's id must be the id its **own stored content** rederives, because that is
+     exactly what a later read checks ([validate], via [derived_release_id]). Deriving it from
+     the finished record makes that true by construction rather than by agreement between two
+     computations.
+
+     They did not agree: [boundary_id] derives with the deployed workloads' `applied_by` set to
+     the *content* id, while the record stores them with `applied_by` = `plan.release_id`, and
+     `applied_by` is itself part of what the derivation reads. Whenever those two ids differed
+     -- a scoped deploy, where an already-applied workload is *retained* -- the deploy wrote a
+     record every later deploy refused as corrupt ("its content rederives ...") and the target
+     could not be deployed to again (#1440). *)
+  { record with release_id = Sol_cli_release_id.to_string (derived_release_id record) }
 ;;
 
 let of_plan ~(apply_mode : apply_mode) (plan : Sol_cli_deployment_plan.t) : t =
   of_plan_with_boundary ~apply_mode ~retained:[] plan
-;;
-
-let derived_release_id (t : t) : Sol_cli_release_id.t =
-  Sol_cli_release_id.of_recorded_boundary
-    ~workspace:t.workspace
-    ~environment:t.environment
-    ~contract:t.contract
-    t.workloads
 ;;
 
 let stale_encoding_version_message (t : t) written_with =

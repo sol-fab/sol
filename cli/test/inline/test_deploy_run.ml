@@ -571,6 +571,54 @@ let test_deploy_removes_only_the_uid_matched_surplus () =
            (Sol_cli_string.contains ~needle:"stale-svc" log)))
 ;;
 
+(* **Deploy twice.** The record one deploy writes must be the record the next deploy can
+   read: [validate] rederives the id from the record's *stored* content, so the write path and
+   the read path must be one derivation.
+
+   Regression for #1440. The write path derived the id with the deployed workloads'
+   `applied_by` set to the *content* id, while the record stores them with `applied_by` = the
+   plan's release id -- and `applied_by` is part of what the derivation reads. The two agree
+   only while the plan's id happens to equal the content id; a real deploy reached a state
+   where it did not, wrote a record every later deploy refused as corrupt ("its content
+   rederives ..."), and the target could not be deployed to again.
+
+   This pins the invariant the read path enforces, for a plan whose id is *not* the content
+   id -- which is what makes it a regression test rather than a restatement of the fixture. *)
+let plan_with_release_id release_id services =
+  { (plan services) with Sol_cli_deployment_plan.release_id }
+;;
+
+let test_a_second_deploy_reads_the_record_the_first_wrote () =
+  let distinct = Sol_cli_release_id.of_string "r-0123456789abcdef" |> Result.get_ok in
+  let first =
+    Sol_cli_release.of_plan
+      ~apply_mode:Sol_cli_release.Direct
+      (plan_with_release_id
+         distinct
+         [ spec ~domain:"payments" ~name:"charge_svc" ~k8s:"charge-svc" Svc ])
+  in
+  (match Sol_cli_release.validate ~name:(Sol_cli_release.configmap_name first) first with
+   | Ok () -> ()
+   | Error message ->
+     Windtrap.fail ("the first deploy's own record must validate: " ^ message));
+  let second =
+    Sol_cli_release.of_plan_with_boundary
+      ~apply_mode:Sol_cli_release.Direct
+      ~retained:first.workloads
+      (plan_with_release_id
+         distinct
+         [ spec ~domain:"comms" ~name:"notify_worker" ~k8s:"notify-worker" Worker ])
+  in
+  match Sol_cli_release.validate ~name:(Sol_cli_release.configmap_name second) second with
+  | Ok () -> ()
+  | Error message ->
+    Windtrap.fail ("a second deploy must be able to read the first's record: " ^ message)
+;;
+
+let%test "release: a second deploy reads the record the first deploy wrote" =
+  test_a_second_deploy_reads_the_record_the_first_wrote ()
+;;
+
 (* An unobservable live set is not a completed reconciliation: the operation errors, so
    the caller must not advance the release boundary past an object whose ownership Sol
    could not check. *)
