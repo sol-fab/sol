@@ -1058,6 +1058,25 @@ app_read_kafka_ca() {
 # `<domain>/<unit>/<KEY>` for one unit's secret. The pre-2b `--target`/`--domain` flags are gone.
 # The value must arrive with `--from-stdin`: the CLI does not auto-detect a pipe and otherwise
 # demands a terminal (#1432).
+app_unit_addresses() {
+  local service path
+  for service in $(app_services); do
+    if path="$(app_context_path "$service")"; then
+      printf '%s\n' "${path#app/}"
+    fi
+  done | sort -u
+}
+
+app_secret_set_unit() {
+  local key="$1" address
+  for address in $(app_unit_addresses); do
+    if ! run "app-secret-$key-$(printf '%s' "$address" | tr '/' '-')" bash -c \
+      "printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$TARGET' '$address/$key' --from-stdin"; then
+      return 1
+    fi
+  done
+}
+
 app_secret_set_platform() {
   local key="$1"
   if ! run "app-secret-platform-$key" bash -c \
@@ -1096,8 +1115,10 @@ app_supply_secrets() {
   fi
   export SOL_SECRET_VALUE="$password"
   app_secret_set_platform KAFKA_SASL_PASSWORD || return 1
+  app_secret_set_unit KAFKA_SASL_PASSWORD || return 1
   export SOL_SECRET_VALUE="$ca"
   app_secret_set_platform KAFKA_SSL_CA_CERT || return 1
+  app_secret_set_unit KAFKA_SSL_CA_CERT || return 1
   unset SOL_SECRET_VALUE
   {
     printf 'platform_secret_keys: KAFKA_SASL_PASSWORD KAFKA_SSL_CA_CERT\n'
