@@ -461,8 +461,9 @@ consumes Kafka without a declared topic or `kafka` resource is not detected
 yet, so declare every Kafka dependency.
 
 The workload credential posture is a Sol-owned renderer property: every workload
-gets no mounted service-account token, and runtime credentials rotate by
-`sol secret set` followed by a verified restart. See
+gets no mounted service-account token, and runtime credentials are updated by
+`sol secret set`, which writes and stops there — activation is explicit, by the
+deploy that applies the units. See
 [`credential-rotation.md`](../deployment/credential-rotation.md).
 
 Recoverable state and scoped identities are target declarations: a locked,

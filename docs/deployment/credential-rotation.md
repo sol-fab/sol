@@ -37,9 +37,17 @@ your-secret-tool get payment-api-key \
 
 Sol resolves the target and the key's declared authority before opening the
 input. It refuses external keys before reading a value. A changed value updates
-only that unit's Secret; for a long-running service or worker, Sol restarts that
-unit and waits for rollout readiness. It neither updates `sol-secrets` nor writes
-to another unit. Secret values are redacted from command output.
+only that unit's Secret. **Setting writes; activation is explicit**: Sol does not
+restart the workload, so a running process keeps reading the value it started
+with until something restarts it, and a value written before the workload exists
+has nothing to restart — which is not a failure. `sol deploy` applies the units,
+and that is what activates the value. `secret set` neither updates `sol-secrets`
+nor writes to another unit. Secret values are redacted from command output.
+
+That also bounds the guarantee: a sequence of `sol secret set` writes is **not**
+an atomic rotation transaction, because a process that starts between two writes
+can observe the newer value. Coordinate overlapping rotations yourself, or make
+the change and activate it in one deploy.
 
 Platform credentials used by Sol's internal Jobs have a separate target scope.
 Database credentials are no longer one of them: the deploy delivers

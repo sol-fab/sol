@@ -200,36 +200,6 @@ let check_set_permissions config facts address key =
            key))
 ;;
 
-let restart_unit ~ctx ~namespace ~unit_name ~key =
-  let kind = "deployment/" ^ unit_name in
-  match Sol_cli_kubectl.rollout_restart ~ctx ~kind ~namespace with
-  | Error error ->
-    Error
-      (Printf.sprintf
-         "secret value was written for %s/%s, but %s could not be restarted: %s"
-         namespace
-         key
-         kind
-         (Sol_cli_process.error_to_string error))
-  | Ok _ ->
-    (match
-       Sol_cli_kubectl.rollout_status_with_timeout
-         ~ctx
-         ~kind_name:kind
-         ~namespace
-         ~timeout_s:120
-     with
-     | Ok _ -> Ok ()
-     | Error error ->
-       Error
-         (Printf.sprintf
-            "secret value was written for %s/%s, but %s did not become ready: %s"
-            namespace
-            key
-            kind
-            (Sol_cli_process.error_to_string error)))
-;;
-
 let run_set target address from_stdin from_file =
   let open Result.Syntax in
   let* address = parse_secret_address address in
@@ -269,32 +239,19 @@ let run_set target address from_stdin from_file =
     let* changed =
       Sol_cli_secret.set_unit_key ~ctx ~namespace ~secret_name ~key:address.key ~value
     in
-    let unit =
-      Sol_cli_workspace_model.workloads facts
-      |> List.find_opt (fun (workload : Sol_cli_workspace_model.workload) ->
-        workload.service.domain = address.domain
-        && workload.service.name = address.unit_name)
-    in
-    let is_long_running =
-      match unit with
-      | Some
-          { service = { primitive = Sol_cli_manifest.Svc | Sol_cli_manifest.Worker; _ }
-          ; _
-          } -> true
-      | _ -> false
-    in
-    let* () =
-      if changed && is_long_running
-      then restart_unit ~ctx ~namespace ~unit_name:address.unit_name ~key:address.key
-      else Ok ()
-    in
+    (* **Set writes; activation is explicit.** Sol updates the value and stops there. A
+       running process keeps reading the value it started with until something restarts it,
+       and a value written before the workload exists has nothing to restart -- which is not
+       a failure, and is exactly the state a deploy's own secret precondition requires
+       (#1350, #1434). `sol deploy` applies the units, and that is what activates the value.
+       This also means a sequence of `sol secret set` calls is not an atomic rotation
+       transaction: a process that starts between two writes can observe the newer value. *)
     Printf.printf
       (if changed
-       then "Secret updated for %s/%s%s.\n%!"
-       else "Secret for %s/%s already had the requested value%s.\n%!")
+       then "Secret updated for %s/%s.\n%!"
+       else "Secret for %s/%s already had the requested value.\n%!")
       unit_address
-      address.key
-      (if changed && is_long_running then " and workload restarted" else "");
+      address.key;
     Ok ()
   | `Platform (key, namespaces) ->
     let* changed = Sol_cli_secret.set_platform_key ~ctx ~namespaces ~key ~value in
