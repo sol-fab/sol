@@ -63,12 +63,36 @@ if [ "${1:-}" = "plan" ]; then
   fi
   exit 0
 fi
+# The app phase's own sequence uses these; each clears the refusal the next deploy checks.
+if [ "${1:-}" = "migrate" ]; then
+  [ -n "${STUB_APP_MARKER_DIR:-}" ] && : >"$STUB_APP_MARKER_DIR/migrated"
+  exit 0
+fi
+if [ "${1:-}" = "secret" ] && [ "${2:-}" = "set" ]; then
+  [ -n "${STUB_APP_MARKER_DIR:-}" ] && : >"$STUB_APP_MARKER_DIR/secrets"
+  exit 0
+fi
 # The whole-target deploy reconciles the durable installation inline, so an installation
 # that cannot be established and a first deploy that reaches the substrate both surface
 # here. A fresh account's installation offer is interactive in the real command; the stub
 # accepts it and reports the reconciled environment `sol deploy` prints before workloads.
 if [ "${1:-}" = "deploy" ]; then
   : >"${TMP:-/tmp}/ecr-sol-created"
+  # 2b's app-phase ordering on a fresh profiled target: the first deploy refuses at the
+  # post-setup migration gate, `sol migrate apply` clears it, the second deploy refuses the
+  # absent operator secrets, and `sol secret set` clears that. `STUB_APP_REFUSALS=1` models
+  # that sequence, so the phase's own ordering is exercised rather than assumed.
+  if [ "${STUB_APP_REFUSALS:-0}" = "1" ]; then
+    if [ ! -f "${STUB_APP_MARKER_DIR:-/nonexistent}/migrated" ]; then
+      printf 'error: the required migration set is not applied. Missing: 001_notifications\n'
+      printf '  Migrations are workspace-wide, so this is the same set for every deploy. Run `sol migrate apply %s`, then deploy again.\n' "${2:-}"
+      exit 1
+    fi
+    if [ ! -f "${STUB_APP_MARKER_DIR:-/nonexistent}/secrets" ]; then
+      printf 'error: pluto-comms/sol-secrets does not hold the required non-empty secret key(s): KAFKA_SASL_PASSWORD, KAFKA_SSL_CA_CERT.\n'
+      exit 1
+    fi
+  fi
   if [ "${STUB_INSTALL_REFUSED:-0}" = "1" ]; then
     printf 'the durable installation for %s could not be established with positive evidence\n' "${2:-}"
     exit 1
@@ -584,10 +608,19 @@ run_row() {
   : >"$ESTABLISH_LOG"
   : >"$TERRAFORM_LOG"
   rm -rf "$LOG_DIR"
+  # The app phase runs against the real refusal sequence: the first deploy refuses at the
+  # migration gate, `sol migrate apply` clears it, the second refuses the absent operator
+  # secrets, and `sol secret set` clears that. Fresh markers per scenario keep one row's
+  # progress from satisfying the next. Scoped to this invocation only -- a global export
+  # would make later cloud/destroy scenarios refuse their deploys too.
+  STUB_APP_MARKER_DIR="$TMP/$name.markers"
+  rm -rf "$STUB_APP_MARKER_DIR"
+  mkdir -p "$STUB_APP_MARKER_DIR"
   env PATH="$TMP/bin:$PATH" \
     WORKSPACE="$WORKSPACE" TARGET=qualreg/aws/us-east-1 ECR_REGISTRY="$ECR" \
     CLUSTER=test-cluster DEPLOY_ROLE_ARN=arn:aws:iam::1:role/deploy \
     CLUSTER_ACCESS_ROLE_ARN=arn:aws:iam::1:role/access \
+    STUB_APP_REFUSALS=1 STUB_APP_MARKER_DIR="$STUB_APP_MARKER_DIR" \
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" PHASE_TIMEOUT=60 "$@" \
     "$ROOT/internal/qualification/aws/live-row.sh" app >"$TMP/$name.out" 2>&1
   echo "$?" >"$TMP/$name.rc"
@@ -761,10 +794,18 @@ lacks "no mutable tag is passed to a profile that requires immutable artifacts" 
   "--image-tag" "$TMP/ok.sol"
 lacks "no operator POSTGRES_URL is set for the migration path" \
   "secret set POSTGRES_URL" "$TMP/ok.sol"
-has "the workload API key is supplied through sol secret set" \
-  "secret set SOL_API_KEY --target qualreg/aws/us-east-1 --domain payments" "$TMP/ok.sol"
-has "and the Kafka credential and CA" \
-  "secret set KAFKA_SSL_CA_CERT --target qualreg/aws/us-east-1 --domain comms" "$TMP/ok.sol"
+has "the workload API key is supplied through sol secret set, addressed per unit" \
+  "secret set qualreg/aws/us-east-1 payments/charge_svc/SOL_API_KEY" "$TMP/ok.sol"
+has "and the Kafka credential and CA as platform Job inputs" \
+  "secret set qualreg/aws/us-east-1 @platform/KAFKA_SSL_CA_CERT" "$TMP/ok.sol"
+lacks "no removed --target/--domain surface is used" \
+  "--domain" "$TMP/ok.sol"
+has "the first deploy's migration-gate refusal is recognised, not treated as a failure" \
+  "then refused to move workloads against an unapplied migration (expected)" "$TMP/ok.out"
+has "the second deploy's absent-secret refusal is recognised" \
+  "then refused the absent operator secrets (expected)" "$TMP/ok.out"
+exists "the migration gate was refused before anything was applied" "$STUB_APP_MARKER_DIR/migrated"
+exists "and the absent-secret refusal was cleared by sol secret set" "$STUB_APP_MARKER_DIR/secrets"
 lacks "no secret value is passed on a command line" \
   "testpass" "$TMP/ok.sol"
 has "the supplied keys are recorded without their values" \

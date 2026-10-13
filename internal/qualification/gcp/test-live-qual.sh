@@ -100,7 +100,7 @@ if [ "${1:-}" = "--version" ]; then
   printf '%s\n' "${STUB_SOL_VERSION:-v0.1.0-alpha.7}"
   exit 0
 fi
-printf 'sol %s [runner=%s]\n' "$*" "${SOL_MIGRATION_RUNNER_IMAGE:-unset}" >>"$ARGV_LOG"
+printf 'sol %s [runner=%s] [setup=%s]\n' "$*" "${SOL_MIGRATION_RUNNER_IMAGE:-unset}" "${SOL_SETUP_POSTGRES_IMAGE:-unset}" >>"$ARGV_LOG"
 if [ -n "${STUB_SOL_SLEEP:-}" ]; then sleep "$STUB_SOL_SLEEP"; fi
 case "$1" in
   deploy)
@@ -863,8 +863,14 @@ lacks "no mutable tag is passed to a profile that requires immutable artifacts" 
   "--image-tag" "$TMP/app-ok.argv"
 lacks "no operator POSTGRES_URL is set for the migration path" \
   "secret set POSTGRES_URL" "$TMP/app-ok.argv"
-has "and the Kafka credential and CA" \
-  "secret set KAFKA_SSL_CA_CERT --target qual/gcp/us-central1 --domain comms" "$TMP/app-ok.argv"
+has "the database setup image is named by digest, so the setup step can run (#1402)" \
+  "[setup=postgres@sha256:" "$TMP/app-ok.argv"
+lacks "and never left unset for a deploy that must deliver class credentials" \
+  "[setup=unset]" "$TMP/app-ok.argv"
+has "and the Kafka credential and CA as platform Job inputs" \
+  "secret set qual/gcp/us-central1 @platform/KAFKA_SSL_CA_CERT" "$TMP/app-ok.argv"
+lacks "no removed --target/--domain surface is used" \
+  "--domain" "$TMP/app-ok.argv"
 lacks "no secret value is passed on a command line" \
   "testpass" "$TMP/app-ok.argv"
 has "the supplied keys are recorded without their values" \

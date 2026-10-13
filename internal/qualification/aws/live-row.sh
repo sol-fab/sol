@@ -709,6 +709,14 @@ app_secret_failure() {
   grep -qF 'does not hold the required non-empty secret key(s)' "$1" 2>/dev/null
 }
 
+# 2b moved migration verification to the post-setup gates, so on a fresh target the deploy
+# reaches the migration gate before the required-secret check. It is the first refusal a
+# fresh profiled target produces, and the harness models it rather than assuming the
+# pre-2b order.
+app_migration_gate_failure() {
+  grep -qF 'the required migration set is not applied' "$1" 2>/dev/null
+}
+
 app_read_platform_password() {
   local password
   if [ -n "${KAFKA_SASL_PASSWORD:-}" ]; then
@@ -727,22 +735,31 @@ app_read_kafka_ca() {
     -o jsonpath='{.data.ca\.crt}' 2>/dev/null | base64 -d 2>/dev/null
 }
 
-app_domains() {
-  local unit dir domain
+app_unit_addresses() {
+  local unit dir
   for unit in $APP_UNITS; do
     if dir="$(unit_dir "$unit")"; then
-      domain="${dir#app/}"
-      printf '%s\n' "${domain%%/*}"
+      printf '%s\n' "${dir#app/}"
     fi
   done | sort -u
 }
 
-app_secret_set() {
-  local key="$1" domain
-  for domain in $(app_domains); do
-    run "app-secret-$key-$domain" bash -c \
-      "cd '$WORKSPACE' && printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$key' --target '$TARGET' --domain '$domain'"
+# The supported `sol secret set` surface is positional — `TARGET ADDRESS`, where ADDRESS is
+# `<domain>/<unit>/<KEY>` for one unit's secret or `@platform/<KEY>` for a Sol Job input. The
+# pre-2b `--target`/`--domain` flags are gone, so a unit value is addressed per unit rather
+# than by domain.
+app_secret_set_unit() {
+  local key="$1" address
+  for address in $(app_unit_addresses); do
+    run "app-secret-$key-$(printf '%s' "$address" | tr '/' '-')" bash -c \
+      "cd '$WORKSPACE' && printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$TARGET' '$address/$key'"
   done
+}
+
+app_secret_set_platform() {
+  local key="$1"
+  run "app-secret-platform-$key" bash -c \
+    "cd '$WORKSPACE' && printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$TARGET' '@platform/$key'"
 }
 
 # Production secrets are operator-supplied: Sol's deploy verifies the ones a unit or a Job
@@ -762,11 +779,11 @@ app_supply_secrets() {
     return 1
   fi
   export SOL_SECRET_VALUE="$SOL_API_KEY"
-  app_secret_set SOL_API_KEY || return 1
+  app_secret_set_unit SOL_API_KEY || return 1
   export SOL_SECRET_VALUE="$password"
-  app_secret_set KAFKA_SASL_PASSWORD || return 1
+  app_secret_set_platform KAFKA_SASL_PASSWORD || return 1
   export SOL_SECRET_VALUE="$ca"
-  app_secret_set KAFKA_SSL_CA_CERT || return 1
+  app_secret_set_platform KAFKA_SSL_CA_CERT || return 1
   unset SOL_SECRET_VALUE
   {
     printf 'unit_secret_keys: SOL_API_KEY\n'
@@ -851,17 +868,31 @@ phase_app() {
       say "  $ns: no sol-deploy RoleBinding yet"
     fi
   done
-  say "app-secrets-bootstrap"
-  if ! run app-deploy-bootstrap bash -c "cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args"; then
-    if app_secret_failure "$LOG_DIR/app-deploy-bootstrap.log"; then
+  say "app-deploy-gate"
+  # 2b's ordering on a fresh profiled target: `gates -> database_setup -> post_setup_gates`.
+  # The first whole-target deploy reconciles the substrate, delivers the class credentials in
+  # the database setup step, and then the post-setup migration gate refuses to move workloads
+  # against an unapplied migration. That refusal is the ordering claim, not an obstacle.
+  if ! run app-deploy-gate bash -c "cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args"; then
+    if app_migration_gate_failure "$LOG_DIR/app-deploy-gate.log"; then
+      say "  the deploy reconciled the substrate and delivered the class credentials, then refused to move workloads against an unapplied migration (expected)"
+    else
+      say "FAILED: the deploy did not reach the migration gate"
+      return 1
+    fi
+  fi
+  say "app-deploy-migrate"
+  run migrate-apply bash -c "cd '$WORKSPACE' && exec '$SOL' migrate apply '$TARGET'" || return 1
+  say "app-deploy-secrets"
+  if ! run app-deploy-secrets bash -c "cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args"; then
+    if app_secret_failure "$LOG_DIR/app-deploy-secrets.log"; then
       say "  the deploy established the namespaces and their scoped RBAC, then refused the absent operator secrets (expected)"
     else
-      say "FAILED: the bootstrap deploy did not reach the secret prerequisite"
+      say "FAILED: the deploy did not reach the secret prerequisite"
       return 1
     fi
   fi
   app_supply_secrets || return 1
-  run migrate-apply bash -c "cd '$WORKSPACE' && exec '$SOL' migrate apply '$TARGET'" || return 1
   run app-deploy bash -c "cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args" || return 1
   app_verify_database_delivery || return 1
   # ADR 0004: destruction removes what the lifecycle created. The run's images live in its own
