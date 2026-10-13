@@ -21,21 +21,42 @@ SOL_API_KEY=dev-internal-key
 SECRETS
 done
 
-# Establish local infrastructure and workloads before applying workspace
-# migrations; the following deploy verifies the migrated schema.
-sol local deploy --scope=demo_ts
+# Establish the local cluster and its infrastructure (k3d, Postgres, Kafka,
+# registry). `sol local migrate` reaches the cluster's Postgres, so it cannot run
+# before the cluster exists -- there is no infra-only command, and
+# `sol local migrate` says so itself: "Run 'sol local deploy' to establish the
+# local cluster, then retry."
+#
+# This first pass therefore also starts the units, which read a schema the
+# migrations below create, so its rollout wait fails. That outcome is expected
+# and is not this script's verdict; the deploy after the migrations is the one
+# that must succeed.
+sol local deploy --scope=demo_ts || true
+
+demo_ns=$(kubectl get ns -o name | sed 's|namespace/||' | grep -- '-demo-ts$' | head -1)
 
 # The demo's tables are workspace migrations now
 # (db/migrations/0006_orders_ts.sql owns orders_ts, fulfilled_orders_ts
 # and order_confirmations_ts; 0007 adds the accept's trace context), so
-# the units create nothing at runtime and this must run before the deploy.
-# Applying them here is also what proves the migrations cover the
-# TypeScript namespace, rather than the apps' own `CREATE TABLE`.
+# the units create nothing at runtime and this must run before the deploy that
+# has to succeed. Applying them here is also what proves the migrations cover the
+# TypeScript namespace, rather than the apps' own `CREATE TABLE`. Migrating here,
+# before the deploy below, is what makes the order deterministic: the workload
+# that must become ready never starts before its schema exists.
 sol local migrate
 
-sol local deploy --scope=demo_ts
+# **Activation is explicit.** The first pass applied the workloads against a
+# schema that did not exist yet, so their Deployment is left in a failed rollout
+# with a pod running the pre-migration code -- its relay says so: "the sol_outbox
+# table does not exist". Re-applying the same spec does not roll it (the pod
+# template is unchanged; `deploy` only observes that the rollout deadline is
+# already past), which is why the restart is explicit rather than implied:
+# `sol secret set` and `sol local migrate` write, and the deploy that follows is
+# what activates. `sol local deploy --scope=demo_ts` then waits for the rollout
+# and fails if the units do not become ready.
+kubectl -n "$demo_ns" rollout restart deployment
 
-demo_ns=$(kubectl get ns -o name | sed 's|namespace/||' | grep -- '-demo-ts$' | head -1)
+sol local deploy --scope=demo_ts
 
 # fulfillment_worker subscribes with `fromBeginning: false`
 # (app code, out of scope to change here). For a genuinely new
