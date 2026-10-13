@@ -52,9 +52,21 @@ type workload_identity =
 
 val identity_of_spec : Sol_cli_deployment_plan.service_spec -> workload_identity
 
+(** The namespaces a plan deploys into. *)
+val namespaces_of_plan : Sol_cli_deployment_plan.t -> string list
+
+(** The namespaces the recorded apply wrote into. Pruning observes these as well as the
+    plan's: a workload the plan no longer declares lives in a namespace the plan may no
+    longer name. *)
+val namespaces_of_evidence : Sol_cli_release_id.owned_object list -> string list
+
+(** Live workloads for [workspace], listed per namespace in [namespaces]. The target's
+    deploy identity is namespace-scoped by design (ADR 0002, SEC-011), so this never lists
+    cluster-wide. *)
 val live_workloads
   :  ctx:Sol_cli_kube_destination.context
   -> workspace:string
+  -> namespaces:string list
   -> ((workload_identity * string) list, string) result
 
 val workload_rows_of_payload
