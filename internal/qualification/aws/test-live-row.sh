@@ -794,10 +794,14 @@ lacks "no mutable tag is passed to a profile that requires immutable artifacts" 
   "--image-tag" "$TMP/ok.sol"
 lacks "no operator POSTGRES_URL is set for the migration path" \
   "secret set POSTGRES_URL" "$TMP/ok.sol"
-has "the workload API key is supplied through sol secret set, addressed per unit" \
-  "secret set qualreg/aws/us-east-1 payments/charge_svc/SOL_API_KEY" "$TMP/ok.sol"
-has "and the Kafka credential and CA as platform Job inputs" \
+lacks "no undeclared unit secret is invented and supplied" \
+  "SOL_API_KEY" "$TMP/ok.sol"
+has "the Kafka credential is supplied as a platform Job input" \
+  "secret set qualreg/aws/us-east-1 @platform/KAFKA_SASL_PASSWORD" "$TMP/ok.sol"
+has "and the CA too" \
   "secret set qualreg/aws/us-east-1 @platform/KAFKA_SSL_CA_CERT" "$TMP/ok.sol"
+has "the value arrives with --from-stdin, so the CLI needs no terminal" \
+  "@platform/KAFKA_SSL_CA_CERT --from-stdin" "$TMP/ok.sol"
 lacks "no removed --target/--domain surface is used" \
   "--domain" "$TMP/ok.sol"
 has "the first deploy's migration-gate refusal is recognised, not treated as a failure" \

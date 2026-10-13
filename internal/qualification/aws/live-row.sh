@@ -735,38 +735,29 @@ app_read_kafka_ca() {
     -o jsonpath='{.data.ca\.crt}' 2>/dev/null | base64 -d 2>/dev/null
 }
 
-app_unit_addresses() {
-  local unit dir
-  for unit in $APP_UNITS; do
-    if dir="$(unit_dir "$unit")"; then
-      printf '%s\n' "${dir#app/}"
-    fi
-  done | sort -u
-}
-
-# The supported `sol secret set` surface is positional — `TARGET ADDRESS`, where ADDRESS is
-# `<domain>/<unit>/<KEY>` for one unit's secret or `@platform/<KEY>` for a Sol Job input. The
-# pre-2b `--target`/`--domain` flags are gone, so a unit value is addressed per unit rather
-# than by domain.
-app_secret_set_unit() {
-  local key="$1" address
-  for address in $(app_unit_addresses); do
-    run "app-secret-$key-$(printf '%s' "$address" | tr '/' '-')" bash -c \
-      "cd '$WORKSPACE' && printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$TARGET' '$address/$key'"
-  done
-}
-
+# The supported `sol secret set` surface is positional — `TARGET ADDRESS` — and the address a
+# platform Job input takes is `@platform/<KEY>`. The pre-2b `--target`/`--domain` flags are
+# gone. The value must arrive with `--from-stdin`: the CLI does not auto-detect a pipe and
+# otherwise demands a terminal (#1432). Only the platform form is offered here because this
+# workspace declares no unit-level runtime secret (see {!app_supply_secrets}); a row whose
+# workspace does needs `<domain>/<unit>/<KEY>` per declaring unit.
 app_secret_set_platform() {
   local key="$1"
   run "app-secret-platform-$key" bash -c \
-    "cd '$WORKSPACE' && printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$TARGET' '@platform/$key'"
+    "cd '$WORKSPACE' && printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$TARGET' '@platform/$key' --from-stdin"
 }
 
 # Production secrets are operator-supplied: Sol's deploy verifies the ones a unit or a Job
-# declares and fails closed. The harness stands in for the operator, supplying the
-# application value and the Kafka platform inputs through the supported `sol secret set`.
-# The database is *not* one of them: the deploy delivers it from the target's binding
-# (2b), so the harness neither holds nor sets a POSTGRES_URL.
+# declares and fails closed. The harness stands in for the operator, supplying the Kafka
+# platform inputs through the supported `sol secret set`. The database is *not* one of them:
+# the deploy delivers it from the target's binding (2b), so the harness neither holds nor sets
+# a POSTGRES_URL.
+#
+# This workspace declares **no unit-level runtime secret** — every unit's `sol.toml` has
+# `# secrets = []`, and its only declared secrets are the two Kafka platform inputs. The
+# harness used to invent an `SOL_API_KEY` to supply as a unit secret; `sol secret set`
+# correctly refuses an undeclared key, which aborted the app phase before the keys the deploy
+# actually requires were supplied (#1430).
 app_supply_secrets() {
   local password ca
   if ! password="$(app_read_platform_password)"; then
@@ -778,20 +769,18 @@ app_supply_secrets() {
     say "could not read the Redpanda CA from redpanda/redpanda-default-cert"
     return 1
   fi
-  export SOL_SECRET_VALUE="$SOL_API_KEY"
-  app_secret_set_unit SOL_API_KEY || return 1
   export SOL_SECRET_VALUE="$password"
   app_secret_set_platform KAFKA_SASL_PASSWORD || return 1
   export SOL_SECRET_VALUE="$ca"
   app_secret_set_platform KAFKA_SSL_CA_CERT || return 1
   unset SOL_SECRET_VALUE
   {
-    printf 'unit_secret_keys: SOL_API_KEY\n'
+    printf 'unit_secret_keys: none declared by this workspace\n'
     printf 'platform_secret_keys: KAFKA_SASL_PASSWORD KAFKA_SSL_CA_CERT\n'
     printf 'secret_values: never recorded\n'
     printf 'database_delivery: delivered by the deploy from the target binding; no operator copy\n'
   } >>"$LOG_DIR/prerequisites.txt"
-  say "supplied the operator's application and Kafka secrets through sol secret set; the database is delivered by the deploy"
+  say "supplied the workspace's declared Kafka secrets through sol secret set; the database is delivered by the deploy"
 }
 
 app_class_credential_name() { printf '%s' "$TARGET" | tr '[:upper:]/' '[:lower:]-'; }
@@ -845,10 +834,9 @@ phase_app() {
   # The cluster root's postgres_url output is the *deploy's* input: the database setup step
   # derives <target>-ddl-creds / <target>-dml-creds from it. The harness records the source
   # redacted and never feeds the value to `sol secret set`.
-  export SOL_API_KEY="${SOL_API_KEY:-$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 20)}"
   {
     printf 'database master source: the cluster root postgres_url output (never recorded in the clear)\n'
-    printf 'SOL_API_KEY: %s*** (generated for this run)\n' "$(printf '%s' "$SOL_API_KEY" | cut -c1-2)"
+    printf 'operator secrets: supplied with sol secret set; values never recorded\n'
   } >"$LOG_DIR/app-runtime-secrets.txt" 2>&1
   local image_ref_args=""
   while IFS= read -r ref; do
