@@ -1264,6 +1264,66 @@ let with_fake_kubectl script f =
     f
 ;;
 
+(* The target's deploy identity is namespace-scoped by design (ADR 0002, SEC-011). A
+   cluster-scoped list is forbidden for it, and it fails the whole deploy *after* its
+   workloads were applied, so the observation must name the namespaces the deploy resolved
+   (#1433). *)
+let test_live_workloads_list_per_namespace () =
+  let contains haystack needle =
+    let n = String.length needle
+    and h = String.length haystack in
+    let rec go i =
+      i + n <= h && (String.equal (String.sub haystack i n) needle || go (i + 1))
+    in
+    n = 0 || go 0
+  in
+  let log = Filename.temp_file "sol-live-workloads" "" in
+  Fun.protect
+    ~finally:(fun () ->
+      try Sys.remove log with
+      | _ -> ())
+    (fun () ->
+       with_fake_kubectl
+         (Printf.sprintf
+            "#!/bin/sh\nprintf '%%s\\n' \"$*\" >> '%s'\nprintf '{\"items\":[]}'\n"
+            log)
+         (fun () ->
+            let ctx = Sol_cli_kube_destination.local_context in
+            (match
+               Sol_cli_rollback.live_workloads
+                 ~ctx
+                 ~workspace:"pluto"
+                 ~namespaces:[ "pluto-comms"; "pluto-payments" ]
+             with
+             | Error message -> Windtrap.fail message
+             | Ok _ -> ());
+            let calls =
+              In_channel.with_open_bin log In_channel.input_all
+              |> String.split_on_char '\n'
+              |> List.filter (fun line -> not (String.equal line ""))
+            in
+            Windtrap.equal
+              Windtrap.int
+              ~msg:"every live kind is read once per namespace"
+              6
+              (List.length calls);
+            Windtrap.equal
+              Windtrap.bool
+              ~msg:"each read names a namespace and none lists cluster-wide"
+              true
+              (List.for_all
+                 (fun line ->
+                    List.exists
+                      (fun namespace -> contains line ("-n " ^ namespace))
+                      [ "pluto-comms"; "pluto-payments" ]
+                    && not (contains line "-A"))
+                 calls)))
+;;
+
+let%test "rollback: live workloads are listed per namespace, never cluster-wide" =
+  test_live_workloads_list_per_namespace ()
+;;
+
 let test_verify_pointer_reports_an_unreadable_read () =
   with_fake_kubectl
     {|#!/bin/sh

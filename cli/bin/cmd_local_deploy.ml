@@ -574,7 +574,12 @@ let apply_plan ~secret_values ~run_log ~workspace ~sha ~repo_root ~pf_failed ~le
 let report_surplus_workloads ~workspace (plan : Sol_cli_deployment_plan.t) =
   if String.equal plan.requested_scope "workspace"
   then (
-    match Sol_cli_rollback.live_workloads ~ctx:cluster ~workspace with
+    match
+      Sol_cli_rollback.live_workloads
+        ~ctx:cluster
+        ~workspace
+        ~namespaces:(Sol_cli_rollback.namespaces_of_plan plan)
+    with
     | Error _ -> ()
     | Ok live ->
       let surplus = Sol_cli_rollback.unexpected_workloads ~expected:plan.services ~live in

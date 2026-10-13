@@ -414,7 +414,16 @@ let remove_surplus_workloads (ctx : context) plan : (unit, string) result =
          reason
          ctx.target_name)
   | Ok evidence ->
-    (match Sol_cli_rollback.live_workloads ~ctx:cluster ~workspace with
+    (match
+       Sol_cli_rollback.live_workloads
+         ~ctx:cluster
+         ~workspace
+         ~namespaces:
+           (List.sort_uniq
+              String.compare
+              (Sol_cli_rollback.namespaces_of_plan plan
+               @ Sol_cli_rollback.namespaces_of_evidence evidence))
+     with
      | Error reason ->
        Error
          (Printf.sprintf

@@ -128,7 +128,22 @@ let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
           ~local
           ~release
     ; live_workloads =
-        (fun () -> Sol_cli_rollback.live_workloads ~ctx ~workspace:release.workspace)
+        (* Scoped to the namespaces the release deployed into: the target's deploy identity
+           is namespace-scoped, so a cluster-scoped list is forbidden for it (#1433). *)
+        (fun () ->
+          let namespaces =
+            release.Sol_cli_release.workloads
+            |> List.filter_map (fun (w : Sol_cli_release_id.recorded_workload) ->
+              match
+                Sol_cli_deployment_plan.namespace_name
+                  ~workspace:release.workspace
+                  ~domain:w.spec.domain
+              with
+              | Ok namespace -> Some namespace
+              | Error _ -> None)
+            |> List.sort_uniq String.compare
+          in
+          Sol_cli_rollback.live_workloads ~ctx ~workspace:release.workspace ~namespaces)
     ; prune =
         (fun ~live ~surplus ->
           let* report = Sol_cli_rollback.prune_workloads ~ctx ~evidence ~live ~surplus in

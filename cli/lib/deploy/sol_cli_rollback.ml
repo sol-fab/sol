@@ -563,33 +563,69 @@ let workload_rows_of_payload ~kind ~workspace (payload : Yojson.Safe.t) =
        | _ -> None)
 ;;
 
-let live_workloads ~(ctx : Sol_cli_kube_destination.context) ~(workspace : string)
+(** The namespaces a plan deploys into — part of what a live-workload observation is scoped
+    to. *)
+let namespaces_of_plan (plan : Sol_cli_deployment_plan.t) =
+  plan.Sol_cli_deployment_plan.services
+  |> List.map (fun (spec : Sol_cli_deployment_plan.service_spec) ->
+    Sol_cli_deployment_plan.namespace_to_string spec.namespace)
+  |> List.sort_uniq String.compare
+;;
+
+(** The namespaces the recorded apply wrote into.
+
+    Pruning has to observe these as well as the plan's: a workload the plan *no longer
+    declares* is surplus precisely because it is absent from the plan, so its namespace may
+    be absent from the plan too. Observing only the plan's namespaces would stop finding it.
+    *)
+let namespaces_of_evidence (evidence : Sol_cli_release_id.owned_object list) =
+  evidence
+  |> List.map (fun (owned : Sol_cli_release_id.owned_object) -> owned.namespace)
+  |> List.sort_uniq String.compare
+;;
+
+(** Observe the workspace's live workloads **in the namespaces this deploy resolved**.
+
+    The observation is deliberately per-namespace. The target's deploy identity is
+    namespace-scoped by design (ADR 0002, SEC-011) — the same boundary the deploy asserts —
+    so a cluster-scoped list (`-A`) is forbidden for it and fails the whole deploy *after*
+    its workloads were applied, which is both a false failure and an unbounded one. *)
+let live_workloads
+      ~(ctx : Sol_cli_kube_destination.context)
+      ~(workspace : string)
+      ~(namespaces : string list)
   : ((workload_identity * string) list, string) result
   =
   let rec go acc = function
     | [] -> Ok (List.rev acc)
     | kind :: rest ->
       let resource, _ = live_kind_path kind in
-      (match
-         Sol_cli_kubectl.get_raw ~ctx ~args:[ "get"; resource; "-A"; "-o"; "json" ]
-       with
-       | Ok r ->
-         let open Result.Syntax in
-         let* rows =
-           Sol_cli_json.decode
-             ~what:(Printf.sprintf "kubectl get %s output" resource)
-             r.stdout
-           |> Fun.flip Result.bind (workload_rows_of_payload ~kind ~workspace)
-         in
-         go (List.rev_append rows acc) rest
-       | Error e when kind = Live_rollout && Sol_cli_kubectl.classify e = No_resource_type
-         -> go acc rest
-       | Error e ->
-         Error
-           (Printf.sprintf
-              "kubectl get %s failed: %s"
-              resource
-              (Sol_cli_process.error_to_string e)))
+      let open Result.Syntax in
+      let* rows =
+        Sol_cli_result.map_list
+          (fun namespace ->
+             match
+               Sol_cli_kubectl.get_raw
+                 ~ctx
+                 ~args:[ "get"; resource; "-n"; namespace; "-o"; "json" ]
+             with
+             | Ok r ->
+               Sol_cli_json.decode
+                 ~what:(Printf.sprintf "kubectl get %s output" resource)
+                 r.stdout
+               |> Fun.flip Result.bind (workload_rows_of_payload ~kind ~workspace)
+             | Error e
+               when kind = Live_rollout && Sol_cli_kubectl.classify e = No_resource_type
+               -> Ok []
+             | Error e ->
+               Error
+                 (Printf.sprintf
+                    "kubectl get %s failed: %s"
+                    resource
+                    (Sol_cli_process.error_to_string e)))
+          namespaces
+      in
+      go (List.rev_append (List.concat rows) acc) rest
   in
   go [] [ Live_deployment; Live_rollout; Live_cronjob ]
 ;;

@@ -232,9 +232,9 @@ let fake_kubectl ~dir ?live_listing () =
     | Some json ->
       Printf.sprintf
         {|case " $* " in
-  *" get deployment -A "*) printf '%%s' '%s' ;;
-  *" get rollout -A "*) printf '%%s' '{"items":[]}' ;;
-  *" get cronjob -A "*) printf '%%s' '{"items":[]}' ;;
+  *" get deployment -n "*) printf '%%s' '%s' ;;
+  *" get rollout -n "*) printf '%%s' '{"items":[]}' ;;
+  *" get cronjob -n "*) printf '%%s' '{"items":[]}' ;;
 esac
 |}
         json
@@ -457,9 +457,9 @@ let surplus_kubectl_script
     match listing_failure with
     | Some message ->
       Printf.sprintf
-        "*\" get deployment -A \"*) printf '%%s\\n' '%s' >&2; exit 1 ;;"
+        "*\" get deployment -n \"*) printf '%%s\\n' '%s' >&2; exit 1 ;;"
         message
-    | None -> Printf.sprintf "*\" get deployment -A \"*) cat %s ;;" deployments
+    | None -> Printf.sprintf "*\" get deployment -n \"*) cat %s ;;" deployments
   in
   let delete_case =
     if delete_fails_first
@@ -477,8 +477,8 @@ case " $* " in
   %s
   *" get configmap sol-release-r-"*) cat %s ;;
   %s
-  *" get rollout -A "*) printf '%%s' '{"items":[]}' ;;
-  *" get cronjob -A "*) printf '%%s' '{"items":[]}' ;;
+  *" get rollout -n "*) printf '%%s' '{"items":[]}' ;;
+  *" get cronjob -n "*) printf '%%s' '{"items":[]}' ;;
   *jsonpath=*)
     case " $* " in
       *" stale-svc "*) printf '%%s' 'uid-other' ;;
