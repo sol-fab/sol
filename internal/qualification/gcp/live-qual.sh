@@ -1056,10 +1056,12 @@ app_read_kafka_ca() {
 # The supported `sol secret set` surface is positional — `TARGET ADDRESS`, where ADDRESS is
 # `@platform/<KEY>` for a Sol Job input (the Kafka credentials of a TLS target) or
 # `<domain>/<unit>/<KEY>` for one unit's secret. The pre-2b `--target`/`--domain` flags are gone.
+# The value must arrive with `--from-stdin`: the CLI does not auto-detect a pipe and otherwise
+# demands a terminal (#1432).
 app_secret_set_platform() {
   local key="$1"
   if ! run "app-secret-platform-$key" bash -c \
-    "printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$TARGET' '@platform/$key'"; then
+    "printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$TARGET' '@platform/$key' --from-stdin"; then
     return 1
   fi
 }

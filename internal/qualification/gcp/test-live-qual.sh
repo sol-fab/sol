@@ -869,6 +869,8 @@ lacks "and never left unset for a deploy that must deliver class credentials" \
   "[setup=unset]" "$TMP/app-ok.argv"
 has "and the Kafka credential and CA as platform Job inputs" \
   "secret set qual/gcp/us-central1 @platform/KAFKA_SSL_CA_CERT" "$TMP/app-ok.argv"
+has "the value arrives with --from-stdin, so the CLI needs no terminal" \
+  "@platform/KAFKA_SSL_CA_CERT --from-stdin" "$TMP/app-ok.argv"
 lacks "no removed --target/--domain surface is used" \
   "--domain" "$TMP/app-ok.argv"
 lacks "no secret value is passed on a command line" \
