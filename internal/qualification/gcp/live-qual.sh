@@ -32,6 +32,11 @@ STATE_BUCKET="${STATE_BUCKET:-sol-qualification-tfstate}"
 CLUSTER_ISSUER="${CLUSTER_ISSUER:-letsencrypt-staging}"
 APP_TAG="${APP_TAG:-qual-$(date -u +%Y%m%d-%H%M%S)}"
 export APP_TAG
+# The database setup Job's image, pinned by digest. It is public, so there is nothing to
+# publish -- only a digest to name. Without it the deploy cannot run the database setup step,
+# so it can neither deliver the class credentials nor fail closed on a missing one (#1402).
+SOL_SETUP_POSTGRES_IMAGE="${SOL_SETUP_POSTGRES_IMAGE:-postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d}"
+export SOL_SETUP_POSTGRES_IMAGE
 
 case "${1:-}" in
   cloud | platform | app)
@@ -1048,24 +1053,15 @@ app_read_kafka_ca() {
     base64 -d 2>/dev/null
 }
 
-app_domains() {
-  local service path domain
-  for service in $(app_services); do
-    if path="$(app_context_path "$service")"; then
-      domain="${path#app/}"
-      printf '%s\n' "${domain%%/*}"
-    fi
-  done | sort -u
-}
-
-app_secret_set() {
-  local key="$1" domain
-  for domain in $(app_domains); do
-    if ! run "app-secret-$key-$domain" bash -c \
-      "printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$key' --target '$TARGET' --domain '$domain'"; then
-      return 1
-    fi
-  done
+# The supported `sol secret set` surface is positional — `TARGET ADDRESS`, where ADDRESS is
+# `@platform/<KEY>` for a Sol Job input (the Kafka credentials of a TLS target) or
+# `<domain>/<unit>/<KEY>` for one unit's secret. The pre-2b `--target`/`--domain` flags are gone.
+app_secret_set_platform() {
+  local key="$1"
+  if ! run "app-secret-platform-$key" bash -c \
+    "printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$TARGET' '@platform/$key'"; then
+    return 1
+  fi
 }
 
 # Production secrets are operator-supplied: Sol's deploy verifies the Kafka inputs a TLS
@@ -1097,9 +1093,9 @@ app_supply_secrets() {
     return 1
   fi
   export SOL_SECRET_VALUE="$password"
-  app_secret_set KAFKA_SASL_PASSWORD || return 1
+  app_secret_set_platform KAFKA_SASL_PASSWORD || return 1
   export SOL_SECRET_VALUE="$ca"
-  app_secret_set KAFKA_SSL_CA_CERT || return 1
+  app_secret_set_platform KAFKA_SSL_CA_CERT || return 1
   unset SOL_SECRET_VALUE
   {
     printf 'platform_secret_keys: KAFKA_SASL_PASSWORD KAFKA_SSL_CA_CERT\n'
