@@ -24,6 +24,12 @@
 
 (rule
  (alias runtest)
+ (deps ../bin/main.exe test_secret_set_writes.sh)
+ (action
+  (run bash %{dep:test_secret_set_writes.sh} %{dep:../bin/main.exe})))
+
+(rule
+ (alias runtest)
  (deps ../bin/main.exe test_uninstall_cli.sh)
  (action
   (run bash %{dep:test_uninstall_cli.sh} %{dep:../bin/main.exe})))
