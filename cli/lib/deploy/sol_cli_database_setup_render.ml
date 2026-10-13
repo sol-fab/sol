@@ -86,29 +86,26 @@ let service_file_name = "pg_service.conf"
 let service_mount_path = "/etc/sol/pg"
 let service_file_path = service_mount_path ^ "/" ^ service_file_name
 
-(** One service-file value. libpq treats an unquoted [#] as a comment and trims unquoted
-    values, so anything that could be read wrongly is quoted; inside quotes a backslash
-    escapes the next character.
+(** One service-file value.
 
-    A line break is the sharpest of these: unquoted, it ends the entry and everything after
-    it is parsed as a second one. The role passwords are hex and cannot contain either, but
-    the master password is operator- or provider-set and can. *)
+    libpq's service-file parser takes the value **verbatim**: a [#] anywhere in the value is
+    literal, single quotes are not stripped, and no character needs escaping. Sol used to
+    wrap any value containing a [#], a single quote, a double quote, a backslash or a space in
+    single quotes — but libpq sends those quotes as part of the value, so a master password
+    containing [#] authenticated as `'…#…'` and the setup Job failed with
+    `password authentication failed` (#1417).
+
+    What a one-line entry genuinely cannot carry is a line break — the entry ends there and
+    the rest is parsed as another one — or leading/trailing whitespace, which the parser
+    trims. Those are refused rather than rewritten. *)
 let service_value value =
-  let unsafe c = List.mem c [ ' '; '\t'; '\n'; '\r'; '#'; '\''; '"'; '\\' ] in
-  if not (String.exists unsafe value)
-  then value
-  else (
-    let b = Buffer.create (String.length value + 2) in
-    Buffer.add_char b '\'';
-    String.iter
-      (fun c ->
-         (match c with
-          | '\\' | '\'' -> Buffer.add_char b '\\'
-          | _ -> ());
-         Buffer.add_char b c)
-      value;
-    Buffer.add_char b '\'';
-    Buffer.contents b)
+  if String.exists (fun c -> c = '\n' || c = '\r') value
+  then
+    Error
+      "this value contains a line break, which a single service-file entry cannot carry"
+  else if not (String.equal value (String.trim value))
+  then Error "this value begins or ends with whitespace, which a service-file entry trims"
+  else Ok value
 ;;
 
 (** The master URL, decomposed into the service file's parameters.
@@ -151,10 +148,13 @@ let service_file ~master_url =
     ]
     |> List.filter_map (fun (key, value) -> Option.map (fun value -> key, value) value)
   in
-  Printf.sprintf
-    "[%s]\n%s\n"
-    service_name
-    (String.concat "\n" (List.map (fun (k, v) -> k ^ "=" ^ service_value v) entries))
+  List.fold_left
+    (fun acc (key, value) ->
+       Result.bind acc (fun acc ->
+         Result.bind (service_value value) (fun value ->
+           Ok (Printf.sprintf "%s%s=%s\n" acc key value))))
+    (Ok (Printf.sprintf "[%s]\n" service_name))
+    entries
 ;;
 
 (** The **password authority**: the target's record of the DDL and DML passwords, and the
@@ -280,7 +280,7 @@ let class_external_secret_doc ~ns ~target ~credential_class ~store ~remote_path 
     is written. There is therefore no moment at which the master Secret exists unowned:
     the patch window is not narrowed, it stops existing. A Job deletion, including the
     [ttlSecondsAfterFinished] backstop, collects this by cascade. *)
-let transient_secret_doc ~ns ~target ~job_uid ~master_url ~ddl_password ~dml_password =
+let transient_secret_doc ~ns ~target ~job_uid ~service_file ~ddl_password ~dml_password =
   resource
     ~api_version:"v1"
     ~kind:"Secret"
@@ -301,29 +301,73 @@ let transient_secret_doc ~ns ~target ~job_uid ~master_url ~ddl_password ~dml_pas
     ; "type", Y.string "Opaque"
     ; ( "stringData"
       , Y.map
-          [ service_file_name, Y.literal (service_file ~master_url)
+          [ service_file_name, Y.literal service_file
           ; "SOL_DDL_PASSWORD", Y.quoted ddl_password
           ; "SOL_DML_PASSWORD", Y.quoted dml_password
           ] )
     ]
 ;;
 
+(** Whether the recorded passwords were **established** by a successful setup Job, or only
+    **persisted** on the way to one.
+
+    A bootstrap writes the authority before Postgres is touched, so an interruption leaves a
+    record rather than roles whose password nobody knows. But that record is written before
+    the server has accepted anything, so as a *pending* record it must not authorize a
+    repair: repairing from it would [ALTER ROLE ... PASSWORD] against roles it never created,
+    replacing passwords the record does not describe. Only a Job that succeeded promotes the
+    record to established — the same one-verified-owner rule the class projections follow. *)
+type authority_state =
+  | Pending
+  | Established
+
+let authority_state_key = "SOL_AUTHORITY_STATE"
+
+let authority_state_to_string = function
+  | Pending -> "pending"
+  | Established -> "established"
+;;
+
+(** Fail-safe: anything but the established marker — including a record written before this
+    key existed — reads as [Pending]. *)
+let authority_state_of_string = function
+  | "established" -> Established
+  | _ -> Pending
+;;
+
+let authority_managed_by_label = "app.kubernetes.io/managed-by"
+let authority_target_annotation = "sol.io/target"
+
 (** The authority Secret, written on a bootstrap only — an ordinary deploy reads it and
     re-applies what it records.
 
     It carries the same two values the transient Secret carries and **not** the master: the
     master is never persisted, so this object does not widen what a cluster compromise
-    reaches. It is durable by design, so it is not collected by the Job's cleanup. *)
-let authority_secret_doc ~ns ~target ~ddl_password ~dml_password =
+    reaches. It is durable by design, so it is not collected by the Job's cleanup.
+
+    It states its owner ([managed-by: sol]) and its **target identity**, so a reader can tell
+    Sol's record for *this* target from a same-named Secret that is not. Name alone is not
+    identity: a Secret that merely shares the name is not evidence of ownership. *)
+let authority_metadata ~ns ~target =
+  Y.map
+    [ "name", Y.string (authority_name target)
+    ; "namespace", Y.string ns
+    ; "labels", Y.map [ authority_managed_by_label, Y.string "sol" ]
+    ; "annotations", Y.map [ authority_target_annotation, Y.string target ]
+    ]
+;;
+
+let authority_secret_doc ~ns ~target ~state ~ddl_password ~dml_password =
   resource
     ~api_version:"v1"
     ~kind:"Secret"
-    [ "metadata", metadata ~ns ~name:(authority_name target)
+    [ "metadata", authority_metadata ~ns ~target
     ; "type", Y.string "Opaque"
     ; ( "stringData"
       , Y.map
           [ "SOL_DDL_PASSWORD", Y.quoted ddl_password
           ; "SOL_DML_PASSWORD", Y.quoted dml_password
+          ; authority_state_key, Y.string (authority_state_to_string state)
           ] )
     ]
 ;;
@@ -472,7 +516,7 @@ let docs
       ~target
       ~job_uid
       ~operation
-      ~master_url
+      ~service_file
       ~ddl_password
       ~dml_password
       ~ca_cert
@@ -481,6 +525,6 @@ let docs
   [ script_configmap_doc ~ns ~target ~operation
   ; ca_configmap_doc ~ns ~target ~ca_cert
   ; job_doc ~ns ~target ~image
-  ; transient_secret_doc ~ns ~target ~job_uid ~master_url ~ddl_password ~dml_password
+  ; transient_secret_doc ~ns ~target ~job_uid ~service_file ~ddl_password ~dml_password
   ]
 ;;

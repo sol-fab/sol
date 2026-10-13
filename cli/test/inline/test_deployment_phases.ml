@@ -1507,7 +1507,10 @@ let render_setup () =
     ~target:"payments"
     ~job_uid:"uid-1234"
     ~operation:Sol_cli_database_setup.Bootstrap
-    ~master_url:"postgresql://postgres:masterpw@db.internal:5432/app"
+    ~service_file:
+      (Result.get_ok
+         (Sol_cli_database_setup_render.service_file
+            ~master_url:"postgresql://postgres:masterpw@db.internal:5432/app"))
     ~ddl_password:"ddl-pw"
     ~dml_password:"dml-pw"
     ~ca_cert:"-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n"
@@ -1652,49 +1655,70 @@ let%test "database setup render: the Job is fail-closed and mounts the CA" =
   test_database_setup_renders_the_fail_closed_job ()
 ;;
 
-(* The service file is parsed by libpq, which treats an unquoted [#] as a comment and trims
-   unquoted values. A master password containing either would be silently truncated into a
-   different credential. *)
-let test_database_setup_service_file_quotes () =
+(* The service file is parsed by libpq, whose service-file parser takes a value **verbatim**:
+   a [#] is literal, single quotes are not stripped, and nothing needs escaping. Sol used to
+   wrap such values in single quotes — which libpq then sent to the server as part of the
+   password, so a [#]-containing master password never authenticated (#1417).
+
+   The verbatim reading is libpq's, established against PostgreSQL 16 (#1417): unquoted
+   values containing [# ? space ' \\ = tab] all authenticated. What a *one-line* entry cannot
+   carry is a line break (it ends the entry) or surrounding whitespace (the parser trims it),
+   and those are refused rather than rewritten. *)
+let test_database_setup_service_file_verbatim () =
+  let value = Sol_cli_database_setup_render.service_value in
+  let shown = function
+    | Ok v -> "Ok " ^ v
+    | Error e -> "Error " ^ e
+  in
   Windtrap.equal
     Windtrap.string
     ~msg:"a plain value is written as it is"
-    "db.internal"
-    (Sol_cli_database_setup_render.service_value "db.internal");
+    "Ok db.internal"
+    (shown (value "db.internal"));
   Windtrap.equal
     Windtrap.string
-    ~msg:"a value with a space is quoted"
-    "'two words'"
-    (Sol_cli_database_setup_render.service_value "two words");
+    ~msg:"a hash is written verbatim, not quoted (libpq would read the quotes literally)"
+    "Ok pa#ss"
+    (shown (value "pa#ss"));
   Windtrap.equal
     Windtrap.string
-    ~msg:"a value with a hash is quoted, so it is not read as a comment"
-    "'pa#ss'"
-    (Sol_cli_database_setup_render.service_value "pa#ss");
+    ~msg:"a space is written verbatim"
+    "Ok two words"
+    (shown (value "two words"));
   Windtrap.equal
     Windtrap.string
-    ~msg:"a quote inside a quoted value is escaped"
-    "'pa\\'ss'"
-    (Sol_cli_database_setup_render.service_value "pa'ss");
-  Windtrap.equal
-    Windtrap.string
-    ~msg:"a line break is quoted, so one entry does not become two"
-    "'a\nb'"
-    (Sol_cli_database_setup_render.service_value "a\nb");
-  (* The whole file, through the same path the renderer uses. *)
+    ~msg:"a single quote is written verbatim, not escaped"
+    "Ok pa'ss"
+    (shown (value "pa'ss"));
   Windtrap.equal
     Windtrap.bool
-    ~msg:"the file names the service, and every value is on its own line"
+    ~msg:"a line break is refused, because one entry cannot carry it"
     true
-    (setup_mentions
-       "[sol-setup]"
-       (Sol_cli_database_setup_render.service_file
-          ~master_url:
-            "postgresql://postgres:masterpw@db.internal:5432/app?sslmode=verify-full&sslrootcert=/etc/sol/db-ca/ca.pem"))
+    (Result.is_error (value "a\nb"));
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"surrounding whitespace is refused, because the parser trims it"
+    true
+    (Result.is_error (value " spaced") && Result.is_error (value "spaced "));
+  (* The whole file, through the same path the renderer uses: a percent-encoded [#] in the
+     password decodes to a literal [#], which must reach the emitted entry verbatim. *)
+  let file =
+    Result.get_ok
+      (Sol_cli_database_setup_render.service_file
+         ~master_url:
+           "postgresql://postgres:ma%23sterpw@db.internal:5432/app?sslmode=verify-full&sslrootcert=/etc/sol/db-ca/ca.pem")
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the file names the service and writes the #-containing password verbatim"
+    true
+    (setup_mentions "[sol-setup]" file
+     && setup_mentions "password=ma#sterpw" file
+     && not (setup_mentions "password='ma#sterpw'" file))
 ;;
 
-let%test "database setup render: a service-file value that libpq could misread is quoted" =
-  test_database_setup_service_file_quotes ()
+let%test "database setup render: a service-file value is written verbatim, or refused" =
+  test_database_setup_service_file_verbatim ()
 ;;
 
 (* The two bounds are different things: the waiter giving up is not the Job being over.
@@ -1779,10 +1803,30 @@ case "$*" in
     esac
     exit 0 ;;
   *"get secret "*"-db-credentials"*)
-    # The password authority. Absent is a first deploy (bootstrap); present is an ordinary
-    # deploy (repair), which must reuse these values rather than generate new ones.
+    # The password authority. Absent is a first deploy (bootstrap); present **established** is
+    # an ordinary deploy (repair), which must reuse these values rather than generate new
+    # ones; present **pending** is a bootstrap that never completed, which must re-run the
+    # bootstrap rather than repair. The shape is target, owner, two values, state.
     if [ "$SETUP_MODE" = "authority" ]; then
-      printf 'ddl-pw\ndml-pw\n'
+      printf 'payments\nsol\nddl-pw\ndml-pw\nestablished\n'
+      exit 0
+    fi
+    if [ "$SETUP_MODE" = "authority-pending" ]; then
+      printf 'payments\nsol\nddl-pw\ndml-pw\npending\n'
+      exit 0
+    fi
+    if [ "$SETUP_MODE" = "authority-foreign" ]; then
+      # A same-named Secret that is not Sol's record for this target: name is not identity.
+      printf 'other-target\nsol\nddl-pw\ndml-pw\nestablished\n'
+      exit 0
+    fi
+    if [ "$SETUP_MODE" = "authority-unowned" ]; then
+      printf 'payments\nnot-sol\nddl-pw\ndml-pw\nestablished\n'
+      exit 0
+    fi
+    if [ "$SETUP_MODE" = "authority-nostate" ]; then
+      # A record written before the state key existed: an empty state line reads as pending.
+      printf 'payments\nsol\nddl-pw\ndml-pw\n\n'
       exit 0
     fi
     if [ "$SETUP_MODE" = "forbidden" ]; then
@@ -2007,6 +2051,125 @@ let test_database_setup_repair_does_not_rewrite_the_record () =
         (setup_mentions "sol_migrator:ddl-pw@" manifests))
 ;;
 
+(* The finding-1 regression, as a sequence rather than three isolated cases: existing roles,
+   no authority, a bootstrap that fails, then a retry. The retry must re-run the *bootstrap*
+   -- which the existing roles then refuse -- and never a repair, which would
+   [ALTER ROLE ... PASSWORD] against roles the record never created, replacing passwords it
+   does not describe. The first deploy's safety refusal, bypassed by retrying, is the bug. *)
+let test_database_setup_pending_authority_never_repairs () =
+  setup_fake_kubectl ~mode:"authority-pending" ~fail_verb:"zzz-never" (fun ~log:_ ->
+    let ctx = Sol_cli_kube_destination.local_context in
+    match resolve_passwords ~ctx () with
+    | Error message -> Windtrap.fail message
+    | Ok (operation, ddl_password, dml_password) ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"a pending record re-runs the bootstrap, never a repair"
+        true
+        (operation = Sol_cli_database_setup.Bootstrap);
+      Windtrap.equal
+        Windtrap.string
+        ~msg:"and recovers the *recorded* DDL password rather than generating a new one"
+        "ddl-pw"
+        ddl_password;
+      Windtrap.equal
+        Windtrap.string
+        ~msg:"and the recorded DML password"
+        "dml-pw"
+        dml_password)
+;;
+
+(* Fail-safe for a record written before the state key existed: an absent state must read as
+   pending, so an unverifiable record is never treated as established. *)
+let test_database_setup_state_less_record_reads_pending () =
+  setup_fake_kubectl ~mode:"authority-nostate" ~fail_verb:"zzz-never" (fun ~log:_ ->
+    let ctx = Sol_cli_kube_destination.local_context in
+    match resolve_passwords ~ctx () with
+    | Error message -> Windtrap.fail message
+    | Ok (operation, _, _) ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"a record with no state key is pending, not established"
+        true
+        (operation = Sol_cli_database_setup.Bootstrap))
+;;
+
+(* The composition, not just the choice: the retry after a pending record must *apply* the
+   bootstrap script. That script refuses an existing role (asserted above), so "the retry is
+   a bootstrap" is what keeps the first deploy's safety refusal from being bypassed. If the
+   retry were a repair, the rendered script would carry ALTER ROLE. *)
+let test_database_setup_pending_retry_applies_the_bootstrap_script () =
+  setup_fake_kubectl ~mode:"authority-pending" ~fail_verb:"zzz-never" (fun ~log ->
+    let ctx = Sol_cli_kube_destination.local_context in
+    match
+      Sol_cli_database_setup_run.resolve
+        ~ctx
+        ~namespace:"myapp-payments"
+        ~target:"payments"
+    with
+    | Error message -> Windtrap.fail message
+    | Ok (operation, ddl_password, dml_password) ->
+      (match run_database_setup ~operation ~ddl_password ~dml_password () with
+       | Error message -> Windtrap.fail message
+       | Ok () -> ());
+      let manifests = read_file (log ^ ".manifests") in
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the retry's script is the bootstrap"
+        true
+        (setup_mentions "operation: bootstrap" manifests);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"so no ALTER ROLE is composed that would replace an existing password"
+        false
+        (setup_mentions "ALTER ROLE" manifests))
+;;
+
+(* A same-named Secret is not evidence of ownership: the record must state that it is Sol's
+   and that it is *this* target's. *)
+let test_database_setup_foreign_authority_fails_closed () =
+  List.iter
+    (fun (mode, what) ->
+       setup_fake_kubectl ~mode ~fail_verb:"zzz-never" (fun ~log:_ ->
+         let ctx = Sol_cli_kube_destination.local_context in
+         match resolve_passwords ~ctx () with
+         | Error message ->
+           Windtrap.equal
+             Windtrap.bool
+             ~msg:what
+             true
+             (setup_mentions "could not read the target's password authority" message)
+         | Ok _ -> Windtrap.fail (what ^ ": the record was accepted")))
+    [ "authority-foreign", "a same-named record naming another target is refused"
+    ; "authority-unowned", "a same-named record Sol did not write is refused"
+    ]
+;;
+
+(* The promotion itself: written pending before the Job, established only once it succeeded. *)
+let test_database_setup_bootstrap_promotes_the_authority () =
+  setup_fake_kubectl ~fail_verb:"zzz-never" (fun ~log ->
+    match
+      run_database_setup
+        ~operation:Sol_cli_database_setup.Bootstrap
+        ~ddl_password:"ddl-pw"
+        ~dml_password:"dml-pw"
+        ()
+    with
+    | Error message -> Windtrap.fail message
+    | Ok () ->
+      let manifests = read_file (log ^ ".manifests") in
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the authority is written pending before the Job"
+        true
+        (setup_mentions "SOL_AUTHORITY_STATE: pending" manifests);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"and promoted to established once the Job succeeded"
+        true
+        (setup_mentions "SOL_AUTHORITY_STATE: established" manifests))
+;;
+
 (** The URL the rendered *class credential* carries, so two deploys can be compared byte
     for byte.
 
@@ -2177,6 +2340,26 @@ let%test "database setup run: a repair never rewrites the recorded authority" =
 
 let%test "database setup: an unreadable authority fails closed, never a bootstrap" =
   test_database_setup_unreadable_authority_fails_closed ()
+;;
+
+let%test "database setup: a pending authority re-runs the bootstrap, never a repair" =
+  test_database_setup_pending_authority_never_repairs ()
+;;
+
+let%test "database setup: a record with no state key reads as pending" =
+  test_database_setup_state_less_record_reads_pending ()
+;;
+
+let%test "database setup: a pending retry applies the bootstrap script, not a repair" =
+  test_database_setup_pending_retry_applies_the_bootstrap_script ()
+;;
+
+let%test "database setup: a same-named authority that is not this target's is refused" =
+  test_database_setup_foreign_authority_fails_closed ()
+;;
+
+let%test "database setup run: a bootstrap writes the authority pending, then established" =
+  test_database_setup_bootstrap_promotes_the_authority ()
 ;;
 
 let%test "database setup: a second deploy writes the same credential as the first" =

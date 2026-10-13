@@ -151,10 +151,12 @@ let cleanup_report failures =
     (String.concat "\n" (List.map (fun note -> "  - " ^ note) failures))
 ;;
 
-(** The target's recorded DDL and DML passwords. *)
+(** The target's recorded DDL and DML passwords, and whether a successful Job established
+    them or they were only persisted on the way to one. *)
 type authority =
   { ddl_password : string
   ; dml_password : string
+  ; state : Sol_cli_database_setup_render.authority_state
   }
 
 (** Read the authority back from the cluster.
@@ -167,10 +169,17 @@ type authority =
     The values are decoded by kubectl's [base64decode] rather than in Sol, because the
     Secret's stored form is base64 and nothing here should grow a second encoding. *)
 let read_authority ~ctx ~namespace ~target =
-  let name = Sol_cli_database_setup_render.authority_name target in
+  let module Render = Sol_cli_database_setup_render in
+  let name = Render.authority_name target in
+  (* Owner and target identity first, so a same-named Secret that is not Sol's record for
+     *this* target is refused rather than believed. The state is read with [with], so a
+     record written before the state key existed yields an empty line and reads as pending. *)
   let template =
-    "{{index .data \"SOL_DDL_PASSWORD\" | base64decode}}{{\"\\n\"}}{{index .data \
-     \"SOL_DML_PASSWORD\" | base64decode}}"
+    "{{index .metadata.annotations \"sol.io/target\"}}{{\"\\n\"}}{{index \
+     .metadata.labels \"app.kubernetes.io/managed-by\"}}{{\"\\n\"}}{{index .data \
+     \"SOL_DDL_PASSWORD\" | base64decode}}{{\"\\n\"}}{{index .data \"SOL_DML_PASSWORD\" \
+     | base64decode}}{{\"\\n\"}}{{with index .data \"SOL_AUTHORITY_STATE\"}}{{. | \
+     base64decode}}{{end}}"
   in
   let unreadable detail =
     Printf.sprintf
@@ -189,16 +198,39 @@ let read_authority ~ctx ~namespace ~target =
   | Error e -> Error (unreadable (Sol_cli_process.error_to_string e))
   | Ok None -> Ok None
   | Ok (Some text) ->
-    (match String.split_on_char '\n' (String.trim text) with
-     | [ ddl_password; dml_password ]
-       when (not (Sol_cli_string.is_blank ddl_password))
-            && not (Sol_cli_string.is_blank dml_password) ->
-       Ok (Some { ddl_password; dml_password })
-     | _ ->
-       Error
-         (unreadable
-            (Printf.sprintf
-               "it does not carry both SOL_DDL_PASSWORD and SOL_DML_PASSWORD")))
+    (match String.split_on_char '\n' text with
+     | recorded_target :: managed_by :: ddl_password :: dml_password :: state_lines ->
+       (* A record written before the state key existed has no state line at all; the empty
+          remainder reads as Pending by [authority_state_of_string]. *)
+       let state = String.concat "\n" state_lines in
+       if not (String.equal recorded_target target)
+       then
+         Error
+           (unreadable
+              (Printf.sprintf
+                 "its %s annotation names %S, so it is not this target's record"
+                 Render.authority_target_annotation
+                 recorded_target))
+       else if not (String.equal managed_by "sol")
+       then
+         Error
+           (unreadable
+              (Printf.sprintf
+                 "its %s label is %S, so it is not a record Sol wrote"
+                 Render.authority_managed_by_label
+                 managed_by))
+       else if
+         Sol_cli_string.is_blank ddl_password || Sol_cli_string.is_blank dml_password
+       then
+         Error (unreadable "it does not carry both SOL_DDL_PASSWORD and SOL_DML_PASSWORD")
+       else
+         Ok
+           (Some
+              { ddl_password
+              ; dml_password
+              ; state = Render.authority_state_of_string state
+              })
+     | _ -> Error (unreadable "it does not carry the fields a Sol authority record has"))
 ;;
 
 (** Which operation this deploy performs, and the passwords it uses.
@@ -209,6 +241,16 @@ let read_authority ~ctx ~namespace ~target =
     and then the passwords are generated exactly once — persisted by the caller's apply,
     before the Job touches Postgres.
 
+    **A pending record is not a repair.** A bootstrap persists the authority before Postgres
+    is touched, so a failed or interrupted bootstrap leaves a record. If finding that record
+    were enough to choose *Repair*, the next deploy would [ALTER ROLE ... PASSWORD] against
+    roles the record never created — replacing passwords it does not describe, and converting
+    the bootstrap's own safety refusal into a retry that overwrites existing credentials. So a
+    pending record re-runs the **bootstrap** with the same recorded passwords: if the roles
+    already exist, the bootstrap refuses (passwords unchanged, the safety refusal held), and
+    if they do not — a genuinely interrupted bootstrap — recovery completes with the values
+    the record already fixed.
+
     Rotation is deliberately absent: PostgreSQL invalidates the previous password the moment
     [ALTER] runs, so it needs overlapping credentials or an explicitly disruptive procedure,
     and that is an operator decision rather than a side effect of a deploy. *)
@@ -216,8 +258,10 @@ let resolve ~ctx ~namespace ~target =
   let open Result.Syntax in
   let* recorded = read_authority ~ctx ~namespace ~target in
   match recorded with
-  | Some authority ->
-    Ok (Sol_cli_database_setup.Repair, authority.ddl_password, authority.dml_password)
+  | Some { state = Sol_cli_database_setup_render.Established; ddl_password; dml_password }
+    -> Ok (Sol_cli_database_setup.Repair, ddl_password, dml_password)
+  | Some { state = Sol_cli_database_setup_render.Pending; ddl_password; dml_password } ->
+    Ok (Sol_cli_database_setup.Bootstrap, ddl_password, dml_password)
   | None ->
     Ok
       ( Sol_cli_database_setup.Bootstrap
@@ -246,6 +290,9 @@ let run
       ~output_secrets
   =
   let module Render = Sol_cli_database_setup_render in
+  (* Before anything is written: a master URL whose password cannot be carried by a
+     service-file entry is refused here, not after the Job has been created. *)
+  let* service_file = Render.service_file ~master_url in
   let job_name = Render.job_name target in
   let secret_name = Render.secret_name target in
   let configmap_name = Render.script_name target in
@@ -259,12 +306,27 @@ let run
       ~ns:namespace
       ~target
       ~job_uid
-      ~master_url
+      ~service_file
       ~ddl_password
       ~dml_password
   in
+  (* Written before the Job, and *pending* until it succeeds: a record found on the next
+     deploy must not, by itself, authorize a repair. See [resolve]. *)
   let authority =
-    Render.authority_secret_doc ~ns:namespace ~target ~ddl_password ~dml_password
+    Render.authority_secret_doc
+      ~ns:namespace
+      ~target
+      ~state:Render.Pending
+      ~ddl_password
+      ~dml_password
+  in
+  let established_authority =
+    Render.authority_secret_doc
+      ~ns:namespace
+      ~target
+      ~state:Render.Established
+      ~ddl_password
+      ~dml_password
   in
   let script = Render.script_configmap_doc ~ns:namespace ~target ~operation in
   let job_doc = Render.job_doc ~ns:namespace ~target ~image in
@@ -299,9 +361,10 @@ let run
         cleanup_failures := cleanup ~ctx ~namespace ~job_name ~configmap_name ~secret_name)
       (fun () ->
          (* A bootstrap persists the passwords *before* Postgres is touched, so an interruption
-         leaves a recorded authority and the next deploy repairs from it — rather than roles
-         whose password nobody has. A repair writes nothing here: the authority it is
-         re-applying is already the record. *)
+         leaves a recorded authority rather than roles whose password nobody has. It is
+         written **pending**: the next deploy re-runs the bootstrap from it (recovery) and
+         only a Job that succeeded promotes it to established (see the [Succeeded] branch).
+         A repair writes nothing here: the authority it is re-applying is already the record. *)
          let* () =
            match operation with
            | Sol_cli_database_setup.Bootstrap ->
@@ -339,11 +402,25 @@ let run
          in
          match outcome with
          | Sol_cli_migration_job.Succeeded ->
-           (* Only now has Postgres accepted these passwords, so only now do the projections
-            consumers read carry a value that works. Writing them before the Job would hand
-            a replacement password to pods that can restart before the server knows it.
-            A failed Job therefore leaves the previous projections exactly as they were,
-            and the recorded authority makes the next deploy a repair. *)
+           (* Only now has Postgres accepted these passwords. The authority is promoted from
+            pending to **established** first: a later deploy may repair from it only because
+            a Job that succeeded is what says the recorded passwords are the roles'. Until
+            then a record exists but authorizes nothing.
+            Only now, too, do the projections consumers read carry a value that works.
+            Writing them before the Job would hand a replacement password to pods that can
+            restart before the server knows it. A failed Job therefore leaves the previous
+            projections exactly as they were, and a *pending* authority means the next deploy
+            re-runs the bootstrap — which refuses if the roles already exist — rather than
+            repairing. *)
+           let* () =
+             match operation with
+             | Sol_cli_database_setup.Bootstrap ->
+               apply_doc
+                 ~ctx
+                 ~what:"password authority (established)"
+                 established_authority
+             | Sol_cli_database_setup.Repair -> Ok ()
+           in
            List.fold_left
              (fun acc doc ->
                 let* () = acc in

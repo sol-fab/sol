@@ -106,11 +106,16 @@ The following substrate inputs must exist before running `sol deploy`.
   `postgres` binding — Sol-provisioned or externally bound. There is no
   operator-held `POSTGRES_URL` to set.
 - A Sol-provisioned database's setup step writes `<target>-db-credentials`
-  (the provisioning master, never delivered to a workload), `<target>-ddl-creds`
+  (the target's record of the DDL and DML passwords, never delivered to a
+  workload), `<target>-ddl-creds`
   (the migration Job's namespace), `<target>-dml-creds` (consuming units'
   namespaces) and the `<target>-db-ca` ConfigMap. A unit that declares
   `uses: [app_db]` reads `POSTGRES_URL` from `<target>-dml-creds`; the migration
-  Job reads it from `<target>-ddl-creds`.
+  Job reads it from `<target>-ddl-creds`. The record is written *pending* before
+  the setup Job runs and promoted to *established* only after that Job succeeds;
+  a deploy repairs from it only when it is established, and otherwise re-runs the
+  bootstrap — which refuses a role that already exists rather than replacing its
+  password.
 - An externally bound database publishes the same class Secret names through an
   ESO `ExternalSecret` per class, and no CA ConfigMap (the provider's own trust
   chain applies). A unit that merely declares `POSTGRES_URL` as an application
