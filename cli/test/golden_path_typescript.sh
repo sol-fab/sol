@@ -122,11 +122,22 @@ echo "POST /orders OK (202, marker=${marker}, trace=${trace_id})"
 # (db/migrations/0006_orders_ts.sql, applied by `sol local migrate`
 # above); the units create nothing at runtime.
 #
-# POSTGRES_URL comes from fulfillment_worker's own injected Secret
-# (the exact credential the app itself uses), not the Postgres
-# Helm chart's internal secret path -- decoupled from that chart's
-# own implementation, which this job has no reason to know about.
-pg_url=$(kubectl get secret -n "$demo_ns" fulfillment-worker-secrets -o jsonpath='{.data.POSTGRES_URL}' | base64 -d)
+# POSTGRES_URL is the consumer's delivered credential: 2b delivers it from
+# the target's DML class Secret, and the renderer's single routing decision
+# (`secret_name_for_key`) points the pod's own `secretKeyRef` at
+# `<target>-dml-creds`. `sol local deploy` treats the workspace as the local
+# stand-in target (`Sol_cli_up_execution.local_plan`, `sanitize_name` of the
+# workspace), so this workspace (`project: pluto`) gets `pluto-dml-creds` in
+# the consumer's namespace. Read that Secret -- the credential the app
+# itself reads -- not the unit's own `fulfillment-worker-secrets`, which no
+# longer carries the key for a consumer, and not the Postgres Helm chart's
+# internal secret path -- decoupled from that chart's own implementation,
+# which this job has no reason to know about.
+pg_url=$(kubectl get secret -n "$demo_ns" pluto-dml-creds -o jsonpath='{.data.POSTGRES_URL}' | base64 -d)
+if [ -z "$pg_url" ]; then
+  echo "::error::TS golden-path smoke test: the delivered class Secret pluto-dml-creds carries no POSTGRES_URL"
+  exit 1
+fi
 pg_pod=$(kubectl get pods -n postgresql -l app.kubernetes.io/name=postgresql -o jsonpath='{.items[0].metadata.name}')
 row_found=0
 # With the consumer-join wait above having closed the cold-start
