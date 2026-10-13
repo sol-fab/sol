@@ -802,6 +802,10 @@ has "and the CA too" \
   "secret set qualreg/aws/us-east-1 @platform/KAFKA_SSL_CA_CERT" "$TMP/ok.sol"
 has "the value arrives with --from-stdin, so the CLI needs no terminal" \
   "@platform/KAFKA_SSL_CA_CERT --from-stdin" "$TMP/ok.sol"
+has "the workspace declares the keys per unit, so the unit scope is supplied too" \
+  "secret set qualreg/aws/us-east-1 payments/charge_svc/KAFKA_SASL_PASSWORD --from-stdin" "$TMP/ok.sol"
+has "and the CA in the unit scope" \
+  "secret set qualreg/aws/us-east-1 comms/notify_worker/KAFKA_SSL_CA_CERT --from-stdin" "$TMP/ok.sol"
 lacks "no removed --target/--domain surface is used" \
   "--domain" "$TMP/ok.sol"
 has "the first deploy's migration-gate refusal is recognised, not treated as a failure" \

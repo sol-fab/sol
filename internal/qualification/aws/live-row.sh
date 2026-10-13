@@ -735,12 +735,27 @@ app_read_kafka_ca() {
     -o jsonpath='{.data.ca\.crt}' 2>/dev/null | base64 -d 2>/dev/null
 }
 
-# The supported `sol secret set` surface is positional — `TARGET ADDRESS` — and the address a
-# platform Job input takes is `@platform/<KEY>`. The pre-2b `--target`/`--domain` flags are
-# gone. The value must arrive with `--from-stdin`: the CLI does not auto-detect a pipe and
-# otherwise demands a terminal (#1432). Only the platform form is offered here because this
-# workspace declares no unit-level runtime secret (see {!app_supply_secrets}); a row whose
-# workspace does needs `<domain>/<unit>/<KEY>` per declaring unit.
+# The supported `sol secret set` surface is positional — `TARGET ADDRESS` — where ADDRESS is
+# `@platform/<KEY>` for a Sol Job input or `<domain>/<unit>/<KEY>` for one unit's secret. The
+# pre-2b `--target`/`--domain` flags are gone. The value must arrive with `--from-stdin`: the
+# CLI does not auto-detect a pipe and otherwise demands a terminal (#1432).
+app_unit_addresses() {
+  local unit dir
+  for unit in $APP_UNITS; do
+    if dir="$(unit_dir "$unit")"; then
+      printf '%s\n' "${dir#app/}"
+    fi
+  done | sort -u
+}
+
+app_secret_set_unit() {
+  local key="$1" address
+  for address in $(app_unit_addresses); do
+    run "app-secret-$key-$(printf '%s' "$address" | tr '/' '-')" bash -c \
+      "cd '$WORKSPACE' && printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$TARGET' '$address/$key' --from-stdin"
+  done
+}
+
 app_secret_set_platform() {
   local key="$1"
   run "app-secret-platform-$key" bash -c \
@@ -753,11 +768,13 @@ app_secret_set_platform() {
 # the deploy delivers it from the target's binding (2b), so the harness neither holds nor sets
 # a POSTGRES_URL.
 #
-# This workspace declares **no unit-level runtime secret** — every unit's `sol.toml` has
-# `# secrets = []`, and its only declared secrets are the two Kafka platform inputs. The
-# harness used to invent an `SOL_API_KEY` to supply as a unit secret; `sol secret set`
-# correctly refuses an undeclared key, which aborted the app phase before the keys the deploy
-# actually requires were supplied (#1430).
+# This workspace declares the two Kafka keys **per unit** with `authority: sol`, and the
+# deploy verifies each unit's own Secret holds every key that unit declares, so the keys are
+# supplied in **both** scopes: `@platform/<KEY>` for Sol's Jobs, `<domain>/<unit>/<KEY>` for
+# the workload. Supplying only the platform scope leaves the deploy refusing the unit Secret
+# (#1438); supplying an *undeclared* key is refused by the CLI (#1430). Writing the unit
+# scope before the workload exists is fine — `sol secret set` writes and stops, and the
+# deploy that follows activates (#1350).
 app_supply_secrets() {
   local password ca
   if ! password="$(app_read_platform_password)"; then
@@ -771,11 +788,13 @@ app_supply_secrets() {
   fi
   export SOL_SECRET_VALUE="$password"
   app_secret_set_platform KAFKA_SASL_PASSWORD || return 1
+  app_secret_set_unit KAFKA_SASL_PASSWORD || return 1
   export SOL_SECRET_VALUE="$ca"
   app_secret_set_platform KAFKA_SSL_CA_CERT || return 1
+  app_secret_set_unit KAFKA_SSL_CA_CERT || return 1
   unset SOL_SECRET_VALUE
   {
-    printf 'unit_secret_keys: none declared by this workspace\n'
+    printf 'unit_secret_keys: KAFKA_SASL_PASSWORD KAFKA_SSL_CA_CERT (declared per unit, authority sol)\n'
     printf 'platform_secret_keys: KAFKA_SASL_PASSWORD KAFKA_SSL_CA_CERT\n'
     printf 'secret_values: never recorded\n'
     printf 'database_delivery: delivered by the deploy from the target binding; no operator copy\n'
