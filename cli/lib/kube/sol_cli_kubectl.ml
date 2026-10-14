@@ -119,6 +119,24 @@ let patch ~ctx ~resource ~name ~namespace ~patch_type ~patch =
     [ "patch"; resource; name; "-n"; namespace; "--type"; patch_type; "-p"; patch ]
 ;;
 
+(** A patch whose body is a file, not an argument. A patch that carries a secret value must
+    not put it in the process argv, where every local user can read it from `ps`; the caller
+    writes it to a 0600 temp file instead ([Sol_cli_fs.with_temp_file]). *)
+let patch_file ~ctx ~resource ~name ~namespace ~patch_type ~file =
+  kubectl
+    ~ctx
+    [ "patch"
+    ; resource
+    ; name
+    ; "-n"
+    ; namespace
+    ; "--type"
+    ; patch_type
+    ; "--patch-file"
+    ; file
+    ]
+;;
+
 let create ~ctx ~file = kubectl ~ctx [ "create"; "-f"; file ]
 let replace ~ctx ~file = kubectl ~ctx [ "replace"; "-f"; file ]
 

@@ -44,6 +44,25 @@ done
 printf '%%s %%s\n' "$verb" "$kind" >> %s
 if [ "$verb" = "rollout" ]; then printf 'rollout-args %%s\n' "$*" >> %s; exit 0; fi
 mode=$(cat %s)
+if [ "$verb" = "patch" ]; then
+  printf 'patch-args %%s\n' "$*" >> %s
+  prev=""
+  for a in "$@"; do
+    if [ "$prev" = "--patch-file" ]; then cat "$a" >> %s; printf '\n' >> %s; fi
+    prev="$a"
+  done
+  case "$mode" in
+    patch-not-found)
+      echo 'Error from server (NotFound): secrets "charge-svc-secrets" not found' >&2
+      exit 1 ;;
+    patch-create-race)
+      if [ "$(grep -c 'patch-args' %s)" = "1" ]; then
+        echo 'Error from server (NotFound): secrets "charge-svc-secrets" not found' >&2
+        exit 1
+      fi ;;
+  esac
+  exit 0
+fi
 if [ "$verb" = "get" ]; then
   if [ "$mode" = "unreachable" ]; then
     echo 'Unable to connect to the server: net/http: TLS handshake timeout' >&2
@@ -169,6 +188,14 @@ if [ "$verb" = "get" ]; then
     *) exit 0 ;;
   esac
 fi
+if [ "$verb" = "create" ]; then
+  case "$mode" in
+    patch-create-race)
+      echo 'Error from server (AlreadyExists): secrets "charge-svc-secrets" already exists' >&2
+      exit 1 ;;
+  esac
+  exit 0
+fi
 if [ "$verb" = "apply" ]; then
   prev=""
   for a in "$@"; do
@@ -181,6 +208,10 @@ exit 0
     log
     log
     mode_file
+    log
+    log
+    log
+    log
     log
 ;;
 
@@ -281,7 +312,7 @@ let test_verify_rejects_an_absent_secret () =
    note beside its former test registration. *)
 
 let test_platform_set_writes_only_the_runtime_secret () =
-  with_fake_kubectl ~mode:"present" (fun ~calls:_ ~manifests ->
+  with_fake_kubectl ~mode:"present" (fun ~calls ~manifests:_ ->
     match
       Sol_cli_secret.set_platform_key
         ~ctx
@@ -291,17 +322,27 @@ let test_platform_set_writes_only_the_runtime_secret () =
     with
     | Error message -> Windtrap.failf "platform secret set failed: %s" message
     | Ok _ ->
-      let manifests = manifests () in
+      let log = calls () in
       Windtrap.equal
         Windtrap.bool
-        ~msg:"the platform Secret is written"
+        ~msg:"the platform Secret is patched by name"
         true
-        (Sol_cli_string.contains ~needle:"name: sol-secrets" manifests);
+        (Sol_cli_string.contains ~needle:"patch secret sol-secrets -n payments" log);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"and names only the key being written"
+        true
+        (Sol_cli_string.contains ~needle:"/data/KAFKA_SASL_PASSWORD" log);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"no other key is rewritten (the lost update this fixes)"
+        false
+        (Sol_cli_string.contains ~needle:"/data/EXISTING" log);
       Windtrap.equal
         Windtrap.bool
         ~msg:"application Secrets are not written"
         false
-        (Sol_cli_string.contains ~needle:"charge-svc-secrets" manifests))
+        (Sol_cli_string.contains ~needle:"charge-svc-secrets" log))
 ;;
 
 (* 2b: POSTGRES_URL is no longer a platform Job input, so the shared-scope writer
@@ -511,7 +552,7 @@ let test_external_secret_readiness_refuses_when_the_generation_lags () =
 ;;
 
 let test_unit_set_writes_only_its_unit_secret () =
-  with_fake_kubectl ~mode:"owned-unit" (fun ~calls:_ ~manifests ->
+  with_fake_kubectl ~mode:"owned-unit" (fun ~calls ~manifests:_ ->
     match
       Sol_cli_secret.set_unit_key
         ~ctx
@@ -522,17 +563,36 @@ let test_unit_set_writes_only_its_unit_secret () =
     with
     | Error message -> Windtrap.failf "unit secret set failed: %s" message
     | Ok _ ->
-      let manifests = manifests () in
+      let log = calls () in
       Windtrap.equal
         Windtrap.bool
-        ~msg:"the selected unit Secret is written"
+        ~msg:"the selected unit Secret is patched by name, not re-applied whole"
         true
-        (Sol_cli_string.contains ~needle:"name: charge-svc-secrets" manifests);
+        (Sol_cli_string.contains
+           ~needle:"patch secret charge-svc-secrets -n payments"
+           log);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the patch names one key, so a concurrent writer's keys are merged"
+        true
+        (Sol_cli_string.contains ~needle:"/data/API_TOKEN" log);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the Sol managed-by label is the write's own precondition"
+        true
+        (Sol_cli_string.contains
+           ~needle:"/metadata/labels/app.kubernetes.io~1managed-by"
+           log);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"no other key is rewritten (the lost update this fixes)"
+        false
+        (Sol_cli_string.contains ~needle:"/data/EXISTING" log);
       Windtrap.equal
         Windtrap.bool
         ~msg:"the platform Secret is not written"
         false
-        (Sol_cli_string.contains ~needle:"name: sol-secrets" manifests))
+        (Sol_cli_string.contains ~needle:"sol-secrets" log))
 ;;
 
 let test_contract_readiness_names_missing_tls_job_input () =
@@ -1017,4 +1077,90 @@ let%test "1392: a class output Secret not owned by its ExternalSecret is refused
 
 let%test "1392: a class output Secret owned by its ExternalSecret passes" =
   test_class_output_owned_by_its_external_secret_passes ()
+;;
+
+(* #1426: the other half of the lost update is an object that does not exist yet. `kubectl
+   patch` fails `NotFound` on it, so the write creates; a concurrent writer that created it
+   first races the create to `AlreadyExists`, and the patch is retried against the winner's
+   object — which merges this key rather than overwriting the winner's. *)
+let test_absent_secret_is_created () =
+  with_fake_kubectl ~mode:"patch-not-found" (fun ~calls ~manifests:_ ->
+    match
+      Sol_cli_secret.set_unit_key
+        ~ctx
+        ~namespace:"payments"
+        ~secret_name:"charge-svc-secrets"
+        ~key:"API_TOKEN"
+        ~value:"unit-only"
+    with
+    | Error message -> Windtrap.failf "the create path failed: %s" message
+    | Ok _ ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"after the patch misses, the Secret is created"
+        true
+        (Sol_cli_string.contains ~needle:"create " (calls ())))
+;;
+
+let test_create_race_retries_the_patch () =
+  with_fake_kubectl ~mode:"patch-create-race" (fun ~calls ~manifests:_ ->
+    match
+      Sol_cli_secret.set_unit_key
+        ~ctx
+        ~namespace:"payments"
+        ~secret_name:"charge-svc-secrets"
+        ~key:"API_TOKEN"
+        ~value:"unit-only"
+    with
+    | Error message -> Windtrap.failf "the racing create path failed: %s" message
+    | Ok _ ->
+      let log = calls () in
+      let count needle =
+        List.length
+          (List.filter
+             (fun line -> Sol_cli_string.contains ~needle line)
+             (String.split_on_char '\n' log))
+      in
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:
+          "the racing create is followed by exactly one retried patch (Ok proves it won)"
+        true
+        (count "patch-args" = 2))
+;;
+
+let test_rewriting_the_same_value_is_a_no_op () =
+  with_fake_kubectl ~mode:"owned-unit" (fun ~calls ~manifests:_ ->
+    match
+      Sol_cli_secret.set_unit_key
+        ~ctx
+        ~namespace:"payments"
+        ~secret_name:"charge-svc-secrets"
+        ~key:"EXISTING"
+        ~value:"existing"
+    with
+    | Error message -> Windtrap.failf "a no-op write failed: %s" message
+    | Ok changed ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"writing the value the Secret already holds reports no change"
+        false
+        changed;
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"and does not touch the object"
+        false
+        (Sol_cli_string.contains ~needle:"patch-args" (calls ())))
+;;
+
+let%test "1426: a write to an absent Secret creates it after the patch misses" =
+  test_absent_secret_is_created ()
+;;
+
+let%test "1426: a create that races to AlreadyExists retries the patch" =
+  test_create_race_retries_the_patch ()
+;;
+
+let%test "1426: writing the value the Secret already holds is a no-op" =
+  test_rewriting_the_same_value_is_a_no_op ()
 ;;

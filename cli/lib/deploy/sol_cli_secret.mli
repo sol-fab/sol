@@ -72,8 +72,9 @@ val external_secret_uid
     different question": for a declared ExternalSecret, the Secret ESO writes must be absent
     or owned by *that* ExternalSecret ([ownerReferences] names [external_uid]). Sol does not
     write these Secrets, so the managed-by label rule cannot answer for them.
-    [external_uid] is [None] when nothing declares the Secret yet, and a pre-existing Secret
-    is then refused. Both the unit path and the class path use this one check. *)
+    [external_uid] is [None] when no ExternalSecret is declared yet, and a pre-existing Secret
+    is then refused (nothing declares it). Both the unit path and the class path use this
+    check. *)
 val verify_external_secret_output
   :  ctx:Sol_cli_kube_destination.context
   -> namespace:string
