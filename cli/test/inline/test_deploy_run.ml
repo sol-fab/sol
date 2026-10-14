@@ -86,6 +86,7 @@ let plan ?profile services : Sol_cli_deployment_plan.t =
   ; profile
   ; contract = []
   ; contract_changes = []
+  ; resource_delivery = None
   }
 ;;
 

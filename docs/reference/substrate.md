@@ -373,6 +373,12 @@ Manifests are written to `gitops/manifests/`. Commit and push. Argo CD or Flux
 detects the change and applies it to the cluster. Sol's role ends when the files
 are written.
 
+An externally bound database's class `ExternalSecret`s are written as
+`<target>-db-prerequisites.yaml` in the same directory, so a fresh GitOps
+deployment carries the object its units read. A target that provisions its
+database cannot be emitted — its class Secrets are written by the setup step,
+which only a direct apply runs — so `--emit-to` refuses it at plan time.
+
 Alongside the manifests, Sol writes `sol-release-<id>.yaml` (named by the plan's
 content-addressed release id — the same id every workload carries as its
 `release` label) and a `sol-current-release.yaml` pointer. Both are pure

@@ -495,8 +495,8 @@ let run
     the setup Job's coordinator ([run]). *)
 
 (** The store and one remote path per credential class an externally bound database
-    delivers, or the reason it cannot. Planning requires this ([validate_external_bindings])
-    and the renderer consumes it, so one rule serves both. *)
+    delivers, or the reason it cannot. {!resource_delivery} is the one caller, and the class
+    [ExternalSecret] renderer consumes its result, so one rule serves both. *)
 let external_credential_sources (binding : Sol_cli_resource_binding.t) =
   let module Render = Sol_cli_database_setup_render in
   let* store =
@@ -530,67 +530,68 @@ let external_credential_sources (binding : Sol_cli_resource_binding.t) =
   Ok (store, classes)
 ;;
 
-(** Plan-time: an externally bound database must name a store and a remote path for every
-    credential class, so delivery cannot fail after planning. This runs before anything is
-    applied; the renderer's [external_credential_docs] asks the same extraction, so the
-    plan check makes its error unreachable in the deploy flow rather than duplicating it. *)
-let validate_external_bindings bindings =
-  bindings
-  |> Sol_cli_resource_binding.of_type ~typ:"postgres"
-  |> List.filter (fun (binding : Sol_cli_resource_binding.t) ->
-    binding.ownership = Sol_cli_config.Ownership_external)
-  |> Sol_cli_result.map_list (fun binding ->
-    Result.map (fun _ -> ()) (external_credential_sources binding))
-  |> Result.map (fun _ -> ())
-;;
-
-(** The pure core: which ExternalSecrets an externally bound database needs, one per class
-    per namespace that reads it. Separate from the apply so the shape is testable without a
-    cluster. *)
-let external_credential_docs
+(** **The target-scoped delivery**, resolved once at plan time: the name-safe target and
+    resource identity, the store, one remote path per credential class, and the namespaces
+    each class lands in. It fails before anything is applied when the binding cannot deliver
+    every class, so planning refuses rather than emitting a class Secret nothing produces. *)
+let resource_delivery
       ~target
+      ~resource
       ~migration_namespace
       ~dml_namespaces
-      ~(binding : Sol_cli_resource_binding.t)
+      (binding : Sol_cli_resource_binding.t)
   =
+  let* store, credentials = external_credential_sources binding in
+  Ok
+    Sol_cli_deployment_plan.
+      { target; resource; store; credentials; migration_namespace; dml_namespaces }
+;;
+
+(** The class ExternalSecrets the delivery names, one per class per namespace that reads it.
+    [resource_delivery] establishes a path for every class, so this error is unreachable in
+    the deploy flow; it is returned rather than raised so a delivery missing a class fails
+    with the class named instead of a [Not_found]. Direct apply and GitOps emit render the
+    same documents. *)
+let external_credential_docs (delivery : Sol_cli_deployment_plan.resource_delivery) =
   let module Render = Sol_cli_database_setup_render in
-  let* store, classes = external_credential_sources binding in
   (* The DDL class is what the migration path reads, so it lands where migrations run; the
      DML class lands wherever a unit declares it consumes the resource. *)
   let namespaces_for_class credential_class =
     if String.equal credential_class Render.ddl_class
-    then [ migration_namespace ]
-    else dml_namespaces
+    then [ delivery.migration_namespace ]
+    else delivery.dml_namespaces
   in
-  Ok
-    (List.concat_map
-       (fun (credential_class, remote_path) ->
-          namespaces_for_class credential_class
-          |> List.sort_uniq String.compare
-          |> List.map (fun ns ->
-            Render.class_external_secret_doc
-              ~ns
-              ~target
-              ~credential_class
-              ~store
-              ~remote_path))
-       classes)
+  Render.postgres_classes
+  |> Sol_cli_result.map_list (fun credential_class ->
+    match List.assoc_opt credential_class delivery.credentials with
+    | None ->
+      Error
+        (Printf.sprintf
+           "the resolved database delivery for %S names no remote path for the %S \
+            credential class, so it would emit no object for it"
+           delivery.resource
+           credential_class)
+    | Some remote_path ->
+      Ok
+        (namespaces_for_class credential_class
+         |> List.sort_uniq String.compare
+         |> List.map (fun ns ->
+           Render.class_external_secret_doc
+             ~ns
+             ~target:delivery.target
+             ~credential_class
+             ~store:delivery.store
+             ~remote_path)))
+  |> Result.map List.concat
 ;;
 
-let run_external_credentials
-      ~ctx
-      ~target
-      ~migration_namespace
-      ~dml_namespaces
-      ~(binding : Sol_cli_resource_binding.t)
-  =
-  let* docs =
-    external_credential_docs ~target ~migration_namespace ~dml_namespaces ~binding
-  in
+let run_external_credentials ~ctx (delivery : Sol_cli_deployment_plan.resource_delivery) =
+  let* docs = external_credential_docs delivery in
   (* The ExternalSecret object is checked the same way the Secret projections are: absent or
      Sol's. It is a delivered object like any other, and a target must not quietly take over
      one another target's consumers still read. *)
   let module Render = Sol_cli_database_setup_render in
+  let target = delivery.target in
   (* Each class's ExternalSecret in the namespace that class is read from. *)
   let guard ~namespace ~credential_class =
     Sol_cli_secret.assert_destination_is_sol
@@ -599,14 +600,16 @@ let run_external_credentials
       ~namespace
       ~name:(Render.creds_name ~credential_class target)
   in
-  let* () = guard ~namespace:migration_namespace ~credential_class:Render.ddl_class in
+  let* () =
+    guard ~namespace:delivery.migration_namespace ~credential_class:Render.ddl_class
+  in
   let* () =
     List.fold_left
       (fun acc ns ->
          let* () = acc in
          guard ~namespace:ns ~credential_class:Render.dml_class)
       (Ok ())
-      dml_namespaces
+      delivery.dml_namespaces
   in
   List.fold_left
     (fun acc doc ->

@@ -309,4 +309,8 @@ Implementation reality is tracked where it belongs: **#1344** carries the `@plat
 migration sequence, the v1 delivery support matrix and the current provider defects; **#1360** carries
 the authoritative-storage decision. The GitOps limitation is **temporary** — resource ownership does not
 determine delivery capability; the flow cannot yet establish prerequisite readiness for
-installation-owned projections, and that is an implementation gap, not a model rule.
+installation-owned projections, and that is an implementation gap, not a model rule. Until it can,
+`sol deploy --emit-to` **refuses a database Sol provisions at plan time**, naming the binding: the setup
+step that writes its class Secrets runs only in a direct apply. An externally bound database emits its
+class `ExternalSecret`s as `<target>-db-prerequisites.yaml` beside the workloads, so a fresh GitOps
+deployment carries the object its units read.

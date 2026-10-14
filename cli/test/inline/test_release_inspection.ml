@@ -106,6 +106,7 @@ let hosted_plan ?progressive_delivery () =
   ; profile = None
   ; contract = []
   ; contract_changes = []
+  ; resource_delivery = None
   }
 ;;
 

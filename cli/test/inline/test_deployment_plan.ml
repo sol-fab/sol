@@ -324,6 +324,7 @@ let sample_plan () : Sol_cli_deployment_plan.t =
   ; profile = None
   ; contract = []
   ; contract_changes = []
+  ; resource_delivery = None
   }
 ;;
 
@@ -415,6 +416,7 @@ let test_to_json_mode_strings () =
       ; profile = None
       ; contract = []
       ; contract_changes = []
+      ; resource_delivery = None
       }
     in
     let s = Yojson.Safe.to_string (Sol_cli_deployment_plan.to_json plan) in

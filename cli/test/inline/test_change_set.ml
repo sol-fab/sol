@@ -125,6 +125,7 @@ let make_plan services =
   ; profile = None
   ; contract = []
   ; contract_changes = []
+  ; resource_delivery = None
   }
 ;;
 
@@ -196,8 +197,81 @@ let test_emit_to_result_fields () =
   Windtrap.equal Windtrap.string ~msg:"name" "notify-worker" r.name
 ;;
 
+(* #1423: the plan's resource delivery is written by the emit as its own target-scoped file,
+   beside the per-workload bundles, so a fresh external-database GitOps deployment carries
+   the class Secrets its units read. A plan with no delivery writes no such file. *)
+let resource_delivery : Sol_cli_deployment_plan.resource_delivery =
+  { target = "payments"
+  ; resource = "app_db"
+  ; store = "vault-production"
+  ; credentials =
+      [ Sol_cli_database_setup_render.ddl_class, "secret/production/app-db-migrator"
+      ; Sol_cli_database_setup_render.dml_class, "secret/production/app-db-app"
+      ]
+  ; migration_namespace = "myapp-payments"
+  ; dml_namespaces = [ "myapp-comms" ]
+  }
+;;
+
+let test_emit_to_writes_resource_prerequisites () =
+  let dir = Filename.temp_file "sol-cs-prereq-" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o755;
+  let plan =
+    { (make_plan [ worker_spec ]) with
+      Sol_cli_deployment_plan.resource_delivery = Some resource_delivery
+    }
+  in
+  let _results = run_ok ~mode:(Sol_cli_executor.Emit_to dir) plan in
+  let name =
+    Sol_cli_database_setup_render.resource_prerequisites_file_name ~target:"payments"
+  in
+  let path = Filename.concat dir name in
+  let present msg needle =
+    Windtrap.equal
+      Windtrap.bool
+      ~msg
+      true
+      (Sys.file_exists path
+       && Sol_cli_string.contains
+            ~needle
+            (In_channel.with_open_bin path In_channel.input_all))
+  in
+  present
+    "the file names the reader's DDL class"
+    (Sol_cli_database_setup_render.ddl_creds_name "payments");
+  present
+    "and the reader's DML class"
+    (Sol_cli_database_setup_render.dml_creds_name "payments");
+  present "the DDL lands where migrations run" "namespace: myapp-payments";
+  present "the DML lands where it is consumed" "namespace: myapp-comms";
+  present "the store is the delivery's" "name: vault-production";
+  present
+    "the key is the reader's"
+    ("secretKey: " ^ Sol_cli_database_setup_render.postgres_url_key);
+  let empty = Filename.temp_file "sol-cs-prereq-none-" "" in
+  Sys.remove empty;
+  Unix.mkdir empty 0o755;
+  let _ = run_ok ~mode:(Sol_cli_executor.Emit_to empty) (make_plan [ worker_spec ]) in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"a plan with no delivery writes no prerequisite file"
+    false
+    (Sys.file_exists (Filename.concat empty name));
+  (try Sys.remove path with
+   | _ -> ());
+  (try Unix.rmdir dir with
+   | _ -> ());
+  try Unix.rmdir empty with
+  | _ -> ()
+;;
+
 let%test "dry_run: result count" = test_dry_run_result_count ()
 let%test "dry_run: result fields (svc)" = test_dry_run_result_fields ()
 let%test "dry_run: result fields (worker)" = test_dry_run_worker ()
 let%test "emit_to: file written" = test_emit_to_writes_file ()
 let%test "emit_to: result fields" = test_emit_to_result_fields ()
+
+let%test "emit_to: resource prerequisites written" =
+  test_emit_to_writes_resource_prerequisites ()
+;;

@@ -201,6 +201,7 @@ let gate_plan : Sol_cli_deployment_plan.t =
   ; profile = None
   ; contract = []
   ; contract_changes = []
+  ; resource_delivery = None
   }
 ;;
 
