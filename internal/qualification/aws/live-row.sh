@@ -695,11 +695,17 @@ phase_prepare() {
 
 app_populate_sol_repositories() {
   local unit
+  local ref
   while IFS= read -r line; do
     unit="${line%%=*}"
+    # The recorded artifact is the digest, which is what the run publishes and what the deploy
+    # was given; it is not guaranteed to be in this host's docker daemon (the publish path may
+    # not load it), so pull the digest before re-tagging it into Sol's repository (#1447).
+    ref="${line#*=}"
     [ -n "$unit" ] || continue
+    [ -n "$ref" ] || continue
     run "app-populate-$unit" bash -c \
-      "docker tag '$(run_repo "$unit"):$APP_TAG' '$(sol_repo "$unit"):$APP_TAG' && docker push '$(sol_repo "$unit"):$APP_TAG'" \
+      "docker pull '$ref' >/dev/null && docker tag '$ref' '$(sol_repo "$unit"):$APP_TAG' && docker push '$(sol_repo "$unit"):$APP_TAG'" \
       || return 1
   done <"$LOG_DIR/app-image-refs.txt"
   say "published the run's images into Sol's repositories, so teardown removes populated ones"
@@ -808,15 +814,34 @@ app_class_credential_name() { printf '%s' "$TARGET" | tr '[:upper:]/' '[:lower:]
 # <target>-dml-creds, both written by the deploy's database setup step. This asserts the
 # delivered form exists and that the consumer did not also receive an operator's master
 # copy — the "value nothing reads" failure this arc removes.
+app_namespaces() {
+  local prefix="${APP_NS%-*}" address
+  for address in $(app_unit_addresses); do
+    printf '%s-%s\n' "$prefix" "${address%%/*}"
+  done | sort -u
+}
+
 app_verify_database_delivery() {
-  local name secrets ddl dml consumer
+  local name secrets ddl dml consumer namespace
   name="$(app_class_credential_name)"
-  secrets="$(kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get secret -A \
-    -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null)"
-  ddl="$(printf '%s\n' "$secrets" | awk -v n="$name-ddl-creds" '$2 == n { print $1 }' | head -1)"
-  dml="$(printf '%s\n' "$secrets" | awk -v n="$name-dml-creds" '$2 == n { print $1 }' | head -1)"
+  # The deploy identity is namespace-scoped (ADR 0002, SEC-011), so every observation lists
+  # per namespace. A cluster-scoped list is Forbidden for it -- and silencing that would read
+  # "cannot observe" as "absent", the one direction absence must never be inferred from
+  # (#1433 is the same defect in the product; this is the harness's own copy of it).
+  ddl=""
+  dml=""
+  for namespace in $(app_namespaces); do
+    if kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get secret "$name-ddl-creds" -n "$namespace" \
+      >/dev/null 2>&1; then
+      ddl="$namespace"
+    fi
+    if kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get secret "$name-dml-creds" -n "$namespace" \
+      >/dev/null 2>&1; then
+      dml="$namespace"
+    fi
+  done
   if [ -z "$ddl" ]; then
-    say "the migration Job's $name-ddl-creds class Secret is absent"
+    say "no namespace this target deploys into carries the migration Job's $name-ddl-creds class Secret"
     return 1
   fi
   if [ -z "$dml" ]; then

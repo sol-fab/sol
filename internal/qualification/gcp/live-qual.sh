@@ -970,6 +970,16 @@ app_registry() { printf '%s-docker.pkg.dev/%s/%s' "$REGION" "$PROJECT" "$CLUSTER
 
 app_kube_context() { printf 'gke_%s_%s_%s' "$PROJECT" "$REGION" "$CLUSTER"; }
 
+# The namespaces this row's units deploy into, for the per-namespace observations below.
+app_namespaces() {
+  local service path
+  for service in $(app_services); do
+    if path="$(app_context_path "$service")"; then
+      printf 'pluto-%s\n' "$(printf '%s' "${path#app/}" | cut -d/ -f1)"
+    fi
+  done | sort -u
+}
+
 app_services() { printf '%s\n' orders_svc fulfilment_worker order_svc fulfillment_worker; }
 
 app_helpers() {
@@ -1008,14 +1018,22 @@ app_class_credential_name() { printf '%s' "$TARGET" | tr '[:upper:]/' '[:lower:]
 # <target>-dml-creds, both written by the deploy's database setup step. Assert the delivered
 # form exists and that the consumer did not also receive an operator's master copy.
 app_verify_database_delivery() {
-  local name secrets ddl dml consumer
+  local name ddl dml consumer namespace
   name="$(app_class_credential_name)"
-  secrets="$(kubectl get secret -A \
-    -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null)"
-  ddl="$(printf '%s\n' "$secrets" | awk -v n="$name-ddl-creds" '$2 == n { print $1 }' | head -1)"
-  dml="$(printf '%s\n' "$secrets" | awk -v n="$name-dml-creds" '$2 == n { print $1 }' | head -1)"
+  # Per namespace, never cluster-wide: a cluster-scoped list is forbidden for the identity this
+  # row uses, and silencing it would read "cannot observe" as "absent" (#1446).
+  ddl=""
+  dml=""
+  for namespace in $(app_namespaces); do
+    if kubectl get secret "$name-ddl-creds" -n "$namespace" >/dev/null 2>&1; then
+      ddl="$namespace"
+    fi
+    if kubectl get secret "$name-dml-creds" -n "$namespace" >/dev/null 2>&1; then
+      dml="$namespace"
+    fi
+  done
   if [ -z "$ddl" ]; then
-    say "app: the migration Job's $name-ddl-creds class Secret is absent"
+    say "app: no namespace this target deploys into carries the migration Job's $name-ddl-creds class Secret"
     return 1
   fi
   if [ -z "$dml" ]; then
