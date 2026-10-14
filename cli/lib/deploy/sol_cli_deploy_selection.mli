@@ -32,13 +32,17 @@ val unit_input_owners
   -> declared:string list
   -> (string * input_owner) list
 
-(** Whether the unit declared it consumes the target's database, by the plan's own rule. *)
+(** Whether the unit declared it consumes the target's database, by
+    [Sol_cli_deployment_plan.db_uses_target] — the function the plan itself uses to fill
+    [spec.db_uses_target]. Reads the workspace's `uses:` edge, not the unit's secret keys. *)
 val unit_consumes_target_database
   :  config:Sol_cli_config.t
   -> unit_name:string
   -> (bool, string) result
 
-(** The `sol secret set` decision for one key, on the resolved input ownership. *)
+(** The `sol secret set` decision for one key, on the resolved input ownership. [declared]
+    is the unit's application secret keys — the same list the plan builds [spec.secrets]
+    from — so both callers reach {!unit_input_owners} with the same input. *)
 val check_unit_secret_write
   :  config:Sol_cli_config.t
   -> unit_address:string

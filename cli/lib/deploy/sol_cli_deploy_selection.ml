@@ -70,10 +70,17 @@ let unit_input_owners
           (Sol_cli_config.secret_authority config.target ~unit_address ~key) ))
 ;;
 
-(* Which target database a unit consumes — the plan's own rule, asked once so `sol secret
-   set` resolves the same [db_uses_target] the plan gate carries. *)
+(* Which target database a unit consumes, by `Sol_cli_deployment_plan.db_uses_target` — the
+   same function `Sol_cli_deployment_plan.of_services_result` calls to fill
+   [spec.db_uses_target], so `sol secret set` resolves the same capability the plan gate
+   carries.
+
+   The declaration resolved here is the **workspace** declaration: `db_uses_target` reads
+   the unit's `uses:` edge from [Sol_cli_config.declared.services]. The unit's *declared
+   secret keys* are a different input — the caller's [declared] to {!check_unit_secret_write}
+   — and the two are not interchangeable. *)
 let unit_consumes_target_database ~(config : Sol_cli_config.t) ~unit_name =
-  let declared = Sol_cli_config.declared_of_config config in
+  let workspace = Sol_cli_config.declared_of_config config in
   match Sol_cli_resource_binding.resolve config with
   | Error _ as error -> error
   | Ok bindings ->
@@ -86,7 +93,7 @@ let unit_consumes_target_database ~(config : Sol_cli_config.t) ~unit_name =
     Ok
       (Option.is_some
          (Sol_cli_deployment_plan.db_uses_target
-            (Some declared)
+            (Some workspace)
             ~target:(Some target)
             ~target_database
             unit_name))

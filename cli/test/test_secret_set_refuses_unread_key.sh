@@ -7,6 +7,10 @@
 # accepted the write and created a Secret the pod never projects. The refusal now happens on
 # the same resolved input ownership the plan gate uses, before the value is read and before
 # any write.
+#
+# The same run then writes a key the unit *does* own, so the stub cluster proves it would
+# have logged the refused write: without that control, "no apply in the log" could pass
+# because the log was never created at all.
 set -euo pipefail
 
 sol="$(realpath "$1")"
@@ -23,7 +27,7 @@ mkdir -p "$tmp/workspace/app/payments/api_svc" "$tmp/workspace/sol" "$tmp/bin"
 printf 'FROM scratch\n' >"$tmp/workspace/app/payments/api_svc/Dockerfile"
 cat >"$tmp/workspace/app/payments/api_svc/sol.toml" <<'EOF'
 [infra.env]
-secrets = ["POSTGRES_URL"]
+secrets = ["POSTGRES_URL", "SOL_API_KEY"]
 EOF
 
 cat >"$tmp/workspace/sol.yml" <<'EOF'
@@ -50,19 +54,42 @@ prod:
         payments/api_svc:
           POSTGRES_URL:
             authority: sol
+          SOL_API_KEY:
+            authority: sol
       aws:
         state_lock_table: sol-secret-set-refusal-lock
 EOF
 
-# Any write is a failure here: the test asserts the CLI refused before touching the cluster.
+# A stub cluster with a namespace and nothing else. `get secret` is NotFound until something
+# is applied; afterwards it returns a Secret with a new resourceVersion, which is how the CLI
+# tells "written" from "already had that value". Every kubectl invocation is logged.
 cat >"$tmp/bin/kubectl" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >>"$tmp/kubectl.log"
+case " \$* " in
+  *" get secret "*)
+    if [ -f "$tmp/applied" ]; then
+      printf '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"api-svc-secrets","namespace":"workspace-payments","resourceVersion":"2","labels":{"app.kubernetes.io/managed-by":"sol"}},"data":{"SOL_API_KEY":"dmFsdWU="}}\n'
+    else
+      printf 'Error from server (NotFound): secrets "api-svc-secrets" not found\n' >&2
+      exit 1
+    fi
+    ;;
+  *" create "*|*" apply "*|*" patch "*)
+    case " \$* " in
+      *"sol-secret-ns-"*) ;;
+      *) : >"$tmp/applied" ;;
+    esac
+    printf 'secret/api-svc-secrets configured\n'
+    ;;
+esac
 exit 0
 EOF
 chmod +x "$tmp/bin/kubectl"
 
 cd "$tmp/workspace"
+
+# 1. The binding supplies POSTGRES_URL, so the write must be refused before any cluster call.
 set +e
 output="$(
   PATH="$tmp/bin:$PATH" SOL_HOME="$(dirname "$sol")" \
@@ -71,12 +98,29 @@ output="$(
 )"
 rc=$?
 set -e
-
-[ "$rc" -ne 0 ] || note "the write must be refused; exit was $rc: $output"
+[ "$rc" -ne 0 ] || note "the POSTGRES_URL write must be refused; exit was $rc: $output"
 printf '%s\n' "$output" | grep -F 'DML class Secret' >/dev/null \
   || note "the refusal must name where POSTGRES_URL is delivered from: $output"
-if [ -f "$tmp/kubectl.log" ] && grep -Eq 'apply|create|patch' "$tmp/kubectl.log"; then
-  note "the refusal must happen before any cluster write: $(cat "$tmp/kubectl.log")"
+if [ -f "$tmp/kubectl.log" ]; then
+  note "the refusal must happen before any cluster call: $(cat "$tmp/kubectl.log")"
+fi
+
+# 2. Positive control: a key the unit owns reaches the stub, proving the stub logs writes.
+set +e
+output="$(
+  PATH="$tmp/bin:$PATH" SOL_HOME="$(dirname "$sol")" \
+    "$sol" secret set prod/aws/us-east-1 payments/api_svc/SOL_API_KEY --from-stdin \
+    <<<"an-owned-value" 2>&1
+)"
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || note "the SOL_API_KEY write must succeed; exit was $rc: $output"
+printf '%s\n' "$output" | grep -F 'Secret updated for payments/api_svc/SOL_API_KEY' >/dev/null \
+  || note "the accepted write must report the Secret it updated: $output"
+if [ ! -f "$tmp/kubectl.log" ]; then
+  note "the positive control never reached the stub cluster, so the refusal assertion is vacuous"
+elif ! grep -Eq 'apply|create|patch' "$tmp/kubectl.log"; then
+  note "the positive control made no write: $(cat "$tmp/kubectl.log")"
 fi
 
 [ "$fail" -eq 0 ] || exit 1

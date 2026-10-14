@@ -394,10 +394,17 @@ services:
         payments/charge_svc:
           POSTGRES_URL:
             authority: sol
+          SOL_API_KEY:
+            authority: sol
+          AUDIT_KEY:
+            authority: external
+            store: audit-store
+            key: production/audit
 |}
     )
   ; "app/payments/charge_svc/Dockerfile", "FROM scratch\n"
-  ; "app/payments/charge_svc/sol.toml", "[infra.env]\nsecrets = [\"POSTGRES_URL\"]\n"
+  ; ( "app/payments/charge_svc/sol.toml"
+    , "[infra.env]\nsecrets = [\"POSTGRES_URL\", \"SOL_API_KEY\", \"AUDIT_KEY\"]\n" )
   ]
 ;;
 
@@ -433,46 +440,106 @@ let test_input_ownership_is_one_decision () =
       "the plan routes POSTGRES_URL from the target's database"
       true
       (charge.Sol_cli_deployment_plan.db_uses_target = Some "ws");
-    (* The one ownership decision. *)
+    (* The two callers must reach the one decision with the *same* declared set. The plan
+       gate reads [spec.secrets], which is built from the unit's `sol.toml`; `sol secret set`
+       reads that same `sol.toml` through the workspace model. Assert the plan's set is the
+       set the test hands to both callers. *)
+    let declared_keys = [ "POSTGRES_URL"; "SOL_API_KEY"; "AUDIT_KEY" ] in
+    check_strings
+      "the plan's declared keys are the unit's declared keys"
+      (List.sort String.compare declared_keys)
+      (List.sort String.compare (List.map fst charge.secrets));
+    (* The one ownership decision, on a declared set that exercises every owner. *)
     let owners =
       Sol_cli_deploy_selection.unit_input_owners
         ~config
         ~unit_address:"payments/charge_svc"
         ~transport:Sol_cli_manifest.Plaintext
         ~db_uses_target:true
-        ~declared:[ "POSTGRES_URL" ]
+        ~declared:declared_keys
     in
-    check_bool
-      "the shared decision owns POSTGRES_URL as the target's database input"
-      true
-      (match List.assoc_opt "POSTGRES_URL" owners with
-       | Some Sol_cli_deploy_selection.Target_database -> true
-       | _ -> false);
-    (* The plan gate asks the same decision, so it demands no authority for the key. *)
+    let owns expected key =
+      check_bool
+        (Printf.sprintf "the shared decision owns %s as %s" key expected)
+        true
+        (match List.assoc_opt key owners with
+         | Some Sol_cli_deploy_selection.Unit_secret ->
+           String.equal expected "the unit's own Secret"
+         | Some Sol_cli_deploy_selection.Target_database ->
+           String.equal expected "the target's database input"
+         | Some (Sol_cli_deploy_selection.External_secret _) ->
+           String.equal expected "an external authority"
+         | Some Sol_cli_deploy_selection.Unmapped -> String.equal expected "unmapped"
+         | None -> false)
+    in
+    owns "the target's database input" "POSTGRES_URL";
+    owns "the unit's own Secret" "SOL_API_KEY";
+    owns "an external authority" "AUDIT_KEY";
+    (* The plan gate and `sol secret set` must project identical owners from that one
+       decision. Compare the two maps as text so a divergence names the key and the source. *)
+    let owner_text = function
+      | Sol_cli_deploy_selection.Unit_secret -> Some "sol"
+      | Sol_cli_deploy_selection.External_secret { store; key } ->
+        Some (Printf.sprintf "external:%s:%s" store key)
+      | Sol_cli_deploy_selection.Target_database | Sol_cli_deploy_selection.Unmapped ->
+        None
+    in
+    let authority_text = function
+      | Sol_cli_config.Sol_managed -> "sol"
+      | Sol_cli_config.External { store; key } ->
+        Printf.sprintf "external:%s:%s" store key
+    in
+    let from_owners =
+      owners
+      |> List.filter_map (fun (key, owner) ->
+        Option.map (fun text -> Printf.sprintf "%s=%s" key text) (owner_text owner))
+      |> List.sort String.compare
+    in
     let authorities =
       Sol_cli_deploy_selection.secret_authorities_for_plan ~config plan
       |> fail_on_error "secret_authorities_for_plan"
     in
-    check_bool
-      "the plan gate demands no POSTGRES_URL authority"
-      false
-      (List.exists (fun (_, key, _) -> String.equal key "POSTGRES_URL") authorities);
+    let from_plan =
+      authorities
+      |> List.filter_map (fun (unit, key, authority) ->
+        if String.equal unit "payments/charge_svc"
+        then Some (Printf.sprintf "%s=%s" key (authority_text authority))
+        else None)
+      |> List.sort String.compare
+    in
+    check_strings
+      "the plan gate and sol secret set resolve the same ownership map"
+      from_owners
+      from_plan;
     (* `sol secret set` is the caller the old split got wrong: it must refuse the write
-       whose value the workload would read from the class Secret instead. *)
+       whose value the workload would read from the class Secret instead, while still
+       accepting a key the unit owns. *)
+    (match
+       Sol_cli_deploy_selection.check_unit_secret_write
+         ~config
+         ~unit_address:"payments/charge_svc"
+         ~unit_name:"charge_svc"
+         ~declared:declared_keys
+         ~key:"POSTGRES_URL"
+     with
+     | Ok () ->
+       Windtrap.fail "sol secret set accepted a POSTGRES_URL the binding supplies"
+     | Error message ->
+       check_bool
+         "the refusal names the class Secret delivery"
+         true
+         (Sol_cli_string.contains ~needle:"DML class Secret" message));
     match
       Sol_cli_deploy_selection.check_unit_secret_write
         ~config
         ~unit_address:"payments/charge_svc"
         ~unit_name:"charge_svc"
-        ~declared:[ "POSTGRES_URL" ]
-        ~key:"POSTGRES_URL"
+        ~declared:declared_keys
+        ~key:"SOL_API_KEY"
     with
-    | Ok () -> Windtrap.fail "sol secret set accepted a POSTGRES_URL the binding supplies"
+    | Ok () -> ()
     | Error message ->
-      check_bool
-        "the refusal names the class Secret delivery"
-        true
-        (Sol_cli_string.contains ~needle:"DML class Secret" message))
+      Windtrap.fail ("sol secret set refused a unit-owned key: " ^ message))
 ;;
 
 let%test "1425: one input-ownership decision drives the plan gate and secret set" =
