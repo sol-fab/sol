@@ -494,15 +494,10 @@ let run
     Nothing here runs for a Sol-provisioned database; that target's classes are written by
     the setup Job's coordinator ([run]). *)
 
-(** The pure core: which ExternalSecrets an externally bound database needs, one per class
-    per namespace that reads it. Separate from the apply so the shape is testable without a
-    cluster. *)
-let external_credential_docs
-      ~target
-      ~migration_namespace
-      ~dml_namespaces
-      ~(binding : Sol_cli_resource_binding.t)
-  =
+(** The store and one remote path per credential class an externally bound database
+    delivers, or the reason it cannot. Planning requires this ([validate_external_bindings])
+    and the renderer consumes it, so one rule serves both. *)
+let external_credential_sources (binding : Sol_cli_resource_binding.t) =
   let module Render = Sol_cli_database_setup_render in
   let* store =
     match binding.Sol_cli_resource_binding.store with
@@ -532,6 +527,34 @@ let external_credential_docs
                 credential_class))
       Render.postgres_classes
   in
+  Ok (store, classes)
+;;
+
+(** Plan-time: an externally bound database must name a store and a remote path for every
+    credential class, so delivery cannot fail after planning. This runs before anything is
+    applied; the renderer's [external_credential_docs] asks the same extraction, so the
+    plan check makes its error unreachable in the deploy flow rather than duplicating it. *)
+let validate_external_bindings bindings =
+  bindings
+  |> Sol_cli_resource_binding.of_type ~typ:"postgres"
+  |> List.filter (fun (binding : Sol_cli_resource_binding.t) ->
+    binding.ownership = Sol_cli_config.Ownership_external)
+  |> Sol_cli_result.map_list (fun binding ->
+    Result.map (fun _ -> ()) (external_credential_sources binding))
+  |> Result.map (fun _ -> ())
+;;
+
+(** The pure core: which ExternalSecrets an externally bound database needs, one per class
+    per namespace that reads it. Separate from the apply so the shape is testable without a
+    cluster. *)
+let external_credential_docs
+      ~target
+      ~migration_namespace
+      ~dml_namespaces
+      ~(binding : Sol_cli_resource_binding.t)
+  =
+  let module Render = Sol_cli_database_setup_render in
+  let* store, classes = external_credential_sources binding in
   (* The DDL class is what the migration path reads, so it lands where migrations run; the
      DML class lands wherever a unit declares it consumes the resource. *)
   let namespaces_for_class credential_class =

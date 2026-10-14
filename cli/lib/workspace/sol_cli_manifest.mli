@@ -90,7 +90,7 @@ val postgres_url_key : string
 
 val required_secret_keys
   :  ?transport:kafka_transport
-  -> ?db_dml_creds_name:string
+  -> ?db_uses_target:bool
   -> string list
   -> string list
 

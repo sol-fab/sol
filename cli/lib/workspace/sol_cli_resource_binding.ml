@@ -51,25 +51,24 @@ let resolve (cfg : Sol_cli_config.t) =
   match go [] (Sol_cli_config.resources cfg) with
   | Error _ as error -> error
   | Ok bindings ->
-    (* v1 supports one provisioned database per target, and the limit is on the effective
-       graph — the resources that survive `omit` — not on what a unit consumes. The
-       provisioner makes exactly one database and `has_postgres` carries no identity to
-       select between them, so a second provisioned database cannot be satisfied. *)
-    let provisioned =
-      List.filter
-        (fun b ->
-           String.equal b.typ "postgres" && b.ownership = Sol_cli_config.Ownership_sol)
-        bindings
-    in
-    (match provisioned with
+    (* v1 supports one database per target, and the limit is on the effective graph — the
+       resources that survive `omit` — not on what a unit consumes. The delivered class
+       Secrets are named for the target, so a consumer cannot tell two databases apart
+       whatever their ownership: two Sol-provisioned databases, two external ones, and a
+       Sol-provisioned plus an external one are the same ambiguity. Rejecting it here, where
+       the effective graph is resolved, is what keeps it from surfacing later as a delivery
+       failure or as an external dependency whose derived delivery was silently skipped. *)
+    let databases = List.filter (fun b -> String.equal b.typ "postgres") bindings in
+    (match databases with
      | _ :: _ :: _ ->
        Error
          (Printf.sprintf
-            "this target's effective resource graph provisions %d PostgreSQL resources \
-             (%s). v1 supports one provisioned database per target: omit the ones this \
-             target does not provision, or bind them externally"
-            (List.length provisioned)
-            (String.concat ", " (List.map (fun b -> b.resource) provisioned)))
+            "this target's effective resource graph declares %d PostgreSQL resources \
+             (%s). v1 supports one database per target: the delivered credential Secrets \
+             are named for the target, so two databases cannot be told apart by their \
+             consumers. Omit the ones this target does not use"
+            (List.length databases)
+            (String.concat ", " (List.map (fun b -> b.resource) databases)))
      | _ -> Ok bindings)
 ;;
 
@@ -89,8 +88,8 @@ let provisioned_database bindings =
 
 (* The one home for "which postgres resource is the target's": a provisioned database is
    authoritative when Sol owns one; otherwise the single external postgres is the target's.
-   Two external postgres resources have no single target, so a consumer's `POSTGRES_URL`
-   stays unit-scoped. *)
+   [resolve] has already refused a graph with more than one postgres resource, so [None]
+   here means the target simply has no database. *)
 let target_database bindings =
   match provisioned_database bindings with
   | Some database -> Some database

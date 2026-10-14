@@ -13,6 +13,44 @@ type deployed =
   ; notes : string list
   }
 
+(** The one ownership decision: which inputs a unit must carry, and who owns each. Both the
+    plan gate and `sol secret set` resolve through it. *)
+type input_owner =
+  | Unit_secret
+  | External_secret of
+      { store : string
+      ; key : string
+      }
+  | Target_database
+  | Unmapped
+
+val unit_input_owners
+  :  config:Sol_cli_config.t
+  -> unit_address:string
+  -> transport:Sol_cli_manifest.kafka_transport
+  -> db_uses_target:bool
+  -> declared:string list
+  -> (string * input_owner) list
+
+(** Whether the unit declared it consumes the target's database, by
+    [Sol_cli_deployment_plan.db_uses_target] — the function the plan itself uses to fill
+    [spec.db_uses_target]. Reads the workspace's `uses:` edge, not the unit's secret keys. *)
+val unit_consumes_target_database
+  :  config:Sol_cli_config.t
+  -> unit_name:string
+  -> (bool, string) result
+
+(** The `sol secret set` decision for one key, on the resolved input ownership. [declared]
+    is the unit's application secret keys — the same list the plan builds [spec.secrets]
+    from — so both callers reach {!unit_input_owners} with the same input. *)
+val check_unit_secret_write
+  :  config:Sol_cli_config.t
+  -> unit_address:string
+  -> unit_name:string
+  -> declared:string list
+  -> key:string
+  -> (unit, string) result
+
 val apply_target
   :  target:string
   -> config:Sol_cli_config.t
