@@ -5,6 +5,11 @@ type workload =
   ; image : string
   ; config : (string * string) list
   ; secrets : (string * string) list
+  ; (* What the unit **declared** it uses (`uses: [app_db]`), captured at build time. A rollback
+       re-resolves these against the current target's authorities and bindings -- storing a
+       *resolution* here would freeze a historical answer the rollback cannot use, which is the
+       conflation this field removes (#1422). *)
+    uses : string list
   ; external_secret_refs : (string * string * string) list
   ; schedule : string option
   ; scheduled_concurrency : string
@@ -40,7 +45,10 @@ type content =
 
 type t = string
 
-let encoding_version = "sol-release-v6"
+(* v7 records each workload's declared requirements. A v6 record cannot answer "what did this
+   version require?", so the version gate refuses it by name rather than letting a rollback guess
+   -- see [Sol_cli_release.stale_encoding_version_message] (#1422). *)
+let encoding_version = "sol-release-v7"
 
 let enc_string b s =
   Buffer.add_string b (Printf.sprintf "%d:" (String.length s));
@@ -102,6 +110,7 @@ let enc_workload b (w : workload) =
   enc_string b w.image;
   enc_pairs b w.config;
   enc_pairs b w.secrets;
+  enc_table b (List.map (fun u -> [ u ]) (List.sort String.compare w.uses));
   enc_table
     b
     (List.map

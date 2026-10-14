@@ -78,6 +78,10 @@ type service_spec =
        Routes the unit's `POSTGRES_URL` to `<target>-dml-creds`; see the implementation
        comment. [None] when the unit consumes no database. *)
     db_uses_target : string option
+    (** What this unit **declared** it uses ([uses: [app_db]]) -- the requirement, not its
+        resolution. The release record carries it so a rollback re-resolves it against the
+        *current* target's authorities and bindings (#1422). *)
+  ; uses : string list
   ; (* 2d: the target whose *Sol-provisioned* database this unit consumes, if any; gates the
        CA ConfigMap mount, which exists only where Sol's setup step writes it. *)
     db_ca_target : string option
@@ -204,6 +208,13 @@ val service_uses_resource_type
     step asks this, rather than the type form, so an externally bound database's consumers
     are not written a Sol credential: only the Sol-provisioned resource's consumers are. *)
 val service_uses_resource : Sol_cli_config.declared option -> string -> string -> bool
+
+(** A `uses:` ref's resource name, when the ref names a resource at all. *)
+val resource_name_of_ref : string -> string option
+
+(** What a unit **declared** it uses, in declaration order -- the requirement, not its
+    resolution (#1422). *)
+val declared_uses : Sol_cli_config.declared option -> string -> string list
 
 val resource_of_spec : service_spec -> string
 val external_secret_of_spec : service_spec -> (string * string) option

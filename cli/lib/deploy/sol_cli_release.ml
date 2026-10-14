@@ -312,6 +312,7 @@ let workload_to_json (w : workload) : Yojson.Safe.t =
     ; "image", `String w.image
     ; "config", pairs_to_assoc w.config
     ; "secrets", pairs_to_assoc w.secrets
+    ; "uses", `List (List.map (fun u -> `String u) w.uses)
     ; "external_secret_refs", rows3_to_json w.external_secret_refs
     ; ( "schedule"
       , match w.schedule with
@@ -496,6 +497,15 @@ let workload_of_json (json : Yojson.Safe.t) : workload =
   ; image = str "image" json
   ; config = pairs "config" json
   ; secrets = pairs "secrets" json
+  ; uses =
+      (match Sol_cli_json.field [ "uses" ] json with
+       | `List items ->
+         List.filter_map
+           (function
+             | `String u -> Some u
+             | _ -> None)
+           items
+       | _ -> [])
   ; external_secret_refs = List.map row3 (rows "external_secret_refs" json)
   ; schedule = string_option "schedule" json
   ; scheduled_concurrency = str "scheduled_concurrency" json

@@ -76,6 +76,11 @@ type service_spec =
        one that merely declares `POSTGRES_URL` as an application secret: that key stays
        unit-scoped. *)
     db_uses_target : string option
+    (** What this unit **declared** it uses (`uses: [app_db]`) -- the requirement, not its
+        resolution. The release record carries it so a rollback re-resolves it against the
+        *current* target's authorities and bindings rather than against today's declarations
+        (#1422). *)
+  ; uses : string list
   ; (* 2d: the target whose *Sol-provisioned* database this unit consumes, if any. The CA
        ConfigMap exists only where Sol's setup step writes it, so this stays [None] for a
        consumer of an externally bound database — its anchor is not Sol's to publish. The
@@ -287,6 +292,7 @@ let release_workload_of_spec (spec : service_spec) : Sol_cli_release_id.workload
   ; image = spec.image
   ; config = spec.config
   ; secrets = spec.secrets
+  ; uses = spec.uses
   ; external_secret_refs =
       spec.secret_sources
       |> List.filter_map (fun (key, source) ->
@@ -642,6 +648,22 @@ let service_uses_resource_type declared service_name typ =
            resources
            |> List.exists (fun (resource : Sol_cli_config.resource) ->
              resource.name = name && resource.typ = Some typ)))
+;;
+
+(** What a unit **declared** it uses, in declaration order: the requirement, not its
+    resolution. A rollback re-resolves these against the current target's authorities and
+    bindings, so this is what the release record stores (#1422). *)
+let declared_uses declared service_name =
+  match declared with
+  | None -> []
+  | Some cfg ->
+    (match
+       cfg.Sol_cli_config.services
+       |> List.find_opt (fun (service : Sol_cli_config.service) ->
+         String.equal service.name service_name)
+     with
+     | None -> []
+     | Some service -> service.uses)
 ;;
 
 let service_uses_resource declared service_name resource_name =
@@ -1254,6 +1276,10 @@ let of_services_result
       ; progressive_delivery = toml.progressive_delivery
       ; db_uses_target = db_uses_target svc.Sol_cli_manifest.name
       ; db_ca_target = db_ca_target svc.Sol_cli_manifest.name
+      ; (* What this unit **declared** it uses. Captured here, where the workspace's declaration
+           is in scope, so the release record can carry it and a rollback can re-resolve it
+           against the current target (#1422). *)
+        uses = declared_uses declared svc.Sol_cli_manifest.name
       }
     in
     let* () = validate_persistence spec in

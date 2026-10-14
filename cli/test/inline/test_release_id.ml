@@ -30,6 +30,7 @@ let wl
   ; image
   ; config
   ; secrets
+  ; uses = []
   ; external_secret_refs = []
   ; schedule
   ; scheduled_concurrency
@@ -246,7 +247,7 @@ let test_of_string_round_trips_and_validates () =
 let test_known_vector () =
   check_string
     "known id for a fixed content"
-    "r-7637ae5d26cd37e1"
+    "r-25d3a8757f181091"
     (id
        (content
           [ wl
@@ -398,6 +399,10 @@ let%test "identity: external secret references are release inputs" =
 ;;
 
 let%test "identity: encoding is unambiguous" = test_encoding_is_unambiguous ()
+
+(* The id moved with `sol-release-v6 -> v7` (#1422): the content now carries each workload's
+   declared requirements, so a release that declared them is a different boundary from one that
+   did not. *)
 let%test "identity: known vector" = test_known_vector ()
 let%test "identity: contract is part of identity" = test_contract_is_part_of_identity ()
 
