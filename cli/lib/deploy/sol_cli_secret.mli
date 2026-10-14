@@ -60,6 +60,27 @@ val external_secret_status
   -> expected_keys:string list
   -> (string, string) result
 
+(** The declared ExternalSecret's uid, or [None] when it does not exist yet — the value its
+    output Secret must name in [ownerReferences]. See {!verify_external_secret_output}. *)
+val external_secret_uid
+  :  ctx:Sol_cli_kube_destination.context
+  -> namespace:string
+  -> external_secret_name:string
+  -> (string option, string) result
+
+(** **The ESO output's ownership**, the predicate "[assert_destination_is_sol] answers a
+    different question": for a declared ExternalSecret, the Secret ESO writes must be absent
+    or owned by *that* ExternalSecret ([ownerReferences] names [external_uid]). Sol does not
+    write these Secrets, so the managed-by label rule cannot answer for them.
+    [external_uid] is [None] when nothing declares the Secret yet, and a pre-existing Secret
+    is then refused. Both the unit path and the class path use this one check. *)
+val verify_external_secret_output
+  :  ctx:Sol_cli_kube_destination.context
+  -> namespace:string
+  -> external_uid:string option
+  -> secret_name:string
+  -> (unit, string) result
+
 val verify_external_secret_destination
   :  ctx:Sol_cli_kube_destination.context
   -> Sol_cli_deployment_plan.service_spec

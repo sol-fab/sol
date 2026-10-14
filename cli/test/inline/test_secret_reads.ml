@@ -86,6 +86,10 @@ if [ "$verb" = "get" ]; then
         printf '{"metadata":{"generation":2},"status":{"refreshTime":"2026-10-10T12:00:00Z","syncedResourceVersion":"2-abc","conditions":[{"type":"Ready","status":"False","reason":"SecretSyncedError"}]}}\n'
         exit 0
       fi
+      if [ "$mode" = "eso-class-output-owned" ] || [ "$mode" = "eso-class-output-unowned" ]; then
+        printf '{"metadata":{"name":"%%s","namespace":"%%s","uid":"class-uid","generation":2,"labels":{"app.kubernetes.io/managed-by":"sol"}},"spec":{"target":{"name":"%%s"}},"status":{"refreshTime":"2026-10-10T12:00:00Z","syncedResourceVersion":"2-abc","conditions":[{"type":"Ready","status":"True","reason":"SecretSynced"}]}}\n' "$resource_name" "$namespace" "$resource_name"
+        exit 0
+      fi
       exit 0 ;;
     externalsecrets)
       if [ "$mode" = "platform-collision" ] && [ "$namespace" = "notifications" ]; then
@@ -105,6 +109,14 @@ if [ "$verb" = "get" ]; then
       fi
       exit 0 ;;
     secret)
+      if [ "$mode" = "eso-class-output-owned" ]; then
+        echo '{"apiVersion":"v1","kind":"Secret","metadata":{"ownerReferences":[{"uid":"class-uid"}]},"data":{"POSTGRES_URL":"cG9zdGdyZXM6Ly9kYg=="}}'
+        exit 0
+      fi
+      if [ "$mode" = "eso-class-output-unowned" ]; then
+        echo '{"apiVersion":"v1","kind":"Secret","data":{"POSTGRES_URL":"cG9zdGdyZXM6Ly9kYg=="}}'
+        exit 0
+      fi
       if [ "$mode" = "eso-class-ready" ]; then
         echo '{"apiVersion":"v1","kind":"Secret","data":{"POSTGRES_URL":"cG9zdGdyZXM6Ly9kYg=="}}'
         exit 0
@@ -958,4 +970,51 @@ let%test "1394: a synced class delivery passes" =
 
 let%test "1394: a class Secret without its key names ESO, not `sol secret set`" =
   test_class_delivery_missing_key_names_eso_not_secret_set ()
+;;
+
+(* #1392: the class path declares ExternalSecrets too, so the Secret ESO writes into must be
+   absent or owned by *that* ExternalSecret — the check a unit's own ExternalSecret already
+   got. ESO writes this Secret, so the managed-by label rule cannot answer for it, and the
+   failure must not send the operator to `sol secret set`. *)
+let test_class_output_must_be_owned_by_its_external_secret () =
+  with_fake_kubectl ~mode:"eso-class-output-unowned" (fun ~calls:_ ~manifests:_ ->
+    match
+      Sol_cli_database_setup_run.run_external_credentials ~ctx (class_delivery ())
+    with
+    | Ok () -> Windtrap.fail "an unowned class output Secret was accepted"
+    | Error message ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the refusal names the class Secret"
+        true
+        (Sol_cli_string.contains ~needle:"payments-ddl-creds" message);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"and says its owner is not the declared ExternalSecret"
+        true
+        (Sol_cli_string.contains
+           ~needle:"its owner is not the declared ExternalSecret"
+           message);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"and does not tell the operator to write it"
+        false
+        (Sol_cli_string.contains ~needle:"sol secret set" message))
+;;
+
+let test_class_output_owned_by_its_external_secret_passes () =
+  with_fake_kubectl ~mode:"eso-class-output-owned" (fun ~calls:_ ~manifests:_ ->
+    match
+      Sol_cli_database_setup_run.run_external_credentials ~ctx (class_delivery ())
+    with
+    | Ok () -> ()
+    | Error message -> Windtrap.fail ("an owned class output must pass: " ^ message))
+;;
+
+let%test "1392: a class output Secret not owned by its ExternalSecret is refused" =
+  test_class_output_must_be_owned_by_its_external_secret ()
+;;
+
+let%test "1392: a class output Secret owned by its ExternalSecret passes" =
+  test_class_output_owned_by_its_external_secret_passes ()
 ;;
