@@ -650,9 +650,10 @@ let service_uses_resource_type declared service_name typ =
              resource.name = name && resource.typ = Some typ)))
 ;;
 
-(** What a unit **declared** it uses, in declaration order: the requirement, not its
-    resolution. A rollback re-resolves these against the current target's authorities and
-    bindings, so this is what the release record stores (#1422). *)
+(** What a unit **declared** it uses -- the requirement, not its resolution. A rollback
+    re-resolves these against the current target's authorities and bindings, so this is what the
+    release record stores (#1422). The declaration's order is not semantic, and the content id is
+    order-insensitive under a reordering. *)
 let declared_uses declared service_name =
   match declared with
   | None -> []

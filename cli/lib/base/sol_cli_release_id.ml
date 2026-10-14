@@ -8,7 +8,11 @@ type workload =
   ; (* What the unit **declared** it uses (`uses: [app_db]`), captured at build time. A rollback
        re-resolves these against the current target's authorities and bindings -- storing a
        *resolution* here would freeze a historical answer the rollback cannot use, which is the
-       conflation this field removes (#1422). *)
+       conflation this field removes (#1422).
+
+       The declaration's order is not semantic, so [enc_workload] sorts it: the content id is
+       order-insensitive under a `uses:` reordering. The JSON keeps the declared order, which is
+       why the two differ -- intentional, not a bug. *)
     uses : string list
   ; external_secret_refs : (string * string * string) list
   ; schedule : string option

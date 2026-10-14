@@ -196,6 +196,64 @@ let stale_record : R.t = { sample_record with encoding_version = Some "sol-relea
    which would be the fail-open defect wearing a different hat. v6 is the version that
    immediately precedes requirement recording, so it is what a real pre-change release carries;
    the boundary is asserted against v7, not against the older v1 the staleness test uses. *)
+(* **#1422 Finding 3's soft spot, asserted rather than described.** `workload_of_json` defaults a
+   missing `uses` to `[]`, which is the fail-open shape. In practice it is unreachable: the
+   version gate refuses a pre-v7 record, and a v7 record whose field was stripped rederives a
+   different content id. This exercises the second defence -- the record below is *valid* with a
+   requirement, and removing one field from its JSON leaves a record claiming an identity its
+   content no longer has. *)
+let test_a_stripped_requirement_field_is_refused () =
+  let placeholder =
+    { sample_record with
+      release_id = ""
+    ; workloads =
+        List.map
+          (fun (w : Sol_cli_release_id.recorded_workload) ->
+             { w with spec = { w.spec with Sol_cli_release_id.uses = [ "app_db" ] } })
+          sample_record.workloads
+    }
+  in
+  let record =
+    { placeholder with
+      release_id = Sol_cli_release_id.to_string (R.derived_release_id placeholder)
+    }
+  in
+  (match R.validate ~name:(R.configmap_name record) record with
+   | Ok () -> ()
+   | Error message -> Windtrap.fail ("the control record must be valid: " ^ message));
+  let strip = function
+    | `Assoc fields ->
+      `Assoc
+        (List.map
+           (function
+             | "workloads", `List workloads ->
+               ( "workloads"
+               , `List
+                   (List.map
+                      (function
+                        | `Assoc w ->
+                          `Assoc
+                            (List.filter (fun (k, _) -> not (String.equal k "uses")) w)
+                        | other -> other)
+                      workloads) )
+             | other -> other)
+           fields)
+    | other -> other
+  in
+  match R.of_json (strip (R.to_json record)) with
+  | Error message -> Windtrap.fail ("the stripped record should still decode: " ^ message)
+  | Ok stripped ->
+    (match R.validate ~name:(R.configmap_name stripped) stripped with
+     | Ok () ->
+       Windtrap.fail "a record whose requirement field was stripped must be refused"
+     | Error message ->
+       check_bool
+         "refused as a record whose content does not rederive its identity, not as an \
+          empty one"
+         true
+         (Sol_cli_string.contains ~needle:"corrupt" message))
+;;
+
 let test_a_pre_requirements_record_is_refused_by_name () =
   let record = { sample_record with encoding_version = Some "sol-release-v6" } in
   match R.validate ~name:(R.configmap_name record) record with
@@ -1032,6 +1090,10 @@ let%test "validate: reports a stale encoding_version, not corruption" =
 
 let%test "release: a pre-requirements record is refused by name" =
   test_a_pre_requirements_record_is_refused_by_name ()
+;;
+
+let%test "release: a stripped requirement field is refused" =
+  test_a_stripped_requirement_field_is_refused ()
 ;;
 
 let%test "validate: reports an undeclared encoding_version, not corruption" =

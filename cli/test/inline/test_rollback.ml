@@ -2892,7 +2892,26 @@ let test_rollback_restores_recorded_requirements () =
           (Sol_cli_release_id.to_string (content_id [ ledger; billing_spec ]))
           (Sol_cli_release_id.to_string
              (content_id
-                [ { ledger_spec with Sol_cli_deployment_plan.uses = [] }; billing_spec ]))))
+                [ { ledger_spec with Sol_cli_deployment_plan.uses = [] }; billing_spec ]))));
+  (* The rollback decodes a recorded ref with **the same function the deploy uses**
+     (`Sol_cli_deployment_plan.resource_name_of_ref`, which `service_uses_resource` also calls),
+     so the two cannot disagree about what "a ref that names a resource" means -- no second
+     parser to drift. A path-shaped ref exercises that decode. *)
+  let namespaced =
+    release_with_workloads
+      ~apply_mode:Sol_cli_release.Direct
+      [ { ledger_spec with Sol_cli_deployment_plan.uses = [ "env/app_db" ] }
+      ; billing_spec
+      ]
+  in
+  match Sol_cli_rollback.service_specs_of_release ~config:(config ()) namespaced with
+  | Error message -> Windtrap.fail message
+  | Ok specs ->
+    Windtrap.equal
+      (Windtrap.option Windtrap.string)
+      ~msg:"and a path-shaped requirement resolves through the deploy's own ref decode"
+      (Some target)
+      (spec_of specs "ledger_svc").db_uses_target
 ;;
 
 let%test "2b: a rollback restores recorded requirements against current bindings" =

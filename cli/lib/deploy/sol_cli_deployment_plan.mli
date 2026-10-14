@@ -212,8 +212,10 @@ val service_uses_resource : Sol_cli_config.declared option -> string -> string -
 (** A `uses:` ref's resource name, when the ref names a resource at all. *)
 val resource_name_of_ref : string -> string option
 
-(** What a unit **declared** it uses, in declaration order -- the requirement, not its
-    resolution (#1422). *)
+(** What a unit **declared** it uses -- the requirement, not its resolution (#1422). The
+    declaration's *order* is not semantic: the release content id is order-insensitive under a
+    `uses:` reordering, so two releases that declared the same requirements in a different order
+    are the same boundary. *)
 val declared_uses : Sol_cli_config.declared option -> string -> string list
 
 val resource_of_spec : service_spec -> string
