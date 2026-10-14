@@ -24,6 +24,7 @@ let sample_workload : R.workload =
   ; image = "reg/myworkspace/charge-svc:abc1234"
   ; config = [ "LOG_LEVEL", "info" ]
   ; secrets = [ "DATABASE_URL", "db-secret" ]
+  ; uses = []
   ; external_secret_refs =
       [ "PAYMENT_API_KEY", "payments-vault", "production/payment-api" ]
   ; schedule = None
@@ -188,6 +189,89 @@ let test_validate_rejects_corrupt_content () =
 ;;
 
 let stale_record : R.t = { sample_record with encoding_version = Some "sol-release-v1" }
+
+(* **#1422's old-record boundary.** A record written before workloads carried their declared
+   requirements cannot answer "what did this version require?", so the version gate refuses it
+   **by name** rather than letting a rollback reconstruct with an empty requirement set --
+   which would be the fail-open defect wearing a different hat. v6 is the version that
+   immediately precedes requirement recording, so it is what a real pre-change release carries;
+   the boundary is asserted against v7, not against the older v1 the staleness test uses. *)
+(* **#1422 Finding 3's soft spot, asserted rather than described.** `workload_of_json` defaults a
+   missing `uses` to `[]`, which is the fail-open shape. In practice it is unreachable: the
+   version gate refuses a pre-v7 record, and a v7 record whose field was stripped rederives a
+   different content id. This exercises the second defence -- the record below is *valid* with a
+   requirement, and removing one field from its JSON leaves a record claiming an identity its
+   content no longer has. *)
+let test_a_stripped_requirement_field_is_refused () =
+  let placeholder =
+    { sample_record with
+      release_id = ""
+    ; workloads =
+        List.map
+          (fun (w : Sol_cli_release_id.recorded_workload) ->
+             { w with spec = { w.spec with Sol_cli_release_id.uses = [ "app_db" ] } })
+          sample_record.workloads
+    }
+  in
+  let record =
+    { placeholder with
+      release_id = Sol_cli_release_id.to_string (R.derived_release_id placeholder)
+    }
+  in
+  (match R.validate ~name:(R.configmap_name record) record with
+   | Ok () -> ()
+   | Error message -> Windtrap.fail ("the control record must be valid: " ^ message));
+  let strip = function
+    | `Assoc fields ->
+      `Assoc
+        (List.map
+           (function
+             | "workloads", `List workloads ->
+               ( "workloads"
+               , `List
+                   (List.map
+                      (function
+                        | `Assoc w ->
+                          `Assoc
+                            (List.filter (fun (k, _) -> not (String.equal k "uses")) w)
+                        | other -> other)
+                      workloads) )
+             | other -> other)
+           fields)
+    | other -> other
+  in
+  match R.of_json (strip (R.to_json record)) with
+  | Error message -> Windtrap.fail ("the stripped record should still decode: " ^ message)
+  | Ok stripped ->
+    (match R.validate ~name:(R.configmap_name stripped) stripped with
+     | Ok () ->
+       Windtrap.fail "a record whose requirement field was stripped must be refused"
+     | Error message ->
+       check_bool
+         "refused as a record whose content does not rederive its identity, not as an \
+          empty one"
+         true
+         (Sol_cli_string.contains ~needle:"corrupt" message))
+;;
+
+let test_a_pre_requirements_record_is_refused_by_name () =
+  let record = { sample_record with encoding_version = Some "sol-release-v6" } in
+  match R.validate ~name:(R.configmap_name record) record with
+  | Ok () -> Windtrap.fail "a pre-requirements record must be refused, not reconstructed"
+  | Error msg ->
+    check_bool
+      "names the version the record was written with"
+      true
+      (Sol_cli_string.contains ~needle:"sol-release-v6" msg);
+    check_bool
+      "and the version this CLI writes"
+      true
+      (Sol_cli_string.contains ~needle:"sol-release-v7" msg);
+    check_bool
+      "and says it is a format change, not damage"
+      true
+      (Sol_cli_string.contains ~needle:"format change" msg)
+;;
 
 let test_validate_reports_stale_encoding_version () =
   match R.validate ~name:(R.configmap_name stale_record) stale_record with
@@ -446,10 +530,13 @@ let test_record_digest_is_total_for_duplicate_keys () =
     (R.record_digest (with_config [ "K", "b"; "K", "a" ]))
 ;;
 
+(* The vector moved with `sol-release-v6 -> v7` (#1422): every workload now folds its declared
+   requirements into the record content, so both the canonical form and the id derived from it
+   change. A pinned vector that moves silently would be the thing this test exists to catch. *)
 let test_record_digest_known_vector () =
   check_string
     "known canonical digest"
-    "59746b2444ef2c1d7afd1a161a4c3855"
+    "324a5c2836da571b448002ddaf915401"
     (R.record_digest sample_record)
 ;;
 
@@ -999,6 +1086,14 @@ let%test "validate: rejects corrupt content" = test_validate_rejects_corrupt_con
 
 let%test "validate: reports a stale encoding_version, not corruption" =
   test_validate_reports_stale_encoding_version ()
+;;
+
+let%test "release: a pre-requirements record is refused by name" =
+  test_a_pre_requirements_record_is_refused_by_name ()
+;;
+
+let%test "release: a stripped requirement field is refused" =
+  test_a_stripped_requirement_field_is_refused ()
 ;;
 
 let%test "validate: reports an undeclared encoding_version, not corruption" =

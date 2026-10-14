@@ -115,6 +115,7 @@ let ledger_spec : Sol_cli_deployment_plan.service_spec =
   ; called_by = [ billing_as_caller ]
   ; extra_labels = [ "team", "payments" ]
   ; progressive_delivery = None
+  ; uses = []
   ; db_uses_target = None
   ; db_ca_target = None
   }
@@ -169,6 +170,7 @@ let billing_spec : Sol_cli_deployment_plan.service_spec =
                ; Sol_cli_toml.Weight 100
                ]
            })
+  ; uses = []
   ; db_uses_target = None
   ; db_ca_target = None
   }
@@ -2746,7 +2748,21 @@ let%test "external_secret_prune: only the UID match is removed" =
 (* 2b: a rollback's database delivery comes from the **current** target bindings, not from
    the release record. The record names the unit; the current config says whether that unit
    consumes the target's database, and current ownership decides the CA. *)
-let test_rollback_derives_database_delivery_from_current_bindings () =
+(* **#1422: a rollback restores the release's *recorded* requirements against the *current*
+   target's bindings.** One scenario, four properties:
+
+   (a) the requirement is **historical** -- it comes from the record, not from today's `uses:`
+       declaration, so dropping the declaration does not drop the dependency;
+   (b) its **resolution is current** -- today's ownership decides whether the reader signal and
+       the CA are set;
+   (c) a binding-resolution **failure refuses** rather than rendering "no dependency": the old
+       `Error _ -> []` was fail-open and is the defect;
+   (d) the requirement is part of the **boundary identity**, so two releases that declared
+       differently are different boundaries even when everything else matches.
+
+   The fixtures are mutated between the release and the reconstruction on purpose: an immutable
+   stub could not exhibit the historical/current mix, which is the whole subject. *)
+let test_rollback_restores_recorded_requirements () =
   let service name uses =
     { Sol_cli_config.name
     ; typ = None
@@ -2758,61 +2774,146 @@ let test_rollback_derives_database_delivery_from_current_bindings () =
     ; omit = false
     }
   in
-  let config =
-    { Sol_cli_config.project = Some "myapp"
-    ; target = Result.get_ok (Sol_cli_config.parse_target "prod/aws/us-east-1")
-    ; resources =
-        [ { Sol_cli_config.name = "app_db"
-          ; typ = Some "postgres"
-          ; partition_key = None
-          ; sort_key = None
-          ; indexes = []
-          ; size = None
-          ; omit = false
-          ; binding = None
-          }
-        ]
-    ; services = [ service "ledger_svc" [ "app_db" ]; service "billing_svc" [] ]
+  let resource ?(name = "app_db") ?(binding = None) () =
+    { Sol_cli_config.name
+    ; typ = Some "postgres"
+    ; partition_key = None
+    ; sort_key = None
+    ; indexes = []
+    ; size = None
+    ; omit = false
+    ; binding
     }
   in
+  let config ?(resources = [ resource () ]) ?(services = []) () =
+    { Sol_cli_config.project = Some "myapp"
+    ; target = Result.get_ok (Sol_cli_config.parse_target "prod/aws/us-east-1")
+    ; resources
+    ; services
+    }
+  in
+  let external_binding =
+    Some
+      { Sol_cli_config.ownership = Sol_cli_config.Ownership_external
+      ; store = Some "vault"
+      ; keys = []
+      ; connection = []
+      ; credentials = []
+      }
+  in
+  let target = "prod-aws-us-east-1" in
+  let spec_of specs name =
+    List.find
+      (fun ((s : Sol_cli_deployment_plan.service_spec), _) ->
+         String.equal s.source_name name)
+      specs
+    |> fst
+  in
+  let ledger = { ledger_spec with Sol_cli_deployment_plan.uses = [ "app_db" ] } in
   let release =
+    release_with_workloads ~apply_mode:Sol_cli_release.Direct [ ledger; billing_spec ]
+  in
+  (* (a) today's declaration drops the dependency entirely; the record's stands. *)
+  (match
+     Sol_cli_rollback.service_specs_of_release
+       ~config:(config ~services:[ service "ledger_svc" []; service "billing_svc" [] ] ())
+       release
+   with
+   | Error message -> Windtrap.fail message
+   | Ok specs ->
+     Windtrap.equal
+       (Windtrap.option Windtrap.string)
+       ~msg:
+         "(a) a requirement the release declared survives today's declaration dropping it"
+       (Some target)
+       (spec_of specs "ledger_svc").db_uses_target;
+     Windtrap.equal
+       (Windtrap.option Windtrap.string)
+       ~msg:"(b) and the CA follows the *current* ownership, which provisions it"
+       (Some target)
+       (spec_of specs "ledger_svc").db_ca_target;
+     Windtrap.equal
+       (Windtrap.option Windtrap.string)
+       ~msg:"and a unit that declared nothing gets neither"
+       None
+       (spec_of specs "billing_svc").db_uses_target);
+  (* (b) the same recorded requirement, resolved against a *different* current binding: the
+     reader signal stands (an external owner still delivers a class Secret) and the CA does not,
+     because Sol provisions nothing. This is the resolution being current. *)
+  (match
+     Sol_cli_rollback.service_specs_of_release
+       ~config:(config ~resources:[ resource ~binding:external_binding () ] ())
+       release
+   with
+   | Error message -> Windtrap.fail message
+   | Ok specs ->
+     Windtrap.equal
+       (Windtrap.option Windtrap.string)
+       ~msg:"(b) an externally bound current target still delivers the class Secret"
+       (Some target)
+       (spec_of specs "ledger_svc").db_uses_target;
+     Windtrap.equal
+       (Windtrap.option Windtrap.string)
+       ~msg:"(b) and mounts no CA, because Sol provisions nothing there"
+       None
+       (spec_of specs "ledger_svc").db_ca_target);
+  (* (c) the current target cannot resolve its bindings at all. The rollback must refuse: the
+     old code answered "no bindings", which renders a workload with no dependency. *)
+  (match
+     Sol_cli_rollback.service_specs_of_release
+       ~config:(config ~resources:[ resource (); resource ~name:"other_db" () ] ())
+       release
+   with
+   | Ok _ ->
+     Windtrap.fail
+       "(c) an unresolvable binding must refuse, not widen into an empty binding list"
+   | Error message ->
+     Windtrap.equal
+       Windtrap.bool
+       ~msg:"(c) and the refusal says what could not be resolved"
+       true
+       (Sol_cli_string.contains ~needle:"resource bindings" message));
+  (* (d) the requirement is in the **boundary identity**: compare the content ids, which are
+     what a boundary is, rather than the fixture's fixed `release_id`. *)
+  let content_id specs =
+    Sol_cli_release_id.of_content
+      { Sol_cli_release_id.workspace = release.workspace
+      ; environment = release.environment
+      ; workloads = List.map Sol_cli_deployment_plan.release_workload_of_spec specs
+      ; contract = []
+      }
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"(d) two releases that declared different requirements are different boundaries"
+    true
+    (not
+       (String.equal
+          (Sol_cli_release_id.to_string (content_id [ ledger; billing_spec ]))
+          (Sol_cli_release_id.to_string
+             (content_id
+                [ { ledger_spec with Sol_cli_deployment_plan.uses = [] }; billing_spec ]))));
+  (* The rollback decodes a recorded ref with **the same function the deploy uses**
+     (`Sol_cli_deployment_plan.resource_name_of_ref`, which `service_uses_resource` also calls),
+     so the two cannot disagree about what "a ref that names a resource" means -- no second
+     parser to drift. A path-shaped ref exercises that decode. *)
+  let namespaced =
     release_with_workloads
       ~apply_mode:Sol_cli_release.Direct
-      [ ledger_spec; billing_spec ]
+      [ { ledger_spec with Sol_cli_deployment_plan.uses = [ "env/app_db" ] }
+      ; billing_spec
+      ]
   in
-  match Sol_cli_rollback.service_specs_of_release ~config release with
+  match Sol_cli_rollback.service_specs_of_release ~config:(config ()) namespaced with
   | Error message -> Windtrap.fail message
   | Ok specs ->
-    let spec name =
-      List.find
-        (fun ((s : Sol_cli_deployment_plan.service_spec), _) ->
-           String.equal s.source_name name)
-        specs
-      |> fst
-    in
-    let target = "prod-aws-us-east-1" in
     Windtrap.equal
       (Windtrap.option Windtrap.string)
-      ~msg:"a released database consumer reads the target's class Secret again"
+      ~msg:"and a path-shaped requirement resolves through the deploy's own ref decode"
       (Some target)
-      (spec "ledger_svc").db_uses_target;
-    Windtrap.equal
-      (Windtrap.option Windtrap.string)
-      ~msg:"and mounts the CA when Sol provisions that database"
-      (Some target)
-      (spec "ledger_svc").db_ca_target;
-    Windtrap.equal
-      (Windtrap.option Windtrap.string)
-      ~msg:"a released unit that consumes no database gets neither"
-      None
-      (spec "billing_svc").db_uses_target;
-    Windtrap.equal
-      (Windtrap.option Windtrap.string)
-      ~msg:"nor a CA"
-      None
-      (spec "billing_svc").db_ca_target
+      (spec_of specs "ledger_svc").db_uses_target
 ;;
 
-let%test "2b: rollback derives database delivery from current bindings" =
-  test_rollback_derives_database_delivery_from_current_bindings ()
+let%test "2b: a rollback restores recorded requirements against current bindings" =
+  test_rollback_restores_recorded_requirements ()
 ;;

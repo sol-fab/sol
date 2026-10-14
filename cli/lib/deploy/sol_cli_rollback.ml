@@ -173,6 +173,7 @@ let decode_workload ~release_id ~workspace (w : Sol_cli_release.workload) =
     ; image = w.image
     ; config = w.config
     ; secrets = w.secrets
+    ; uses = w.uses
     ; secret_sources =
         w.external_secret_refs
         |> List.map (fun (key, store, remote_key) ->
@@ -258,24 +259,29 @@ let with_called_by (specs : Sol_cli_deployment_plan.service_spec list) =
 ;;
 
 let service_specs_of_release ?config (release : Sol_cli_release.t) =
-  (* 2b: a rollback restores historical application requirements against the **current**
-     target bindings — the release record does not carry (and must not carry) database
-     ownership. The current config says which resource each released unit uses, and current
-     ownership decides whether that resource is Sol-provisioned: the reader signal
-     [db_uses_target] is set for any owner, the Sol-only CA signal [db_ca_target] only when
-     Sol publishes the anchor. *)
+  (* A rollback restores the release's **recorded** requirements against the **current** target's
+     authorities and bindings. The release answers "what did this version require?"; the target
+     answers "where does that credential come from today?". Neither is asked the other's question,
+     which is the conflation this prevents (#1422).
+
+     A resolution failure **refuses**. Widening it into "no bindings" is the fail-open defect: the
+     rollback would render a workload with no database dependency rather than saying it cannot
+     tell. *)
   let database_targets =
     match config with
-    | None -> fun _ -> None, None
+    | None -> Ok (fun _ -> None, None)
     | Some config ->
-      let declared = Sol_cli_config.declared_of_config config in
+      let* bindings =
+        Sol_cli_resource_binding.resolve config
+        |> Result.map_error (fun message ->
+          Printf.sprintf
+            "the rollback cannot resolve target %s's resource bindings, so the released \
+             workloads' declared requirements cannot be resolved against it: %s"
+            config.Sol_cli_config.target.name
+            message)
+      in
       let target =
         Sol_cli_kubernetes_name.sanitize_name config.Sol_cli_config.target.name
-      in
-      let bindings =
-        match Sol_cli_resource_binding.resolve config with
-        | Ok bindings -> bindings
-        | Error _ -> []
       in
       let resource_of (database : Sol_cli_resource_binding.t) = database.resource in
       let provisioned =
@@ -284,22 +290,28 @@ let service_specs_of_release ?config (release : Sol_cli_release.t) =
       let target_database =
         Sol_cli_resource_binding.target_database bindings |> Option.map resource_of
       in
-      let uses resource name =
-        Sol_cli_deployment_plan.service_uses_resource (Some declared) name resource
+      (* The **recorded** requirements, and only they: whether a unit requires a resource is a
+         historical fact of the release, so today's `uses:` declarations never enter here. *)
+      let requires (requirements : string list) resource =
+        List.exists
+          (fun ref -> Sol_cli_deployment_plan.resource_name_of_ref ref = Some resource)
+          requirements
       in
-      fun name ->
-        let db_uses_target =
-          match target_database with
-          | Some resource when uses resource name -> Some target
-          | _ -> None
-        in
-        let db_ca_target =
-          match provisioned with
-          | Some resource when uses resource name -> Some target
-          | _ -> None
-        in
-        db_uses_target, db_ca_target
+      Ok
+        (fun requirements ->
+          let db_uses_target =
+            match target_database with
+            | Some resource when requires requirements resource -> Some target
+            | _ -> None
+          in
+          let db_ca_target =
+            match provisioned with
+            | Some resource when requires requirements resource -> Some target
+            | _ -> None
+          in
+          db_uses_target, db_ca_target)
   in
+  let* database_targets = database_targets in
   let rec go acc = function
     | [] -> Ok (List.rev acc)
     | (w : Sol_cli_release.recorded_workload) :: rest ->
@@ -309,7 +321,8 @@ let service_specs_of_release ?config (release : Sol_cli_release.t) =
           ~workspace:release.workspace
           w.spec
       in
-      let db_uses_target, db_ca_target = database_targets spec.source_name in
+      (* The requirement is the *record's*; the resolution is the current target's. *)
+      let db_uses_target, db_ca_target = database_targets w.spec.uses in
       let spec = { spec with db_uses_target; db_ca_target } in
       go (spec :: acc) rest
   in
