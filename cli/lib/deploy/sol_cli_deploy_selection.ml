@@ -36,7 +36,10 @@ let unit_id (s : Sol_cli_manifest.service) = Printf.sprintf "%s/%s" s.domain s.n
    target's database, and the target's Kafka keys ([required_secret_keys] is the single
    definition of that set). [Target_database] is the delivery the per-key routing already
    names from `db_uses_target`; [Unmapped] is a required key the target maps no authority
-   for, which planning refuses and `secret set` cannot write. *)
+   for, which planning refuses and `secret set` cannot write.
+
+   The reader side of this decision is `Sol_cli_manifest_yaml.secret_name_for_key`;
+   [Sol_cli_manifest.required_secret_keys] is the third leg (which keys exist). *)
 type input_owner =
   | Unit_secret
   | External_secret of

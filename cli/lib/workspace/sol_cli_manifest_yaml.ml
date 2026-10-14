@@ -89,6 +89,10 @@ let database_secret_keys db_uses_target =
   if db_uses_target then [ postgres_url_key ] else []
 ;;
 
+(** **Which keys exist**: the declared keys, `POSTGRES_URL` when the unit consumes the
+    target's database, and the target's Kafka keys. This is one leg of the input decision;
+    the other two are `Sol_cli_deploy_selection.unit_input_owners` (who owns each key) and
+    {!secret_name_for_key} (which Secret the reader reads it from). *)
 let required_secret_keys ?(transport = Plaintext) ?(db_uses_target = false) declared =
   List.sort_uniq
     String.compare
@@ -202,7 +206,12 @@ let external_secret_name name = Printf.sprintf "%s-external-secrets" name
    2b adds one case ahead of it: a unit that consumes the target's database reads
    `POSTGRES_URL` from that target's DML class Secret, whatever the database's ownership.
    The signal is the capability ([db_dml_creds_name] is [Some]), not the key name — a unit
-   that merely declares `POSTGRES_URL` falls through to its own Secret. *)
+   that merely declares `POSTGRES_URL` falls through to its own Secret.
+
+   This is the reader side of `Sol_cli_deploy_selection.unit_input_owners`; the two agree
+   because [db_dml_creds_name] is [Option.map dml_creds_name db_uses_target], the capability
+   the ownership decision also reads. {!required_secret_keys} is the third leg (which keys
+   exist). *)
 let secret_name_for_key ~name ~secret_sources ~db_dml_creds_name key =
   match db_dml_creds_name with
   | Some creds when String.equal key postgres_url_key -> creds
