@@ -115,6 +115,37 @@ Database connections are not a platform input: a unit that declares
 `uses: [app_db]` reads the deploy-delivered `<target>-dml-creds` class Secret,
 and the migration Job reads `<target>-ddl-creds`.
 
+**Where those Secrets live is the target's, not the application inventory's.** The namespace
+database operations run in — the migration Job, the password authority
+(`<target>-db-credentials`) and the DDL class Secret — is derived from the database identity:
+the target and the resource it acts on. It does not depend on which units a deploy selects, so
+omitting a domain from a scoped deploy cannot move a credential or split the Job from the Secret
+it reads.
+
+A target that binds no database gets no database-operations namespace and no declaration, which
+is the behaviour before this contract existed: there is nothing to write and no identity to
+publish. The migration gate establishes the namespace itself when it needs one.
+
+The deploy **declares the identity it resolved** so a monitor or a qualification row reads where
+the credentials are instead of reproducing the naming rule:
+
+```
+sol-database-identity: target=<target> resource=<resource> namespace=<namespace> ddl-creds=<name> authority=<name> ca-configmap=<name>
+```
+
+`<resource>` is the **name-safe** form of the resource, not the config's spelling (`app_db` → `app-db`), because the identity's fields name Kubernetes objects and a reader splits this line on whitespace.
+
+The **sentinel and the whole field set are the interface**: `target`, `resource`, `namespace`,
+`ddl-creds`, `authority`, `ca-configmap`. A change to any of them — including the sentinel — is a
+change to this contract, and the product test `database identity report is the interface the rows
+read` covers all of them so drift fails rather than being discovered by a reader.
+
+The identity is resolved from the **resolved config**, never from a target string a caller
+sanitizes: what the operator typed and what the environment file resolves to can differ, and two
+sanitized strings would put one target's credentials in two namespaces. Reporting is not verification: a reader that asserts delivery reads the
+Secret at the declared location, it does not stop at the declaration. The class Secret *names*
+remain target-scoped, which is what ADR 0007 and every consumer already name.
+
 The substrate checks the platform inputs a Job consumes before proceeding. An
 application Secret contains exactly the unit's declared keys; a unit-scoped
 `POSTGRES_URL` is one it declares itself, while a unit that consumes the target's

@@ -338,6 +338,38 @@ let test_ensure_applies_the_published_allowance () =
       (Sol_cli_string.contains ~needle:"port: 5432" manifests))
 ;;
 
+(* **The claim the target-derived database namespace rests on**: `ensure` establishes any
+   namespace it is given, together with the deploy identity's scoped RoleBinding -- it does not
+   require the `<workspace>-<domain>` shape a workload apply creates. Without this, the database
+   operations namespace would be one the deploy identity cannot write into (#1424). *)
+let test_a_target_derived_namespace_gets_the_same_substrate () =
+  let ns = "sol-db-pluto-qual-2b-a33-aws-us-east-1" in
+  let docs = docs_or_fail [ ns ] in
+  check_int "namespace + deploy RoleBinding + operator RoleBinding" 3 (List.length docs);
+  check_bool
+    "the namespace is the target-derived one, not a domain's"
+    true
+    (Sol_cli_string.contains ~needle:"kind: Namespace" (List.nth docs 0)
+     && Sol_cli_string.contains ~needle:ns (List.nth docs 0));
+  check_bool
+    "and the deploy identity gets its scoped RoleBinding there"
+    true
+    (Sol_cli_string.contains ~needle:"kind: RoleBinding" (List.nth docs 1)
+     && Sol_cli_string.contains ~needle:("namespace: " ^ ns) (List.nth docs 1)
+     && Sol_cli_string.contains ~needle:"name: sol-deploy" (List.nth docs 1));
+  check_bool
+    "and the operator's diagnostic RoleBinding too"
+    true
+    (Sol_cli_string.contains ~needle:"kind: RoleBinding" (List.nth docs 2)
+     && Sol_cli_string.contains ~needle:("namespace: " ^ ns) (List.nth docs 2)
+     && Sol_cli_string.contains ~needle:"name: sol-operator-diagnostics" (List.nth docs 2)
+    )
+;;
+
+let%test "workspace substrate: a target-derived namespace gets the same substrate" =
+  test_a_target_derived_namespace_gets_the_same_substrate ()
+;;
+
 let%test "workspace substrate: namespace and RoleBindings only" =
   test_substrate_is_namespace_and_role_bindings_only ()
 ;;

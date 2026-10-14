@@ -709,13 +709,41 @@ let run_database_setup_step
   let target_path =
     planning.Sol_cli_deploy_selection.Target_plan_input.config.target.name
   in
-  let target = Sol_cli_kubernetes_name.sanitize_name target_path in
   let* bindings =
     Sol_cli_resource_binding.resolve planning.config
     |> Result.map_error (fun message ->
       Printf.sprintf
         "could not resolve resource ownership for the database setup step: %s"
         message)
+  in
+  (* **One derivation, and the caller does not sanitize a target itself.** `identity_of_config`
+     resolves the target from the config it is given and the resource from the same config, so
+     "which resource is this target's database" is answered in one place rather than twice
+     (#1424). The identity is not a function of the selected services. *)
+  let database =
+    Sol_cli_database_setup_run.identity_of_config
+      ~workspace:planning.workspace
+      planning.config
+  in
+  let target = database.Sol_cli_database_setup_render.target in
+  (* The namespace and the declaration belong to the target's database operations, so they are
+     established only where a database is involved: a target that binds none gets neither, as
+     before, and the migration gate ensures the namespace itself when it needs it. *)
+  let migration_namespace = Sol_cli_database_setup_render.database_namespace database in
+  let establish () =
+    let* () =
+      Sol_cli_substrate.ensure
+        ~ctx
+        ~namespaces:[ migration_namespace ]
+        ~workloads:[]
+        ~manages_database:false
+    in
+    (* The deploy declares the identity it resolved, so a verifier reads the location instead of
+       reproducing the naming rule. Stable fields; see database_identity_report. *)
+    Sol_cli_report.app
+      "%s"
+      (Sol_cli_database_setup_render.database_identity_report database);
+    Ok ()
   in
   match Sol_cli_resource_binding.provisioned_database bindings with
   | None ->
@@ -730,11 +758,7 @@ let run_database_setup_step
     (match externally_bound with
      | [] -> Ok ()
      | [ binding ] ->
-       let* migration_namespace =
-         Sol_cli_migration_job.job_namespace
-           ~workspace:planning.workspace
-           ~services:planning.services
-       in
+       let* () = establish () in
        let declared = Sol_cli_config.declared_of_config planning.config in
        let dml_namespaces =
          Sol_cli_database_setup_run.dml_namespaces
@@ -760,7 +784,8 @@ let run_database_setup_step
                (List.map
                   (fun (binding : Sol_cli_resource_binding.t) -> binding.resource)
                   externals))))
-  | Some (database : Sol_cli_resource_binding.t) ->
+  | Some (_provisioned : Sol_cli_resource_binding.t) ->
+    let* () = establish () in
     let provider =
       planning.Sol_cli_deploy_selection.Target_plan_input.config.target.provider
     in
@@ -833,11 +858,6 @@ let run_database_setup_step
       Sol_cli_database_setup.setup_image ()
       |> Result.map_error (fun message ->
         "the database setup image could not be resolved: " ^ message)
-    in
-    let* migration_namespace =
-      Sol_cli_migration_job.job_namespace
-        ~workspace:planning.workspace
-        ~services:planning.services
     in
     (* The mode is the provider's, not a constant here: the contract is authenticated server
        identity and each provider establishes it its own way. *)

@@ -68,7 +68,7 @@ let verify dir =
     ~ctx:Sol_cli_kube_destination.local_context
     ~workspace:"pluto"
     ~dir
-    ~services:[]
+    ~namespace:"sol-db-pluto-qualreg-aws-us-east-1"
     ~ddl_creds_name:"pluto-ddl-creds"
     ()
 ;;

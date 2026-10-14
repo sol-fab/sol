@@ -844,29 +844,40 @@ app_namespaces() {
   done | sort -u
 }
 
+# **Read where the deploy says it wrote** (sol-database-identity: ...), rather than reproducing
+# the naming rule here. The row asserts Sol's decision, not its own copy of it (#1424). The
+# field names are the interface; the deploy's line is a stable, documented output, and the
+# product test `database identity report is the interface the rows read` fails if they drift.
+app_database_declaration() {
+  grep -h 'sol-database-identity:' "$LOG_DIR"/app-deploy.log 2>/dev/null | tail -1
+}
+
+app_database_field() {
+  app_database_declaration | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1
+}
+
 app_verify_database_delivery() {
-  local name secrets ddl dml consumer namespace
+  local name ddl dml consumer namespace declared_ns ddl_name
   name="$(app_class_credential_name)"
-  # The deploy identity is namespace-scoped (ADR 0002, SEC-011), so every observation lists
-  # per namespace. A cluster-scoped list is Forbidden for it -- and silencing that would read
-  # "cannot observe" as "absent", the one direction absence must never be inferred from
-  # (#1433 is the same defect in the product; this is the harness's own copy of it).
-  ddl=""
+  declared_ns="$(app_database_field namespace)"
+  ddl_name="$(app_database_field ddl-creds)"
+  if [ -z "$declared_ns" ] || [ -z "$ddl_name" ]; then
+    say "the deploy declared no database identity, so where it wrote is not known; the assertion cannot read a location it cannot name"
+    return 1
+  fi
+  # Reporting is not verification: read the Secret at the declared location.
+  if ! kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get secret "$ddl_name" -n "$declared_ns" \
+    >/dev/null 2>&1; then
+    say "the deploy declared its migration Job's $ddl_name in $declared_ns, and it is absent there"
+    return 1
+  fi
   dml=""
   for namespace in $(app_namespaces); do
-    if kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get secret "$name-ddl-creds" -n "$namespace" \
-      >/dev/null 2>&1; then
-      ddl="$namespace"
-    fi
     if kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get secret "$name-dml-creds" -n "$namespace" \
       >/dev/null 2>&1; then
       dml="$namespace"
     fi
   done
-  if [ -z "$ddl" ]; then
-    say "no namespace this target deploys into carries the migration Job's $name-ddl-creds class Secret"
-    return 1
-  fi
   if [ -z "$dml" ]; then
     say "no consuming namespace carries the $name-dml-creds class Secret"
     return 1
@@ -878,8 +889,8 @@ app_verify_database_delivery() {
     return 1
   fi
   {
-    printf 'database_delivery: %s (migration Job), %s@%s (unit consumer)\n' \
-      "$name-ddl-creds" "$name-dml-creds" "$dml"
+    printf 'database_delivery: %s@%s (migration Job, as the deploy declared it), %s@%s (unit consumer)\n' \
+      "$ddl_name" "$declared_ns" "$name-dml-creds" "$dml"
     printf 'database_delivery_assertion: the consumer unit Secret carries no POSTGRES_URL\n'
   } >>"$LOG_DIR/prerequisites.txt"
   say "the deploy delivered the database as $name-ddl-creds / $name-dml-creds; the consumer's unit Secret carries no master copy"

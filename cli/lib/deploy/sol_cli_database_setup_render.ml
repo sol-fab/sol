@@ -211,6 +211,69 @@ let creds_name ~credential_class target = target ^ "-" ^ credential_class ^ "-cr
 let ddl_creds_name target = creds_name ~credential_class:ddl_class target
 let dml_creds_name target = creds_name ~credential_class:dml_class target
 
+(* **The identity of a database operation**: the workspace, the target, and the resource it
+    acts on. It is deliberately *not* the set of services a deploy selected.
+
+    Every step that touches the target's database — setup, migrations, the gate, the deploy
+    prerequisites and rollback — resolves its namespace from this identity, so a change to the
+    application inventory cannot move where a credential is written or read. Before this, the
+    namespace was the namespace of the alphabetically-first selected service, which made it a
+    function of the inventory: the setup step was given the *selected* services while the
+    migration gate was given the *full* inventory, so omitting the alphabetically-first domain
+    put the DDL class Secret and the Job that reads it in different namespaces, and moved the
+    password authority with them.
+
+    v1 binds one database per target. The resource is carried anyway so that supporting more
+    than one is a change to these functions rather than a re-derivation of naming across the
+    deploy. The class Secret names stay target-scoped ({!ddl_creds_name} and friends) because
+    they are the delivery contract ADR 0007 and every consumer already name; the identity is
+    what a resource-scoped spelling would be derived from. *)
+
+(** The identity of a database operation: the workspace, the target, and the resource, never
+    the set of services a deploy selected. *)
+type database_identity =
+  { workspace : string
+  ; target : string
+  ; resource : string
+  }
+
+(* The fields **name** Kubernetes objects, so they are name-safe *by construction*: an identity
+   is always parseable and always usable in a name, whatever the config admitted. A resource
+   name is not covered by the config's identifier check, so it is sanitized here rather than
+   trusted. *)
+let database_identity ~workspace ~target ~resource =
+  let safe = Sol_cli_kubernetes_name.sanitize_name in
+  { workspace = safe workspace; target = safe target; resource = safe resource }
+;;
+
+(** Where database operations run: **derived from the target**, never from a service list. *)
+let database_namespace (id : database_identity) =
+  Sol_cli_kubernetes_name.sanitize_name
+    (Printf.sprintf "sol-db-%s-%s" id.workspace id.target)
+;;
+
+(** The deploy's declaration of where it wrote, so a verifier reads the location instead of
+    reproducing the naming rule.
+
+    **The sentinel and the field names are the interface**; the field order and the value
+    formatting are not. A reader splits on whitespace, so every value is name-safe (see
+    {!database_identity}) and no value can contain a space or an [=]. The product test
+    `database identity report is the interface the rows read` covers the sentinel and every
+    declared field, so drift fails rather than being discovered by a reader. *)
+let database_identity_sentinel = "sol-database-identity:"
+
+let database_identity_report (id : database_identity) =
+  Printf.sprintf
+    "%s target=%s resource=%s namespace=%s ddl-creds=%s authority=%s ca-configmap=%s"
+    database_identity_sentinel
+    id.target
+    id.resource
+    (database_namespace id)
+    (ddl_creds_name id.target)
+    (authority_name id.target)
+    (ca_configmap_name id.target)
+;;
+
 (** One output Secret: a class's connection URL under the consumer key.
 
     [POSTGRES_URL] is the same key the classes read today, so 2b's delivery selects the

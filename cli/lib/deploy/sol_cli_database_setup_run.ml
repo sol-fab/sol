@@ -39,8 +39,28 @@ let apply_doc ~ctx ~what doc =
   |> Result.join
 ;;
 
-(** The Job's UID, read back immediately after creation so the transient Secret can be
-    given an owner. *)
+(* **The one place that turns a target into a database identity.** Every caller passes its
+   *resolved config*, so the target that names the namespace is the same string for the setup
+   step, the migration gate, `sol migrate`, rollback and the deploy prerequisite.
+
+   Callers must not sanitize a target themselves. What the operator typed (`req.target`) and what
+   the environment file resolves to (`resolved_config.target.name`) can differ --
+   `load_for_target` takes the config's own target when it declares one -- so two sanitized
+   strings would put one target's database operations in two namespaces. That is the defect this
+   identity exists to remove, one level up (#1424). *)
+let identity_of_config ~workspace (config : Sol_cli_config.t) =
+  let target = Sol_cli_kubernetes_name.sanitize_name config.target.name in
+  let resource =
+    match Sol_cli_resource_binding.resolve config with
+    | Ok bindings ->
+      (match Sol_cli_resource_binding.of_type bindings ~typ:"postgres" with
+       | (binding : Sol_cli_resource_binding.t) :: _ -> binding.resource
+       | [] -> "none")
+    | Error _ -> "none"
+  in
+  Sol_cli_database_setup_render.database_identity ~workspace ~target ~resource
+;;
+
 let job_uid ~ctx ~namespace ~job_name =
   let* r =
     kubectl

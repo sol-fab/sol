@@ -90,18 +90,39 @@ let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
      target's `<target>-ddl-creds` class Secret and mounts `<target>-db-ca` when Sol
      provisions that database. A local rollback has no target binding and keeps the
      workspace runtime Secret path. *)
-  let ddl_creds_name, ca_configmap =
+  (* Which namespace the migration read runs in, and -- against a target -- the target whose
+     class Secret names it reads. **One** `identity_of_config` call supplies both, so the
+     namespace and the Secret names cannot disagree (#1424). A local rollback has no target;
+     {!Sol_cli_migration_job.local_namespace} explains why its namespace stays inventory-derived. *)
+  let* namespace, target, provisions =
     match config with
-    | None -> Sol_cli_manifest.runtime_secret_name, None
     | Some config ->
-      let target =
-        Sol_cli_kubernetes_name.sanitize_name config.Sol_cli_config.target.name
-      in
+      let database = Sol_cli_database_setup_run.identity_of_config ~workspace config in
+      (* A different question from the identity's ("which resource is the target's database"):
+         this asks whether Sol provisions it, and only the CA mount depends on the answer. It
+         resolves the config again rather than adding a second public shape for the identity,
+         which is the duplication #1424 removed. `resolve` is pure. *)
       let provisions =
         match Sol_cli_resource_binding.resolve config with
         | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
         | Error _ -> false
       in
+      Ok
+        ( Sol_cli_database_setup_render.database_namespace database
+        , Some database.Sol_cli_database_setup_render.target
+        , provisions )
+    | None ->
+      let* namespace =
+        Sol_cli_migration_job.local_namespace
+          ~workspace
+          ~services:(Sol_cli_workspace_model.services facts)
+      in
+      Ok (namespace, None, false)
+  in
+  let ddl_creds_name, ca_configmap =
+    match target with
+    | None -> Sol_cli_manifest.runtime_secret_name, None
+    | Some target ->
       ( Sol_cli_database_setup_render.ddl_creds_name target
       , if provisions
         then Some (Sol_cli_database_setup_render.ca_configmap_name target)
@@ -114,10 +135,9 @@ let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
         (fun () ->
           Sol_cli_migration_gate.read_applied
             ~ctx
-            ~workspace
             ~dir:migrations_dir
             ~table:(Sol_cli_migration.table_name ~workspace)
-            ~services:(Sol_cli_workspace_model.services facts)
+            ~namespace
             ~ddl_creds_name
             ?ca_configmap
             ())
