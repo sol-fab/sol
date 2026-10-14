@@ -576,7 +576,7 @@ services:
   ]
 ;;
 
-let plan_refuses what files =
+let plan_for ?(emit_to = None) files =
   with_workspace files (fun () ->
     let facts =
       Sol_cli_workspace_model.load ~root:(Sys.getcwd ())
@@ -588,24 +588,26 @@ let plan_refuses what files =
       |> Result.map_error Sol_cli_config.error_to_string
       |> fail_on_error "load_for_target"
     in
-    match
-      Sol_cli_deploy_selection.plan
-        { Sol_cli_deploy_selection.Planning_input.workspace = "ws"
-        ; registry = "registry.example"
-        ; sha = "sha-under-test"
-        ; emit_to = None
-        ; config
-        ; facts
-        ; inventory = services
-        ; requested_scope = "target"
-        ; image_refs = []
-        ; services
-        }
-    with
-    | Ok _ -> Windtrap.fail (what ^ ": expected the plan to be refused")
-    | Error (Sol_cli_deploy_selection.Refused message) -> message
-    | Error (Sol_cli_deploy_selection.Preflight _) ->
-      Windtrap.fail (what ^ ": expected a refusal, not a preflight finding"))
+    Sol_cli_deploy_selection.plan
+      { Sol_cli_deploy_selection.Planning_input.workspace = "ws"
+      ; registry = "registry.example"
+      ; sha = "sha-under-test"
+      ; emit_to
+      ; config
+      ; facts
+      ; inventory = services
+      ; requested_scope = "target"
+      ; image_refs = []
+      ; services
+      })
+;;
+
+let plan_refuses ?emit_to what files =
+  match plan_for ?emit_to files with
+  | Ok _ -> Windtrap.fail (what ^ ": expected the plan to be refused")
+  | Error (Sol_cli_deploy_selection.Refused message) -> message
+  | Error (Sol_cli_deploy_selection.Preflight _) ->
+    Windtrap.fail (what ^ ": expected a refusal, not a preflight finding")
 ;;
 
 let test_two_external_databases_are_refused_at_plan () =
@@ -668,4 +670,70 @@ let%test "1425: two external databases are refused at plan" =
 
 let%test "1425: an external binding missing a credential class is refused at plan" =
   test_missing_external_class_is_refused_at_plan ()
+;;
+
+(* #1423: the ownership matrix is established by the binding, not by the profile. A database
+   Sol provisions cannot be emitted to GitOps (the setup step that writes its class Secrets
+   runs only in a direct apply), and an externally bound database now plans and carries the
+   delivery the emit renders. *)
+let test_sol_provisioned_gitops_is_refused_at_plan () =
+  let message =
+    plan_refuses
+      ~emit_to:(Some "/tmp/gitops")
+      "a Sol-provisioned database emitted to GitOps"
+      (charge_workspace ~resources:"  app_db:\n    type: postgres\n" ~target_extra:"")
+  in
+  check_bool
+    "the refusal names the database"
+    true
+    (Sol_cli_string.contains ~needle:"app_db" message);
+  check_bool
+    "the refusal names the emit path"
+    true
+    (Sol_cli_string.contains ~needle:"GitOps" message)
+;;
+
+let test_external_database_plans_for_gitops_with_a_delivery () =
+  match
+    plan_for
+      ~emit_to:(Some "/tmp/gitops")
+      (charge_workspace
+         ~resources:"  app_db:\n    type: postgres\n"
+         ~target_extra:
+           "      resources:\n\
+           \        app_db:\n\
+           \          binding:\n\
+           \            ownership: external\n\
+           \            store: vault\n\
+           \            credentials:\n\
+           \              ddl: secret/app-db-migrator\n\
+           \              dml: secret/app-db-app\n")
+  with
+  | Error (Sol_cli_deploy_selection.Refused message) ->
+    Windtrap.fail (Printf.sprintf "an externally bound database must emit: %s" message)
+  | Error (Sol_cli_deploy_selection.Preflight _) ->
+    Windtrap.fail "an externally bound database must not raise a preflight finding"
+  | Ok plan ->
+    (match plan.Sol_cli_deployment_plan.resource_delivery with
+     | None -> Windtrap.fail "an external database must carry a delivery to emit"
+     | Some delivery ->
+       Windtrap.equal
+         Windtrap.string
+         ~msg:"the delivery names the target"
+         "prod-aws-us-east-1"
+         delivery.target;
+       Windtrap.equal Windtrap.string ~msg:"and the resource" "app_db" delivery.resource;
+       Windtrap.equal
+         Windtrap.int
+         ~msg:"with both class paths"
+         2
+         (List.length delivery.credentials))
+;;
+
+let%test "1423: a Sol-provisioned database emitted to GitOps is refused at plan" =
+  test_sol_provisioned_gitops_is_refused_at_plan ()
+;;
+
+let%test "1423: an external database plans for GitOps with its delivery" =
+  test_external_database_plans_for_gitops_with_a_delivery ()
 ;;

@@ -127,6 +127,23 @@ type contract_change =
       ; desired : string
       }
 
+(** A target's externally bound database, as **delivery**: the store, one remote path per
+    credential class, and the namespaces each class lands in. It is target-scoped and
+    cross-namespace, so it is its own section of the plan rather than part of any workload's
+    bundle; direct apply and GitOps emit render the class `ExternalSecret`s from it. [None]
+    when the target provisions its database or has none.
+
+    [resource] and [target] are the same name-safe identity the setup step and the reader
+    derive, carried so the delivery names its objects without re-resolving the target. *)
+type resource_delivery =
+  { target : string
+  ; resource : string
+  ; store : string
+  ; credentials : (string * string) list
+  ; migration_namespace : string
+  ; dml_namespaces : string list
+  }
+
 type t =
   { workspace : string
   ; release_id : Sol_cli_release_id.t
@@ -141,6 +158,7 @@ type t =
   ; profile : profile_claim option
   ; contract : Sol_cli_release_id.contract_fact list
   ; contract_changes : contract_change list
+  ; resource_delivery : resource_delivery option
   }
 
 type plan_error =
@@ -1368,5 +1386,6 @@ let of_services_result
           ~whole_workspace:(String.equal requested_scope "workspace")
     ; contract
     ; contract_changes = []
+    ; resource_delivery = None
     }
 ;;

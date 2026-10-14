@@ -338,16 +338,30 @@ let plan (input : Planning_input.t) =
      owns *which* resource that is; the plan only carries the names. *)
   let target = Sol_cli_kubernetes_name.sanitize_name config.target.name in
   let* bindings = Sol_cli_resource_binding.resolve config |> refused in
-  (* An external binding must be able to deliver every credential class before anything is
-     applied; the renderer asks the same extraction, so this check and the delivery cannot
-     disagree. *)
-  let* () = Sol_cli_database_setup_run.validate_external_bindings bindings |> refused in
   let resource_of (database : Sol_cli_resource_binding.t) = database.resource in
   let provisioned_database =
     Option.map resource_of (Sol_cli_resource_binding.provisioned_database bindings)
   in
   let target_database =
     Option.map resource_of (Sol_cli_resource_binding.target_database bindings)
+  in
+  (* A GitOps emit cannot run the database setup step, so it cannot deliver a database Sol
+     provisions. Refuse it here, keyed on the binding rather than on a profile, so the
+     ownership matrix is established by the deploy contract and not by whichever profile a
+     target happens to select. An externally bound database emits its class Secrets from the
+     plan's resource delivery below. *)
+  let* () =
+    (match emit_to, Sol_cli_resource_binding.provisioned_database bindings with
+     | Some _, Some database ->
+       Error
+         (Printf.sprintf
+            "target %s cannot emit a GitOps bundle: it provisions database %S, whose \
+             setup Job and class credentials run during a direct apply. Bind the \
+             database externally to emit it, or deploy this target directly."
+            config.target.name
+            database.Sol_cli_resource_binding.resource)
+     | _ -> Ok ())
+    |> refused
   in
   let* plan =
     Sol_cli_factory.plan_of_services
@@ -365,6 +379,36 @@ let plan (input : Planning_input.t) =
     |> refused
   in
   let* plan = secret_sources_for_plan ~config plan |> refused in
+  (* **The target-scoped delivery** of an externally bound database, resolved once from the
+     binding. Direct apply and the GitOps emit render the class ExternalSecrets from this
+     same value, so they cannot name different objects; a binding that cannot deliver every
+     class is refused here, before anything is applied. *)
+  let* plan =
+    match Sol_cli_resource_binding.target_database bindings with
+    | Some database
+      when database.Sol_cli_resource_binding.ownership = Sol_cli_config.Ownership_external
+      ->
+      let declared = Sol_cli_config.declared_of_config config in
+      let dml_namespaces =
+        Sol_cli_database_setup_run.dml_namespaces
+          ~declared:(Some declared)
+          ~resource:database.Sol_cli_resource_binding.resource
+          plan
+      in
+      let database_identity =
+        Sol_cli_database_setup_run.identity_of_config ~workspace config
+      in
+      Sol_cli_database_setup_run.resource_delivery
+        ~target:database_identity.Sol_cli_database_setup_render.target
+        ~migration_namespace:
+          (Sol_cli_database_setup_render.database_namespace database_identity)
+        ~dml_namespaces
+        database
+      |> Result.map (fun resource_delivery ->
+        { plan with Sol_cli_deployment_plan.resource_delivery = Some resource_delivery })
+      |> refused
+    | _ -> Ok plan
+  in
   let apply_mode =
     match emit_to with
     | Some _ -> Sol_cli_release.Gitops

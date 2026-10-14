@@ -194,6 +194,7 @@ let make_plan ?(env = customer_env) services : Sol_cli_deployment_plan.t =
   ; profile = None
   ; contract = []
   ; contract_changes = []
+  ; resource_delivery = None
   }
 ;;
 
@@ -2730,23 +2731,27 @@ let count_occurrences needle text =
   go 0 0
 ;;
 
+(* The resolved target-scoped delivery the plan carries, built the way the plan builds it. *)
+let delivery_of_binding ?(store = Some "vault-production") credentials =
+  Sol_cli_database_setup_run.resource_delivery
+    ~target:"payments"
+    ~migration_namespace:"myapp-payments"
+    ~dml_namespaces:[ "myapp-comms" ]
+    (external_binding ~store credentials)
+;;
+
 let test_external_database_delivers_the_class_secrets () =
   let binding =
-    external_binding
-      [ Sol_cli_database_setup_render.ddl_class, "secret/production/app-db-migrator"
-      ; Sol_cli_database_setup_render.dml_class, "secret/production/app-db-app"
-      ]
+    [ Sol_cli_database_setup_render.ddl_class, "secret/production/app-db-migrator"
+    ; Sol_cli_database_setup_render.dml_class, "secret/production/app-db-app"
+    ]
   in
-  match
-    Sol_cli_database_setup_run.external_credential_docs
-      ~target:"payments"
-      ~migration_namespace:"myapp-payments"
-      ~dml_namespaces:[ "myapp-comms" ]
-      ~binding
-  with
+  match delivery_of_binding binding with
   | Error message -> Windtrap.fail message
-  | Ok docs ->
-    let text = Sol_cli_yaml.render docs in
+  | Ok delivery ->
+    let text =
+      Sol_cli_yaml.render (Sol_cli_database_setup_run.external_credential_docs delivery)
+    in
     let present msg needle =
       Windtrap.equal Windtrap.bool ~msg true (setup_mentions needle text)
     in
@@ -2783,13 +2788,7 @@ let test_external_database_delivers_the_class_secrets () =
 
 let test_external_database_requires_every_class () =
   let refuses ?(store = Some "vault-production") credentials needle =
-    match
-      Sol_cli_database_setup_run.external_credential_docs
-        ~target:"payments"
-        ~migration_namespace:"myapp-payments"
-        ~dml_namespaces:[ "myapp-comms" ]
-        ~binding:(external_binding ~store credentials)
-    with
+    match delivery_of_binding ~store credentials with
     | Ok _ -> Windtrap.fail (Printf.sprintf "expected a refusal mentioning %S" needle)
     | Error message ->
       Windtrap.equal
@@ -2830,17 +2829,12 @@ let test_plan_time_rejects_an_undeliverable_external_binding () =
     ; Sol_cli_database_setup_render.dml_class, "secret/production/app-db-app"
     ]
   in
-  (match
-     Sol_cli_database_setup_run.validate_external_bindings [ external_binding complete ]
-   with
-   | Ok () -> ()
-   | Error message -> Windtrap.fail ("a complete binding must plan: " ^ message));
+  (match delivery_of_binding complete with
+   | Ok _ -> ()
+   | Error message -> Windtrap.fail ("a complete binding must resolve: " ^ message));
   let refuses ?(store = Some "vault-production") credentials needle =
-    match
-      Sol_cli_database_setup_run.validate_external_bindings
-        [ external_binding ~store credentials ]
-    with
-    | Ok () -> Windtrap.fail (Printf.sprintf "expected a refusal mentioning %S" needle)
+    match delivery_of_binding ~store credentials with
+    | Ok _ -> Windtrap.fail (Printf.sprintf "expected a refusal mentioning %S" needle)
     | Error message ->
       Windtrap.equal
         Windtrap.bool
@@ -2859,4 +2853,91 @@ let test_plan_time_rejects_an_undeliverable_external_binding () =
 
 let%test "1425: an undeliverable external binding is refused before delivery" =
   test_plan_time_rejects_an_undeliverable_external_binding ()
+;;
+
+(* #1423: the emitted database prerequisite file is a contract — a GitOps consumer finds the
+   target's class Secrets by this name, and reads these fields. Pin both, so a rename or a
+   dropped field fails here instead of emitting an object nothing references. The key-set
+   assertion is **exact**: an added field fails too, the way the database-identity interface
+   test covers every field it names. *)
+let yaml_key_names text =
+  text
+  |> String.split_on_char '\n'
+  |> List.filter_map (fun line ->
+    let line = String.trim line in
+    (* A list item renders as `- key: value`; the key is what follows the dash. *)
+    let line =
+      if String.length line >= 2 && String.equal (String.sub line 0 2) "- "
+      then String.trim (String.sub line 2 (String.length line - 2))
+      else line
+    in
+    match String.index_opt line ':' with
+    | None | Some 0 -> None
+    | Some i ->
+      let key = String.sub line 0 i in
+      let is_key_char c =
+        (c >= 'a' && c <= 'z')
+        || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9')
+        || List.mem c [ '.'; '/'; '-'; '_' ]
+      in
+      if String.for_all is_key_char key then Some key else None)
+  |> List.sort_uniq String.compare
+;;
+
+let test_resource_prerequisites_file_is_the_interface () =
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"the prerequisite file name is the contract"
+    "payments-db-prerequisites.yaml"
+    (Sol_cli_database_setup_render.resource_prerequisites_file_name ~target:"payments");
+  let binding =
+    [ Sol_cli_database_setup_render.ddl_class, "secret/production/app-db-migrator"
+    ; Sol_cli_database_setup_render.dml_class, "secret/production/app-db-app"
+    ]
+  in
+  match delivery_of_binding binding with
+  | Error message -> Windtrap.fail message
+  | Ok delivery ->
+    let text =
+      Sol_cli_yaml.render (Sol_cli_database_setup_run.external_credential_docs delivery)
+    in
+    Windtrap.equal
+      Windtrap.int
+      ~msg:"one ExternalSecret per class per namespace"
+      2
+      (count_occurrences "kind: ExternalSecret" text);
+    let expected_fields =
+      [ "apiVersion"
+      ; "app.kubernetes.io/managed-by"
+      ; "creationPolicy"
+      ; "data"
+      ; "key"
+      ; "kind"
+      ; "labels"
+      ; "metadata"
+      ; "name"
+      ; "namespace"
+      ; "refreshInterval"
+      ; "remoteRef"
+      ; "secretKey"
+      ; "sourceRef"
+      ; "spec"
+      ; "storeRef"
+      ; "target"
+      ]
+    in
+    let actual_fields = yaml_key_names text in
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:
+        (Printf.sprintf
+           "the document field set is the contract; emitted: %s"
+           (String.concat "," actual_fields))
+      true
+      (actual_fields = expected_fields)
+;;
+
+let%test "1423: the emitted database prerequisite file is the interface" =
+  test_resource_prerequisites_file_is_the_interface ()
 ;;

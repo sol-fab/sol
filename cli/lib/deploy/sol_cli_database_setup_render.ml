@@ -211,6 +211,14 @@ let creds_name ~credential_class target = target ^ "-" ^ credential_class ^ "-cr
 let ddl_creds_name target = creds_name ~credential_class:ddl_class target
 let dml_creds_name target = creds_name ~credential_class:dml_class target
 
+(** The file a GitOps emit writes the target-scoped database class `ExternalSecret`s to.
+
+    The name is the contract a GitOps consumer discovers them by, and the interface test
+    `the emitted database prerequisite file is the interface` pins it beside the document
+    fields it carries, so a rename or a dropped field fails rather than silently emitting an
+    unreferenced object. *)
+let resource_prerequisites_file_name ~target = target ^ "-db-prerequisites.yaml"
+
 (* **The identity of a database operation**: the workspace, the target, and the resource it
     acts on. It is deliberately *not* the set of services a deploy selected.
 

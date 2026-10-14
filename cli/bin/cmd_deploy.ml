@@ -748,26 +748,15 @@ let run_database_setup_step
   match Sol_cli_resource_binding.provisioned_database bindings with
   | None ->
     (* No Sol-provisioned database: the target either binds its database externally — then
-       the class Secrets are still delivered, by ESO, from the store the binding names — or
-       has no database and there is nothing to do. [resolve] has already refused a graph
-       with more than one database, so the single postgres here is the external one. *)
-    (match Sol_cli_resource_binding.target_database bindings with
+       the class Secrets are still delivered, by ESO, from the store the delivery names — or
+       has no database and there is nothing to do. The delivery was resolved with the plan
+       ([Sol_cli_deployment_plan.resource_delivery]), and the GitOps emit renders the same
+       class ExternalSecrets from it. *)
+    (match plan.Sol_cli_deployment_plan.resource_delivery with
      | None -> Ok ()
-     | Some binding ->
+     | Some delivery ->
        let* () = establish () in
-       let declared = Sol_cli_config.declared_of_config planning.config in
-       let dml_namespaces =
-         Sol_cli_database_setup_run.dml_namespaces
-           ~declared:(Some declared)
-           ~resource:binding.Sol_cli_resource_binding.resource
-           plan
-       in
-       Sol_cli_database_setup_run.run_external_credentials
-         ~ctx
-         ~target
-         ~migration_namespace
-         ~dml_namespaces
-         ~binding)
+       Sol_cli_database_setup_run.run_external_credentials ~ctx delivery)
   | Some (_provisioned : Sol_cli_resource_binding.t) ->
     let* () = establish () in
     let provider =

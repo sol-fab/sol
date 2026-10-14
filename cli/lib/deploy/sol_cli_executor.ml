@@ -161,6 +161,23 @@ let write_release_bundle ~dir ~(apply_mode : Sol_cli_release.apply_mode) plan =
   |> Result.map ignore
 ;;
 
+(** The target's own delivery prerequisites: one class ExternalSecret per class per namespace
+    that reads it, rendered from the plan's {!Sol_cli_deployment_plan.resource_delivery}. A
+    direct apply delivers these in the database setup step; a GitOps emit writes them to
+    their own file — named by the one definition [resource_prerequisites_file_name] — so a
+    fresh external-database GitOps deployment carries the object its units read. *)
+let emit_resource_prerequisites ~dir (plan : Sol_cli_deployment_plan.t) =
+  match plan.Sol_cli_deployment_plan.resource_delivery with
+  | None -> Ok ()
+  | Some delivery ->
+    let docs = Sol_cli_database_setup_run.external_credential_docs delivery in
+    let name =
+      Sol_cli_database_setup_render.resource_prerequisites_file_name
+        ~target:delivery.target
+    in
+    Sol_cli_fs.write_atomic (Filename.concat dir name) (Sol_cli_yaml.render docs)
+;;
+
 let run_plan (execution : Sol_cli_execution.context) ~mode ?before_apply plan =
   let workspace = execution.workspace in
   let env = execution.env in
@@ -216,7 +233,9 @@ let run_plan (execution : Sol_cli_execution.context) ~mode ?before_apply plan =
   let* results = execute [] pairs in
   let* () =
     match mode with
-    | Emit_to dir -> write_release_bundle ~dir ~apply_mode:Sol_cli_release.Gitops plan
+    | Emit_to dir ->
+      let* () = emit_resource_prerequisites ~dir plan in
+      write_release_bundle ~dir ~apply_mode:Sol_cli_release.Gitops plan
     | Dry_run | Apply -> Ok ()
   in
   Ok results
