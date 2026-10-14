@@ -155,6 +155,10 @@ let in_cluster_context ~target_path ~active =
      all use the same namespace and the same target string (#1424). *)
   let database = Sol_cli_database_setup_run.identity_of_config ~workspace config in
   let target = database.Sol_cli_database_setup_render.target in
+  (* Two resolutions of one config, deliberately: `identity_of_config` answers "which resource
+     is this target's database", and this answers the different question "does Sol provision
+     it". `resolve` is pure, and collapsing them would mean a second public shape for the
+     identity (which is the duplication #1424 removed). *)
   let provisions_database =
     match Sol_cli_resource_binding.resolve config with
     | Ok bindings ->
@@ -191,12 +195,13 @@ let run_dry_run_in_cluster ~ctx ~dir ~table ~target_path ~active =
   let* _workspace, _services, database, ddl_creds_name, ca_configmap =
     in_cluster_context ~target_path ~active
   in
+  let namespace = Sol_cli_database_setup_render.database_namespace database in
   let* applied =
     Sol_cli_migration_gate.read_applied
       ~ctx
       ~dir
       ~table
-      ~database
+      ~namespace
       ~ddl_creds_name
       ?ca_configmap
       ()

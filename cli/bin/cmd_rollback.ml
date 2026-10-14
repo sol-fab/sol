@@ -90,16 +90,37 @@ let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
      target's `<target>-ddl-creds` class Secret and mounts `<target>-db-ca` when Sol
      provisions that database. A local rollback has no target binding and keeps the
      workspace runtime Secret path. *)
-  (* The identity is resolved from the *resolved config*, so the namespace and the class Secret
-     names come from one target string (#1424). A local rollback has no target, so its identity
-     is the workspace's local one. *)
+  (* The migration Job runs where this workspace's credential is.
+     - Against a target: the target-derived database namespace, resolved from the *resolved
+       config* so the namespace and the class Secret names come from one target string (#1424).
+     - Locally: there is no target, and the local deploy writes the workspace runtime Secret
+       (`sol-secrets`) into the **release's** namespace (cmd_local_deploy). A target-derived
+       namespace here would be one the local deploy never populates, and the read would fail on a
+       missing credential -- so this path keeps the namespace it was always able to read. *)
+  let namespace =
+    match config with
+    | Some config ->
+      Sol_cli_database_setup_render.database_namespace
+        (Sol_cli_database_setup_run.identity_of_config ~workspace config)
+    | None ->
+      (* A local workspace has no target and no class Secrets: `sol-secrets` is written by the
+         local deploy **into every workload namespace**, and the manifest mounts it per
+         namespace. So any of the workspace's namespaces can read the migration state, and this
+         picks one the local flows agree on. It is deliberately inventory-derived -- local has no
+         target identity to derive from -- and safe precisely because the local deploy is
+         unscoped, so every candidate namespace holds the credential. No target ever takes this
+         path (#1424). *)
+      Sol_cli_migration_job.local_namespace
+        ~workspace
+        ~services:(Sol_cli_workspace_model.services facts)
+  in
   let database =
     match config with
     | Some config -> Sol_cli_database_setup_run.identity_of_config ~workspace config
     | None ->
       Sol_cli_database_setup_render.database_identity
         ~workspace
-        ~target:"local"
+        ~target:namespace
         ~resource:"none"
   in
   let ddl_creds_name, ca_configmap =
@@ -126,7 +147,7 @@ let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
             ~ctx
             ~dir:migrations_dir
             ~table:(Sol_cli_migration.table_name ~workspace)
-            ~database
+            ~namespace
             ~ddl_creds_name
             ?ca_configmap
             ())

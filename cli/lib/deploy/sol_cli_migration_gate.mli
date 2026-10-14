@@ -17,17 +17,23 @@ val read_applied
   :  ctx:Sol_cli_kube_destination.context
   -> dir:string
   -> table:string
-  -> database:Sol_cli_database_setup_render.database_identity
+  -> namespace:string
   -> ddl_creds_name:string
   -> ?ca_configmap:string
   -> unit
   -> (int list, string) result
 
+(** [read_applied] and [verify] run their Job in [namespace]. A *target* computes it from the
+    database identity ({!Sol_cli_database_setup_render.database_namespace} of
+    {!Sol_cli_database_setup_run.identity_of_config}), so no caller derives it from the selected
+    services (#1424). The local path has no target and passes the release's own namespace, where
+    its runtime credential lives. *)
+
 val verify
   :  ctx:Sol_cli_kube_destination.context
   -> workspace:string
   -> dir:string
-  -> database:Sol_cli_database_setup_render.database_identity
+  -> namespace:string
   -> ddl_creds_name:string
   -> ?ca_configmap:string
   -> unit

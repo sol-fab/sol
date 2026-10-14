@@ -784,7 +784,7 @@ let run_database_setup_step
                (List.map
                   (fun (binding : Sol_cli_resource_binding.t) -> binding.resource)
                   externals))))
-  | Some (database : Sol_cli_resource_binding.t) ->
+  | Some (_provisioned : Sol_cli_resource_binding.t) ->
     let* () = establish () in
     let provider =
       planning.Sol_cli_deploy_selection.Target_plan_input.config.target.provider

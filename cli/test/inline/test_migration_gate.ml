@@ -68,11 +68,7 @@ let verify dir =
     ~ctx:Sol_cli_kube_destination.local_context
     ~workspace:"pluto"
     ~dir
-    ~database:
-      (Sol_cli_database_setup_render.database_identity
-         ~workspace:"pluto"
-         ~target:"qualreg-aws-us-east-1"
-         ~resource:"app_db")
+    ~namespace:"sol-db-pluto-qualreg-aws-us-east-1"
     ~ddl_creds_name:"pluto-ddl-creds"
     ()
 ;;

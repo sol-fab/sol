@@ -153,7 +153,14 @@ let test_database_identity_report_is_the_interface () =
     ~msg:"the report names the target"
     "qual-2b-a33-aws-us-east-1"
     (field "target");
-  Windtrap.equal Windtrap.string ~msg:"and the resource" "app_db" (field "resource");
+  (* The identity's fields name things, so the report carries the **name-safe** form of the
+     resource (`_` becomes `-`), not the config's spelling. That is what makes the line
+     whitespace-parseable for any resource the config admits. *)
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"and the resource, name-safe"
+    "app-db"
+    (field "resource");
   Windtrap.equal
     Windtrap.string
     ~msg:"and the namespace it wrote into"
@@ -183,6 +190,81 @@ let test_database_identity_report_is_the_interface () =
        (List.filter
           (fun key -> String.equal (field key) "<absent>")
           [ "target"; "resource"; "namespace"; "ddl-creds"; "authority"; "ca-configmap" ]))
+;;
+
+(* **A local rollback reads where its credential is.** Local has no target, and `sol-secrets` is
+   written per workload namespace, so this path stays inventory-derived on purpose: a
+   target-derived `sol-db-<workspace>-local` would be a namespace the local deploy never
+   populates and the read would fail on a missing credential (#1424). *)
+let test_local_namespace_is_a_workload_namespace () =
+  let services =
+    [ service "payments" "orders_svc"
+    ; service "comms" "fulfilment_worker"
+    ; service "checkout" "checkout_svc"
+    ]
+  in
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"the first service by domain, then name"
+    "pluto-checkout"
+    (Sol_cli_migration_job.local_namespace ~workspace:"pluto" ~services);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:
+      "and it is one of the workspace's workload namespaces, never a target-derived one"
+    true
+    (List.mem
+       (Sol_cli_migration_job.local_namespace ~workspace:"pluto" ~services)
+       [ "pluto-payments"; "pluto-comms"; "pluto-checkout" ])
+;;
+
+(* **A reader splits the report on whitespace**, so no value may contain a space or an `=`. A
+   resource name is not covered by the config's identifier check (unlike a store, a domain or a
+   unit), so this proves the identity is name-safe by construction rather than by trusting the
+   config. *)
+let test_the_report_is_parseable_for_a_hostile_resource () =
+  let identity =
+    Sol_cli_database_setup_render.database_identity
+      ~workspace:"pluto"
+      ~target:"qual-2b-a33-aws-us-east-1"
+      ~resource:"app db=evil"
+  in
+  let report = Sol_cli_database_setup_render.database_identity_report identity in
+  let tokens = String.split_on_char ' ' report in
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"sentinel plus six fields, whatever the resource name was"
+    7
+    (List.length tokens);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"and no token is a bare value fragment: every field token carries exactly one ="
+    true
+    (List.for_all
+       (fun token ->
+          token = Sol_cli_database_setup_render.database_identity_sentinel
+          || (String.length token > 0
+              && String.index_opt token '=' <> None
+              && String.index_opt token '='
+                 = Some
+                     (String.length token
+                      - 1
+                      - String.length
+                          (String.sub
+                             token
+                             (Option.get (String.index_opt token '=') + 1)
+                             (String.length token
+                              - Option.get (String.index_opt token '=')
+                              - 1)))))
+       tokens)
+;;
+
+let%test "release: the identity is name-safe, so the report is parseable" =
+  test_the_report_is_parseable_for_a_hostile_resource ()
+;;
+
+let%test "release: a local migration read uses a workload namespace" =
+  test_local_namespace_is_a_workload_namespace ()
 ;;
 
 let%test "release: the database namespace is the target's, not the inventory's" =

@@ -119,6 +119,7 @@ let migration_prerequisite ctx ~plan ~live =
           ctx.resolved_config
       in
       let target = database.Sol_cli_database_setup_render.target in
+      let namespace = Sol_cli_database_setup_render.database_namespace database in
       let provisions_database =
         match Sol_cli_resource_binding.resolve ctx.resolved_config with
         | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
@@ -139,7 +140,7 @@ let migration_prerequisite ctx ~plan ~live =
           ~ctx:ctx.execution.cluster
           ~workspace:ctx.execution.workspace
           ~dir
-          ~database
+          ~namespace
           ~ddl_creds_name
           ?ca_configmap
           ()

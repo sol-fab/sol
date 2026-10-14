@@ -28,6 +28,29 @@ let services_of_target ~(all : Sol_cli_manifest.service list) ~(active : string 
   List.filter (fun (s : Sol_cli_manifest.service) -> List.mem s.name active) all
 ;;
 
+(** The namespace a **local** migration read runs in.
+
+    Local has no target and no class Secrets: the workspace runtime Secret (`sol-secrets`) is
+    written by the local deploy into every workload namespace and mounted per namespace, so any
+    of the workspace's namespaces can read migration state. This picks one by a rule the local
+    flows agree on.
+
+    It is inventory-derived **on purpose** -- there is no target identity to derive from
+    locally -- and that is safe because the local deploy is unscoped, so every candidate
+    namespace holds the credential. A target never uses this: its namespace comes from the
+    database identity (#1424). *)
+let local_namespace ~workspace ~(services : Sol_cli_manifest.service list) =
+  let by_domain_and_name (a : Sol_cli_manifest.service) (b : Sol_cli_manifest.service) =
+    compare (a.domain, a.name) (b.domain, b.name)
+  in
+  match List.sort by_domain_and_name services with
+  | (first : Sol_cli_manifest.service) :: _ ->
+    (match Sol_cli_deployment_plan.namespace_result ~workspace ~domain:first.domain with
+     | Ok ns -> Sol_cli_deployment_plan.namespace_to_string ns
+     | Error _ -> workspace)
+  | [] -> workspace
+;;
+
 let runner_image () =
   let* assets =
     Sol_cli_platform_assets.resolve ()

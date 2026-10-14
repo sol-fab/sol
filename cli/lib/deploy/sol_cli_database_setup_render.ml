@@ -237,7 +237,14 @@ type database_identity =
   ; resource : string
   }
 
-let database_identity ~workspace ~target ~resource = { workspace; target; resource }
+(* The fields **name** Kubernetes objects, so they are name-safe *by construction*: an identity
+   is always parseable and always usable in a name, whatever the config admitted. A resource
+   name is not covered by the config's identifier check, so it is sanitized here rather than
+   trusted. *)
+let database_identity ~workspace ~target ~resource =
+  let safe = Sol_cli_kubernetes_name.sanitize_name in
+  { workspace = safe workspace; target = safe target; resource = safe resource }
+;;
 
 (** Where database operations run: **derived from the target**, never from a service list. *)
 let database_namespace (id : database_identity) =
@@ -246,9 +253,13 @@ let database_namespace (id : database_identity) =
 ;;
 
 (** The deploy's declaration of where it wrote, so a verifier reads the location instead of
-    reproducing the naming rule. A [sentinel] and whitespace-separated [key=value] fields: the
-    fields are the interface, the formatting is not, and
-    [test_database_identity_report] fails if either drifts. *)
+    reproducing the naming rule.
+
+    **The sentinel and the field names are the interface**; the field order and the value
+    formatting are not. A reader splits on whitespace, so every value is name-safe (see
+    {!database_identity}) and no value can contain a space or an [=]. The product test
+    `database identity report is the interface the rows read` covers the sentinel and every
+    declared field, so drift fails rather than being discovered by a reader. *)
 let database_identity_sentinel = "sol-database-identity:"
 
 let database_identity_report (id : database_identity) =
