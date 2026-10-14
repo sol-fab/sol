@@ -122,16 +122,25 @@ the target and the resource it acts on. It does not depend on which units a depl
 omitting a domain from a scoped deploy cannot move a credential or split the Job from the Secret
 it reads.
 
-The deploy **declares that identity** so a monitor or a qualification row reads where it wrote
-instead of reproducing the naming rule:
+A target that binds no database gets no database-operations namespace and no declaration, which
+is the behaviour before this contract existed: there is nothing to write and no identity to
+publish. The migration gate establishes the namespace itself when it needs one.
+
+The deploy **declares the identity it resolved** so a monitor or a qualification row reads where
+the credentials are instead of reproducing the naming rule:
 
 ```
 sol-database-identity: target=<target> resource=<resource> namespace=<namespace> ddl-creds=<name> authority=<name> ca-configmap=<name>
 ```
 
-The field names are the interface (`target`, `resource`, `namespace`, `ddl-creds`, `authority`,
-`ca-configmap`); the field order and the sentinel are part of it too, and a change to either is a
-change to this contract. Reporting is not verification: a reader that asserts delivery reads the
+The **sentinel and the whole field set are the interface**: `target`, `resource`, `namespace`,
+`ddl-creds`, `authority`, `ca-configmap`. A change to any of them — including the sentinel — is a
+change to this contract, and the product test `database identity report is the interface the rows
+read` covers all of them so drift fails rather than being discovered by a reader.
+
+The identity is resolved from the **resolved config**, never from a target string a caller
+sanitizes: what the operator typed and what the environment file resolves to can differ, and two
+sanitized strings would put one target's credentials in two namespaces. Reporting is not verification: a reader that asserts delivery reads the
 Secret at the declared location, it does not stop at the declaration. The class Secret *names*
 remain target-scoped, which is what ADR 0007 and every consumer already name.
 

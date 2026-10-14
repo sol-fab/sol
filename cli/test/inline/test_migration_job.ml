@@ -113,9 +113,11 @@ let test_database_namespace_is_the_targets () =
     (not (String.equal (namespace ()) (namespace ~target:"another-aws-us-east-1" ())))
 ;;
 
-(* The deploy declares where it wrote, so a verifier reads the declaration rather than
-   reproducing the naming rule. These are the fields the rows parse, so a change to them is an
-   interface change and this test is what makes it fail loudly. *)
+(* The deploy declares the identity it resolved, so a verifier reads the declaration rather than
+   reproducing the naming rule. **The sentinel and the whole field set are the contract**, both
+   in `runtime.md` and in the doc comment -- a row parsing this line breaks on a sentinel change
+   exactly as hard as on a field-name change, so the test covers all of it. If a field is added
+   to the report and not here, this test stops being the thing that makes drift fail. *)
 let test_database_identity_report_is_the_interface () =
   let identity =
     Sol_cli_database_setup_render.database_identity
@@ -136,6 +138,17 @@ let test_database_identity_report_is_the_interface () =
     |> Option.value ~default:"<absent>"
   in
   Windtrap.equal
+    Windtrap.bool
+    ~msg:"the sentinel is the contract's first token"
+    true
+    (String.length report
+     >= String.length Sol_cli_database_setup_render.database_identity_sentinel
+     && String.sub
+          report
+          0
+          (String.length Sol_cli_database_setup_render.database_identity_sentinel)
+        = Sol_cli_database_setup_render.database_identity_sentinel);
+  Windtrap.equal
     Windtrap.string
     ~msg:"the report names the target"
     "qual-2b-a33-aws-us-east-1"
@@ -155,7 +168,21 @@ let test_database_identity_report_is_the_interface () =
     Windtrap.string
     ~msg:"and the authority Secret name"
     (Sol_cli_database_setup_render.authority_name "qual-2b-a33-aws-us-east-1")
-    (field "authority")
+    (field "authority");
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"and the CA ConfigMap name"
+    (Sol_cli_database_setup_render.ca_configmap_name "qual-2b-a33-aws-us-east-1")
+    (field "ca-configmap");
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"and no declared field is absent from what the report prints"
+    ""
+    (String.concat
+       ", "
+       (List.filter
+          (fun key -> String.equal (field key) "<absent>")
+          [ "target"; "resource"; "namespace"; "ddl-creds"; "authority"; "ca-configmap" ]))
 ;;
 
 let%test "release: the database namespace is the target's, not the inventory's" =

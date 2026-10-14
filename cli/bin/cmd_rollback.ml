@@ -90,13 +90,23 @@ let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
      target's `<target>-ddl-creds` class Secret and mounts `<target>-db-ca` when Sol
      provisions that database. A local rollback has no target binding and keeps the
      workspace runtime Secret path. *)
+  (* The identity is resolved from the *resolved config*, so the namespace and the class Secret
+     names come from one target string (#1424). A local rollback has no target, so its identity
+     is the workspace's local one. *)
+  let database =
+    match config with
+    | Some config -> Sol_cli_database_setup_run.identity_of_config ~workspace config
+    | None ->
+      Sol_cli_database_setup_render.database_identity
+        ~workspace
+        ~target:"local"
+        ~resource:"none"
+  in
   let ddl_creds_name, ca_configmap =
     match config with
     | None -> Sol_cli_manifest.runtime_secret_name, None
     | Some config ->
-      let target =
-        Sol_cli_kubernetes_name.sanitize_name config.Sol_cli_config.target.name
-      in
+      let target = database.Sol_cli_database_setup_render.target in
       let provisions =
         match Sol_cli_resource_binding.resolve config with
         | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
@@ -106,21 +116,6 @@ let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
       , if provisions
         then Some (Sol_cli_database_setup_render.ca_configmap_name target)
         else None )
-  in
-  (* The migration namespace is the target's, not the workspace inventory's (#1424). A local
-     rollback has no target, so its identity is the workspace's local one. *)
-  let database =
-    match config with
-    | Some config ->
-      Sol_cli_database_setup_run.identity_of_config
-        ~workspace
-        ~target:(Sol_cli_kubernetes_name.sanitize_name config.Sol_cli_config.target.name)
-        config
-    | None ->
-      Sol_cli_database_setup_render.database_identity
-        ~workspace
-        ~target:"local"
-        ~resource:"none"
   in
   let deps : Sol_cli_rollback.transaction_deps =
     { config

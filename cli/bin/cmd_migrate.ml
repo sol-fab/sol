@@ -147,20 +147,14 @@ let in_cluster_context ~target_path ~active =
       ~all:(Sol_cli_workspace_model.services facts)
       ~active
   in
-  let target = Sol_cli_kubernetes_name.sanitize_name target_path in
-  (* Whether Sol provisions the database decides only the CA mount; the DDL class Secret name
-     is ownership-neutral, so the Job reads `<target>-ddl-creds` either way. This is a
-     different question from which resource is the target's database, and it asks the one
-     binding module rather than re-deriving the answer. *)
   let* config =
     Sol_cli_config.load_for_target ~target:target_path
     |> Result.map_error Sol_cli_config.error_to_string
   in
   (* The database identity, resolved once here so the dry run, the apply and the migration Job
-     all use the same namespace (#1424). *)
-  let database =
-    Sol_cli_database_setup_run.identity_of_config ~workspace ~target config
-  in
+     all use the same namespace and the same target string (#1424). *)
+  let database = Sol_cli_database_setup_run.identity_of_config ~workspace config in
+  let target = database.Sol_cli_database_setup_render.target in
   let provisions_database =
     match Sol_cli_resource_binding.resolve config with
     | Ok bindings ->

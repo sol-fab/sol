@@ -109,24 +109,18 @@ let migration_prerequisite ctx ~plan ~live =
        Secret the setup step (or ESO, for an externally bound database) writes. The reader
        never learns the ownership; the only ownership-shaped decision here is whether the
        target publishes a CA ConfigMap, which only Sol's setup step does. *)
-      let target = Sol_cli_kubernetes_name.sanitize_name ctx.target_name in
-      let resolved = Sol_cli_resource_binding.resolve ctx.resolved_config in
-      (* The migration namespace is the target's, not the selected services' (#1424). *)
+      (* The identity comes from the *resolved config*, not from `ctx.target_name`: what the
+         operator typed and what the environment file resolves to can differ, and two sanitized
+         target strings would put this target's database operations in two namespaces (#1424).
+         The class Secret names come from the identity's target for the same reason. *)
       let database =
-        match resolved with
-        | Ok bindings ->
-          Sol_cli_database_setup_run.identity_of_bindings
-            ~workspace:ctx.execution.workspace
-            ~target
-            bindings
-        | Error _ ->
-          Sol_cli_database_setup_render.database_identity
-            ~workspace:ctx.execution.workspace
-            ~target
-            ~resource:"none"
+        Sol_cli_database_setup_run.identity_of_config
+          ~workspace:ctx.execution.workspace
+          ctx.resolved_config
       in
+      let target = database.Sol_cli_database_setup_render.target in
       let provisions_database =
-        match resolved with
+        match Sol_cli_resource_binding.resolve ctx.resolved_config with
         | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
         | Error _ -> false
       in
