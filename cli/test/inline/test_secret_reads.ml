@@ -128,6 +128,16 @@ if [ "$verb" = "get" ]; then
       fi
       exit 0 ;;
     secret)
+      if [ "$mode" = "patch-create-race" ]; then
+        # The winner of the create exists only after the Secret itself was created.
+        if [ -f "$(dirname "$0")/calls.log.created" ]; then
+          echo '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"charge-svc-secrets","namespace":"payments","resourceVersion":"5","labels":{"app.kubernetes.io/managed-by":"sol"}},"data":{"EXISTING":"ZXhpc3Rpbmc="}}'
+          exit 0
+        else
+          echo 'Error from server (NotFound): secrets "charge-svc-secrets" not found' >&2
+          exit 1
+        fi
+      fi
       if [ "$mode" = "eso-class-output-owned" ]; then
         echo '{"apiVersion":"v1","kind":"Secret","metadata":{"ownerReferences":[{"uid":"class-uid"}]},"data":{"POSTGRES_URL":"cG9zdGdyZXM6Ly9kYg=="}}'
         exit 0
@@ -189,6 +199,12 @@ if [ "$verb" = "get" ]; then
   esac
 fi
 if [ "$verb" = "create" ]; then
+  # The namespace is created with a different manifest prefix; only the Secret's own create
+  # makes the object exist for a later read.
+  case " $* " in
+    *"sol-secret-ns-"*) ;;
+    *) : >"$(dirname "$0")/calls.log.created" ;;
+  esac
   case "$mode" in
     patch-create-race)
       echo 'Error from server (AlreadyExists): secrets "charge-svc-secrets" already exists' >&2
@@ -1126,7 +1142,13 @@ let test_create_race_retries_the_patch () =
         ~msg:
           "the racing create is followed by exactly one retried patch (Ok proves it won)"
         true
-        (count "patch-args" = 2))
+        (count "patch-args" = 2);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:
+          "the retry rebuilds from a fresh read, so it carries the identity precondition"
+        true
+        (count "/metadata/labels/app.kubernetes.io~1managed-by" = 1))
 ;;
 
 let test_rewriting_the_same_value_is_a_no_op () =

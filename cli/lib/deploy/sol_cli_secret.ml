@@ -334,16 +334,32 @@ let create_named_secret ~ctx ~namespace ~secret_name ~key ~value =
 ;;
 
 (** Patch the one key; on a missing object create it; if a concurrent writer created it first
-    (the create races to `AlreadyExists`), patch again — one retry, because the second patch
-    merges into whatever the winner wrote. *)
-let write_named_secret_key ~ctx ~namespace ~secret_name ~key ~value ~existing =
-  let patch = secret_key_patch ~json:(Option.value existing ~default:`Null) ~key ~value in
+    (the create races to `AlreadyExists`), **re-read** and retry once.
+
+    The retry re-reads rather than reusing the first body: we read the object as absent, so the
+    first patch carries no `test` op, but the object that won the create is not the one we read.
+    Rebuilding from the fresh json attaches the same identity precondition a normal write has,
+    and re-runs the ownership rule — a winner that is not Sol's is refused instead of written. *)
+let write_named_secret_key
+      ~allow_unlabeled_runtime
+      ~ctx
+      ~namespace
+      ~secret_name
+      ~key
+      ~value
+      ~existing
+  =
+  let verify_owner =
+    if allow_unlabeled_runtime
+    then verify_runtime_secret_owner
+    else verify_sol_managed_secret
+  in
   let redact message = Sol_cli_process.apply_redactions [ value ] message in
-  let patch_once () =
+  let patch_once json =
     Sol_cli_fs.with_temp_file
       ~prefix:"sol-secret-patch-"
       ~suffix:".json"
-      patch
+      (secret_key_patch ~json ~key ~value)
       (fun file ->
          Sol_cli_kubectl.patch_file
            ~ctx
@@ -353,8 +369,8 @@ let write_named_secret_key ~ctx ~namespace ~secret_name ~key ~value ~existing =
            ~patch_type:"json"
            ~file)
   in
-  let rec attempt retries =
-    match patch_once () with
+  let rec attempt retries json =
+    match patch_once json with
     | Error message -> Error (redact message)
     | Ok (Ok _) -> Ok ()
     | Ok (Error failure) when failure_says failure "NotFound" && retries > 0 ->
@@ -362,7 +378,9 @@ let write_named_secret_key ~ctx ~namespace ~secret_name ~key ~value ~existing =
        | Error message -> Error (redact message)
        | Ok (Ok _) -> Ok ()
        | Ok (Error failure) when failure_says failure "AlreadyExists" && retries > 0 ->
-         attempt (retries - 1)
+         let* fresh = get_named_secret_json ~ctx ~name:secret_name namespace in
+         let* () = verify_owner fresh in
+         attempt (retries - 1) (Option.value fresh ~default:`Null)
        | Ok (Error failure) ->
          Error
            (redact
@@ -380,7 +398,7 @@ let write_named_secret_key ~ctx ~namespace ~secret_name ~key ~value ~existing =
               secret_name
               (Sol_cli_process.error_to_string failure)))
   in
-  attempt 1
+  attempt 1 (Option.value existing ~default:`Null)
 ;;
 
 let require_namespaces namespaces =
@@ -533,7 +551,16 @@ let set_named_key
   if unchanged
   then Ok false
   else
-    let* () = write_named_secret_key ~ctx ~namespace ~secret_name ~key ~value ~existing in
+    let* () =
+      write_named_secret_key
+        ~allow_unlabeled_runtime
+        ~ctx
+        ~namespace
+        ~secret_name
+        ~key
+        ~value
+        ~existing
+    in
     Ok true
 ;;
 
