@@ -85,6 +85,34 @@ is correct and needs no change" as a valid conclusion. Investigate proportionate
 failure is worth recording and carrying as stated risk, not necessarily an open-ended hunt or a
 blocker for unrelated work.
 
+### Patterns that have cost us twice
+
+Short rules, each paid for by a specific defect. They are not preferences; each one is the
+lesson of an incident whose evidence is in the linked issue.
+
+1. **Green CI after a commit that removed a test is a warning, not a pass.** If a diff removes a
+   `let%test` or a test file, the commit message must say why. A splice, a rebase or a bad edit
+   that drops a test is a defect on its own, and CI cannot tell that from a passing change
+   (#1455: the hostile-resource test vanished in a splice and `@ci-unit` stayed green because it
+   was simply gone).
+2. **One decision, one place.** Two call sites answering the same question either share one
+   implementation or carry a comment saying which question each answers. A second resolve without
+   a comment is the shape that becomes the next conflation (#1424: findings 2, 6, 12).
+3. **When a fix removes a conflation between two concepts, look for it one level up and one level
+   down before calling the fix complete.** The same pairing tends to exist in the caller and in
+   the callee (#1424: the fix for target-vs-namespace contained target-vs-namespace; also
+   historical/current in #1422, plan/apply in #1425, writer/reader in the row assertion).
+4. **A test named "is the interface" must assert every member of the interface, or the name is a
+   lie.** Check the sentinel, the field set, the shape — everything the record claims is the
+   contract (#1424: finding 3 was a partial interface test, fixed and then fixed again).
+5. **Never reimplement a naming or formatting rule in the reader.** If the reader needs a name,
+   the writer declares it; if the declaration is unstable, fix the declaration. A reader that
+   reproduces the rule is correct only by coincidence (#1424: the rows derived the namespace
+   before the deploy declared it).
+6. **A `Result` is not a fallback.** Do not substitute a default for an `Error` unless the error is
+   provably unreachable, and say so in code where it is, not in your head (#1424: finding 11
+   swallowed a real `make_namespace` failure behind `Error _ -> workspace`).
+
 ## Durable invariants
 
 - Sol owns only its declared contract boundary. Users may integrate arbitrary
