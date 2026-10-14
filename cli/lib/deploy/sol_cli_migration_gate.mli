@@ -15,10 +15,9 @@ type verification =
 
 val read_applied
   :  ctx:Sol_cli_kube_destination.context
-  -> workspace:string
   -> dir:string
   -> table:string
-  -> services:Sol_cli_manifest.service list
+  -> database:Sol_cli_database_setup_render.database_identity
   -> ddl_creds_name:string
   -> ?ca_configmap:string
   -> unit
@@ -28,7 +27,7 @@ val verify
   :  ctx:Sol_cli_kube_destination.context
   -> workspace:string
   -> dir:string
-  -> services:Sol_cli_manifest.service list
+  -> database:Sol_cli_database_setup_render.database_identity
   -> ddl_creds_name:string
   -> ?ca_configmap:string
   -> unit

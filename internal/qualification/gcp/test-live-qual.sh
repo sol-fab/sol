@@ -139,10 +139,25 @@ case "$1" in
       printf 'provisioner-bootstrap-access-remove ok\n'
       printf 'lifecycle phase: Ready\nDone.\n'
       if [ "${STUB_APPLY_RC:-0}" = "0" ] && [ "${STUB_APPLY_ERROR:-none}" != "already-exists" ]; then
+        # The real deploy prints this from its database setup step (#1424).
+        printf 'sol-database-identity: target=%s resource=app_db namespace=%s ddl-creds=%s authority=%s ca-configmap=%s\n' \
+          "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}" \
+          "${STUB_DDL_NAMESPACE:-pluto-comms}" \
+          "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-ddl-creds" \
+          "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-db-credentials" \
+          "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-db-ca"
         printf 'The environment for %s is reconciled.\n' "$2"
       fi
       [ "${STUB_APPLY_RC:-0}" = "0" ]
     else
+      # The app deploy pins digests and prints no terraform transcript, but the real one still
+      # runs its database setup step, so it declares where it wrote (#1424).
+      printf 'sol-database-identity: target=%s resource=app_db namespace=%s ddl-creds=%s authority=%s ca-configmap=%s\n' \
+        "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}" \
+        "${STUB_DDL_NAMESPACE:-pluto-comms}" \
+        "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-ddl-creds" \
+        "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-db-credentials" \
+        "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-db-ca"
       [ "${STUB_DEPLOY_RC:-0}" = "0" ]
     fi
     ;;
@@ -404,6 +419,24 @@ case "$*" in
     exit 0 ;;
   # 2b: the deploy delivers the database as class Secrets; the row lists them across
   # namespaces and checks the consumer's own Secret for the master copy it no longer holds.
+  "get secret "*"-ddl-creds -n "*)
+    if [ "${STUB_DDL_CREDS_ABSENT:-0}" = "1" ]; then
+      printf 'Error from server (NotFound): secrets not found\n' >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+  "get secret "*"-dml-creds -n "*)
+    ns=""
+    prev=""
+    for a in $*; do
+      [ "$prev" = "-n" ] && ns="$a"
+      prev="$a"
+    done
+    [ "$ns" = "${STUB_DML_NAMESPACE:-pluto-payments}" ] && exit 0
+    printf 'Error from server (NotFound): secrets not found\n' >&2
+    exit 1
+    ;;
   "get secret -A"*)
     printf '%s\n' \
       "${STUB_DML_NAMESPACE:-pluto-payments} ${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-dml-creds" \
@@ -878,7 +911,7 @@ lacks "no secret value is passed on a command line" \
 has "the supplied keys are recorded without their values" \
   "secret_values: never recorded" "$TMP/app-ok.logs/prerequisites.txt"
 has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
-  "database_delivery: qual-gcp-us-central1-ddl-creds (migration Job), qual-gcp-us-central1-dml-creds@pluto-payments (unit consumer)" \
+  "database_delivery: qual-gcp-us-central1-ddl-creds@pluto-comms (migration Job, as the deploy declared it), qual-gcp-us-central1-dml-creds@pluto-payments (unit consumer)" \
   "$TMP/app-ok.logs/prerequisites.txt"
 # A profile-less deploy fires neither gate, so this row scopes them out and names the bug
 # that must make them fire on any deploy (#1403) rather than claiming them here.

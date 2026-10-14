@@ -28,18 +28,6 @@ let services_of_target ~(all : Sol_cli_manifest.service list) ~(active : string 
   List.filter (fun (s : Sol_cli_manifest.service) -> List.mem s.name active) all
 ;;
 
-let job_namespace ~workspace ~(services : Sol_cli_manifest.service list) =
-  let by_domain_and_name (a : Sol_cli_manifest.service) (b : Sol_cli_manifest.service) =
-    compare (a.domain, a.name) (b.domain, b.name)
-  in
-  match List.sort by_domain_and_name services with
-  | [] ->
-    Error
-      "no deployed service found in this workspace -- nothing to run the migration Job \
-       in. Deploy at least one service first."
-  | chosen :: _ -> Sol_cli_deployment_plan.namespace_name ~workspace ~domain:chosen.domain
-;;
-
 let runner_image () =
   let* assets =
     Sol_cli_platform_assets.resolve ()

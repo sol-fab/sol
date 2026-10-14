@@ -107,6 +107,21 @@ let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
         then Some (Sol_cli_database_setup_render.ca_configmap_name target)
         else None )
   in
+  (* The migration namespace is the target's, not the workspace inventory's (#1424). A local
+     rollback has no target, so its identity is the workspace's local one. *)
+  let database =
+    match config with
+    | Some config ->
+      Sol_cli_database_setup_run.identity_of_config
+        ~workspace
+        ~target:(Sol_cli_kubernetes_name.sanitize_name config.Sol_cli_config.target.name)
+        config
+    | None ->
+      Sol_cli_database_setup_render.database_identity
+        ~workspace
+        ~target:"local"
+        ~resource:"none"
+  in
   let deps : Sol_cli_rollback.transaction_deps =
     { config
     ; ensure_held = (fun () -> Sol_cli_boundary_lease.ensure_held lease)
@@ -114,10 +129,9 @@ let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
         (fun () ->
           Sol_cli_migration_gate.read_applied
             ~ctx
-            ~workspace
             ~dir:migrations_dir
             ~table:(Sol_cli_migration.table_name ~workspace)
-            ~services:(Sol_cli_workspace_model.services facts)
+            ~database
             ~ddl_creds_name
             ?ca_configmap
             ())

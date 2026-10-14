@@ -152,14 +152,20 @@ let in_cluster_context ~target_path ~active =
      is ownership-neutral, so the Job reads `<target>-ddl-creds` either way. This is a
      different question from which resource is the target's database, and it asks the one
      binding module rather than re-deriving the answer. *)
-  let* provisions_database =
+  let* config =
     Sol_cli_config.load_for_target ~target:target_path
     |> Result.map_error Sol_cli_config.error_to_string
-    |> Result.map (fun config ->
-      match Sol_cli_resource_binding.resolve config with
-      | Ok bindings ->
-        Option.is_some (Sol_cli_resource_binding.provisioned_database bindings)
-      | Error _ -> false)
+  in
+  (* The database identity, resolved once here so the dry run, the apply and the migration Job
+     all use the same namespace (#1424). *)
+  let database =
+    Sol_cli_database_setup_run.identity_of_config ~workspace ~target config
+  in
+  let provisions_database =
+    match Sol_cli_resource_binding.resolve config with
+    | Ok bindings ->
+      Option.is_some (Sol_cli_resource_binding.provisioned_database bindings)
+    | Error _ -> false
   in
   let ca_configmap =
     if provisions_database
@@ -169,6 +175,7 @@ let in_cluster_context ~target_path ~active =
   Ok
     ( workspace
     , services
+    , database
     , Sol_cli_database_setup_render.ddl_creds_name target
     , ca_configmap )
 ;;
@@ -187,16 +194,15 @@ let print_pending_files ~dir applied files =
    never connects from the operator's machine, so it needs no credential in the operator's
    environment — the Job reads the target's DDL class Secret. *)
 let run_dry_run_in_cluster ~ctx ~dir ~table ~target_path ~active =
-  let* workspace, services, ddl_creds_name, ca_configmap =
+  let* _workspace, _services, database, ddl_creds_name, ca_configmap =
     in_cluster_context ~target_path ~active
   in
   let* applied =
     Sol_cli_migration_gate.read_applied
       ~ctx
-      ~workspace
       ~dir
       ~table
-      ~services
+      ~database
       ~ddl_creds_name
       ?ca_configmap
       ()
@@ -207,10 +213,10 @@ let run_dry_run_in_cluster ~ctx ~dir ~table ~target_path ~active =
 ;;
 
 let run_apply_in_cluster ~ctx ~dir ~table ~target_path ~active =
-  let* workspace, services, ddl_creds_name, ca_configmap =
+  let* workspace, services, database, ddl_creds_name, ca_configmap =
     in_cluster_context ~target_path ~active
   in
-  let* namespace = Sol_cli_migration_job.job_namespace ~workspace ~services in
+  let namespace = Sol_cli_database_setup_render.database_namespace database in
   let* () =
     Sol_cli_substrate.ensure
       ~ctx

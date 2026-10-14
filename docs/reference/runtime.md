@@ -115,6 +115,26 @@ Database connections are not a platform input: a unit that declares
 `uses: [app_db]` reads the deploy-delivered `<target>-dml-creds` class Secret,
 and the migration Job reads `<target>-ddl-creds`.
 
+**Where those Secrets live is the target's, not the application inventory's.** The namespace
+database operations run in — the migration Job, the password authority
+(`<target>-db-credentials`) and the DDL class Secret — is derived from the database identity:
+the target and the resource it acts on. It does not depend on which units a deploy selects, so
+omitting a domain from a scoped deploy cannot move a credential or split the Job from the Secret
+it reads.
+
+The deploy **declares that identity** so a monitor or a qualification row reads where it wrote
+instead of reproducing the naming rule:
+
+```
+sol-database-identity: target=<target> resource=<resource> namespace=<namespace> ddl-creds=<name> authority=<name> ca-configmap=<name>
+```
+
+The field names are the interface (`target`, `resource`, `namespace`, `ddl-creds`, `authority`,
+`ca-configmap`); the field order and the sentinel are part of it too, and a change to either is a
+change to this contract. Reporting is not verification: a reader that asserts delivery reads the
+Secret at the declared location, it does not stop at the declaration. The class Secret *names*
+remain target-scoped, which is what ADR 0007 and every consumer already name.
+
 The substrate checks the platform inputs a Job consumes before proceeding. An
 application Secret contains exactly the unit's declared keys; a unit-scoped
 `POSTGRES_URL` is one it declares itself, while a unit that consumes the target's

@@ -80,20 +80,90 @@ let service domain name : Sol_cli_manifest.service =
   { domain; name; primitive = Sol_cli_manifest.Svc; dir = "app/" ^ domain ^ "/" ^ name }
 ;;
 
-let test_job_namespace () =
+(* **#1424: the database namespace is the target's, not the application inventory's.** The old
+   derivation took the namespace of the alphabetically-first *selected* service, and the setup
+   step and the migration gate were given different lists — so omitting the alphabetically-first
+   domain put the DDL class Secret and the Job that reads it in different namespaces, and moved
+   the password authority with them. *)
+let test_database_namespace_is_the_targets () =
+  let namespace ?(resource = "app_db") ?(target = "qual-2b-a33-aws-us-east-1") () =
+    Sol_cli_database_setup_render.database_namespace
+      (Sol_cli_database_setup_render.database_identity
+         ~workspace:"pluto"
+         ~target
+         ~resource)
+  in
   Windtrap.equal
-    (Windtrap.result Windtrap.string Windtrap.string)
-    ~msg:"the first service by domain, then name"
-    (Ok "pluto-checkout")
-    (Sol_cli_migration_job.job_namespace
-       ~workspace:"pluto"
-       ~services:[ service "payments" "charge_svc"; service "checkout" "checkout_svc" ]);
+    Windtrap.string
+    ~msg:"which resource is bound does not move the namespace"
+    (namespace ())
+    (namespace ~resource:"another_db" ());
   Windtrap.equal
     Windtrap.bool
-    ~msg:"no services is an error"
+    ~msg:"and the namespace is not any domain's"
     true
-    (Result.is_error
-       (Sol_cli_migration_job.job_namespace ~workspace:"pluto" ~services:[]))
+    (not
+       (List.mem
+          (namespace ())
+          [ "pluto-checkout"; "pluto-comms"; "pluto-payments"; "pluto-demo-ts" ]));
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"two targets in one cluster do not share a database namespace"
+    true
+    (not (String.equal (namespace ()) (namespace ~target:"another-aws-us-east-1" ())))
+;;
+
+(* The deploy declares where it wrote, so a verifier reads the declaration rather than
+   reproducing the naming rule. These are the fields the rows parse, so a change to them is an
+   interface change and this test is what makes it fail loudly. *)
+let test_database_identity_report_is_the_interface () =
+  let identity =
+    Sol_cli_database_setup_render.database_identity
+      ~workspace:"pluto"
+      ~target:"qual-2b-a33-aws-us-east-1"
+      ~resource:"app_db"
+  in
+  let report = Sol_cli_database_setup_render.database_identity_report identity in
+  let field key =
+    let prefix = key ^ "=" in
+    report
+    |> String.split_on_char ' '
+    |> List.find_opt (fun f ->
+      String.length f > String.length prefix
+      && String.sub f 0 (String.length prefix) = prefix)
+    |> Option.map (fun f ->
+      String.sub f (String.length prefix) (String.length f - String.length prefix))
+    |> Option.value ~default:"<absent>"
+  in
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"the report names the target"
+    "qual-2b-a33-aws-us-east-1"
+    (field "target");
+  Windtrap.equal Windtrap.string ~msg:"and the resource" "app_db" (field "resource");
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"and the namespace it wrote into"
+    (Sol_cli_database_setup_render.database_namespace identity)
+    (field "namespace");
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"and the DDL class Secret name"
+    (Sol_cli_database_setup_render.ddl_creds_name "qual-2b-a33-aws-us-east-1")
+    (field "ddl-creds");
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"and the authority Secret name"
+    (Sol_cli_database_setup_render.authority_name "qual-2b-a33-aws-us-east-1")
+    (field "authority")
+;;
+
+let%test "release: the database namespace is the target's, not the inventory's" =
+  test_database_namespace_is_the_targets ()
+;;
+
+let%test "release: the deploy's database identity report is the interface the rows read" =
+  test_database_identity_report_is_the_interface ()
 ;;
 
 let%test "REFAC-139 part A: unstartable fails fast" = test_unstartable_fails_fast ()
@@ -101,41 +171,4 @@ let%test "REFAC-139 part A: succeeded" = test_succeeded ()
 
 let%test "REFAC-139 part A: a transient wait runs to its bound" =
   test_times_out_on_a_transient_wait ()
-;;
-
-let%test "REFAC-139 part A: job namespace" = test_job_namespace ()
-
-(* The workspace's migrations are a single artifact, but the one-shot Job runs in
-   one namespace. A target that omits the service whose domain sorts first must
-   not place the Job in that omitted service's namespace: the standalone migrate
-   path uses the target's own service selection, as the deploy path does. *)
-let test_job_namespace_follows_target () =
-  let all =
-    [ service "payments" "orders_svc"
-    ; service "comms" "fulfilment_worker"
-    ; service "checkout" "checkout_svc"
-    ]
-  in
-  Windtrap.equal
-    (Windtrap.result Windtrap.string Windtrap.string)
-    ~msg:"the omitted service's namespace is not chosen"
-    (Ok "pluto-comms")
-    (Sol_cli_migration_job.job_namespace
-       ~workspace:"pluto"
-       ~services:
-         (Sol_cli_migration_job.services_of_target
-            ~all
-            ~active:[ "orders_svc"; "fulfilment_worker" ]));
-  Windtrap.equal
-    Windtrap.bool
-    ~msg:"a target that deploys no service has no migration namespace"
-    true
-    (Result.is_error
-       (Sol_cli_migration_job.job_namespace
-          ~workspace:"pluto"
-          ~services:(Sol_cli_migration_job.services_of_target ~all ~active:[])))
-;;
-
-let%test "a target's service selection decides the migration namespace" =
-  test_job_namespace_follows_target ()
 ;;

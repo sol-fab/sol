@@ -39,8 +39,28 @@ let apply_doc ~ctx ~what doc =
   |> Result.join
 ;;
 
+(* One place that turns "this target" into the database identity, so every caller of the gate and
+   the setup resolves the same one (#1424). The resource is the target's bound database, or
+   ["none"] when it binds none: the namespace does not depend on it in v1, but the identity
+   carries it so a resource-scoped naming change has one place to land. *)
 (** The Job's UID, read back immediately after creation so the transient Secret can be
     given an owner. *)
+let identity_of_bindings ~workspace ~target (bindings : Sol_cli_resource_binding.t list) =
+  let resource =
+    match Sol_cli_resource_binding.of_type bindings ~typ:"postgres" with
+    | (binding : Sol_cli_resource_binding.t) :: _ -> binding.resource
+    | [] -> "none"
+  in
+  Sol_cli_database_setup_render.database_identity ~workspace ~target ~resource
+;;
+
+let identity_of_config ~workspace ~target (config : Sol_cli_config.t) =
+  match Sol_cli_resource_binding.resolve config with
+  | Ok bindings -> identity_of_bindings ~workspace ~target bindings
+  | Error _ ->
+    Sol_cli_database_setup_render.database_identity ~workspace ~target ~resource:"none"
+;;
+
 let job_uid ~ctx ~namespace ~job_name =
   let* r =
     kubectl

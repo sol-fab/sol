@@ -105,6 +105,14 @@ if [ "${1:-}" = "deploy" ]; then
     printf 'Resolve that, then re-run the whole-target deploy to resume the install.\n'
     exit 1
   fi
+  # The real deploy prints this from its database setup step: the writer declares where it
+  # wrote, so the row reads the location instead of reproducing the naming rule (#1424).
+  printf 'sol-database-identity: target=%s resource=app_db namespace=%s ddl-creds=%s authority=%s ca-configmap=%s\n' \
+    "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}" \
+    "${STUB_DDL_NAMESPACE:-pluto-comms}" \
+    "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-ddl-creds" \
+    "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-db-credentials" \
+    "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-db-ca"
   printf 'The environment for %s is reconciled.\n' "${2:-}"
   exit 0
 fi
@@ -453,6 +461,26 @@ case " $* " in
   # 2b: the deploy delivers the database as class Secrets. The row lists them across
   # namespaces and checks the consumer's own Secret for the master copy it no longer
   # carries.
+  # The row now reads the class Secret *by name at the location the deploy declared*, so the
+  # stub answers that shape too -- and can model its absence, which the fall-through cannot.
+  *" get secret "*"-ddl-creds -n "*)
+    if [ "${STUB_DDL_CREDS_ABSENT:-0}" = "1" ]; then
+      printf 'Error from server (NotFound): secrets not found\n' >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+  *" get secret "*"-dml-creds -n "*)
+    ns=""
+    prev=""
+    for a in $*; do
+      [ "$prev" = "-n" ] && ns="$a"
+      prev="$a"
+    done
+    [ "$ns" = "${STUB_DML_NAMESPACE:-pluto-payments}" ] && exit 0
+    printf 'Error from server (NotFound): secrets not found\n' >&2
+    exit 1
+    ;;
   *" get secret -A "*)
     printf '%s\n' \
       "${STUB_DML_NAMESPACE:-pluto-payments} ${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-dml-creds" \
@@ -823,7 +851,7 @@ lacks "no secret value is passed on a command line" \
 has "the supplied keys are recorded without their values" \
   "secret_values: never recorded" "$TMP/ok.logs/prerequisites.txt"
 has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
-  "database_delivery: qualreg-aws-us-east-1-ddl-creds (migration Job), qualreg-aws-us-east-1-dml-creds@pluto-payments (unit consumer)" \
+  "database_delivery: qualreg-aws-us-east-1-ddl-creds@pluto-comms (migration Job, as the deploy declared it), qualreg-aws-us-east-1-dml-creds@pluto-payments (unit consumer)" \
   "$TMP/ok.logs/prerequisites.txt"
 has "the run identity records the bundle version" \
   "sol_version: $VERSION" "$TMP/ok.logs/sol-identity.txt"
@@ -1122,6 +1150,16 @@ has "and the refusal names the re-authentication to run" \
 lacks "and no Sol command is attempted" "destroy qualreg/aws/us-east-1 --apply" "$TMP/stalec.sol"
 lacks "so no inventory is taken, and no teardown is recorded as attempted" \
   "teardown" "$TMP/stalec.logs/harness.log"
+
+printf '\nscenario: the delivery assertion reads the location the deploy declared\n'
+# The stub declares its class Secret in one namespace and, with this knob, refuses the read
+# there. If the row were still asserting a baked-in namespace this would not be the failure it
+# reports; the refusal naming the declared location is what shows it read the declaration.
+run_row declaredabsent TRANSPORT=0 APP_UNITS="orders_svc" STUB_DDL_CREDS_ABSENT=1
+refused declaredabsent "the row refuses when the class Secret is absent at the declared location"
+has "and names the class Secret the deploy declared" \
+  "qualreg-aws-us-east-1-ddl-creds" "$TMP/declaredabsent.out"
+has "and the namespace the deploy declared" "pluto-comms" "$TMP/declaredabsent.out"
 
 printf '\nscenario: the destroy phase survives a closed stdout reader and records the inventory\n'
 run_phase_closed_stdout destroyclosed destroy

@@ -65,8 +65,10 @@ type verification =
   | Drifted of Sol_cli_migration.drift list
   | Unavailable of string
 
-let read_status ~ctx ~workspace ~dir ~table ~services ~ddl_creds_name ?ca_configmap () =
-  let* namespace = Sol_cli_migration_job.job_namespace ~workspace ~services in
+let read_status ~ctx ~dir ~table ~database ~ddl_creds_name ?ca_configmap () =
+  (* The migration namespace comes from the database identity -- the target and its resource --
+     never from a service list (#1424). *)
+  let namespace = Sol_cli_database_setup_render.database_namespace database in
   let* () =
     Sol_cli_substrate.ensure
       ~ctx
@@ -135,20 +137,18 @@ let read_status ~ctx ~workspace ~dir ~table ~services ~ddl_creds_name ?ca_config
   result
 ;;
 
-let read_applied ~ctx ~workspace ~dir ~table ~services ~ddl_creds_name ?ca_configmap () =
-  read_status ~ctx ~workspace ~dir ~table ~services ~ddl_creds_name ?ca_configmap ()
+let read_applied ~ctx ~dir ~table ~database ~ddl_creds_name ?ca_configmap () =
+  read_status ~ctx ~dir ~table ~database ~ddl_creds_name ?ca_configmap ()
   |> Result.map (fun (status : Sol_cli_migration.applied_status) -> status.applied)
 ;;
 
-let verify ~ctx ~workspace ~dir ~services ~ddl_creds_name ?ca_configmap () =
+let verify ~ctx ~workspace ~dir ~database ~ddl_creds_name ?ca_configmap () =
   match Sol_cli_migration.required_if_present ~dir with
   | Error e -> Unavailable e
   | Ok [] -> No_migrations
   | Ok required ->
     let table = Sol_cli_migration.table_name ~workspace in
-    (match
-       read_status ~ctx ~workspace ~dir ~table ~services ~ddl_creds_name ?ca_configmap ()
-     with
+    (match read_status ~ctx ~dir ~table ~database ~ddl_creds_name ?ca_configmap () with
      | Error e -> Unavailable e
      | Ok status ->
        (match status.drifted with

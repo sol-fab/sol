@@ -717,6 +717,36 @@ let run_database_setup_step
         "could not resolve resource ownership for the database setup step: %s"
         message)
   in
+  (* The database identity: this target and the resource it acts on. **Not** the selected
+     services. Every step that touches the database resolves its namespace from this, so which
+     units a deploy selects cannot move where the credentials are written or read (#1424). *)
+  let resource =
+    match Sol_cli_resource_binding.of_type bindings ~typ:"postgres" with
+    | (binding : Sol_cli_resource_binding.t) :: _ -> binding.resource
+    | [] -> "none"
+  in
+  let database =
+    Sol_cli_database_setup_render.database_identity
+      ~workspace:planning.workspace
+      ~target
+      ~resource
+  in
+  let migration_namespace = Sol_cli_database_setup_render.database_namespace database in
+  (* The namespace database operations run in is the target's, so it is not one of the
+     namespaces a workload apply creates. Establish it, with its scoped RBAC, before anything is
+     written into it: the deploy identity needs a binding there to write the authority Secret. *)
+  let* () =
+    Sol_cli_substrate.ensure
+      ~ctx
+      ~namespaces:[ migration_namespace ]
+      ~workloads:[]
+      ~manages_database:false
+  in
+  (* The deploy declares where it wrote, so a verifier reads the location instead of
+     reproducing the naming rule. Stable fields; see database_identity_report. *)
+  Sol_cli_report.app
+    "%s"
+    (Sol_cli_database_setup_render.database_identity_report database);
   match Sol_cli_resource_binding.provisioned_database bindings with
   | None ->
     (* No Sol-provisioned database: either the database is bound externally, in which case
@@ -730,11 +760,6 @@ let run_database_setup_step
     (match externally_bound with
      | [] -> Ok ()
      | [ binding ] ->
-       let* migration_namespace =
-         Sol_cli_migration_job.job_namespace
-           ~workspace:planning.workspace
-           ~services:planning.services
-       in
        let declared = Sol_cli_config.declared_of_config planning.config in
        let dml_namespaces =
          Sol_cli_database_setup_run.dml_namespaces
@@ -833,11 +858,6 @@ let run_database_setup_step
       Sol_cli_database_setup.setup_image ()
       |> Result.map_error (fun message ->
         "the database setup image could not be resolved: " ^ message)
-    in
-    let* migration_namespace =
-      Sol_cli_migration_job.job_namespace
-        ~workspace:planning.workspace
-        ~services:planning.services
     in
     (* The mode is the provider's, not a constant here: the contract is authenticated server
        identity and each provider establishes it its own way. *)
