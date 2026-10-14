@@ -248,7 +248,10 @@ is missing rather than applying a workload that cannot start.
 External authority keys are delivered by the External Secrets Operator. Sol
 renders a namespaced `ExternalSecret` into the bundle's prerequisites and applies
 the workload only after ESO reports it synced, verifying that the sync names the
-spec it applied (see the deployment guide). Platform Job inputs use the reserved
+spec it applied (see the deployment guide). For a target bound to an external
+database the same wait covers the class `ExternalSecret`s (`<target>-ddl-creds`,
+`<target>-dml-creds`) before the migration gate and the workloads that read them
+run. Platform Job inputs use the reserved
 `@platform/<KEY>` address and write only `sol-secrets`. Do not commit manifest
 files that contain real secret values.
 

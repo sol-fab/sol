@@ -14,11 +14,16 @@ val apply_unit_values
   -> (string * string) list
   -> (bool, string) result
 
+(** [hint] overrides the guidance appended when the Secret is missing keys, so a caller whose
+    Secret is written by something other than the operator does not tell the reader to write
+    it by hand. *)
 val verify_required_keys
-  :  ctx:Sol_cli_kube_destination.context
+  :  ?hint:string
+  -> ctx:Sol_cli_kube_destination.context
   -> namespace:string
   -> secret_name:string
   -> required_keys:string list
+  -> unit
   -> (unit, string) result
 
 val verify_workload_secret
@@ -31,6 +36,21 @@ val verify_external_secret_ready
   -> ?poll_s:float
   -> ctx:Sol_cli_kube_destination.context
   -> Sol_cli_deployment_plan.service_spec
+  -> (unit, string) result
+
+(** Wait for an ExternalSecret to report Ready/SecretSynced, then check the Secret it wrote
+    holds [required_keys]. [external_name] names both the ExternalSecret and the Secret it
+    targets — this is the class-Secret shape, where the target is named for the target rather
+    than a unit. [hint] overrides the key-check guidance. *)
+val verify_external_secret_materialized
+  :  ?timeout_s:float
+  -> ?poll_s:float
+  -> ?hint:string
+  -> ctx:Sol_cli_kube_destination.context
+  -> namespace:string
+  -> external_name:string
+  -> required_keys:string list
+  -> unit
   -> (unit, string) result
 
 val external_secret_status
