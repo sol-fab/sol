@@ -843,6 +843,74 @@ let external_secret_status ~ctx ~namespace ~unit_name ~expected_keys =
                ^ ")")))
 ;;
 
+(** The declared ExternalSecret's uid, or [None] when it does not exist yet. It is the value
+    the Secret ESO writes must carry in its [ownerReferences] — see
+    {!verify_external_secret_output}. *)
+let external_secret_uid ~ctx ~namespace ~external_secret_name =
+  let* existing =
+    get_named_object_json
+      ~ctx
+      ~resource:"externalsecret"
+      ~namespace
+      ~name:external_secret_name
+  in
+  match existing with
+  | None -> Ok None
+  | Some json ->
+    let root = json_object json in
+    let metadata =
+      json_object (Option.value (List.assoc_opt "metadata" root) ~default:`Null)
+    in
+    Ok (json_string "uid" metadata)
+;;
+
+(** **The ESO output's ownership**: for a declared ExternalSecret, the Secret it writes must
+    be absent or owned by *it* — its [ownerReferences] name [external_uid].
+
+    This is not {!assert_destination_is_sol}'s question. That predicate asks "is this object
+    *Sol's* to overwrite?" (the `app.kubernetes.io/managed-by` label) and guards the objects
+    **Sol writes**: the ExternalSecret object itself, the class Secrets Sol's setup Job
+    writes, platform and runtime Secrets. ESO writes the Secret here, and ESO's output
+    carries no Sol label, so the label rule cannot answer for it — it would refuse a
+    legitimate re-deploy. [external_uid] is [None] when no ExternalSecret is declared yet,
+    and a pre-existing Secret is then refused: nothing declares it.
+
+    Both paths that declare an ExternalSecret — a unit's own and a target's database class —
+    go through here, so "who owns this ESO output" is answered once. *)
+let verify_external_secret_output ~ctx ~namespace ~external_uid ~secret_name =
+  let* materialized = get_named_secret_json ~ctx ~name:secret_name namespace in
+  match materialized with
+  | None -> Ok ()
+  | Some json ->
+    let root = json_object json in
+    let metadata =
+      json_object (Option.value (List.assoc_opt "metadata" root) ~default:`Null)
+    in
+    let owner_refs =
+      match List.assoc_opt "ownerReferences" metadata with
+      | Some (`List rows) -> rows
+      | _ -> []
+    in
+    let owned_by_external_secret =
+      Option.fold
+        ~none:false
+        ~some:(fun uid ->
+          List.exists
+            (fun row -> json_string "uid" (json_object row) = Some uid)
+            owner_refs)
+        external_uid
+    in
+    if owned_by_external_secret
+    then Ok ()
+    else
+      Error
+        (Printf.sprintf
+           "refusing to use existing Secret %s/%s as ESO output: its owner is not the \
+            declared ExternalSecret"
+           namespace
+           secret_name)
+;;
+
 let verify_external_secret_destination ~ctx (spec : Sol_cli_deployment_plan.service_spec) =
   let external_keys =
     spec.secret_sources
@@ -912,37 +980,7 @@ let verify_external_secret_destination ~ctx (spec : Sol_cli_deployment_plan.serv
              es_name
              target_name)
     in
-    let* materialized = get_named_secret_json ~ctx ~name:target_name namespace in
-    (match materialized with
-     | None -> Ok ()
-     | Some json ->
-       let root = json_object json in
-       let metadata =
-         json_object (Option.value (List.assoc_opt "metadata" root) ~default:`Null)
-       in
-       let owner_refs =
-         match List.assoc_opt "ownerReferences" metadata with
-         | Some (`List rows) -> rows
-         | _ -> []
-       in
-       let owned_by_external_secret =
-         Option.fold
-           ~none:false
-           ~some:(fun uid ->
-             List.exists
-               (fun row -> json_string "uid" (json_object row) = Some uid)
-               owner_refs)
-           external_uid
-       in
-       if owned_by_external_secret
-       then Ok ()
-       else
-         Error
-           (Printf.sprintf
-              "refusing to use existing Secret %s/%s as ESO output: its owner is not the \
-               declared ExternalSecret"
-              namespace
-              target_name))
+    verify_external_secret_output ~ctx ~namespace ~external_uid ~secret_name:target_name
 ;;
 
 let verify_runtime_secret_keys ~ctx ~namespace ~required_keys =

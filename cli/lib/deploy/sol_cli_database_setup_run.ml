@@ -633,18 +633,29 @@ let run_external_credentials
       (delivery : Sol_cli_deployment_plan.resource_delivery)
   =
   let* docs = external_credential_docs delivery in
-  (* The ExternalSecret object is checked the same way the Secret projections are: absent or
-     Sol's. It is a delivered object like any other, and a target must not quietly take over
-     one another target's consumers still read. *)
   let module Render = Sol_cli_database_setup_render in
   let target = delivery.target in
-  (* Each class's ExternalSecret in the namespace that class is read from. *)
+  (* Each class's ExternalSecret in the namespace that class is read from. Two checks, one per
+     writer: the ExternalSecret object is Sol's or absent (the label rule — Sol writes it),
+     and the Secret ESO writes into is absent or owned by *that* ExternalSecret (the
+     ownerReference rule — ESO writes it, and its output carries no Sol label). *)
   let guard ~namespace ~credential_class =
-    Sol_cli_secret.assert_destination_is_sol
+    let name = Render.creds_name ~credential_class target in
+    let* () =
+      Sol_cli_secret.assert_destination_is_sol
+        ~ctx
+        ~resource:"externalsecret"
+        ~namespace
+        ~name
+    in
+    let* external_uid =
+      Sol_cli_secret.external_secret_uid ~ctx ~namespace ~external_secret_name:name
+    in
+    Sol_cli_secret.verify_external_secret_output
       ~ctx
-      ~resource:"externalsecret"
       ~namespace
-      ~name:(Render.creds_name ~credential_class target)
+      ~external_uid
+      ~secret_name:name
   in
   let* () =
     guard ~namespace:delivery.migration_namespace ~credential_class:Render.ddl_class
