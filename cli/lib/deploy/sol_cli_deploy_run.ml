@@ -120,6 +120,10 @@ let migration_prerequisite ctx ~plan ~live =
       in
       let target = database.Sol_cli_database_setup_render.target in
       let namespace = Sol_cli_database_setup_render.database_namespace database in
+      (* A different question from the identity's ("which resource is the target's database"):
+         this asks whether Sol provisions it, and only the CA mount depends on the answer. It
+         resolves the config again rather than adding a second public shape for the identity,
+         which is the duplication #1424 removed. `resolve` is pure. *)
       let provisions_database =
         match Sol_cli_resource_binding.resolve ctx.resolved_config with
         | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"

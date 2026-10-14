@@ -195,7 +195,11 @@ let test_database_identity_report_is_the_interface () =
 (* **A local rollback reads where its credential is.** Local has no target, and `sol-secrets` is
    written per workload namespace, so this path stays inventory-derived on purpose: a
    target-derived `sol-db-<workspace>-local` would be a namespace the local deploy never
-   populates and the read would fail on a missing credential (#1424). *)
+   populates and the read would fail on a missing credential (#1424).
+
+   A workspace with no service has **no** namespace holding the credential, so this keeps the
+   original, explicit failure rather than naming a namespace that would report a missing Secret
+   instead -- and it propagates the namespace-name error rather than swallowing it. *)
 let test_local_namespace_is_a_workload_namespace () =
   let services =
     [ service "payments" "orders_svc"
@@ -204,18 +208,27 @@ let test_local_namespace_is_a_workload_namespace () =
     ]
   in
   Windtrap.equal
-    Windtrap.string
+    (Windtrap.result Windtrap.string Windtrap.string)
     ~msg:"the first service by domain, then name"
-    "pluto-checkout"
+    (Ok "pluto-checkout")
     (Sol_cli_migration_job.local_namespace ~workspace:"pluto" ~services);
   Windtrap.equal
     Windtrap.bool
     ~msg:
       "and it is one of the workspace's workload namespaces, never a target-derived one"
     true
-    (List.mem
-       (Sol_cli_migration_job.local_namespace ~workspace:"pluto" ~services)
-       [ "pluto-payments"; "pluto-comms"; "pluto-checkout" ])
+    (match Sol_cli_migration_job.local_namespace ~workspace:"pluto" ~services with
+     | Ok ns -> List.mem ns [ "pluto-payments"; "pluto-comms"; "pluto-checkout" ]
+     | Error _ -> false);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:
+      "a workspace with no service fails, naming why, rather than pointing at a namespace"
+    true
+    (match Sol_cli_migration_job.local_namespace ~workspace:"pluto" ~services:[] with
+     | Ok _ -> false
+     | Error message ->
+       Sol_cli_string.contains ~needle:"no deployed service found" message)
 ;;
 
 (* **A reader splits the report on whitespace**, so no value may contain a space or an `=`. A
@@ -238,24 +251,15 @@ let test_the_report_is_parseable_for_a_hostile_resource () =
     (List.length tokens);
   Windtrap.equal
     Windtrap.bool
-    ~msg:"and no token is a bare value fragment: every field token carries exactly one ="
+    ~msg:"and each field token has one =, not at its start"
     true
     (List.for_all
        (fun token ->
           token = Sol_cli_database_setup_render.database_identity_sentinel
-          || (String.length token > 0
-              && String.index_opt token '=' <> None
-              && String.index_opt token '='
-                 = Some
-                     (String.length token
-                      - 1
-                      - String.length
-                          (String.sub
-                             token
-                             (Option.get (String.index_opt token '=') + 1)
-                             (String.length token
-                              - Option.get (String.index_opt token '=')
-                              - 1)))))
+          ||
+          match String.index_opt token '=', String.rindex_opt token '=' with
+          | Some i, Some j -> i = j && i > 0
+          | _ -> false)
        tokens)
 ;;
 

@@ -31,24 +31,31 @@ let services_of_target ~(all : Sol_cli_manifest.service list) ~(active : string 
 (** The namespace a **local** migration read runs in.
 
     Local has no target and no class Secrets: the workspace runtime Secret (`sol-secrets`) is
-    written by the local deploy into every workload namespace and mounted per namespace, so any
-    of the workspace's namespaces can read migration state. This picks one by a rule the local
-    flows agree on.
+    written by the local deploy into the workload namespaces and mounted per namespace, so a
+    workload namespace can read migration state. This picks one by a rule the local flows agree
+    on.
 
     It is inventory-derived **on purpose** -- there is no target identity to derive from
     locally -- and that is safe because the local deploy is unscoped, so every candidate
     namespace holds the credential. A target never uses this: its namespace comes from the
-    database identity (#1424). *)
-let local_namespace ~workspace ~(services : Sol_cli_manifest.service list) =
+    database identity (#1424).
+
+    A workspace with no service has no namespace holding the credential, so this fails with that
+    reason rather than naming a namespace that would report a missing Secret instead. The
+    namespace-name error is propagated, not swallowed. *)
+let local_namespace ~workspace ~(services : Sol_cli_manifest.service list)
+  : (string, string) result
+  =
   let by_domain_and_name (a : Sol_cli_manifest.service) (b : Sol_cli_manifest.service) =
     compare (a.domain, a.name) (b.domain, b.name)
   in
   match List.sort by_domain_and_name services with
+  | [] ->
+    Error
+      "no deployed service found in this workspace -- nothing to run the migration Job \
+       in. Deploy at least one service first."
   | (first : Sol_cli_manifest.service) :: _ ->
-    (match Sol_cli_deployment_plan.namespace_result ~workspace ~domain:first.domain with
-     | Ok ns -> Sol_cli_deployment_plan.namespace_to_string ns
-     | Error _ -> workspace)
-  | [] -> workspace
+    Sol_cli_deployment_plan.namespace_name ~workspace ~domain:first.domain
 ;;
 
 let runner_image () =

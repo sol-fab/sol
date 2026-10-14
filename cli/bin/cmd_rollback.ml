@@ -90,49 +90,39 @@ let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
      target's `<target>-ddl-creds` class Secret and mounts `<target>-db-ca` when Sol
      provisions that database. A local rollback has no target binding and keeps the
      workspace runtime Secret path. *)
-  (* The migration Job runs where this workspace's credential is.
-     - Against a target: the target-derived database namespace, resolved from the *resolved
-       config* so the namespace and the class Secret names come from one target string (#1424).
-     - Locally: there is no target, and the local deploy writes the workspace runtime Secret
-       (`sol-secrets`) into the **release's** namespace (cmd_local_deploy). A target-derived
-       namespace here would be one the local deploy never populates, and the read would fail on a
-       missing credential -- so this path keeps the namespace it was always able to read. *)
-  let namespace =
+  (* Which namespace the migration read runs in, and -- against a target -- the target whose
+     class Secret names it reads. **One** `identity_of_config` call supplies both, so the
+     namespace and the Secret names cannot disagree (#1424). A local rollback has no target;
+     {!Sol_cli_migration_job.local_namespace} explains why its namespace stays inventory-derived. *)
+  let* namespace, target, provisions =
     match config with
     | Some config ->
-      Sol_cli_database_setup_render.database_namespace
-        (Sol_cli_database_setup_run.identity_of_config ~workspace config)
-    | None ->
-      (* A local workspace has no target and no class Secrets: `sol-secrets` is written by the
-         local deploy **into every workload namespace**, and the manifest mounts it per
-         namespace. So any of the workspace's namespaces can read the migration state, and this
-         picks one the local flows agree on. It is deliberately inventory-derived -- local has no
-         target identity to derive from -- and safe precisely because the local deploy is
-         unscoped, so every candidate namespace holds the credential. No target ever takes this
-         path (#1424). *)
-      Sol_cli_migration_job.local_namespace
-        ~workspace
-        ~services:(Sol_cli_workspace_model.services facts)
-  in
-  let database =
-    match config with
-    | Some config -> Sol_cli_database_setup_run.identity_of_config ~workspace config
-    | None ->
-      Sol_cli_database_setup_render.database_identity
-        ~workspace
-        ~target:namespace
-        ~resource:"none"
-  in
-  let ddl_creds_name, ca_configmap =
-    match config with
-    | None -> Sol_cli_manifest.runtime_secret_name, None
-    | Some config ->
-      let target = database.Sol_cli_database_setup_render.target in
+      let database = Sol_cli_database_setup_run.identity_of_config ~workspace config in
+      (* A different question from the identity's ("which resource is the target's database"):
+         this asks whether Sol provisions it, and only the CA mount depends on the answer. It
+         resolves the config again rather than adding a second public shape for the identity,
+         which is the duplication #1424 removed. `resolve` is pure. *)
       let provisions =
         match Sol_cli_resource_binding.resolve config with
         | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
         | Error _ -> false
       in
+      Ok
+        ( Sol_cli_database_setup_render.database_namespace database
+        , Some database.Sol_cli_database_setup_render.target
+        , provisions )
+    | None ->
+      let* namespace =
+        Sol_cli_migration_job.local_namespace
+          ~workspace
+          ~services:(Sol_cli_workspace_model.services facts)
+      in
+      Ok (namespace, None, false)
+  in
+  let ddl_creds_name, ca_configmap =
+    match target with
+    | None -> Sol_cli_manifest.runtime_secret_name, None
+    | Some target ->
       ( Sol_cli_database_setup_render.ddl_creds_name target
       , if provisions
         then Some (Sol_cli_database_setup_render.ca_configmap_name target)

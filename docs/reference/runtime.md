@@ -133,6 +133,8 @@ the credentials are instead of reproducing the naming rule:
 sol-database-identity: target=<target> resource=<resource> namespace=<namespace> ddl-creds=<name> authority=<name> ca-configmap=<name>
 ```
 
+`<resource>` is the **name-safe** form of the resource, not the config's spelling (`app_db` → `app-db`), because the identity's fields name Kubernetes objects and a reader splits this line on whitespace.
+
 The **sentinel and the whole field set are the interface**: `target`, `resource`, `namespace`,
 `ddl-creds`, `authority`, `ca-configmap`. A change to any of them — including the sentinel — is a
 change to this contract, and the product test `database identity report is the interface the rows
