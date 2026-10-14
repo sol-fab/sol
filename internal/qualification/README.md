@@ -23,9 +23,22 @@ success. A skipped capability is named as skipped; it is not silently promoted.
 1. Qualify the released artifact a user installs, not a checkout build. `sol-under-test.sh`
    resolves and records the release identity, including the revision the bundle was built from,
    and the run builds the application under test from that revision: `candidate-binding.sh`
-   refuses a workspace at another revision, a tree with modified tracked files, or a framework
-   pin still on a moving ref, before anything is built. A stale checkout must not be able to
+   refuses a workspace that is neither the candidate revision nor a descendant of it, a tree with
+   modified tracked files, or a framework pin still on a moving ref, before anything is built. A stale checkout must not be able to
    substitute another revision's application while the run reports evidence for the candidate.
+
+   The **harness** may run from the candidate revision or any descendant of it, and its own
+   revision is recorded with the binding. A harness fix merged after the tag must be usable on
+   that tag's window, or every fix would force a new candidate and the harness would never
+   converge. What may not move is the application: it is materialized from the candidate
+   revision, never from the working tree, so no working-tree state substitutes another
+   revision's code. The tree must still be clean, so the harness that produced the evidence is
+   a revision rather than a state.
+
+   **Two providers' verdicts on one candidate are the same apparatus only if both records name
+   the same harness revision.** If the AWS row ran on `harness@X` and the GCP row on
+   `harness@Y`, "one tag, two providers" has not been met: bring the second run to the same
+   revision, or cut a candidate that contains it.
 2. Name the candidate, not just the prefix. `SOL_CANDIDATE` is the draft's `candidate.json`, and
    `sol-under-test.sh` verifies the installed release is that candidate — version, revision and
    pinned runner image — before anything is provisioned. An install prefix alone cannot say which

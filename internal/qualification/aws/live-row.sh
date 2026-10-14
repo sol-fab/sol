@@ -558,7 +558,30 @@ phase_transport() {
   say "  recorded before and after, and none of them holds pods/portforward"
 }
 
+# The credential path **Terraform** will use, refreshed now.
+#
+# `aws sts get-caller-identity` is not this check: it answers from cached role credentials and
+# keeps succeeding long after the SSO session that mints them has expired. That is the shape that
+# left a substrate live twice -- terraform could not refresh the SSO token, the destroy died at
+# `terraform init` with `No valid credential sources found`, and the only signal was an inventory
+# somebody had to read (sol-fab/sol#1443).
+#
+# `aws configure export-credentials` resolves credentials through the profile's own path, so it
+# fails exactly when the plan/apply/destroy would, *before* anything is created or destroyed.
+require_credentials() {
+  local detail
+  if detail="$(aws configure export-credentials --profile "$AWS_PROFILE" --format env 2>&1 >/dev/null)"; then
+    return 0
+  fi
+  say "the AWS credentials for profile '$AWS_PROFILE' cannot be refreshed:"
+  printf '%s\n' "$detail" | sed 's/^/  /' >&2
+  say "terraform uses the same credential path, so no plan, apply or destroy can run; nothing was attempted."
+  say "Re-authenticate (for an SSO profile: aws sso login --profile $AWS_PROFILE), then re-run."
+  return 1
+}
+
 phase_cloud() {
+  require_credentials || return 1
   require_target_terraform_var_file || return 1
   # A fixed repository name is not made fresh by a fresh target name, so record it on the way in.
   ecr_record_sol_repositories before
@@ -620,7 +643,7 @@ app_publish_images() {
     say "refusing to build the application: it cannot be bound to candidate $SOL_REVISION"
     return 1
   fi
-  sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$context" "$pins"
+  sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$context" "$pins" "$(git -C "$WORKSPACE" rev-parse HEAD)"
   say "app images build from candidate $SOL_REVISION ($WORKSPACE at that revision, framework pinned to it)"
   run ecr-login bash -c \
     "aws ecr get-login-password --region '$AWS_REGION' | docker login --username AWS --password-stdin '$ECR_REGISTRY'" || return 1
@@ -958,6 +981,9 @@ phase_app() {
 }
 
 phase_destroy() {
+  # Checked *before* TEARDOWN_ATTEMPTED: a destroy that cannot start must not record that a
+  # teardown was attempted, or an inventory that was never taken reads as a failed teardown.
+  require_credentials || return 1
   TEARDOWN_ATTEMPTED=1
   capture_state
   local destroy_rc=0 verdict_rc=0

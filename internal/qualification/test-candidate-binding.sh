@@ -95,6 +95,26 @@ has "and the refusal names both revisions" "$CANDIDATE" "$TMP/behind.err"
 has "and the candidate revision" "$LATER" "$TMP/behind.err"
 is "and no build context is left behind" \
   "$([ -e "$context4" ] && echo present || echo absent)" "absent"
+
+printf '\nthe harness may run from a descendant of the candidate, and the application still comes from the candidate\n'
+$GIT -C "$workspace" checkout -q "$LATER"
+context7="$TMP/context7"
+if pins7="$(sol_candidate_bind_context "$workspace" "$CANDIDATE" "$context7" 2>"$TMP/ahead.err")"; then
+  ok "a harness ahead of the candidate binds the candidate"
+else
+  no "a harness ahead of the candidate binds the candidate" "exit 0" "$(cat "$TMP/ahead.err")"
+fi
+is "the context carries the candidate revision's application code, not the harness's" \
+  "$(cat "$context7/sol.yml")" "project: scratch"
+is "and the framework is pinned to the candidate, not to the harness revision" \
+  "$(printf '%s\n' "$pins7" | sort -u)" "github.com/sol-fab/sol.git#$CANDIDATE"
+
+printf '\nthe binding names the harness revision, so two providers can be compared\n'
+sol_candidate_record_binding "$TMP/binding" "$CANDIDATE" "$workspace" "$context7" "$pins7" "$($GIT -C "$workspace" rev-parse HEAD)"
+is "the record names the candidate revision" \
+  "$(sed -n 's/^candidate_revision: //p' "$TMP/binding/candidate-binding.txt")" "$CANDIDATE"
+is "the record names the harness revision it actually ran from" \
+  "$(sed -n 's/^harness_revision: //p' "$TMP/binding/candidate-binding.txt")" "$LATER"
 if sol_candidate_bind_context "$workspace" "not-a-revision" "$TMP/context5" 2>"$TMP/badrev.err"; then
   no "a release that names no revision is refused" "non-zero" "0"
 else

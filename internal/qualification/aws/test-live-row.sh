@@ -232,6 +232,10 @@ class_read() {
     *) return 1 ;;
   esac
 }
+if [ "${STUB_CREDENTIALS_STALE:-0}" = "1" ] && [ "$1 $2" = "configure export-credentials" ]; then
+  printf 'failed to refresh cached credentials, refresh cached SSO token failed, unable to refresh SSO token, operation error SSO OIDC: CreateToken, https response error StatusCode: 400, InvalidGrantException\n' >&2
+  exit 255
+fi
 if [ "${STUB_INVENTORY_UNREADABLE:-0}" = "1" ] && class_read "$1" "$2"; then
   printf 'Unable to locate credentials\n' >&2
   exit 255
@@ -1078,16 +1082,46 @@ lacks "and no unselected image is built" "charge-svc" "$TMP/alphaunits.docker"
 has "and every selected unit is pinned by digest" \
   "image-ref orders_svc=$ECR/sol-runs/aws-self-test/orders-svc@sha256:" "$TMP/alphaunits.sol"
 
-printf '\nscenario: a checkout at another revision cannot qualify as the candidate\n'
+printf '\nscenario: a checkout that does not contain the candidate cannot qualify as the candidate\n'
+# A divergent tree: the candidate is not in this history at all, so no amount of harness movement
+# brings it forward from the candidate.
+git -C "$WORKSPACE" checkout -q --orphan divergent
 git -c user.name=qualification -c user.email=qualification@example.invalid \
-  -C "$WORKSPACE" commit -q --allow-empty -m "a revision cut after the candidate"
-run_row driftrev TRANSPORT=0 APP_UNITS="orders_svc"
-refused driftrev "the run refuses a workspace that is not the candidate revision"
-lacks "and builds nothing" "docker build" "$TMP/driftrev.docker"
-lacks "and records no candidate binding" "candidate_revision" "$TMP/driftrev.logs/candidate-binding.txt"
+  -C "$WORKSPACE" commit -q -m "a tree that does not contain the candidate"
+run_row divergentrev TRANSPORT=0 APP_UNITS="orders_svc"
+refused divergentrev "the run refuses a checkout that does not contain the candidate"
+lacks "and builds nothing" "docker build" "$TMP/divergentrev.docker"
+lacks "and records no candidate binding" "candidate_revision" "$TMP/divergentrev.logs/candidate-binding.txt"
 has "and the refusal names the candidate it could not bind to" \
-  "$CANDIDATE_REVISION" "$TMP/driftrev.out"
+  "$CANDIDATE_REVISION" "$TMP/divergentrev.out"
+git -C "$WORKSPACE" checkout -q "$CANDIDATE_REVISION"
+git -C "$WORKSPACE" branch -q -D divergent
+
+printf '\nscenario: a harness ahead of the candidate binds the candidate, and the application comes from the candidate\n'
+git -c user.name=qualification -c user.email=qualification@example.invalid \
+  -C "$WORKSPACE" commit -q --allow-empty -m "a harness fix cut after the candidate"
+HARNESS_AHEAD="$(git -C "$WORKSPACE" rev-parse HEAD)"
+run_row aheadoftag TRANSPORT=0 APP_UNITS="orders_svc"
+is "the run exits 0" "$(cat "$TMP/aheadoftag.rc")" "0"
+has "the build context is the candidate revision's, not the harness's" \
+  "docker build -f $TMP/aheadoftag.logs/app-build-context/app/payments/orders_svc/Dockerfile" \
+  "$TMP/aheadoftag.docker"
+has "the binding names the candidate revision" \
+  "candidate_revision: $CANDIDATE_REVISION" "$TMP/aheadoftag.logs/candidate-binding.txt"
+has "and the harness revision it actually ran from" \
+  "harness_revision: $HARNESS_AHEAD" "$TMP/aheadoftag.logs/candidate-binding.txt"
 git -C "$WORKSPACE" reset -q --hard "$CANDIDATE_REVISION"
+
+printf '\nscenario: a destroy refuses before touching anything when the credentials cannot be refreshed\n'
+# The cheap check answers from cached role credentials and keeps succeeding; the destroy then dies
+# at terraform init and leaves the substrate live (#1443).
+run_phase stalec destroy STUB_CREDENTIALS_STALE=1
+refused stalec "the destroy refuses when its credentials cannot be refreshed"
+has "and the refusal names the re-authentication to run" \
+  "aws sso login --profile" "$TMP/stalec.out"
+lacks "and no Sol command is attempted" "destroy qualreg/aws/us-east-1 --apply" "$TMP/stalec.sol"
+lacks "so no inventory is taken, and no teardown is recorded as attempted" \
+  "teardown" "$TMP/stalec.logs/harness.log"
 
 printf '\nscenario: the destroy phase survives a closed stdout reader and records the inventory\n'
 run_phase_closed_stdout destroyclosed destroy
