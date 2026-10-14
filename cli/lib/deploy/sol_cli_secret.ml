@@ -505,7 +505,10 @@ let delete_unit_key ~ctx ~namespace ~secret_name ~key =
           (Sol_cli_process.error_to_string error)))
 ;;
 
-let verify_required_keys ~ctx ~namespace ~secret_name ~required_keys =
+(** The keys a delivered Secret must hold. [hint] overrides the guidance appended to the
+    failure, so a caller whose Secret is written by something other than the operator does
+    not tell the reader to write it by hand. *)
+let verify_required_keys ?hint ~ctx ~namespace ~secret_name ~required_keys () =
   let* json = get_named_secret_json ~ctx ~name:secret_name namespace in
   let data = existing_data json in
   let missing =
@@ -518,16 +521,22 @@ let verify_required_keys ~ctx ~namespace ~secret_name ~required_keys =
   match missing with
   | [] -> Ok ()
   | _ ->
+    let hint =
+      Option.value
+        hint
+        ~default:
+          "Sol's ordinary deploy and rollback deliver secret references only and never \
+           write values; set application values with `sol secret set <TARGET> \
+           <DOMAIN/UNIT/KEY>` or platform Job inputs with `sol secret set <TARGET> \
+           @platform/<KEY>`, then try again."
+    in
     Error
       (Printf.sprintf
-         "%s/%s does not hold the required non-empty secret key(s): %s. Sol's ordinary \
-          deploy and rollback deliver secret references only and never write values; set \
-          application values with `sol secret set <TARGET> <DOMAIN/UNIT/KEY>` or \
-          platform Job inputs with `sol secret set <TARGET> @platform/<KEY>`, then try \
-          again."
+         "%s/%s does not hold the required non-empty secret key(s): %s. %s"
          namespace
          secret_name
-         (String.concat ", " missing))
+         (String.concat ", " missing)
+         hint)
 ;;
 
 let verify_workload_secret ~ctx (spec : Sol_cli_deployment_plan.service_spec) =
@@ -560,6 +569,7 @@ let verify_workload_secret ~ctx (spec : Sol_cli_deployment_plan.service_spec) =
     ~namespace:(Sol_cli_deployment_plan.namespace_to_string spec.namespace)
     ~secret_name:unit_secret_name
     ~required_keys:required
+    ()
 ;;
 
 let json_object = function
@@ -762,6 +772,28 @@ let verify_external_secret_ready
            (String.concat ", " expected))
 ;;
 
+(** Wait for an ExternalSecret to report Ready/SecretSynced, then check the Secret it wrote
+    holds the keys the reader needs. This is {!verify_external_secret_ready}'s two checks for
+    a delivered object named for the target rather than a unit (the class Secrets): the
+    ExternalSecret and the Secret it targets share [external_name]. [hint] overrides the
+    key-check guidance so a class Secret is not reported with `sol secret set`'s instruction
+    — ESO, not the operator, is its writer. *)
+let verify_external_secret_materialized
+      ?(timeout_s = eso_sync_timeout_s)
+      ?(poll_s = eso_sync_poll_s)
+      ?hint
+      ~ctx
+      ~namespace
+      ~external_name
+      ~required_keys
+      ()
+  =
+  let* () =
+    wait_for_external_secret_sync ~timeout_s ~poll_s ~ctx ~namespace ~external_name
+  in
+  verify_required_keys ?hint ~ctx ~namespace ~secret_name:external_name ~required_keys ()
+;;
+
 let external_secret_status ~ctx ~namespace ~unit_name ~expected_keys =
   let external_keys = List.sort_uniq String.compare expected_keys in
   match external_keys with
@@ -919,6 +951,7 @@ let verify_runtime_secret_keys ~ctx ~namespace ~required_keys =
     ~namespace
     ~secret_name:Sol_cli_manifest.runtime_secret_name
     ~required_keys
+    ()
 ;;
 
 let unit_secret_keys ~ctx ~namespace ~secret_name =

@@ -585,7 +585,53 @@ let external_credential_docs (delivery : Sol_cli_deployment_plan.resource_delive
   |> Result.map List.concat
 ;;
 
-let run_external_credentials ~ctx (delivery : Sol_cli_deployment_plan.resource_delivery) =
+(** The class Secrets are the readers' inputs, so the external delivery is not complete until
+    ESO has actually synced them: the migration path envFroms `<target>-ddl-creds` and a
+    consumer reads `<target>-dml-creds`, and both start as soon as the ExternalSecrets are
+    applied. Waiting here — where the ExternalSecrets are applied, before the migration gate
+    and the workloads — is the same wait {!Sol_cli_executor.apply_workload_phased} gives a
+    unit's own ExternalSecret, and the one place that covers both classes. *)
+let verify_class_secrets
+      ?eso_timeout_s
+      ~ctx
+      (delivery : Sol_cli_deployment_plan.resource_delivery)
+  =
+  let module Render = Sol_cli_database_setup_render in
+  let namespaces_for_class credential_class =
+    if String.equal credential_class Render.ddl_class
+    then [ delivery.migration_namespace ]
+    else delivery.dml_namespaces
+  in
+  Render.postgres_classes
+  |> Sol_cli_result.map_list (fun credential_class ->
+    let name = Render.creds_name ~credential_class delivery.target in
+    namespaces_for_class credential_class
+    |> List.sort_uniq String.compare
+    |> Sol_cli_result.map_list (fun namespace ->
+      Sol_cli_secret.verify_external_secret_materialized
+        ?timeout_s:eso_timeout_s
+        ~ctx
+        ~namespace
+        ~external_name:name
+        ~required_keys:[ Render.postgres_url_key ]
+        ~hint:
+          (Printf.sprintf
+             "ExternalSecret %s/%s has not materialized this key yet: the External \
+              Secrets Operator writes this Secret from the target's external database \
+              binding. Check the ExternalSecret's status (Ready/SecretSynced) and the \
+              store it reads."
+             namespace
+             name)
+        ())
+    |> Result.map ignore)
+  |> Result.map ignore
+;;
+
+let run_external_credentials
+      ?eso_timeout_s
+      ~ctx
+      (delivery : Sol_cli_deployment_plan.resource_delivery)
+  =
   let* docs = external_credential_docs delivery in
   (* The ExternalSecret object is checked the same way the Secret projections are: absent or
      Sol's. It is a delivered object like any other, and a target must not quietly take over
@@ -611,10 +657,13 @@ let run_external_credentials ~ctx (delivery : Sol_cli_deployment_plan.resource_d
       (Ok ())
       delivery.dml_namespaces
   in
-  List.fold_left
-    (fun acc doc ->
-       let* () = acc in
-       apply_doc ~ctx ~what:"external database credential" doc)
-    (Ok ())
-    docs
+  let* () =
+    List.fold_left
+      (fun acc doc ->
+         let* () = acc in
+         apply_doc ~ctx ~what:"external database credential" doc)
+      (Ok ())
+      docs
+  in
+  verify_class_secrets ?eso_timeout_s ~ctx delivery
 ;;

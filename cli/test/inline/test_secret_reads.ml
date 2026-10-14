@@ -78,6 +78,14 @@ if [ "$verb" = "get" ]; then
         # one the freshness gate refuses first and the key check is unreachable.
         printf '{"metadata":{"generation":2},"status":{"refreshTime":"2026-10-10T12:00:00Z","syncedResourceVersion":"2-1","conditions":[{"type":"Ready","status":"%%s","reason":"%%s"}]}}\n' "$state" "$reason"
       fi
+      if [ "$mode" = "eso-class-ready" ] || [ "$mode" = "eso-class-missing-key" ]; then
+        printf '{"metadata":{"generation":2},"status":{"refreshTime":"2026-10-10T12:00:00Z","syncedResourceVersion":"2-abc","conditions":[{"type":"Ready","status":"True","reason":"SecretSynced"}]}}\n'
+        exit 0
+      fi
+      if [ "$mode" = "eso-class-not-synced" ]; then
+        printf '{"metadata":{"generation":2},"status":{"refreshTime":"2026-10-10T12:00:00Z","syncedResourceVersion":"2-abc","conditions":[{"type":"Ready","status":"False","reason":"SecretSyncedError"}]}}\n'
+        exit 0
+      fi
       exit 0 ;;
     externalsecrets)
       if [ "$mode" = "platform-collision" ] && [ "$namespace" = "notifications" ]; then
@@ -97,6 +105,14 @@ if [ "$verb" = "get" ]; then
       fi
       exit 0 ;;
     secret)
+      if [ "$mode" = "eso-class-ready" ]; then
+        echo '{"apiVersion":"v1","kind":"Secret","data":{"POSTGRES_URL":"cG9zdGdyZXM6Ly9kYg=="}}'
+        exit 0
+      fi
+      if [ "$mode" = "eso-class-missing-key" ]; then
+        echo '{"apiVersion":"v1","kind":"Secret","data":{"OTHER_KEY":"c2VjcmV0"}}'
+        exit 0
+      fi
       if [ "$mode" = "phased-eso-ready" ] || [ "$mode" = "phased-eso-not-synced" ]; then
         case "$resource_name" in
           *-external-secrets)
@@ -196,7 +212,8 @@ let verify ?(secret_name = "charge-svc-secrets") ?(required_keys = [ "EXISTING" 
       ~ctx
       ~namespace:"payments"
       ~secret_name
-      ~required_keys)
+      ~required_keys
+      ())
 ;;
 
 let test_verify_passes_when_required_keys_are_present () =
@@ -859,4 +876,86 @@ let test_rollback_renders_and_applies_the_external_secret_first () =
 
 let%test "rollback: the ExternalSecret is a prerequisite applied before the workload" =
   test_rollback_renders_and_applies_the_external_secret_first ()
+;;
+
+(* #1394: an externally bound database's class Secrets are the readers' inputs, so the
+   delivery is not complete until ESO has synced them — the migration gate's Job envFroms
+   `<target>-ddl-creds` and a consumer reads `<target>-dml-creds`, and both start as soon as
+   the ExternalSecrets are applied. The wait is the one a unit's own ExternalSecret gets, and
+   its failure names the class and the writer (ESO) rather than telling the operator to
+   `sol secret set` a Secret ESO owns. *)
+let class_delivery () : Sol_cli_deployment_plan.resource_delivery =
+  { target = "payments"
+  ; resource = "app-db"
+  ; store = "vault-production"
+  ; credentials =
+      [ Sol_cli_database_setup_render.ddl_class, "secret/production/app-db-migrator"
+      ; Sol_cli_database_setup_render.dml_class, "secret/production/app-db-app"
+      ]
+  ; migration_namespace = "myapp-payments"
+  ; dml_namespaces = [ "myapp-comms" ]
+  }
+;;
+
+let verify_class mode =
+  with_fake_kubectl ~mode (fun ~calls:_ ~manifests:_ ->
+    Sol_cli_database_setup_run.verify_class_secrets
+      ~eso_timeout_s:0.0
+      ~ctx
+      (class_delivery ()))
+;;
+
+let test_class_delivery_waits_for_sync () =
+  match verify_class "eso-class-not-synced" with
+  | Ok () -> Windtrap.fail "a not-synced class ExternalSecret was accepted"
+  | Error message ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the wait names the class ExternalSecret it waited on"
+      true
+      (Sol_cli_string.contains ~needle:"payments-ddl-creds" message);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"and reports it is not synced"
+      true
+      (Sol_cli_string.contains ~needle:"not SecretSynced" message)
+;;
+
+let test_class_delivery_passes_when_synced () =
+  match verify_class "eso-class-ready" with
+  | Ok () -> ()
+  | Error message -> Windtrap.fail ("a synced class delivery must pass: " ^ message)
+;;
+
+let test_class_delivery_missing_key_names_eso_not_secret_set () =
+  match verify_class "eso-class-missing-key" with
+  | Ok () -> Windtrap.fail "a class Secret without the key was accepted"
+  | Error message ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the failure names the class Secret"
+      true
+      (Sol_cli_string.contains ~needle:"payments-ddl-creds" message);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"and names ESO as the writer"
+      true
+      (Sol_cli_string.contains ~needle:"External Secrets Operator" message);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"and does not fall back to the operator-writing hint"
+      false
+      (Sol_cli_string.contains ~needle:"sol secret set" message)
+;;
+
+let%test "1394: the class delivery waits for ESO to sync it" =
+  test_class_delivery_waits_for_sync ()
+;;
+
+let%test "1394: a synced class delivery passes" =
+  test_class_delivery_passes_when_synced ()
+;;
+
+let%test "1394: a class Secret without its key names ESO, not `sol secret set`" =
+  test_class_delivery_missing_key_names_eso_not_secret_set ()
 ;;
