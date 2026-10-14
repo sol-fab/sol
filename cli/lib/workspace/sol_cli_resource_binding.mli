@@ -5,8 +5,8 @@
     effective resource graph is [Sol_cli_config.resources], which already applies [omit];
     the binding selection is [Sol_cli_config.resource_binding].
 
-    v1 supports at most one provisioned database per target. That limit lives here, where
-    the effective graph is resolved, and not in a consumer. *)
+    v1 supports at most one database per target, whatever its ownership. That limit lives
+    here, where the effective graph is resolved, and not in a consumer. *)
 
 type t =
   { resource : string
