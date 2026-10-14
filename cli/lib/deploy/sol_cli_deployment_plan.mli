@@ -209,6 +209,16 @@ val service_uses_resource_type
     are not written a Sol credential: only the Sol-provisioned resource's consumers are. *)
 val service_uses_resource : Sol_cli_config.declared option -> string -> string -> bool
 
+(** The target whose database the service consumes, by the one rule both the plan and
+    `sol secret set` use. [None] when it declares no use of the resource the target resolved
+    as its database. *)
+val db_uses_target
+  :  Sol_cli_config.declared option
+  -> target:string option
+  -> target_database:string option
+  -> string
+  -> string option
+
 (** A `uses:` ref's resource name, when the ref names a resource at all. *)
 val resource_name_of_ref : string -> string option
 

@@ -83,19 +83,16 @@ let runtime_secret_name = "sol-secrets"
 let postgres_url_key = "POSTGRES_URL"
 
 (** The inputs the target's database binding supplies: `POSTGRES_URL`, and only for a unit
-    that consumes the target's database ([db_dml_creds_name] is [Some]). A unit that merely
-    declares `POSTGRES_URL` keeps it in its own Secret and is verified there. *)
-let database_secret_keys = function
-  | None -> []
-  | Some _ -> [ postgres_url_key ]
+    that consumes the target's database. A unit that merely declares `POSTGRES_URL` keeps it
+    in its own Secret and is verified there. The signal is the capability, not the key name. *)
+let database_secret_keys db_uses_target =
+  if db_uses_target then [ postgres_url_key ] else []
 ;;
 
-let required_secret_keys ?(transport = Plaintext) ?db_dml_creds_name declared =
+let required_secret_keys ?(transport = Plaintext) ?(db_uses_target = false) declared =
   List.sort_uniq
     String.compare
-    (declared
-     @ database_secret_keys db_dml_creds_name
-     @ kafka_required_secret_keys transport)
+    (declared @ database_secret_keys db_uses_target @ kafka_required_secret_keys transport)
 ;;
 
 module Y = Sol_cli_yaml

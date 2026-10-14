@@ -2821,3 +2821,42 @@ let%test "external database: every class is delivered as the reader's Secret" =
 let%test "external database: a missing class or store is refused, naming it" =
   test_external_database_requires_every_class ()
 ;;
+
+(* #1425: the same extraction the renderer uses is asked while planning, so a binding that
+   cannot deliver every class never reaches delivery. *)
+let test_plan_time_rejects_an_undeliverable_external_binding () =
+  let complete =
+    [ Sol_cli_database_setup_render.ddl_class, "secret/production/app-db-migrator"
+    ; Sol_cli_database_setup_render.dml_class, "secret/production/app-db-app"
+    ]
+  in
+  (match
+     Sol_cli_database_setup_run.validate_external_bindings [ external_binding complete ]
+   with
+   | Ok () -> ()
+   | Error message -> Windtrap.fail ("a complete binding must plan: " ^ message));
+  let refuses ?(store = Some "vault-production") credentials needle =
+    match
+      Sol_cli_database_setup_run.validate_external_bindings
+        [ external_binding ~store credentials ]
+    with
+    | Ok () -> Windtrap.fail (Printf.sprintf "expected a refusal mentioning %S" needle)
+    | Error message ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:("the refusal mentions " ^ needle)
+        true
+        (setup_mentions needle message)
+  in
+  refuses
+    [ Sol_cli_database_setup_render.ddl_class, "secret/production/app-db-migrator" ]
+    Sol_cli_database_setup_render.dml_class;
+  refuses
+    [ Sol_cli_database_setup_render.dml_class, "secret/production/app-db-app" ]
+    Sol_cli_database_setup_render.ddl_class;
+  refuses ~store:None complete "names no store"
+;;
+
+let%test "1425: an undeliverable external binding is refused before delivery" =
+  test_plan_time_rejects_an_undeliverable_external_binding ()
+;;

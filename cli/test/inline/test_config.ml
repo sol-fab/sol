@@ -2545,34 +2545,77 @@ let test_external_binding_requires_store_and_keys () =
       "requires keys")
 ;;
 
-let test_two_provisioned_databases_are_refused () =
-  (* A layer may not declare a resource's shape (DEC-047), so build the graph directly. *)
-  let postgres name =
-    { Sol_cli_config.name
-    ; typ = Some "postgres"
-    ; partition_key = None
-    ; sort_key = None
-    ; indexes = []
-    ; size = None
-    ; omit = false
-    ; binding = None
-    }
-  in
+let postgres_resource ?binding name =
+  { Sol_cli_config.name
+  ; typ = Some "postgres"
+  ; partition_key = None
+  ; sort_key = None
+  ; indexes = []
+  ; size = None
+  ; omit = false
+  ; binding
+  }
+;;
+
+let external_postgres_binding store =
+  ({ Sol_cli_config.ownership = Sol_cli_config.Ownership_external
+   ; store = Some store
+   ; keys = []
+   ; connection = []
+   ; credentials = []
+   }
+   : Sol_cli_config.resource_binding)
+;;
+
+let resolve_refuses what resources =
   let config =
     { Sol_cli_config.project = Some "ws"
     ; target = Result.get_ok (Sol_cli_config.parse_target "prod/aws/us-east-1")
-    ; resources = [ postgres "app_db"; postgres "analytics_db" ]
+    ; resources
     ; services = []
     }
   in
   match Sol_cli_resource_binding.resolve config with
-  | Ok _ -> Windtrap.fail "two provisioned databases must not resolve"
-  | Error message ->
-    Windtrap.equal
-      Windtrap.bool
-      ~msg:"the refusal names the v1 limit"
-      true
-      (mentions "one provisioned database per target" message)
+  | Ok _ -> Windtrap.fail (what ^ ": expected a refusal")
+  | Error message -> message
+;;
+
+let test_more_than_one_database_is_refused () =
+  (* A layer may not declare a resource's shape (DEC-047), so build the graph directly. *)
+  let two_sol =
+    resolve_refuses
+      "two Sol-provisioned databases"
+      [ postgres_resource "app_db"; postgres_resource "analytics_db" ]
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the refusal names the v1 limit"
+    true
+    (mentions "one database per target" two_sol);
+  let two_external =
+    resolve_refuses
+      "two external databases"
+      [ postgres_resource ~binding:(external_postgres_binding "vault") "app_db"
+      ; postgres_resource ~binding:(external_postgres_binding "vault") "analytics_db"
+      ]
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"two external databases are refused, naming both"
+    true
+    (mentions "app_db" two_external && mentions "analytics_db" two_external);
+  let sol_and_external =
+    resolve_refuses
+      "Sol-provisioned plus external"
+      [ postgres_resource "app_db"
+      ; postgres_resource ~binding:(external_postgres_binding "vault") "analytics_db"
+      ]
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"Sol-provisioned plus external is refused, naming both"
+    true
+    (mentions "app_db" sol_and_external && mentions "analytics_db" sol_and_external)
 ;;
 
 let%test "resource binding: an external binding suppresses provisioning" =
@@ -2627,6 +2670,6 @@ let%test "resource binding: external credentials are per class" =
   test_external_binding_credentials_are_per_class ()
 ;;
 
-let%test "resource binding: two provisioned databases are refused" =
-  test_two_provisioned_databases_are_refused ()
+let%test "resource binding: more than one database is refused whatever the ownership" =
+  test_more_than_one_database_is_refused ()
 ;;

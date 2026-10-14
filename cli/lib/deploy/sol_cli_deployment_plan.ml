@@ -681,6 +681,18 @@ let service_uses_resource declared service_name resource_name =
        List.exists (fun ref -> resource_name_of_ref ref = Some resource_name) service.uses)
 ;;
 
+(** The one rule for the reader's routing signal: a unit consumes *the target's* database
+    when it declared `uses` of the resource the target resolved as its database. The signal
+    is the capability, not the key name — a unit that merely declares `POSTGRES_URL` gets
+    [None] and keeps it unit-scoped. Both the plan and `sol secret set` ask this rule, so
+    neither can route on a different notion of "consumer". *)
+let db_uses_target declared ~target ~target_database service_name =
+  match target, target_database with
+  | Some target, Some resource when service_uses_resource declared service_name resource
+    -> Some target
+  | _ -> None
+;;
+
 let derive_consumer_groups ?declared workspace services =
   List.filter_map
     (fun s ->
@@ -1058,12 +1070,6 @@ let of_services_result
   (* 2d: a unit gets a CA mount only when it consumes the database *this target provisions*:
      the ConfigMap is what Sol's setup step writes, so an externally bound database has none
      to mount, and mounting one the deploy will not publish would wedge the pod. *)
-  let db_uses_target service_name =
-    match target, target_database with
-    | Some target, Some resource when service_uses_resource declared service_name resource
-      -> Some target
-    | _ -> None
-  in
   let db_ca_target service_name =
     match target, provisioned_database with
     | Some target, Some resource when service_uses_resource declared service_name resource
@@ -1275,7 +1281,8 @@ let of_services_result
       ; called_by = []
       ; extra_labels = toml.extra_labels
       ; progressive_delivery = toml.progressive_delivery
-      ; db_uses_target = db_uses_target svc.Sol_cli_manifest.name
+      ; db_uses_target =
+          db_uses_target declared ~target ~target_database svc.Sol_cli_manifest.name
       ; db_ca_target = db_ca_target svc.Sol_cli_manifest.name
       ; (* What this unit **declared** it uses. Captured here, where the workspace's declaration
            is in scope, so the release record can carry it and a rollback can re-resolve it

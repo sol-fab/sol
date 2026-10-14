@@ -299,7 +299,9 @@ flag, default or code path it removes or rewrites. The check is at the change le
 
 ## 8. Out of scope
 
-More than one provisioned database per target; multi-target sharing of a resource; capability types
+More than one database per target, whatever its ownership — the delivered class Secrets are
+named for the target, so two databases cannot be told apart by their consumers; multi-target
+sharing of a resource; capability types
 beyond the concrete PostgreSQL and Kafka connections Sol supports today; automatic rotation; cross-cloud
 portability; environment-wide change reports.
 

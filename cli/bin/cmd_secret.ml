@@ -174,30 +174,20 @@ let destination_context config =
   Ok (Sol_cli_kube_destination.context_of_destination destination)
 ;;
 
-let check_set_permissions config facts address key =
-  let unit_address = address in
+let check_set_permissions config facts unit_address unit_name key =
   let* toml = find_unit_config facts unit_address in
-  if not (List.mem key (required_keys config.Sol_cli_config.target toml))
-  then Error (Printf.sprintf "%s/%s is not a declared secret" unit_address key)
-  else (
-    match
-      Sol_cli_config.secret_authority config.Sol_cli_config.target ~unit_address ~key
-    with
-    | None ->
-      Error
-        (Printf.sprintf
-           "target %s has no authority mapping for %s/%s; add it under \
-            targets.<provider>/<region>.secrets in sol/environments.yml"
-           config.target.name
-           unit_address
-           key)
-    | Some Sol_cli_config.Sol_managed -> Ok toml
-    | Some (Sol_cli_config.External _) ->
-      Error
-        (Printf.sprintf
-           "%s/%s is externally managed; sol secret set cannot write it"
-           unit_address
-           key))
+  (* The same resolved input ownership the plan gate uses: a key the target's database
+     binding supplies, or an external authority owns, is refused here even though the unit
+     declares it. *)
+  let* () =
+    Sol_cli_deploy_selection.check_unit_secret_write
+      ~config
+      ~unit_address
+      ~unit_name
+      ~declared:toml.secret_keys
+      ~key
+  in
+  Ok toml
 ;;
 
 let run_set target address from_stdin from_file =
@@ -215,7 +205,9 @@ let run_set target address from_stdin from_file =
     match address with
     | Unit address ->
       let unit_address = address.domain ^ "/" ^ address.unit_name in
-      let* _toml = check_set_permissions config facts unit_address address.key in
+      let* _toml =
+        check_set_permissions config facts unit_address address.unit_name address.key
+      in
       let* namespace, secret_name =
         namespace_and_secret
           ~workspace

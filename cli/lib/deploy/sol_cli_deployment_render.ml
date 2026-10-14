@@ -140,7 +140,7 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
   let secret_keys =
     Sol_cli_manifest.required_secret_keys
       ~transport
-      ?db_dml_creds_name
+      ~db_uses_target:(Option.is_some db_dml_creds_name)
       (List.map fst secrets)
   in
   Sol_cli_manifest.(

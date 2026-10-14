@@ -20,7 +20,8 @@ type t =
   }
 
 (** Resolve every effective resource for a target. Fails when a resource has no type, or
-    when the graph declares more than one provisioned database (the v1 limit). *)
+    when the graph declares more than one PostgreSQL resource (the v1 limit, whatever the
+    ownership). *)
 val resolve : Sol_cli_config.t -> (t list, string) result
 
 (** Whether the resolved graph has a resource of this type that Sol provisions. *)
@@ -33,8 +34,7 @@ val of_type : t list -> typ:string -> t list
 val provisioned_database : t list -> t option
 
 (** The resource a target's database consumers read: the provisioned database when Sol owns
-    one (v1 allows at most one), otherwise the single externally bound postgres resource.
-    [None] when there is no postgres resource, or more than one external one — then no single
-    resource *is* the target's database, so a consumer's `POSTGRES_URL` cannot be routed and
-    the renderer leaves it unit-scoped. *)
+    one, otherwise the single externally bound postgres resource. [None] when there is no
+    postgres resource at all — [resolve] has already refused a graph with more than one, so
+    there is no ambiguous case left for a consumer's `POSTGRES_URL` to fall through. *)
 val target_database : t list -> t option

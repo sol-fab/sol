@@ -532,30 +532,33 @@ let verify_required_keys ~ctx ~namespace ~secret_name ~required_keys =
 
 let verify_workload_secret ~ctx (spec : Sol_cli_deployment_plan.service_spec) =
   let transport = Sol_cli_manifest.kafka_transport_of_config spec.config in
-  (* 2b: a unit that consumes the target's database reads `POSTGRES_URL` from the target's
-     DML class Secret, not from its own Secret, so it is not verified here. A unit that
-     merely declares `POSTGRES_URL` still is. *)
-  let declared =
-    if Option.is_some spec.db_uses_target
-    then
-      List.filter
-        (fun key -> not (String.equal key Sol_cli_manifest.postgres_url_key))
-        (List.map fst spec.secrets)
-    else List.map fst spec.secrets
+  let name = Sol_cli_deployment_plan.k8s_name_to_string spec.k8s_name in
+  (* Which keys this unit's own Secret must hold is the routing decision itself: a key the
+     target's database binding supplies or an external authority owns is delivered
+     elsewhere. Asking the one routing function keeps this from re-deriving the capability
+     filter the plan already applies. *)
+  let db_dml_creds_name =
+    Option.map Sol_cli_database_setup_render.dml_creds_name spec.db_uses_target
   in
+  let unit_secret_name = Sol_cli_manifest.workload_secret_name name in
   let required =
-    Sol_cli_manifest.required_secret_keys ~transport declared
+    Sol_cli_manifest.required_secret_keys
+      ~transport
+      ~db_uses_target:(Option.is_some spec.db_uses_target)
+      (List.map fst spec.secrets)
     |> List.filter (fun key ->
-      match List.assoc_opt key spec.secret_sources with
-      | Some (Sol_cli_manifest.External _) -> false
-      | Some Sol_cli_manifest.Sol_managed | None -> true)
+      String.equal
+        (Sol_cli_manifest_yaml.secret_name_for_key
+           ~name
+           ~secret_sources:spec.secret_sources
+           ~db_dml_creds_name
+           key)
+        unit_secret_name)
   in
   verify_required_keys
     ~ctx
     ~namespace:(Sol_cli_deployment_plan.namespace_to_string spec.namespace)
-    ~secret_name:
-      (Sol_cli_manifest.workload_secret_name
-         (Sol_cli_deployment_plan.k8s_name_to_string spec.k8s_name))
+    ~secret_name:unit_secret_name
     ~required_keys:required
 ;;
 
