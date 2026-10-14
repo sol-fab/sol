@@ -722,7 +722,13 @@ let test_external_database_plans_for_gitops_with_a_delivery () =
          ~msg:"the delivery names the target"
          "prod-aws-us-east-1"
          delivery.target;
-       Windtrap.equal Windtrap.string ~msg:"and the resource" "app_db" delivery.resource;
+       (* The identity is name-safe: the binding's `app_db` is carried as `app-db`, the same
+          form the setup step and the reader name objects from. *)
+       Windtrap.equal
+         Windtrap.string
+         ~msg:"and the name-safe resource"
+         "app-db"
+         delivery.resource;
        Windtrap.equal
          Windtrap.int
          ~msg:"with both class paths"

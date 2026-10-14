@@ -2731,13 +2731,21 @@ let count_occurrences needle text =
   go 0 0
 ;;
 
-(* The resolved target-scoped delivery the plan carries, built the way the plan builds it. *)
+(* The resolved target-scoped delivery the plan carries, built the way the plan builds it:
+   the identity fields are the name-safe forms the plan passes. *)
 let delivery_of_binding ?(store = Some "vault-production") credentials =
   Sol_cli_database_setup_run.resource_delivery
     ~target:"payments"
+    ~resource:"app-db"
     ~migration_namespace:"myapp-payments"
     ~dml_namespaces:[ "myapp-comms" ]
     (external_binding ~store credentials)
+;;
+
+let delivery_docs delivery =
+  match Sol_cli_database_setup_run.external_credential_docs delivery with
+  | Ok docs -> docs
+  | Error message -> Windtrap.fail message
 ;;
 
 let test_external_database_delivers_the_class_secrets () =
@@ -2749,9 +2757,7 @@ let test_external_database_delivers_the_class_secrets () =
   match delivery_of_binding binding with
   | Error message -> Windtrap.fail message
   | Ok delivery ->
-    let text =
-      Sol_cli_yaml.render (Sol_cli_database_setup_run.external_credential_docs delivery)
-    in
+    let text = Sol_cli_yaml.render (delivery_docs delivery) in
     let present msg needle =
       Windtrap.equal Windtrap.bool ~msg true (setup_mentions needle text)
     in
@@ -2899,9 +2905,7 @@ let test_resource_prerequisites_file_is_the_interface () =
   match delivery_of_binding binding with
   | Error message -> Windtrap.fail message
   | Ok delivery ->
-    let text =
-      Sol_cli_yaml.render (Sol_cli_database_setup_run.external_credential_docs delivery)
-    in
+    let text = Sol_cli_yaml.render (delivery_docs delivery) in
     Windtrap.equal
       Windtrap.int
       ~msg:"one ExternalSecret per class per namespace"

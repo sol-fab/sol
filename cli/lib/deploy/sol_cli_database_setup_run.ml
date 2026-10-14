@@ -530,12 +530,13 @@ let external_credential_sources (binding : Sol_cli_resource_binding.t) =
   Ok (store, classes)
 ;;
 
-(** **The target-scoped delivery**, resolved once at plan time: the store, one remote path
-    per credential class, and the namespaces each class lands in. It fails before anything
-    is applied when the binding cannot deliver every class, so planning refuses rather than
-    emitting a class Secret nothing produces. *)
+(** **The target-scoped delivery**, resolved once at plan time: the name-safe target and
+    resource identity, the store, one remote path per credential class, and the namespaces
+    each class lands in. It fails before anything is applied when the binding cannot deliver
+    every class, so planning refuses rather than emitting a class Secret nothing produces. *)
 let resource_delivery
       ~target
+      ~resource
       ~migration_namespace
       ~dml_namespaces
       (binding : Sol_cli_resource_binding.t)
@@ -543,18 +544,14 @@ let resource_delivery
   let* store, credentials = external_credential_sources binding in
   Ok
     Sol_cli_deployment_plan.
-      { target
-      ; resource = binding.Sol_cli_resource_binding.resource
-      ; store
-      ; credentials
-      ; migration_namespace
-      ; dml_namespaces
-      }
+      { target; resource; store; credentials; migration_namespace; dml_namespaces }
 ;;
 
 (** The class ExternalSecrets the delivery names, one per class per namespace that reads it.
-    Total: {!resource_delivery} established that every class has a path, so the rendered
-    set cannot be missing one. Direct apply and GitOps emit render these same documents. *)
+    [resource_delivery] establishes a path for every class, so this error is unreachable in
+    the deploy flow; it is returned rather than raised so a delivery missing a class fails
+    with the class named instead of a [Not_found]. Direct apply and GitOps emit render the
+    same documents. *)
 let external_credential_docs (delivery : Sol_cli_deployment_plan.resource_delivery) =
   let module Render = Sol_cli_database_setup_render in
   (* The DDL class is what the migration path reads, so it lands where migrations run; the
@@ -564,23 +561,32 @@ let external_credential_docs (delivery : Sol_cli_deployment_plan.resource_delive
     then [ delivery.migration_namespace ]
     else delivery.dml_namespaces
   in
-  List.concat_map
-    (fun credential_class ->
-       let remote_path = List.assoc credential_class delivery.credentials in
-       namespaces_for_class credential_class
-       |> List.sort_uniq String.compare
-       |> List.map (fun ns ->
-         Render.class_external_secret_doc
-           ~ns
-           ~target:delivery.target
-           ~credential_class
-           ~store:delivery.store
-           ~remote_path))
-    Render.postgres_classes
+  Render.postgres_classes
+  |> Sol_cli_result.map_list (fun credential_class ->
+    match List.assoc_opt credential_class delivery.credentials with
+    | None ->
+      Error
+        (Printf.sprintf
+           "the resolved database delivery for %S names no remote path for the %S \
+            credential class, so it would emit no object for it"
+           delivery.resource
+           credential_class)
+    | Some remote_path ->
+      Ok
+        (namespaces_for_class credential_class
+         |> List.sort_uniq String.compare
+         |> List.map (fun ns ->
+           Render.class_external_secret_doc
+             ~ns
+             ~target:delivery.target
+             ~credential_class
+             ~store:delivery.store
+             ~remote_path)))
+  |> Result.map List.concat
 ;;
 
 let run_external_credentials ~ctx (delivery : Sol_cli_deployment_plan.resource_delivery) =
-  let docs = external_credential_docs delivery in
+  let* docs = external_credential_docs delivery in
   (* The ExternalSecret object is checked the same way the Secret projections are: absent or
      Sol's. It is a delivered object like any other, and a target must not quietly take over
      one another target's consumers still read. *)

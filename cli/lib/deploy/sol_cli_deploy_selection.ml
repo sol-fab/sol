@@ -400,6 +400,7 @@ let plan (input : Planning_input.t) =
       in
       Sol_cli_database_setup_run.resource_delivery
         ~target:database_identity.Sol_cli_database_setup_render.target
+        ~resource:database_identity.Sol_cli_database_setup_render.resource
         ~migration_namespace:
           (Sol_cli_database_setup_render.database_namespace database_identity)
         ~dml_namespaces
