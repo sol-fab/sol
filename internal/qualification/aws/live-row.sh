@@ -620,7 +620,7 @@ app_publish_images() {
     say "refusing to build the application: it cannot be bound to candidate $SOL_REVISION"
     return 1
   fi
-  sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$context" "$pins"
+  sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$context" "$pins" "$(git -C "$WORKSPACE" rev-parse HEAD)"
   say "app images build from candidate $SOL_REVISION ($WORKSPACE at that revision, framework pinned to it)"
   run ecr-login bash -c \
     "aws ecr get-login-password --region '$AWS_REGION' | docker login --username AWS --password-stdin '$ECR_REGISTRY'" || return 1

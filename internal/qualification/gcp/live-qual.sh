@@ -1369,7 +1369,7 @@ phase_app() {
   fi
   APP_BUILD_CONTEXT="$LOG_DIR/app-build-context"
   export APP_BUILD_CONTEXT
-  sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$APP_BUILD_CONTEXT" "$pins"
+  sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$APP_BUILD_CONTEXT" "$pins" "$(git -C "$WORKSPACE" rev-parse HEAD)"
   say "app images build from candidate $SOL_REVISION ($WORKSPACE at that revision, framework pinned to it)"
   if ! run app-build bash -c "$(declare -f $(app_helpers)); build_app_images"; then
     capture_app_evidence

@@ -6,9 +6,22 @@
 # (`share/sol/<version>/REVISION`, written by build-release-bundle.sh). A live run
 # must build the application under test from that revision:
 #
-#   * the workspace must be that revision's tree, with no modified tracked file;
+#   * the application is materialized **from the candidate revision**, never from
+#     the working tree, so no working-tree state can substitute another
+#     revision's code;
 #   * every pin that fetches the Sol framework must name that commit, never a
 #     moving ref such as `main`.
+#
+# The *harness* may run from the candidate revision or any descendant of it. A
+# harness fix merged after a tag has to be usable on that tag's window, or every
+# fix would force a new candidate and the harness would never converge (sol-fab/sol#1451).
+# The working tree must still be clean, so the harness that produced the evidence
+# is a revision rather than a state; that revision is recorded with the binding.
+#
+# Two provider verdicts on one tag are the same apparatus only if they name the
+# same harness revision. A run whose harness revision differs from the other
+# provider's for the same candidate has not met "one tag, two providers", and the
+# records have to say so.
 #
 # Otherwise a stale checkout -- or a `main` that advanced after the candidate was
 # cut -- can substitute another revision's framework or application code while the
@@ -52,19 +65,21 @@ sol_candidate_bind_context() {
     sol_candidate_die "'$source' is not a git work tree, so it cannot be shown to be the candidate revision $revision"
     return 1
   fi
-  if [ "$head" != "$revision" ]; then
-    sol_candidate_die "the workspace is at $head but the candidate is $revision; building it would qualify another revision's application as this candidate's"
+  if ! git -C "$source" merge-base --is-ancestor "$revision" "$head"; then
+    sol_candidate_die "the workspace is at $head, which is neither the candidate revision $revision nor a descendant of it; the harness may move forward from the candidate, never away from it"
     return 1
   fi
   if [ -n "$(git -C "$source" status --porcelain --untracked-files=no)" ]; then
-    sol_candidate_die "'$source' has modified tracked files, so its tree is not revision $revision"
+    sol_candidate_die "'$source' has modified tracked files, so the harness revision cannot be named: commit them, or cut a candidate that contains them"
     return 1
   fi
 
+  # From the candidate revision, not from the working tree: that is what keeps a harness that has
+  # moved forward from changing the application under test.
   rm -rf "$out"
   mkdir -p "$out"
-  if ! git -C "$source" ls-files -z | (cd "$source" && xargs -0 cp --parents -t "$out"); then
-    sol_candidate_die "could not materialize revision $revision's tracked files from $source"
+  if ! git -C "$source" archive "$revision" | tar -x -C "$out"; then
+    sol_candidate_die "could not materialize revision $revision from $source"
     return 1
   fi
 
@@ -93,15 +108,19 @@ sol_candidate_bind_context() {
   printf '%s\n' "$refs"
 }
 
-# sol_candidate_record_binding <dir> <revision> <workspace> <context>
+# sol_candidate_record_binding <dir> <revision> <workspace> <context> [pins] [harness]
 #
 # Write the binding the run actually enforced beside its other evidence.
+#
+# [harness] is the revision the harness itself ran from; it must be [revision] or a descendant
+# of it, and two providers' records for one candidate must name the same one (#1451).
 sol_candidate_record_binding() {
   local dir="${1:-}" revision="${2:-}" workspace="${3:-}" context="${4:-}"
-  local pins="${5:-}"
+  local pins="${5:-}" harness="${6:-}"
   mkdir -p "$dir"
   {
     printf 'candidate_revision: %s\n' "$revision"
+    printf 'harness_revision: %s\n' "${harness:-$revision}"
     printf 'workspace: %s\n' "$workspace"
     printf 'build_context: %s\n' "$context"
     printf 'framework_pins:\n'
