@@ -232,6 +232,10 @@ class_read() {
     *) return 1 ;;
   esac
 }
+if [ "${STUB_CREDENTIALS_STALE:-0}" = "1" ] && [ "$1 $2" = "configure export-credentials" ]; then
+  printf 'failed to refresh cached credentials, refresh cached SSO token failed, unable to refresh SSO token, operation error SSO OIDC: CreateToken, https response error StatusCode: 400, InvalidGrantException\n' >&2
+  exit 255
+fi
 if [ "${STUB_INVENTORY_UNREADABLE:-0}" = "1" ] && class_read "$1" "$2"; then
   printf 'Unable to locate credentials\n' >&2
   exit 255
@@ -1107,6 +1111,17 @@ has "the binding names the candidate revision" \
 has "and the harness revision it actually ran from" \
   "harness_revision: $HARNESS_AHEAD" "$TMP/aheadoftag.logs/candidate-binding.txt"
 git -C "$WORKSPACE" reset -q --hard "$CANDIDATE_REVISION"
+
+printf '\nscenario: a destroy refuses before touching anything when the credentials cannot be refreshed\n'
+# The cheap check answers from cached role credentials and keeps succeeding; the destroy then dies
+# at terraform init and leaves the substrate live (#1443).
+run_phase stalec destroy STUB_CREDENTIALS_STALE=1
+refused stalec "the destroy refuses when its credentials cannot be refreshed"
+has "and the refusal names the re-authentication to run" \
+  "aws sso login --profile" "$TMP/stalec.out"
+lacks "and no Sol command is attempted" "destroy qualreg/aws/us-east-1 --apply" "$TMP/stalec.sol"
+lacks "so no inventory is taken, and no teardown is recorded as attempted" \
+  "teardown" "$TMP/stalec.logs/harness.log"
 
 printf '\nscenario: the destroy phase survives a closed stdout reader and records the inventory\n'
 run_phase_closed_stdout destroyclosed destroy
