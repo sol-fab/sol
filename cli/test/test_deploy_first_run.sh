@@ -5,6 +5,8 @@ sol="$(realpath "${1:-}")"
 tmp="$(mktemp -d)"
 export SOL_WHOAMI_RETRY_INTERVAL_S=0
 export SOL_PLATFORM_READINESS_TIMEOUT_S=0
+# This fixture tests installation observations after deterministic image preflight.
+export SOL_SETUP_POSTGRES_IMAGE="postgres@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 trap 'rm -rf "$tmp"' EXIT
 
 fail=0
