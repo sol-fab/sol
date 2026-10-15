@@ -282,13 +282,14 @@ provision at all.
 
 ## Production Kafka transport (SASL_SSL)
 
-The `production-single-region` profile runs Redpanda with TLS and SASL
-(FEAT-093). The shared platform module enables both in the `durable` layer of
+The `durable` platform shape runs Redpanda with TLS and SASL
+(FEAT-093); `production-single-region` requires that shape. The shared platform
+module enables both in the `durable` layer of
 `platform/shared/components.json`: cert-manager issues an in-cluster CA and the
 broker certificate, and the Kafka, schema-registry and admin listeners each get
-TLS. Sol sets the module's `platform_profile` from the target's profile,
-independently of `observability_backend`, so a production target whose telemetry
-goes to an external backend still gets the production transport.
+TLS. Sol sets the module's `platform_profile` from the target's declared
+`shape`, independently of `observability_backend`, so a durable target whose
+telemetry goes to an external backend still gets the authenticated transport.
 
 Sol never generates or stores the workload credential. The broker's SASL users
 Secret is a **pre-platform operator input**: `sol deploy` creates the

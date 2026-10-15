@@ -194,8 +194,12 @@ let prepare_config ~strict ~assets ~config ~var_file ~vars () =
   in
   let* cluster_assets = asset_root ~assets provider Sol_cli_platform_assets.Cluster in
   let* () = refuse_sensitive_vars ~infra_dir:cluster_assets ~vars in
+  let* platform_shape =
+    Sol_cli_config.platform_shape config
+    |> Result.map_error (fun message -> Refused message)
+  in
   let* cloud_target =
-    Sol_cli_cloud_lifecycle.cloud_target target_cfg
+    Sol_cli_cloud_lifecycle.cloud_target ~platform_shape target_cfg
     |> Result.map_error (fun message -> Refused message)
   in
   let cloud_backend = Sol_cli_cloud_lifecycle.cloud_backend cloud_target in

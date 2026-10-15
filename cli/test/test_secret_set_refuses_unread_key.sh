@@ -47,6 +47,7 @@ cat >"$tmp/workspace/sol/environments.yml" <<'EOF'
 prod:
   targets:
     aws/us-east-1:
+      shape: local
       cluster_name: planned
       kube_context: planned
       state_bucket: sol-secret-set-refusal

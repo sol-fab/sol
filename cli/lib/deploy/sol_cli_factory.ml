@@ -9,6 +9,7 @@ let plan_of_services
       ~facts
       ?requested_scope
       ?declared
+      ~platform_shape
       ?image_refs
       ?inventory
       ?target
@@ -22,6 +23,7 @@ let plan_of_services
     ~facts
     ?requested_scope
     ?declared
+    ~platform_shape
     ?image_refs
     ?inventory
     ?target
@@ -39,6 +41,7 @@ type request =
   { env : Sol_cli_deployment_plan.env_config
   ; requested_scope : string option
   ; declared : Sol_cli_config.declared option
+  ; platform_shape : Sol_cli_profile.platform_shape
   ; (* 2d: see {!Sol_cli_deployment_plan.of_services_result}; [target] is the sanitized
        target a CA mount would be named for, [provisioned_database] the resource Sol owns.
        2b: [target_database] is the target's postgres resource whatever its ownership, so
@@ -57,6 +60,7 @@ let run execution ~(request : request) ~mode ~facts services =
       ~facts
       ?requested_scope:request.requested_scope
       ?declared:request.declared
+      ~platform_shape:request.platform_shape
       ?target:request.target
       ?target_database:request.target_database
       ?provisioned_database:request.provisioned_database

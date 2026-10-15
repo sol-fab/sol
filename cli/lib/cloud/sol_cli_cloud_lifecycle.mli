@@ -7,6 +7,7 @@ val authorization_backend : Sol_cli_config.target -> (string list, string) resul
 
 type cloud_target =
   { target : Sol_cli_config.target
+  ; platform_shape : Sol_cli_profile.platform_shape
   ; cloud_backend : string list
   ; platform_backend : string list
   ; base_domain : string
@@ -14,7 +15,11 @@ type cloud_target =
   ; cluster_access_role_arn : string option
   }
 
-val cloud_target : Sol_cli_config.target -> (cloud_target, string) result
+val cloud_target
+  :  platform_shape:Sol_cli_profile.platform_shape
+  -> Sol_cli_config.target
+  -> (cloud_target, string) result
+
 val target : cloud_target -> Sol_cli_config.target
 val cloud_backend : cloud_target -> string list
 val platform_backend : cloud_target -> string list

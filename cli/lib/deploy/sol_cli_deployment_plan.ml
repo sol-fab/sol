@@ -1067,6 +1067,7 @@ let of_services_result
       ~facts
       ?(requested_scope = "workspace")
       ?declared
+      ~platform_shape
       ?(image_refs = [])
       ?inventory
       ?target
@@ -1093,12 +1094,6 @@ let of_services_result
     | Some target, Some resource when service_uses_resource declared service_name resource
       -> Some target
     | _ -> None
-  in
-  let platform_shape =
-    Sol_cli_profile.platform_shape
-      (match declared with
-       | Some cfg -> cfg.Sol_cli_config.profile
-       | None -> None)
   in
   let resolution_units =
     match inventory with

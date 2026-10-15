@@ -26,6 +26,7 @@ let target : Sol_cli_config.target =
   ; dns_zone_ownership = None
   ; node_failure_headroom_nodes = None
   ; profile = None
+  ; shape = Some Sol_cli_profile.Local
   ; provider_fields =
       [ ( "aws"
         , [ "state_lock_table", "acme-lock"
@@ -285,7 +286,9 @@ let gcp_target () =
 ;;
 
 let test_cluster_identity_check () =
-  let aws_target = Result.get_ok (L.cloud_target target) in
+  let aws_target =
+    Result.get_ok (L.cloud_target ~platform_shape:Sol_cli_profile.Local target)
+  in
   let cluster role =
     let outputs =
       match valid_outputs () with
@@ -550,7 +553,9 @@ let test_platform_terraform_vars () =
       ~deploy_role_arn:None
       (Result.get_ok (parse (valid_outputs ())))
   in
-  let aws_target = Result.get_ok (L.cloud_target target) in
+  let aws_target =
+    Result.get_ok (L.cloud_target ~platform_shape:Sol_cli_profile.Local target)
+  in
   let aws_inputs = Result.get_ok (L.platform_inputs aws_target aws_cloud) in
   let aws = vars aws_inputs in
   Windtrap.equal
@@ -573,7 +578,9 @@ let test_platform_terraform_vars () =
     ~msg:"AWS passes no GCS inputs to a root that does not declare them"
     []
     (prefixed aws "loki_gcs_bucket=" @ prefixed aws "thanos_gcs_bucket=");
-  let gcp = Result.get_ok (L.cloud_target (gcp_target ())) in
+  let gcp =
+    Result.get_ok (L.cloud_target ~platform_shape:Sol_cli_profile.Local (gcp_target ()))
+  in
   let gcp_cloud =
     Sol_cli_gcp_cluster.cluster
       ~region:"us-central1"
@@ -601,7 +608,9 @@ let test_platform_terraform_vars () =
      @ prefixed gcp_vars "grafana_irsa_role_arn="
      = []);
   let tls_target = { (gcp_target ()) with cluster_issuer = Some "letsencrypt-prod" } in
-  let tls_cloud = Result.get_ok (L.cloud_target tls_target) in
+  let tls_cloud =
+    Result.get_ok (L.cloud_target ~platform_shape:Sol_cli_profile.Local tls_target)
+  in
   match L.platform_inputs tls_cloud gcp_cloud |> Result.map L.platform_terraform_vars with
   | Ok (Ok vars) ->
     Windtrap.equal
@@ -738,7 +747,9 @@ let test_preparations_eligible () =
 
 let test_platform_vars_destruction_context () =
   let tls_target = { (gcp_target ()) with cluster_issuer = Some "letsencrypt-prod" } in
-  let tls_cloud = Result.get_ok (L.cloud_target tls_target) in
+  let tls_cloud =
+    Result.get_ok (L.cloud_target ~platform_shape:Sol_cli_profile.Local tls_target)
+  in
   let gcp_cloud =
     Sol_cli_gcp_cluster.cluster
       ~region:"us-central1"
@@ -1081,13 +1092,13 @@ let test_cloud_target () =
     ; kube_context = Some "gke_sol-qualification_us-central1_sol"
     }
   in
-  let aws = Result.get_ok (L.cloud_target target) in
+  let aws = Result.get_ok (L.cloud_target ~platform_shape:Sol_cli_profile.Local target) in
   Windtrap.equal
     Windtrap.bool
     ~msg:"AWS carries the provisioner role it must assume"
     true
     (aws.cluster_access_role_arn = Some "arn:aws:iam::1:role/cluster-access");
-  let gcp = Result.get_ok (L.cloud_target gcp) in
+  let gcp = Result.get_ok (L.cloud_target ~platform_shape:Sol_cli_profile.Local gcp) in
   Windtrap.equal
     Windtrap.bool
     ~msg:"GCP carries no role ARN and is not refused for it"
@@ -1103,10 +1114,18 @@ let test_cloud_target () =
     ~msg:"the target's own backends are the ones selected"
     [ "bucket=acme-state"; "prefix=sol/prod/gcp/us-central1/platform.tfstate" ]
     gcp.platform_backend;
-  (match L.cloud_target (without_aws_field "cluster_access_role_arn" target) with
+  (match
+     L.cloud_target
+       ~platform_shape:Sol_cli_profile.Local
+       (without_aws_field "cluster_access_role_arn" target)
+   with
    | Error _ -> ()
    | Ok _ -> Windtrap.fail "an AWS target without a cluster-access role must be refused");
-  match L.cloud_target { target with base_domain = None } with
+  match
+    L.cloud_target
+      ~platform_shape:Sol_cli_profile.Local
+      { target with base_domain = None }
+  with
   | Error _ -> ()
   | Ok _ -> Windtrap.fail "a target without a base domain must be refused"
 ;;
@@ -2048,7 +2067,7 @@ let test_effective_authorization () =
 
 let test_terraform_layout_derives_from_cloud_target () =
   let layout_for cloud_target = Sol_cli_cloud_wiring.terraform_layout ~cloud_target in
-  let aws = Result.get_ok (L.cloud_target target) in
+  let aws = Result.get_ok (L.cloud_target ~platform_shape:Sol_cli_profile.Local target) in
   let layout = layout_for aws in
   Windtrap.equal
     Windtrap.string
@@ -2080,7 +2099,11 @@ let test_terraform_layout_derives_from_cloud_target () =
     ~msg:"the two roles never share a workdir"
     true
     (not (String.equal layout.infra_dir layout.platform_dir));
-  let gcp = layout_for (Result.get_ok (L.cloud_target (gcp_target ()))) in
+  let gcp =
+    layout_for
+      (Result.get_ok
+         (L.cloud_target ~platform_shape:Sol_cli_profile.Local (gcp_target ())))
+  in
   Windtrap.equal
     Windtrap.string
     ~msg:"a second provider derives its own name"

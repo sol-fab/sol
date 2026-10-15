@@ -654,6 +654,7 @@ let with_plan ~requested_scope f =
         ~facts:(facts ())
         ~workspace:"myworkspace"
         ~env:test_env
+        ~platform_shape:Sol_cli_profile.Local
         ~requested_scope
         [ test_service ]
     with
@@ -825,6 +826,7 @@ let test_selected_plan_builder_preserves_scoped_provenance () =
           ~facts:(facts ())
           ~workspace:"myworkspace"
           ~env
+          ~platform_shape:Sol_cli_profile.Local
           ~requested_scope
           services
       with

@@ -27,55 +27,57 @@ let secret_authority_findings ~facts =
             (Sol_cli_config.error_to_string error)
         ]
       | Ok config ->
-        Sol_cli_workspace_model.workloads facts
-        |> List.filter (fun (workload : Sol_cli_workspace_model.workload) ->
-          not
-            (Sol_cli_config.is_omitted_service
-               config
-               ~name:workload.service.Sol_cli_manifest.name))
-        |> List.concat_map (fun (workload : Sol_cli_workspace_model.workload) ->
-          match workload.config with
-          | Error _ -> []
-          | Ok toml ->
-            let unit_address = workload.service.domain ^ "/" ^ workload.service.name in
-            let required_keys =
-              Sol_cli_manifest.required_secret_keys
-                ~transport:
-                  (Sol_cli_manifest.kafka_transport
-                     (Sol_cli_profile.platform_shape config.target.profile))
-                toml.secret_keys
-            in
-            let resolution =
-              Sol_cli_config.resolve_secret_authorities
-                config.target
-                ~unit_address
-                ~required_keys
-            in
-            let path = "sol/environments.yml" in
-            List.map
-              (fun key ->
-                 finding
-                   Sol_cli_check.Severity.Error
-                   path
-                   (Printf.sprintf
-                      "%s/%s has no authority mapping for target %s; declare authority: \
-                       sol or external"
-                      unit_address
-                      key
-                      target_path))
-              resolution.missing
-            @ List.map
-                (fun key ->
-                   finding
-                     Sol_cli_check.Severity.Warning
-                     path
-                     (Printf.sprintf
-                        "%s/%s maps an undeclared secret for target %s; it will not be \
-                         projected"
-                        unit_address
-                        key
-                        target_path))
-                resolution.additional))
+        (match Sol_cli_config.platform_shape config with
+         | Error message ->
+           [ finding Sol_cli_check.Severity.Error "sol/environments.yml" message ]
+         | Ok platform_shape ->
+           Sol_cli_workspace_model.workloads facts
+           |> List.filter (fun (workload : Sol_cli_workspace_model.workload) ->
+             not
+               (Sol_cli_config.is_omitted_service
+                  config
+                  ~name:workload.service.Sol_cli_manifest.name))
+           |> List.concat_map (fun (workload : Sol_cli_workspace_model.workload) ->
+             match workload.config with
+             | Error _ -> []
+             | Ok toml ->
+               let unit_address = workload.service.domain ^ "/" ^ workload.service.name in
+               let required_keys =
+                 Sol_cli_manifest.required_secret_keys
+                   ~transport:(Sol_cli_manifest.kafka_transport platform_shape)
+                   toml.secret_keys
+               in
+               let resolution =
+                 Sol_cli_config.resolve_secret_authorities
+                   config.target
+                   ~unit_address
+                   ~required_keys
+               in
+               let path = "sol/environments.yml" in
+               List.map
+                 (fun key ->
+                    finding
+                      Sol_cli_check.Severity.Error
+                      path
+                      (Printf.sprintf
+                         "%s/%s has no authority mapping for target %s; declare \
+                          authority: sol or external"
+                         unit_address
+                         key
+                         target_path))
+                 resolution.missing
+               @ List.map
+                   (fun key ->
+                      finding
+                        Sol_cli_check.Severity.Warning
+                        path
+                        (Printf.sprintf
+                           "%s/%s maps an undeclared secret for target %s; it will not \
+                            be projected"
+                           unit_address
+                           key
+                           target_path))
+                   resolution.additional)))
 ;;
 
 let findings_for ~facts = function

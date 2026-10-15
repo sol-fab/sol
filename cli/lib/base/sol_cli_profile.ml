@@ -4,11 +4,6 @@ type platform_shape =
   | Local
   | Durable
 
-let platform_shape = function
-  | Some Production_single_region -> Durable
-  | None -> Local
-;;
-
 let platform_shape_to_string = function
   | Local -> "local"
   | Durable -> "durable"

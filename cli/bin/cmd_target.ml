@@ -134,14 +134,14 @@ let substrate_status
    an error here — the report then says nothing about a handoff rather than guessing a
    context (DEC-020 keeps the context a mechanism, not the target's identity). *)
 let deploy_handoff (target : Sol_cli_config.target) =
-  match Sol_cli_cloud_lifecycle.cloud_target target with
+  match Sol_cli_cloud_lifecycle.backend_config target ~root:`Cloud with
   | Error _ -> None
-  | Ok cloud_target ->
+  | Ok cloud_backend ->
     let infra_dir =
       Sol_cli_terraform_workdir.chdir
         ~provider:target.provider
         ~role:Sol_cli_platform_assets.Cluster
-        ~backend_config:(Sol_cli_cloud_lifecycle.cloud_backend cloud_target)
+        ~backend_config:cloud_backend
     in
     (match Sol_cli_terraform.output_json ~chdir:infra_dir () with
      | Error _ -> None

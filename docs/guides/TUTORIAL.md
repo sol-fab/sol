@@ -819,6 +819,7 @@ prod:
 - `cluster_name`, `kube_context`, `kubeconfig`, `cluster_endpoint_cidr` and `registry` identify one cluster, so they are set on a target, never on an environment.
 - What your application *is* (a service's `type`, `path`, `language`, `uses`; a resource's `type` and keys) belongs in `sol.yml`. An environment or target only adjusts `size`, `scale` and `omit`, and only for services and resources `sol.yml` declares.
 - `profile` is chosen per environment or target, never in `sol.yml`.
+- `shape` (`local` or `durable`) is declared per environment or target, never in `sol.yml`. Every cloud target must declare it; `production-single-region` requires `durable`. A plan against a target that omits it is refused before anything is provisioned.
 
 Values you would rather not commit — an account's registry, role ARNs — go in `sol/environments.local.yml`, which the scaffolded `.gitignore` excludes. It has the same shape and may add keys the tracked file leaves unset, or whole environments and targets; setting a key the tracked file already sets is an error, so a value you see in `sol/environments.yml` is always the one in use.
 

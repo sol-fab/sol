@@ -279,6 +279,7 @@ val of_services_result
   -> facts:Sol_cli_workspace_model.t
   -> ?requested_scope:string
   -> ?declared:Sol_cli_config.declared
+  -> platform_shape:Sol_cli_profile.platform_shape
   -> ?image_refs:(string * string) list
   -> ?inventory:Sol_cli_manifest.service list
   -> ?target:string

@@ -88,10 +88,10 @@ The following substrate inputs must exist before running `sol deploy`.
   required `KAFKA_SECURITY_PROTOCOL` (plus `KAFKA_SSL_*`/`KAFKA_SASL_*` when used) from
   their environment. The generated ConfigMap points at Sol's in-cluster
   Redpanda defaults. On the `local` shape that is
-  `KAFKA_SECURITY_PROTOCOL=plaintext`; on the **production profile** Sol declares
+  `KAFKA_SECURITY_PROTOCOL=plaintext`; on the **durable shape** Sol declares
   `KAFKA_SECURITY_PROTOCOL=sasl_ssl` with the HTTPS schema-registry and admin
   URLs, `KAFKA_SASL_MECHANISM=SCRAM-SHA-256` and `KAFKA_SSL_CA_LOCATION`, and
-  mounts the CA from the workload Secret as `KAFKA_SSL_CA_CERT`. A production
+  mounts the CA from the workload Secret as `KAFKA_SSL_CA_CERT`. A durable-shape
   workload Secret must therefore also carry `KAFKA_SASL_PASSWORD` and
   `KAFKA_SSL_CA_CERT`; an ordinary deploy fails closed when either is missing.
   For an external Kafka substrate, override those values via
@@ -407,6 +407,7 @@ claims nothing.
 # sol/environments.yml
 pilot:
   profile: production-single-region
+  shape: durable
   targets:
     aws/us-east-1:
 ```
@@ -414,6 +415,11 @@ pilot:
 `profile` is accepted on an environment or a target, never in `sol.yml`: `sol.yml`'s
 `target:` section is inherited by every target, so a profile there is rejected
 rather than opting every environment in.
+
+Every cloud target declares its platform shape (`shape: local` or `shape: durable`),
+on its environment or on the target itself. `shape`, like `profile`, is rejected in
+`sol.yml` for the same reason. A plan that would deploy infrastructure for a target
+without a shape is refused before Terraform or the workload stage.
 
 A target that selects `production-single-region` goes through a preflight on
 every `sol deploy` (including `--dry-run`) before any cluster call, lease or
@@ -425,29 +431,32 @@ until Sol can establish every guarantee it requires.
 
 #### Shape and qualification are separate axes
 
-The profile resolves two independent things, and only the first decides what Sol
+A target declares two independent things, and only the first decides what Sol
 renders:
 
-- **Platform shape** (`platform_shape`: `local` or `durable`) is a structural
-  derivation from the selected profile — `production-single-region` resolves
-  `durable`, no profile resolves `local`. It is the input to posture that
-  follows the shape: the Kafka transport is `sasl_ssl` on the durable shape and
-  `plaintext` on the local one (#1308). Every consumer derives it from the one
-  resolved target, so the plan and the cloud lifecycle cannot disagree.
+- **Platform shape** (`platform_shape`: `local` or `durable`) is an explicit
+  declaration on the cloud target — on its environment or on the target itself —
+  not a derivation from a selected profile. `production-single-region` requires
+  `durable` and is refused with `local`; the local platform that `sol local
+  deploy` drives is `local` by construction and needs no target declaration. The
+  shape is the input to posture that follows it: the Kafka transport is
+  `sasl_ssl` on the durable shape and `plaintext` on the local one (#1308). Every
+  consumer reads the one resolution (`Sol_cli_config.platform_shape`), so the plan
+  and the cloud lifecycle cannot disagree.
 - **Qualification** is the preflight gate above — the guarantees in the table
   below, which must be established before Sol mutates anything.
 
-They are independent. An unqualified provider still resolves the durable shape,
-so the posture a preflight refuses is exactly the posture the plan previewed:
-qualification decides *whether* a deploy may proceed, never *what* the profile
-means. Deriving the transport from the shape therefore does not imply the
-substrate is qualified, and GCP stays unshippable until it has its own
-production qualification claim.
+They are independent. A profile can constrain the shape without being its source,
+and an unqualified provider still deploys the declared shape, so the posture a
+preflight refuses is exactly the posture the plan previewed: qualification
+decides *whether* a deploy may proceed, never *what* the target deploys. Deriving
+the transport from the shape therefore does not imply the substrate is qualified,
+and GCP stays unshippable until it has its own production qualification claim.
 
 Every guarantee now has a real establishment branch — none is staged
 (`not_yet_established` no longer exists). Preflight establishes only what is
 observable offline: a declaration, a rendered configuration, or a
-profile-derived setting. It never claims live behaviour; the failure and
+shape-derived setting. It never claims live behaviour; the failure and
 recovery behaviour behind the numeric DEC-026 bounds is HARDEN-002's evidence.
 
 | Guarantee | Required when |

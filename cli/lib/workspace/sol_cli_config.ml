@@ -22,6 +22,7 @@ type target =
   ; dns_zone_ownership : string option
   ; node_failure_headroom_nodes : int option
   ; profile : Sol_cli_profile.t option
+  ; shape : Sol_cli_profile.platform_shape option
   ; provider_fields : (string * (string * string) list) list
   ; secret_authorities : (string * (string * secret_authority) list) list
   }
@@ -118,6 +119,7 @@ let target_empty =
   ; dns_zone_ownership = None
   ; node_failure_headroom_nodes = None
   ; profile = None
+  ; shape = None
   ; provider_fields = []
   ; secret_authorities = []
   }
@@ -208,6 +210,7 @@ type target_field =
   | Target_cluster_endpoint_cidr
   | Target_node_failure_headroom_nodes
   | Target_profile
+  | Target_shape
   | Target_dns_zone_ownership
   | Target_secrets
 
@@ -237,6 +240,7 @@ let target_key_of_string s =
   | "cluster_endpoint_cidr" -> Target_field Target_cluster_endpoint_cidr
   | "node_failure_headroom_nodes" -> Target_field Target_node_failure_headroom_nodes
   | "profile" -> Target_field Target_profile
+  | "shape" -> Target_field Target_shape
   | "dns_zone_ownership" -> Target_field Target_dns_zone_ownership
   | "secrets" -> Target_field Target_secrets
   | _ ->
@@ -267,6 +271,7 @@ let target_field_name = function
   | Target_cluster_endpoint_cidr -> "cluster_endpoint_cidr"
   | Target_node_failure_headroom_nodes -> "node_failure_headroom_nodes"
   | Target_profile -> "profile"
+  | Target_shape -> "shape"
   | Target_dns_zone_ownership -> "dns_zone_ownership"
   | Target_secrets -> "secrets"
 ;;
@@ -532,6 +537,12 @@ let decode_layer ~path ~context ~top_level (fields : (string * Yaml.yaml) list) 
     | Target_profile ->
       Sol_cli_profile.of_selection s
       |> Result.map (fun profile -> { current with profile = Some profile })
+      |> Result.map_error error
+    | Target_shape ->
+      (match String.lowercase_ascii s with
+       | "durable" -> Ok { current with shape = Some Sol_cli_profile.Durable }
+       | "local" -> Ok { current with shape = Some Sol_cli_profile.Local }
+       | other -> Error (Printf.sprintf "shape %S is not one of durable, local" other))
       |> Result.map_error error
     | Target_secrets -> assert false
   in
@@ -993,6 +1004,7 @@ let merge_target a b =
   ; node_failure_headroom_nodes =
       prefer a.node_failure_headroom_nodes b.node_failure_headroom_nodes
   ; profile = prefer a.profile b.profile
+  ; shape = prefer a.shape b.shape
   ; provider_fields = merge_provider_fields a.provider_fields b.provider_fields
   ; secret_authorities =
       merge_secret_authorities a.secret_authorities b.secret_authorities
@@ -1109,6 +1121,7 @@ let target_of_path s =
           ; dns_zone_ownership = None
           ; node_failure_headroom_nodes = None
           ; profile = None
+          ; shape = None
           ; provider_fields = []
           ; secret_authorities = []
           }
@@ -1537,16 +1550,26 @@ let validate_uses cfg =
     validate_services (active_services cfg)
 ;;
 
-let reject_shared_profile ~path (base : layer) =
-  match base.target with
-  | Some { profile = Some _; _ } ->
+(* `profile` and `shape` are per-target claims: sol.yml's `target:` section is shared by every
+   target, so a claim there would opt every environment in rather than being declared where it
+   applies. Both are rejected, not inherited. *)
+let reject_shared_claims ~path (base : layer) =
+  let refuse claim guidance =
     Error
       { path
       ; line = 0
       ; message =
-          "profile must be selected in an environment or target (sol/environments.yml), \
-           not in sol.yml, whose target section every target inherits"
+          Printf.sprintf
+            "%s must be %s (sol/environments.yml), not in sol.yml, whose target section \
+             every target inherits"
+            claim
+            guidance
       }
+  in
+  match base.target with
+  | Some { profile = Some _; _ } ->
+    refuse "profile" "selected in an environment or target"
+  | Some { shape = Some _; _ } -> refuse "shape" "declared in an environment or target"
   | _ -> Ok ()
 ;;
 
@@ -1679,6 +1702,43 @@ let declared_of_config (cfg : t) =
   { services = cfg.services; resources = cfg.resources; profile = cfg.target.profile }
 ;;
 
+(** **The platform shape this config deploys with — the one decision every consumer reads.**
+
+    Shape answers what Sol deploys (authenticated Kafka, durable infrastructure, the credential
+    inputs that follow from them). A qualification profile answers which guarantees a target
+    *claims*, and can constrain the shape without being its source.
+
+    A cloud target declares its shape; there is no default, because the previous default was the
+    bug: absent became [Local], so a target that qualified for nothing silently deployed a
+    development posture. The local platform never constructs a config with a target
+    ([Sol_cli_config.local_infra], [load_declared]), so its shape is [Local] by construction
+    rather than by an absent declaration. *)
+let platform_shape (cfg : t) =
+  match cfg.target.shape with
+  | Some Sol_cli_profile.Local ->
+    (match cfg.target.profile with
+     | Some Sol_cli_profile.Production_single_region ->
+       Error
+         (Printf.sprintf
+            "target %s declares `shape: local` and the %s profile, which requires \
+             `shape: durable`: a profile that claims production guarantees cannot be \
+             satisfied by a development posture. Declare `shape: durable`, or drop the \
+             profile."
+            cfg.target.name
+            (Sol_cli_profile.to_string Sol_cli_profile.Production_single_region))
+     | _ -> Ok Sol_cli_profile.Local)
+  | Some (Sol_cli_profile.Durable as shape) -> Ok shape
+  | None ->
+    Error
+      (Printf.sprintf
+         "target %s declares no platform shape. Declare `shape: durable` (authenticated \
+          Kafka and durable infrastructure) or `shape: local` (a deliberate development \
+          posture) on the target or its environment in %s; Sol does not infer it from \
+          the presence of a profile."
+         cfg.target.name
+         environments_file)
+;;
+
 let load_declared ~root =
   let* layer = load (Filename.concat root "sol.yml") in
   Ok { services = layer.services; resources = layer.resources; profile = None }
@@ -1698,7 +1758,7 @@ let load_for_target ~target =
   in
   let sol_yml = Filename.concat root "sol.yml" in
   let* base = load sol_yml in
-  let* () = reject_shared_profile ~path:sol_yml base in
+  let* () = reject_shared_claims ~path:sol_yml base in
   let* envs = load_environments ~root in
   let* cfg = resolve ~base ~envs target in
   let* cfg = validate_uses cfg in

@@ -19,6 +19,7 @@ let authorization_backend target = backend_config target ~root:`Authorization
 
 type cloud_target =
   { target : Sol_cli_config.target
+  ; platform_shape : Sol_cli_profile.platform_shape
   ; cloud_backend : string list
   ; platform_backend : string list
   ; base_domain : string
@@ -28,7 +29,7 @@ type cloud_target =
 
 let required = Sol_cli_provider_capabilities.required
 
-let cloud_target target =
+let cloud_target ~platform_shape (target : Sol_cli_config.target) =
   let open Result.Syntax in
   let* cloud_backend = backend_config target ~root:`Cloud in
   let* platform_backend = backend_config target ~root:`Platform in
@@ -41,6 +42,7 @@ let cloud_target target =
   in
   Ok
     { target
+    ; platform_shape
     ; cloud_backend
     ; platform_backend
     ; base_domain
@@ -67,11 +69,6 @@ type platform_inputs =
   ; alert_runbook_url : string option
   ; cluster : Sol_cli_cluster.t
   }
-
-let platform_profile (target : Sol_cli_config.target) =
-  Sol_cli_profile.platform_shape target.profile
-  |> Sol_cli_profile.platform_shape_to_string
-;;
 
 let profile_of_platform_vars vars =
   vars
@@ -196,7 +193,7 @@ let platform_inputs (target : cloud_target) (cluster : Sol_cli_cluster.t) =
       ; region = target.target.region
       ; cluster_issuer = target.target.cluster_issuer
       ; observability_backend = target.target.observability_backend
-      ; platform_profile = platform_profile target.target
+      ; platform_profile = Sol_cli_profile.platform_shape_to_string target.platform_shape
       ; alert_receiver_type = target.target.alert_receiver_type
       ; alert_receiver_url = target.target.alert_receiver_url
       ; alert_owner = target.target.alert_owner

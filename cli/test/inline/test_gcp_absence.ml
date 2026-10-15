@@ -22,6 +22,7 @@ let target : Sol_cli_config.target =
   ; dns_zone_ownership = None
   ; node_failure_headroom_nodes = None
   ; profile = None
+  ; shape = Some Sol_cli_profile.Local
   ; provider_fields = [ "gcp", [ "project_id", "acme-project" ] ]
   ; secret_authorities = []
   }

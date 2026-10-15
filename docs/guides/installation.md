@@ -123,6 +123,7 @@ it means in `sol/environments.yml`:
 ```yaml
 prod:
   profile: production-single-region
+  shape: durable
   base_domain: acme.example
   dns_zone_ownership: sol          # sol | user | external — see below
   targets:

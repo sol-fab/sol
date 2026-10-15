@@ -96,8 +96,12 @@ let test_preview_accepts_undeclared_target () =
         ~workspace:"pluto"
         "dev/aws/us-east-1"
     with
-    | Ok (_, target) ->
-      Windtrap.equal Windtrap.string ~msg:"region" "us-east-1" target.region
+    | Ok (_, config) ->
+      Windtrap.equal
+        Windtrap.string
+        ~msg:"region"
+        "us-east-1"
+        config.Sol_cli_config.target.region
     | Error message -> Windtrap.fail message)
 ;;
 

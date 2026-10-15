@@ -69,6 +69,7 @@ let environments_yml =
   targets:
     aws/us-east-1:
       cluster_name: ws-prod
+      shape: local
 |}
 ;;
 
@@ -113,6 +114,9 @@ let plans () =
     |> Result.map_error Sol_cli_config.error_to_string
     |> fail_on_error "load_for_target"
   in
+  let platform_shape =
+    Sol_cli_config.platform_shape target_config |> fail_on_error "platform_shape"
+  in
   let env =
     Sol_cli_env_target.to_env_config
       ~name:"ws"
@@ -124,6 +128,7 @@ let plans () =
       ~env
       ~facts
       ~declared:(Sol_cli_config.declared_of_config target_config)
+      ~platform_shape
       services
     |> fun result ->
     match result with
@@ -390,6 +395,7 @@ services:
   targets:
     aws/us-east-1:
       cluster_name: ws-prod
+      shape: local
       secrets:
         payments/charge_svc:
           POSTGRES_URL:
@@ -569,6 +575,7 @@ services:
   targets:
     aws/us-east-1:
       cluster_name: ws-prod
+      shape: local
 %s|}
         target_extra )
   ; "app/payments/charge_svc/Dockerfile", "FROM scratch\n"
@@ -742,4 +749,150 @@ let%test "1423: a Sol-provisioned database emitted to GitOps is refused at plan"
 
 let%test "1423: an external database plans for GitOps with its delivery" =
   test_external_database_plans_for_gitops_with_a_delivery ()
+;;
+
+(* #1403: a cloud target declares its platform shape. The plan refuses a target that omits it
+   — before Terraform or the workload stage — and a profile that contradicts it. The declared
+   shape, not the profile, decides the rendered Kafka transport and the credential authorities
+   the target must map. *)
+
+(* A workspace whose cloud target body the test supplies, so the shape is the only variable. *)
+let single_charge_workspace ~target_body ?(toml = "") () =
+  [ ( "sol.yml"
+    , "project: ws\n\
+       services:\n\
+      \  charge_svc:\n\
+      \    type: http\n\
+      \    path: app/payments/charge_svc\n\
+      \    language: ocaml\n" )
+  ; ( "sol/environments.yml"
+    , Printf.sprintf "prod:\n  targets:\n    aws/us-east-1:\n%s" target_body )
+  ; "app/payments/charge_svc/Dockerfile", "FROM scratch\n"
+  ; "app/payments/charge_svc/sol.toml", toml
+  ]
+;;
+
+let planned_or_fail what = function
+  | Ok plan -> plan
+  | Error (Sol_cli_deploy_selection.Refused message) ->
+    Windtrap.failf "%s: %s" what message
+  | Error (Sol_cli_deploy_selection.Preflight _) ->
+    Windtrap.failf "%s: a profile-less target must not preflight" what
+;;
+
+let test_cloud_target_without_shape_is_refused_at_plan () =
+  let message =
+    plan_refuses
+      "a cloud target with no shape"
+      (single_charge_workspace ~target_body:"      cluster_name: ws-prod\n" ())
+  in
+  check_bool
+    "the refusal names the missing platform shape"
+    true
+    (Sol_cli_string.contains ~needle:"declares no platform shape" message);
+  check_bool
+    "and says Sol does not infer it from a profile"
+    true
+    (Sol_cli_string.contains ~needle:"does not infer" message)
+;;
+
+let test_production_profile_with_local_shape_is_refused_at_plan () =
+  let message =
+    plan_refuses
+      "a production profile with a local shape"
+      (single_charge_workspace
+         ~target_body:
+           "      cluster_name: ws-prod\n\
+           \      profile: production-single-region\n\
+           \      shape: local\n"
+         ())
+  in
+  check_bool
+    "the refusal says the profile requires durable"
+    true
+    (Sol_cli_string.contains ~needle:"requires" message);
+  check_bool
+    "and names the durable shape it needs"
+    true
+    (Sol_cli_string.contains ~needle:"durable" message)
+;;
+
+let test_durable_shape_declares_authenticated_kafka_and_requires_its_authorities () =
+  let message =
+    plan_refuses
+      "a durable target with no Kafka authority"
+      (single_charge_workspace
+         ~target_body:"      cluster_name: ws-prod\n      shape: durable\n"
+         ())
+  in
+  check_bool
+    "the refusal names the credential the durable shape requires"
+    true
+    (Sol_cli_string.contains ~needle:"KAFKA_SASL_PASSWORD" message);
+  let plan =
+    planned_or_fail
+      "a durable target that maps its Kafka authority"
+      (plan_for
+         (single_charge_workspace
+            ~target_body:
+              "      cluster_name: ws-prod\n\
+              \      shape: durable\n\
+              \      secrets:\n\
+              \        payments/charge_svc:\n\
+              \          KAFKA_SASL_PASSWORD:\n\
+              \            authority: sol\n\
+              \          KAFKA_SSL_CA_CERT:\n\
+              \            authority: sol\n"
+            ()))
+  in
+  let spec = List.hd plan.Sol_cli_deployment_plan.services in
+  check_bool
+    "the durable shape renders the SASL_SSL transport"
+    true
+    (List.assoc_opt "KAFKA_SECURITY_PROTOCOL" spec.config = Some "sasl_ssl")
+;;
+
+let test_local_shape_leaves_the_transport_to_the_renderer () =
+  let plan =
+    planned_or_fail
+      "a local target with no Kafka authority"
+      (plan_for
+         (single_charge_workspace
+            ~target_body:"      cluster_name: ws-prod\n      shape: local\n"
+            ()))
+  in
+  let spec = List.hd plan.Sol_cli_deployment_plan.services in
+  check_bool
+    "the local shape declares no SASL_SSL transport of its own"
+    true
+    (List.assoc_opt "KAFKA_SECURITY_PROTOCOL" spec.config = None)
+;;
+
+let test_local_plan_declares_the_local_shape () =
+  with_workspace workspace (fun () ->
+    let local, _ = plans () in
+    check_bool
+      "sol local deploy plans the local shape without a target"
+      true
+      (local.Sol_cli_deployment_plan.platform_shape = Sol_cli_profile.Local))
+;;
+
+let%test "#1403: a cloud target without a shape is refused at plan" =
+  test_cloud_target_without_shape_is_refused_at_plan ()
+;;
+
+let%test "#1403: a production profile with a local shape is refused at plan" =
+  test_production_profile_with_local_shape_is_refused_at_plan ()
+;;
+
+let%test "#1403: the durable shape requires and names its credential authorities" =
+  test_durable_shape_declares_authenticated_kafka_and_requires_its_authorities ()
+;;
+
+let%test "#1403: the local shape leaves the transport to the renderer" =
+  test_local_shape_leaves_the_transport_to_the_renderer ()
+;;
+
+let%test "#1403: sol local deploy plans the local shape" =
+  test_local_plan_declares_the_local_shape ()
 ;;

@@ -78,6 +78,7 @@ prod:
   targets:
     aws/us-east-1:
       profile: production-single-region
+      shape: durable
       base_domain: example.test
       cluster_name: lifecycle-test
       letsencrypt_email: ops@example.test
@@ -104,6 +105,7 @@ prod:
           size: small
 prod/missing-alerts:
   profile: production-single-region
+  shape: durable
 EOF
 
 export SOL_HOME="$root"
