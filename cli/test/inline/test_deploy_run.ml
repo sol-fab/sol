@@ -163,13 +163,37 @@ let gate ctx ~plan ~live =
 
 let reported = List.map snd
 
-let test_no_profile_is_not_checked () =
+(** **#1403: the migration gate is not conditional on a profile.** A profile-less live deploy
+    that carries migrations must be verified. The fixture has no cluster, so the check fails
+    closed — which is the point: it must not be skipped silently. *)
+let test_profileless_live_deploy_is_checked () =
   with_context ~migrations:[ "001_init.sql" ] (fun ctx ->
+    match gate ctx ~plan:(plan []) ~live:true with
+    | Ok (), _ -> Windtrap.fail "a live deploy with migrations must not skip verification"
+    | Error (Sol_cli_deploy_run.Failed message), _ ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the refusal is the unverifiable migration state"
+        true
+        (Sol_cli_string.contains
+           ~needle:"cannot verify the required migration state"
+           message)
+    | Error (Sol_cli_deploy_run.Refused message), _ ->
+      Windtrap.failf "unexpected refusal: %s" message)
+;;
+
+(** ...and a profile-less deploy that carries no migrations still has nothing to verify, so the
+    change does not make an ordinary migration-free target do cluster work. *)
+let test_profileless_deploy_without_migrations_is_not_gated () =
+  with_context (fun ctx ->
     match gate ctx ~plan:(plan []) ~live:true with
     | Ok (), [] -> ()
     | Ok (), lines ->
       Windtrap.failf "unexpected report: %s" (String.concat "; " (reported lines))
-    | Error _, _ -> Windtrap.fail "a deploy with no profile must not be gated")
+    | Error (Sol_cli_deploy_run.Failed message), _ ->
+      Windtrap.failf "a deploy with no migrations must not be gated: %s" message
+    | Error (Sol_cli_deploy_run.Refused message), _ ->
+      Windtrap.failf "unexpected refusal: %s" message)
 ;;
 
 let test_offline_run_reports_not_verified () =
@@ -1114,7 +1138,13 @@ let test_an_unavailable_run_log_does_not_change_the_lifecycle_outcome () =
         (Sol_cli_string.contains ~needle:" apply " log)))
 ;;
 
-let%test "migration gate (AUDIT-069): no profile" = test_no_profile_is_not_checked ()
+let%test "migration gate (#1403): a profile-less deploy is checked" =
+  test_profileless_live_deploy_is_checked ()
+;;
+
+let%test "migration gate (#1403): a profile-less deploy with no migrations is not gated" =
+  test_profileless_deploy_without_migrations_is_not_gated ()
+;;
 
 let%test "migration gate (AUDIT-069): offline: not verified" =
   test_offline_run_reports_not_verified ()
