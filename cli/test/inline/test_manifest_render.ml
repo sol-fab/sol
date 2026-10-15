@@ -671,6 +671,18 @@ let test_production_svc_declares_sasl_ssl () =
     "production CA path is the mounted file"
     workload
     {|KAFKA_SSL_CA_LOCATION: "/etc/sol/kafka/ca.crt"|};
+  (* #1477: the OCaml client reads KAFKA_SSL_CA_LOCATION, but a Node process (TypeScript
+     units and the contract Job) verifies HTTPS with Node's own trust store. The posture
+     declares the same CA path to Node, so a durable TypeScript consumer's fetch trusts the
+     platform's Schema Registry/Admin endpoints instead of failing with "fetch failed". *)
+  assert_contains
+    "production Node trust store includes the platform CA (#1477)"
+    workload
+    {|NODE_EXTRA_CA_CERTS: "/etc/sol/kafka/ca.crt"|};
+  assert_absent
+    "and the fix never disables certificate verification"
+    workload
+    "NODE_TLS_REJECT_UNAUTHORIZED";
   assert_contains
     "production SASL mechanism"
     workload
@@ -693,7 +705,8 @@ let test_production_svc_mounts_the_ca () =
 let test_local_svc_has_no_kafka_ca_mount () =
   let _ns, workload = render_spec_ok svc_spec in
   assert_absent "no CA mount locally" workload "kafka-ca";
-  assert_absent "no CA path locally" workload "KAFKA_SSL_CA_LOCATION"
+  assert_absent "no CA path locally" workload "KAFKA_SSL_CA_LOCATION";
+  assert_absent "no Node CA trust locally" workload "NODE_EXTRA_CA_CERTS"
 ;;
 
 let test_production_placeholder_secret_requires_kafka_keys () =
@@ -2762,7 +2775,30 @@ let test_contract_job_manifest () =
     tls_doc
     "name: sol-secrets";
   assert_contains "TLS contract Job mounts the CA key" tls_doc "key: KAFKA_SSL_CA_CERT";
-  assert_contains "TLS contract Job receives the SASL key" tls_doc "KAFKA_SASL_PASSWORD"
+  assert_contains "TLS contract Job receives the SASL key" tls_doc "KAFKA_SASL_PASSWORD";
+  (* #1477: the contract Job runs the TypeScript client, whose HTTPS fetch to the Schema
+     Registry needs the platform CA in Node's trust store. The env var and the mount must
+     name the same file, or the fix would point Node at an absent path. *)
+  assert_contains
+    "TLS contract Job trusts the platform CA for Node (#1477)"
+    tls_doc
+    "name: NODE_EXTRA_CA_CERTS";
+  assert_contains
+    "and the trust path is the mounted CA file"
+    tls_doc
+    "value: /etc/sol/kafka/ca.crt";
+  assert_contains
+    "at the same mount path the contract Job uses"
+    tls_doc
+    "mountPath: /etc/sol/kafka";
+  assert_absent
+    "the plaintext contract Job does not widen Node's trust store"
+    doc
+    "NODE_EXTRA_CA_CERTS";
+  assert_absent
+    "the contract Job never disables certificate verification"
+    tls_doc
+    "NODE_TLS_REJECT_UNAUTHORIZED"
 ;;
 
 let test_contract_scope_rule () =

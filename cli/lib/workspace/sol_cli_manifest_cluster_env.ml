@@ -75,6 +75,16 @@ let service_url ~scheme ~namespace ~name ~port =
 
 let local_url port = Printf.sprintf "http://localhost:%d" port
 
+(* The durable posture's trust anchor, expressed for the runtimes Sol ships. The OCaml
+   Kafka client reads [KAFKA_SSL_CA_LOCATION]; a Node process (the TypeScript units and the
+   contract Job) verifies HTTPS with Node's own trust store and reads [NODE_EXTRA_CA_CERTS],
+   the standard way to add a CA without disabling verification. Both name the same mounted
+   file: the platform CA the deploy delivers as [KAFKA_SSL_CA_CERT], mounted at
+   [kafka_ca_file]. This widens the Node process's trust store, but these are Sol-managed
+   processes whose only TLS peers are the platform's own endpoints, and the published
+   TypeScript client exposes no per-request agent setting to scope it more narrowly. *)
+let node_extra_ca_certs_key = "NODE_EXTRA_CA_CERTS"
+
 let kafka_posture_env = function
   | Plaintext -> [ "KAFKA_SECURITY_PROTOCOL", "plaintext" ]
   | Sasl_ssl ->
@@ -82,6 +92,7 @@ let kafka_posture_env = function
     ; "KAFKA_SASL_MECHANISM", kafka_sasl_mechanism
     ; "KAFKA_SASL_USERNAME", kafka_sasl_username
     ; "KAFKA_SSL_CA_LOCATION", kafka_ca_file
+    ; node_extra_ca_certs_key, kafka_ca_file
     ]
 ;;
 
@@ -118,14 +129,14 @@ let cluster_env transport =
 
 let default_cluster_env = cluster_env Plaintext
 
+(* The durable unit's config: the same posture env the contract Job gets (one declaration of
+   the trust anchor, so a durable Node consumer cannot receive the CA path in one projection
+   and not the other) plus the two TLS endpoints it reaches over the platform CA. *)
 let production_kafka_config =
-  [ kafka_protocol_key, "sasl_ssl"
-  ; "KAFKA_SASL_MECHANISM", kafka_sasl_mechanism
-  ; "KAFKA_SASL_USERNAME", kafka_sasl_username
-  ; "KAFKA_SSL_CA_LOCATION", kafka_ca_file
-  ; "SCHEMA_REGISTRY_URL", Printf.sprintf "https://%s" schema_registry_host
-  ; "REDPANDA_ADMIN_URL", Printf.sprintf "https://%s" redpanda_admin_host
-  ]
+  kafka_posture_env Sasl_ssl
+  @ [ "SCHEMA_REGISTRY_URL", Printf.sprintf "https://%s" schema_registry_host
+    ; "REDPANDA_ADMIN_URL", Printf.sprintf "https://%s" redpanda_admin_host
+    ]
 ;;
 
 let kafka_required_secret_keys = function
