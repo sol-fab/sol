@@ -183,11 +183,14 @@ incomplete.`, before any workload moves (issue #1473). The phase succeeds on the
 environment (`The environment for <target> is reconciled.`) **and** that refusal, not on the
 deploy's exit code. When the deploy stops at the pre-platform `redpanda-users` credential, create
 the Secret with the run's generated or operator-supplied `sol-workloads` SCRAM credential, record
-the supplied input, and re-run the same deploy to resume. Then publish the images `prepare` built
-into the repositories Sol created, `docker inspect` each for its digest, and preview the whole
-target with `sol plan <target> --var-file <tfvars> --image-ref <unit>=<repo>@sha256:<digest>`;
-build the deploy/access/operator kubeconfigs; capture nodes and the cluster root state. Evidence:
-`cloud-apply.log`, `cloud-apply-resume.log`, `platform-credential.log`, `cloud-plan.log`,
+the supplied input, and re-run the same deploy to resume. Before publishing, read the cluster to
+establish the cold-start boundary itself: no Deployment in `pluto-payments`/`pluto-comms` and no
+`sol.dev/type=release` ConfigMap — an unreadable namespace is UNKNOWN, never absence. Then publish
+the images `prepare` built into the repositories Sol created, `docker inspect` each for its digest,
+and preview the whole target with `sol plan <target> --var-file <tfvars> --image-ref
+<unit>=<repo>@sha256:<digest>`; build the deploy/access/operator kubeconfigs; capture nodes and the
+cluster root state. Evidence: `cloud-apply.log`, `cloud-apply-resume.log`,
+`platform-credential.log`, `cold-start-*.err`, `cloud-plan.log`,
 `ecr-sol-repositories-before.txt`, `ecr-sol-repositories-after.txt`, `prerequisites.txt`,
 `k8s-nodes.txt`, `state/cloud.tfstate`, and the verbatim `lifecycle phase:` line per invocation.
 Rows: I1, I2, I4, A, F1, F2.

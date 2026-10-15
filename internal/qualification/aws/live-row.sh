@@ -221,6 +221,41 @@ pending_artifacts_refused() {
   grep -qF 'Deployment incomplete.' "$LOG_DIR"/cloud-apply*.log 2>/dev/null
 }
 
+# The other half of that contract, read from the cluster rather than inferred from the log:
+# reconciliation is not a workload rollout and not a recorded release. A namespace that does not
+# exist yet is not a moved workload; a read that fails for any other reason is UNKNOWN, never
+# absence.
+cold_start_moved_nothing() {
+  local ns out err
+  for ns in $APP_NS $WORKER_NS; do
+    err="$LOG_DIR/cold-start-$ns.err"
+    if ! out="$(kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get deploy -n "$ns" -o name 2>"$err")"; then
+      if grep -q 'not found' "$err" 2>/dev/null; then
+        continue
+      fi
+      say "could not read the deployments in $ns, so whether a workload moved is UNKNOWN (see $err)"
+      return 1
+    fi
+    if [ -n "$out" ]; then
+      say "the cold deploy moved a workload before its immutable artifacts were published: $out"
+      return 1
+    fi
+    if ! out="$(kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get configmap -n "$ns" \
+      -l sol.dev/type=release -o name 2>"$err")"; then
+      if grep -q 'not found' "$err" 2>/dev/null; then
+        continue
+      fi
+      say "could not read the release ConfigMaps in $ns, so whether a release was recorded is UNKNOWN (see $err)"
+      return 1
+    fi
+    if [ -n "$out" ]; then
+      say "the cold deploy recorded a release before its immutable artifacts were published: $out"
+      return 1
+    fi
+  done
+  say "the cold deploy provisioned the target and moved no workload and recorded no release"
+}
+
 # `sol deploy` prints this once the durable installation and the environment are
 # reconciled, before it moves on to the workloads. It is the signal that the bootstrap
 # deploy reached the substrate even when the workload stage later stops on images that do
@@ -579,6 +614,11 @@ phase_cloud() {
     say "(expected 'Deployment incomplete.' in $LOG_DIR/cloud-apply*.log)"
     return 1
   fi
+  # Infrastructure reconciled is not the same as workloads moved. Before this run publishes the
+  # immutable artifacts, establish from the cluster that the cold deploy moved no workload and
+  # recorded no release -- the distinction #1473 makes and a successful cold-start row must show.
+  ensure_contexts || return 1
+  cold_start_moved_nothing || return 1
   # Publish the images `prepare` built into the repositories the deploy just created, then preview
   # the whole target with the digests those pushes resolved to. `sol plan` is the read-only
   # whole-target preview; `sol deploy` is the only command that reconciles the substrate.
@@ -599,7 +639,6 @@ phase_cloud() {
     tail -n 40 "$LOG_DIR/cloud-plan.log"
     return 1
   fi
-  ensure_contexts || return 1
   run nodes kubectl --kubeconfig "$ACCESS_KUBECONFIG" get nodes -o wide || return 1
   capture_kube_evidence
   capture_state

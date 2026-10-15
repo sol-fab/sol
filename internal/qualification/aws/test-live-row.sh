@@ -446,6 +446,18 @@ case " $* " in
     printf 'secret/redpanda-users created\n'
     exit 0
     ;;
+  # The cold-start boundary (#1473): the phase reads the cluster for a workload that moved or a
+  # release that was recorded before the immutable artifacts existed. The default is "nothing
+  # there" (the deploy refused before it established the workload namespaces); each flag models
+  # the failure the assertion must catch.
+  *" get deploy -n "*)
+    if [ "${STUB_COLD_WORKLOAD:-0}" = "1" ]; then printf 'deployment.apps/charge-svc\n'; fi
+    exit 0
+    ;;
+  *" get configmap -n "*" sol.dev/type=release "*)
+    if [ "${STUB_COLD_RELEASE:-0}" = "1" ]; then printf 'configmap/sol-release-current-pluto\n'; fi
+    exit 0
+    ;;
   *" get secret redpanda-users "*)
     printf '%s' 'sol-workloads:testpass:SCRAM-SHA-256' | base64
     exit 0
@@ -1047,6 +1059,24 @@ has "and the preview names the published digest and the row's var file" \
   "plan qualreg/aws/us-east-1 --var-file $ROOT/internal/qualification/aws/qual-aws-row.tfvars --image-ref checkout_svc=$ECR/pluto/checkout-svc@sha256:" \
   "$TMP/cloudrun.sol"
 lacks "the removed partial cloud apply is never invoked" "cloud apply" "$TMP/cloudrun.sol"
+has "and it asserts from the cluster that no workload moved before the publish" \
+  "get deploy -n pluto-payments" "$TMP/cloudrun.kubectl"
+has "and that no release was recorded" \
+  "get configmap -n pluto-payments" "$TMP/cloudrun.kubectl"
+
+printf '\nscenario: a cold deploy that moved a workload before publishing is caught (#1473)\n'
+KEEP_LOG_DIR=1 run_phase coldworkload prepare
+KEEP_LOG_DIR=1 run_phase coldworkload cloud STUB_COLD_WORKLOAD=1
+refused coldworkload "a workload that moved before its artifacts were published fails the phase"
+has "and names what moved" \
+  "the cold deploy moved a workload before its immutable artifacts were published" "$TMP/coldworkload.out"
+
+printf '\nscenario: a cold deploy that recorded a release before publishing is caught (#1473)\n'
+KEEP_LOG_DIR=1 run_phase coldrelease prepare
+KEEP_LOG_DIR=1 run_phase coldrelease cloud STUB_COLD_RELEASE=1
+refused coldrelease "a release recorded before its artifacts were published fails the phase"
+has "and names the release" \
+  "the cold deploy recorded a release before its immutable artifacts were published" "$TMP/coldrelease.out"
 
 printf '\nscenario: the run owns no registry of its own, so the cleanup phase is gone\n'
 run_phase cleanuprun cleanup
