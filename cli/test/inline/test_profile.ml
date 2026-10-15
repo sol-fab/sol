@@ -546,9 +546,9 @@ let test_profile_declares_the_kafka_posture () =
             (Sol_cli_release_id.to_string unclaimed.release_id))))
 ;;
 
-let preflight ?establish ?plan ~apply_mode target =
+let preflight ?establish ?plan ?(evaluation = Pre.All) ~apply_mode target =
   let plan = Option.value plan ~default:(plan_for target) in
-  Pre.check ?establish ~target:(target_of (load target)) ~apply_mode plan
+  Pre.check ?establish ~evaluation ~target:(target_of (load target)) ~apply_mode plan
 ;;
 
 let findings = function
@@ -746,6 +746,111 @@ let test_digest_plan_establishes_artifact_guarantee () =
 
 let finding_for capability fs =
   List.find_opt (fun (f : Pre.finding) -> f.capability = capability) fs
+;;
+
+(* **#1413: the artifact guarantee is the one whose evidence is post-registry.** The apply
+   path evaluates every other guarantee before it reconciles the environment and the artifact
+   guarantee after; these tests pin the split so a caller cannot accidentally evaluate the
+   wrong set. *)
+let test_structural_evaluation_holds_back_only_artifacts () =
+  with_workspace (fun () ->
+    write_target prod_aws selecting;
+    let fs =
+      findings
+        (preflight
+           ~evaluation:Pre.Structural
+           ~apply_mode:Sol_cli_release.Direct
+           "prod/aws/us-east-1")
+    in
+    check_strs
+      "every non-artifact guarantee is still evaluated before any mutation"
+      [ "qualified_versions"
+      ; "remote_state"
+      ; "scoped_operator_identities"
+      ; "alert_delivery"
+      ]
+      (capabilities fs);
+    check_bool
+      "and the artifact guarantee is held back for the post-registry check"
+      false
+      (List.exists (fun (f : Pre.finding) -> f.capability = P.Immutable_artifacts) fs))
+;;
+
+let test_artifacts_evaluation_reports_only_artifacts () =
+  with_workspace (fun () ->
+    write_target prod_aws selecting;
+    let fs =
+      findings
+        (preflight
+           ~evaluation:Pre.Artifacts
+           ~apply_mode:Sol_cli_release.Direct
+           "prod/aws/us-east-1")
+    in
+    check_strs
+      "only the artifact guarantee is evaluated after the registry exists"
+      [ "immutable_artifacts" ]
+      (capabilities fs))
+;;
+
+let test_artifacts_evaluation_passes_with_a_digest () =
+  with_workspace (fun () ->
+    write_target prod_aws selecting;
+    let digest =
+      "123456789012.dkr.ecr.us-east-1.amazonaws.com/pluto/charge-svc@sha256:"
+      ^ String.make 64 'a'
+    in
+    let plan = plan_for ~image_refs:[ "charge_svc", digest ] "prod/aws/us-east-1" in
+    check_bool
+      "a digest establishes the artifact guarantee wherever it is evaluated"
+      true
+      (preflight
+         ~plan
+         ~evaluation:Pre.Artifacts
+         ~apply_mode:Sol_cli_release.Direct
+         "prod/aws/us-east-1"
+       = Ok ()))
+;;
+
+let test_pending_artifacts_name_the_target_repositories () =
+  with_workspace (fun () ->
+    write_target prod_aws selecting;
+    let plan = plan_for "prod/aws/us-east-1" in
+    check_strs
+      "the pending repositories are the workspace path the target root creates"
+      [ "registry.example.com/pluto/charge-svc" ]
+      (Pre.publish_repositories plan);
+    let report =
+      Pre.pending_artifacts_report
+        ~target:"prod/aws/us-east-1"
+        ~profile:P.Production_single_region
+        plan
+    in
+    check_bool
+      "the report says the provision succeeded and the deployment is incomplete"
+      true
+      (Sol_cli_string.contains ~needle:"Deployment incomplete" report
+       && Sol_cli_string.contains ~needle:"no workload has moved" report);
+    check_bool
+      "and names the repository and the re-run command"
+      true
+      (Sol_cli_string.contains ~needle:"registry.example.com/pluto/charge-svc" report
+       && Sol_cli_string.contains ~needle:"sol deploy prod/aws/us-east-1" report))
+;;
+
+let test_repository_strips_a_tag_but_keeps_a_port () =
+  check_str
+    "a registry port is not a tag"
+    "registry:5000/pluto/charge-svc"
+    (Sol_cli_image_ref.repository "registry:5000/pluto/charge-svc:abc123");
+  check_str
+    "a digest reference strips at the digest"
+    "registry:5000/pluto/charge-svc"
+    (Sol_cli_image_ref.repository
+       ("registry:5000/pluto/charge-svc@sha256:" ^ String.make 64 'a'));
+  check_str
+    "a repository with no tag is unchanged"
+    "registry:5000/pluto/charge-svc"
+    (Sol_cli_image_ref.repository "registry:5000/pluto/charge-svc")
 ;;
 
 let test_undeclared_language_is_an_application_finding () =
@@ -1312,6 +1417,26 @@ let%test "preflight: no profile skips" = test_no_profile_skips_preflight ()
 
 let%test "preflight: unestablished guarantees fail closed" =
   test_unestablished_guarantees_fail_closed ()
+;;
+
+let%test "preflight (#1413): structural holds back only artifacts" =
+  test_structural_evaluation_holds_back_only_artifacts ()
+;;
+
+let%test "preflight (#1413): artifacts evaluates only artifacts" =
+  test_artifacts_evaluation_reports_only_artifacts ()
+;;
+
+let%test "preflight (#1413): a digest establishes artifacts when evaluated alone" =
+  test_artifacts_evaluation_passes_with_a_digest ()
+;;
+
+let%test "preflight (#1413): pending artifacts name the target repositories" =
+  test_pending_artifacts_name_the_target_repositories ()
+;;
+
+let%test "preflight (#1413): repository strips a tag and keeps a registry port" =
+  test_repository_strips_a_tag_but_keeps_a_port ()
 ;;
 
 let%test "preflight: undeclared language is an application finding" =

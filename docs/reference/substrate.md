@@ -422,12 +422,19 @@ on its environment or on the target itself. `shape`, like `profile`, is rejected
 without a shape is refused before Terraform or the workload stage.
 
 A target that selects `production-single-region` goes through a preflight on
-every `sol deploy` (including `--dry-run`) before any cluster call, lease or
-emitted file. The preflight checks each guarantee the profile requires for the
-workloads being deployed and refuses if any is unmet. Each unmet guarantee is
-named along with who must act: the application, the target, or Sol itself.
-There is no "accepted but unverified" outcome: the profile is unsatisfiable
-until Sol can establish every guarantee it requires.
+every `sol deploy` (including `--dry-run`). Every guarantee whose evidence is
+knowable from configuration is checked before any cluster call, lease or emitted
+file, and refuses if unmet. The immutable-artifact guarantee is the one
+exception: its evidence is a digest published into the target's registry, and
+that registry is itself part of the target's infrastructure. On an apply, Sol
+reconciles the environment — which creates the registry — and then checks the
+artifacts; if none is published it reports the deployment incomplete, names the
+repositories to publish into, and changes no workload. A `--dry-run` or
+`--emit-to` still evaluates every guarantee, including the artifacts, before it
+writes anything. Each unmet guarantee is named along with who must act: the
+application, the target, or Sol itself. There is no "accepted but unverified"
+outcome: the profile is unsatisfiable until Sol can establish every guarantee it
+requires.
 
 #### Shape and qualification are separate axes
 
@@ -444,7 +451,10 @@ renders:
   consumer reads the one resolution (`Sol_cli_config.platform_shape`), so the plan
   and the cloud lifecycle cannot disagree.
 - **Qualification** is the preflight gate above — the guarantees in the table
-  below, which must be established before Sol mutates anything.
+  below, which must be established before Sol mutates anything. The
+  immutable-artifact guarantee is established as soon as the target's registry
+  exists and before any workload moves; every other guarantee precedes the
+  registry.
 
 They are independent. A profile can constrain the shape without being its source,
 and an unqualified provider still deploys the declared shape, so the posture a

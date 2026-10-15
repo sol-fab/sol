@@ -13,3 +13,6 @@ val resolve_with_previous
   -> ((string * string) list, string) result
 
 val plan_is_immutable : string list -> bool
+
+(** The registry path a reference addresses, without its tag or digest. *)
+val repository : string -> string

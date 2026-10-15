@@ -102,5 +102,12 @@ module Target_plan : sig
   val to_deployment_plan : t -> Sol_cli_deployment_plan.t
 end
 
-val plan : Planning_input.t -> (Sol_cli_deployment_plan.t, plan_error) result
-val target_plan : Target_plan_input.t -> (Target_plan.t, plan_error) result
+val plan
+  :  ?evaluation:Sol_cli_profile_preflight.evaluation
+  -> Planning_input.t
+  -> (Sol_cli_deployment_plan.t, plan_error) result
+
+val target_plan
+  :  ?evaluation:Sol_cli_profile_preflight.evaluation
+  -> Target_plan_input.t
+  -> (Target_plan.t, plan_error) result

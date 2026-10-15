@@ -242,6 +242,30 @@ check_absent \
   "create it — network, cluster, database and platform — with:" \
   "$output"
 
+# **#1413: a target whose images are not published yet provisions the registry it needs, then
+# stops before any workload moves. The provision is reported as a completed step, not as a
+# failed deploy.**
+run_deploy prod/aws/us-east-1
+check "a cold target with no published digests exits 1" 1 "$rc"
+check_contains \
+  "the run reports a completed provision and a pending artifact, not a failed deploy" \
+  "Deployment incomplete" "$output"
+check_contains \
+  "and names the repository the operator must publish to" \
+  "registry.example.test/environment-stage/work/charge-svc" "$output"
+check_contains \
+  "and the re-run that will apply it" \
+  "sol deploy prod/aws/us-east-1" "$output"
+check_file_contains \
+  "the cold run still reconciles the environment (its registry)" \
+  "cloud/aws/cluster" "$tmp/lifecycle.log"
+check_absent \
+  "the cold run never claims the preflight passed" \
+  "(preflight passed)" "$output"
+check_absent \
+  "and never reaches the workload prerequisites" \
+  "could not establish the target's trusted Kubernetes workload issuer" "$output"
+
 OIDC_ISSUER_UNAVAILABLE=1 run_deploy prod/aws/us-east-1 --image-ref "$image_ref"
 check_contains \
   "an unavailable issuer refuses an svc deployment" \

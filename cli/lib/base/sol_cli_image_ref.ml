@@ -108,3 +108,23 @@ let resolve_with_previous ~service_names refs previous =
 let plan_is_immutable (images : string list) =
   images <> [] && List.for_all is_digest images
 ;;
+
+(** The registry path a reference addresses, without its tag or digest. The pending-artifact
+    report names these; they are the `<registry>/<workspace>/<unit>` repositories the target
+    root creates. A registry host may carry a port, so only a `:` *after the last `/`* is a
+    tag separator — `registry:5000/ws/unit` is left intact, `registry:5000/ws/unit:tag` is
+    stripped at the tag. *)
+let repository ref =
+  match String.index_opt ref '@' with
+  | Some at -> String.sub ref 0 at
+  | None ->
+    (match String.rindex_opt ref ':' with
+     | Some colon ->
+       let after_last_slash =
+         match String.rindex_opt ref '/' with
+         | Some slash -> colon > slash
+         | None -> true
+       in
+       if after_last_slash then String.sub ref 0 colon else ref
+     | None -> ref)
+;;
