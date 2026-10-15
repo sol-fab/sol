@@ -78,6 +78,17 @@ let provisions bindings ~typ =
     bindings
 ;;
 
+(** Whether Sol provisions a [typ] resource in the config's effective graph. The decision
+    refuses when that graph cannot be resolved: reading the error as "not Sol-provisioned"
+    would skip the CA mount and treat the database as someone else's, which is the fail-open
+    shape this boundary removes (#1469). Callers that need the answer apply their own message;
+    the resolution error is preserved. *)
+let provisions_of_config (cfg : Sol_cli_config.t) ~typ =
+  match resolve cfg with
+  | Ok bindings -> Ok (provisions bindings ~typ)
+  | Error _ as error -> error
+;;
+
 let of_type bindings ~typ = List.filter (fun b -> String.equal b.typ typ) bindings
 
 let provisioned_database bindings =

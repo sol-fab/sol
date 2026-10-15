@@ -132,11 +132,23 @@ let migration_prerequisite ctx ~plan:_ ~live =
       (* A different question from the identity's ("which resource is the target's database"):
          this asks whether Sol provisions it, and only the CA mount depends on the answer. It
          resolves the config again rather than adding a second public shape for the identity,
-         which is the duplication #1424 removed. `resolve` is pure. *)
-      let provisions_database =
-        match Sol_cli_resource_binding.resolve ctx.resolved_config with
-        | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
-        | Error _ -> false
+         which is the duplication #1424 removed. `resolve` is pure.
+
+         An unresolvable binding refuses the deploy. Reading it as "not Sol-provisioned" would
+         quietly skip the CA mount and proceed as if the database belonged to someone else,
+         which is the fail-open shape this boundary removes (#1469); the decision cannot be
+         made from a discarded error. Nothing is applied: this resolves before the migration
+         gate reconciles operator bindings or reads cluster state. *)
+      let* provisions_database =
+        Sol_cli_resource_binding.provisions_of_config ctx.resolved_config ~typ:"postgres"
+        |> Result.map_error (fun message ->
+          Refused
+            (Printf.sprintf
+               "\n\
+                error: cannot determine whether target %s provisions its database, so \
+                the migration gate cannot decide whether to mount its CA ConfigMap: %s"
+               ctx.target_name
+               message))
       in
       let ca_configmap =
         if provisions_database

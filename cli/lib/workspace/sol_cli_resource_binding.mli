@@ -27,6 +27,11 @@ val resolve : Sol_cli_config.t -> (t list, string) result
 (** Whether the resolved graph has a resource of this type that Sol provisions. *)
 val provisions : t list -> typ:string -> bool
 
+(** Whether Sol provisions a [typ] resource, resolving the config itself. Fails with the
+    resolution error rather than reading an unresolvable graph as "not Sol-provisioned": the
+    caller's CA-mount decision must not be made from a discarded error (#1469). *)
+val provisions_of_config : Sol_cli_config.t -> typ:string -> (bool, string) result
+
 (** The resolved bindings of one type. *)
 val of_type : t list -> typ:string -> t list
 
