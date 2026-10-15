@@ -163,6 +163,40 @@ declared destination, and a provider that declares no deploy identity (GCP today
 gets no ephemeral access at all — the deploy stops after provisioning and prints
 exactly this command and context for you to add.
 
+### The first deploy against a cold target
+
+`sol deploy` owns reconciliation of the declared target, including its first
+run. A target that has never been provisioned has no container repository for
+its workloads, and a profiled target requires an immutable reference for every
+workload — so the first run is completed across two `sol deploy` invocations
+with a publish between them:
+
+1. `sol deploy <target>` validates every guarantee whose evidence is
+   configuration — configuration, shape, resource ownership, provider
+   capabilities, artifact-reference syntax — before it changes anything. It then
+   reconciles the environment, which creates the workspace's ECR repositories.
+   It publishes nothing, so it reports the deployment incomplete, names the
+   repositories to publish into, and stops before any workload moves:
+
+   ```
+   Profile: production-single-region/v1
+   ...
+   Deployment incomplete: infrastructure is reconciled and no workload has moved.
+   ...
+     - 123456789012.dkr.ecr.us-east-1.amazonaws.com/pluto/charge-svc
+   ```
+
+2. The publisher pushes each workload's image to its repository as the
+   `publisher` identity above, and reads back the digest.
+
+3. `sol deploy <target> --image-ref <service>=<repo>@sha256:<digest> ...`
+   re-validates, reconciles the environment (already at its declared state, so a
+   no-op), and applies the workloads. The run is resumable and idempotent:
+   re-running any step changes nothing already reconciled.
+
+The repositories belong to the target root, not to a longer-lived installation,
+and are destroyed with it (ADR-0004) — teardown removes them and their contents.
+
 ## 3. No standing cluster-creator admin
 
 The AWS module sets `enable_cluster_creator_admin_permissions = false`. During

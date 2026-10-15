@@ -24,20 +24,38 @@ let print_header ~workspace ~sha ?mode_line () =
   Printf.printf "\n%!"
 ;;
 
-let build_plan (input : Sol_cli_deploy_selection.Target_plan_input.t) =
+let build_plan
+      ?(evaluation = Sol_cli_profile_preflight.All)
+      (input : Sol_cli_deploy_selection.Target_plan_input.t)
+  =
   let* plan =
-    Sol_cli_deploy_selection.target_plan input
+    Sol_cli_deploy_selection.target_plan ~evaluation input
     |> Result.map_error (function
       | Sol_cli_deploy_selection.Refused message -> Sol_cli_exit.error message
       | Preflight (profile, findings) ->
         Sol_cli_exit.failure (Sol_cli_profile_preflight.report profile findings))
   in
-  Sol_cli_deploy_selection.Target_plan.profile plan
-  |> Option.iter (fun (claim : Sol_cli_deployment_plan.profile_claim) ->
+  (* Only a caller that evaluated every guarantee can say the preflight passed here: the apply
+     path evaluates the artifacts after it has reconciled the registry, and prints the pass
+     then. *)
+  (match evaluation with
+   | Sol_cli_profile_preflight.All ->
+     Sol_cli_deploy_selection.Target_plan.profile plan
+     |> Option.iter (fun (claim : Sol_cli_deployment_plan.profile_claim) ->
+       Printf.printf
+         "Profile: %s (preflight passed)\n%!"
+         (Sol_cli_profile.to_string claim.profile))
+   | Structural | Artifacts -> ());
+  Ok plan
+;;
+
+let print_plan_preflight_passed (plan : Sol_cli_deployment_plan.t) =
+  match plan.Sol_cli_deployment_plan.profile with
+  | Some (claim : Sol_cli_deployment_plan.profile_claim) ->
     Printf.printf
       "Profile: %s (preflight passed)\n%!"
-      (Sol_cli_profile.to_string claim.profile));
-  Ok plan
+      (Sol_cli_profile.to_string claim.profile)
+  | None -> ()
 ;;
 
 let project_trusted_workload_issuer target_cfg plan =
@@ -938,7 +956,7 @@ let run_apply
     ~workspace:planning.Sol_cli_deploy_selection.Target_plan_input.workspace
     ~sha:planning.Sol_cli_deploy_selection.Target_plan_input.sha
     ();
-  let* plan = build_plan planning in
+  let* plan = build_plan ~evaluation:Sol_cli_profile_preflight.Structural planning in
   let plan = Sol_cli_deploy_selection.Target_plan.to_deployment_plan plan in
   let* () =
     check_apply_environment
@@ -954,6 +972,24 @@ let run_apply
     Sol_cli_database_setup_run.setup_image_preflight planning.config
     |> Sol_cli_exit.of_msg
   in
+  (* **Immutable artifact availability.** Its evidence — a digest published into the target's
+     registry — cannot exist before the target root has created that registry, so a target
+     that already names one is checked here, before any mutation, and a target that does not
+     is provisioned first and reported incomplete below. This is the last preflight step, and
+     it is evaluated before the environment stage so a warm run still refuses before
+     provisioning. Nothing here changes a workload: the entire workload stage runs only when
+     this is established. *)
+  let pending_artifacts =
+    match
+      Sol_cli_profile_preflight.check
+        ~evaluation:Sol_cli_profile_preflight.Artifacts
+        ~target:planning.Sol_cli_deploy_selection.Target_plan_input.config.target
+        ~apply_mode:Sol_cli_release.Direct
+        plan
+    with
+    | Ok () -> None
+    | Error (profile, _findings) -> Some profile
+  in
   let* destination, established, infra_dir =
     destination_or_environment_stage
       ~planning
@@ -965,6 +1001,18 @@ let run_apply
       ()
   in
   let target_cfg = planning.Sol_cli_deploy_selection.Target_plan_input.config.target in
+  let* () =
+    match pending_artifacts with
+    | None -> Ok ()
+    | Some profile ->
+      print_guided
+        [ ""
+        ; "Deployment incomplete."
+        ; Sol_cli_profile_preflight.pending_artifacts_report ~target ~profile plan
+        ];
+      Error (Sol_cli_exit.reported ~code:1 ())
+  in
+  print_plan_preflight_passed plan;
   let authorization = Sol_cli_provider_capabilities.capabilities_of target_cfg.provider in
   let reconciler_declared =
     match

@@ -301,7 +301,7 @@ module Target_plan = struct
   let to_deployment_plan t = t.deployment_plan
 end
 
-let plan (input : Planning_input.t) =
+let plan ?(evaluation = Sol_cli_profile_preflight.All) (input : Planning_input.t) =
   let open Planning_input in
   let { workspace
       ; registry
@@ -416,13 +416,16 @@ let plan (input : Planning_input.t) =
     | None -> Sol_cli_release.Direct
   in
   let* () =
-    Sol_cli_profile_preflight.check ~target:config.target ~apply_mode plan
+    Sol_cli_profile_preflight.check ~evaluation ~target:config.target ~apply_mode plan
     |> Result.map_error (fun (profile, findings) -> Preflight (profile, findings))
   in
   Ok plan
 ;;
 
-let target_plan (input : Target_plan_input.t) =
+let target_plan
+      ?(evaluation = Sol_cli_profile_preflight.All)
+      (input : Target_plan_input.t)
+  =
   let open Target_plan_input in
   let { workspace
       ; registry
@@ -438,6 +441,7 @@ let target_plan (input : Target_plan_input.t) =
     input
   in
   plan
+    ~evaluation
     { Planning_input.workspace
     ; registry
     ; sha

@@ -13,6 +13,26 @@ type finding =
   ; reason : string
   }
 
+(** **Which guarantees a caller evaluates now.**
+
+    [Immutable_artifacts] is the one guarantee whose evidence — a digest published into the
+    target's registry — cannot exist until the target root has created that registry. The
+    apply path therefore evaluates {!Structural} before it reconciles the environment and
+    {!Artifacts} before it moves a workload. Every other caller evaluates {!All} and refuses
+    before any mutation; a target that already names immutable references also passes {!All}
+    before provisioning, so a warm apply keeps its early validation. *)
+type evaluation =
+  | All
+  | Structural
+  | Artifacts
+
+let evaluates evaluation (capability : Sol_cli_profile.capability) =
+  match evaluation with
+  | All -> true
+  | Structural -> not (capability = Immutable_artifacts)
+  | Artifacts -> capability = Immutable_artifacts
+;;
+
 let qualified_providers =
   Sol_cli_provider.all
   |> List.filter (fun provider ->
@@ -246,7 +266,13 @@ let establish
       | [] -> Established)
 ;;
 
-let check ?establish:establish_opt ~target ~apply_mode (plan : Sol_cli_deployment_plan.t) =
+let check
+      ?establish:establish_opt
+      ?(evaluation = All)
+      ~target
+      ~apply_mode
+      (plan : Sol_cli_deployment_plan.t)
+  =
   match plan.profile with
   | None -> Ok ()
   | Some (claim : Sol_cli_deployment_plan.profile_claim) ->
@@ -260,6 +286,7 @@ let check ?establish:establish_opt ~target ~apply_mode (plan : Sol_cli_deploymen
     in
     let findings =
       claim.requirements
+      |> List.filter (evaluates evaluation)
       |> List.filter_map (fun capability ->
         match
           Option.value (application_status capability) ~default:(establish capability)
@@ -292,4 +319,38 @@ let report profile findings =
     (Sol_cli_profile.to_string profile)
     (List.length findings)
     (findings |> List.map (fun f -> "  - " ^ finding_to_string f) |> String.concat "\n")
+;;
+
+(** The repositories a pending immutable artifact must be published into: each workload's
+    registry path, without its tag. The plan's images are the
+    `<registry>/<workspace>/<unit>` names the target root creates, so this reader derives them
+    from the same image the renderer would push. *)
+let publish_repositories (plan : Sol_cli_deployment_plan.t) =
+  plan.services
+  |> List.map (fun (spec : Sol_cli_deployment_plan.service_spec) ->
+    Sol_cli_image_ref.repository spec.image)
+  |> List.sort_uniq String.compare
+;;
+
+(** The diagnostic an apply prints when it has reconciled the target but cannot move a
+    workload: the target-root registry now exists, so the operator can publish, but this
+    target requires an immutable reference for every workload and none is published yet. It
+    names what was established and the exact next step rather than reporting a failed
+    provision. *)
+let pending_artifacts_report ~target ~profile (plan : Sol_cli_deployment_plan.t) =
+  let repositories = publish_repositories plan in
+  Printf.sprintf
+    "Deployment incomplete: infrastructure is reconciled and no workload has moved.\n\
+     This target selects profile %s, which requires an immutable reference for every \
+     workload; none is published yet.\n\n\
+     Publish each workload's image to its repository, then re-run `sol deploy %s` with \
+     the digests:\n\
+     %s\n\n\
+    \  sol deploy %s --image-ref '<service>=<repository>@sha256:<digest>' ...\n"
+    (Sol_cli_profile.to_string profile)
+    target
+    (repositories
+     |> List.map (fun repository -> "  - " ^ repository)
+     |> String.concat "\n")
+    target
 ;;
