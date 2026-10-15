@@ -84,119 +84,128 @@ let plan_workloads (plan : Sol_cli_deployment_plan.t) =
 ;;
 
 (* **#1403: migration verification does not depend on the profile.** A profile answers which
-   guarantees a target claims, not what the deploy does. A profile-less target must still
-   refuse to roll workloads against an unapplied schema, so what decides here is whether the
-   workspace has migrations at all: [Sol_cli_migration_gate.verify] answers [No_migrations]
-   before it touches the cluster, so a target that carries none does no cluster work here. *)
+   guarantees a target claims, not what the deploy does, so a profile-less target must still
+   refuse to roll workloads against an unapplied schema. What decides is whether the workspace
+   carries migrations at all — and that is decided before any cluster call, so a target with
+   none performs no migration-specific Kubernetes work of any kind. *)
 let migration_prerequisite ctx ~plan:_ ~live =
   let dir =
     Filename.concat ctx.facts.Sol_cli_workspace_model.root Sol_cli_migration.default_dir
   in
-  if not live
-  then (
-    match Sol_cli_migration.required_if_present ~dir with
-    | Ok [] | Error _ -> Ok ()
-    | Ok _ ->
+  (* Whether there is anything to verify is decided **before any migration-specific cluster
+     operation**: a target that carries no migrations returns here, so it reconciles no
+     operator RoleBindings and reads no migration status. Asking the cluster first and
+     discovering "nothing to verify" afterwards would still be cluster work. *)
+  match Sol_cli_migration.required_if_present ~dir with
+  | Ok [] -> Ok ()
+  | Error _ when not live -> Ok ()
+  | _ ->
+    (* Reaching here offline means the directory is inspectable and names migrations, so the
+       only honest answer is that this run did not verify them. *)
+    if not live
+    then (
       Sol_cli_report.app
         "Migrations: NOT verified -- a side-effect-free run creates no status Job. The \
          applied migration set is only checked against the live cluster by a real deploy \
          (before any workload moves).";
       Ok ())
-  else (
-    (* The lifecycle owner establishes the plan's namespaces and scoped RBAC once,
+    else (
+      (* The lifecycle owner establishes the plan's namespaces and scoped RBAC once,
          in [substrate_prerequisite], before this gate. Migration verification must not
          re-enter that establishment: a second call would be duplicate lifecycle work
          and would let the two steps drift apart. *)
-    (* 2b: the migration Job is a DDL consumer, so it reads `<target>-ddl-creds` — the class
+      (* 2b: the migration Job is a DDL consumer, so it reads `<target>-ddl-creds` — the class
        Secret the setup step (or ESO, for an externally bound database) writes. The reader
        never learns the ownership; the only ownership-shaped decision here is whether the
        target publishes a CA ConfigMap, which only Sol's setup step does. *)
-    (* The identity comes from the *resolved config*, not from `ctx.target_name`: what the
+      (* The identity comes from the *resolved config*, not from `ctx.target_name`: what the
          operator typed and what the environment file resolves to can differ, and two sanitized
          target strings would put this target's database operations in two namespaces (#1424).
          The class Secret names come from the identity's target for the same reason. *)
-    let database =
-      Sol_cli_database_setup_run.identity_of_config
-        ~workspace:ctx.execution.workspace
-        ctx.resolved_config
-    in
-    let target = database.Sol_cli_database_setup_render.target in
-    let namespace = Sol_cli_database_setup_render.database_namespace database in
-    (* A different question from the identity's ("which resource is the target's database"):
+      let database =
+        Sol_cli_database_setup_run.identity_of_config
+          ~workspace:ctx.execution.workspace
+          ctx.resolved_config
+      in
+      let target = database.Sol_cli_database_setup_render.target in
+      let namespace = Sol_cli_database_setup_render.database_namespace database in
+      (* A different question from the identity's ("which resource is the target's database"):
          this asks whether Sol provisions it, and only the CA mount depends on the answer. It
          resolves the config again rather than adding a second public shape for the identity,
          which is the duplication #1424 removed. `resolve` is pure. *)
-    let provisions_database =
-      match Sol_cli_resource_binding.resolve ctx.resolved_config with
-      | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
-      | Error _ -> false
-    in
-    let ca_configmap =
-      if provisions_database
-      then Some (Sol_cli_database_setup_render.ca_configmap_name target)
-      else None
-    in
-    let ddl_creds_name = Sol_cli_database_setup_render.ddl_creds_name target in
-    Sol_cli_migration_gate.reconcile_operator_bindings
-      ~ctx:ctx.execution.cluster
-      ~workspace:ctx.execution.workspace
-      ~services:ctx.inventory;
-    match
-      Sol_cli_migration_gate.verify
+      let provisions_database =
+        match Sol_cli_resource_binding.resolve ctx.resolved_config with
+        | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
+        | Error _ -> false
+      in
+      let ca_configmap =
+        if provisions_database
+        then Some (Sol_cli_database_setup_render.ca_configmap_name target)
+        else None
+      in
+      let ddl_creds_name = Sol_cli_database_setup_render.ddl_creds_name target in
+      Sol_cli_migration_gate.reconcile_operator_bindings
         ~ctx:ctx.execution.cluster
         ~workspace:ctx.execution.workspace
-        ~dir
-        ~namespace
-        ~ddl_creds_name
-        ?ca_configmap
-        ()
-    with
-    | Sol_cli_migration_gate.No_migrations -> Ok ()
-    | Sol_cli_migration_gate.Satisfied applied ->
-      Sol_cli_report.app
-        "Migrations: OK -- %d declared migration(s) present in schema_migrations"
-        (List.length applied);
-      Ok ()
-    | Sol_cli_migration_gate.Unsatisfied missing ->
-      Error
-        (Failed
-           (Printf.sprintf
-              "\n\
-               error: the required migration set is not applied. Missing: %s\n\
-              \  Migrations are workspace-wide, so this is the same set for every \
-               deploy. Run `sol migrate apply %s`, then deploy again."
-              (String.concat ", " (List.map Sol_cli_migration.to_string missing))
-              ctx.target_name))
-    | Sol_cli_migration_gate.Drifted drifted ->
-      Error
-        (Failed
-           (Printf.sprintf
-              "\n\
-               error: an already-applied migration no longer matches the file this \
-               revision carries, so the applied schema record and the deployable \
-               revision disagree:\n\
-               %s\n\
-              \  Restore each file to the content that was applied, or put the change in \
-               a new migration and apply it with `sol migrate apply %s`. Deploying while \
-               they disagree would record a boundary whose schema is one of the two, not \
-               both."
-              (String.concat
-                 "\n"
-                 (List.map (fun d -> "  - " ^ Sol_cli_migration.drift_message d) drifted))
-              ctx.target_name))
-    | Sol_cli_migration_gate.Unavailable reason ->
-      Error
-        (Failed
-           (Printf.sprintf
-              "\n\
-               error: cannot verify the required migration state: %s\n\
-              \  A deploy fails closed here rather than assume the schema is compatible: \
-               any target that carries migrations is verified. Migrations are \
-               workspace-wide -- a deploy does not select them -- so `sol migrate apply \
-               %s` checks the same required set this deploy did (it reports the applied \
-               set). Run it, then deploy again."
-              reason
-              ctx.target_name)))
+        ~services:ctx.inventory;
+      match
+        Sol_cli_migration_gate.verify
+          ~ctx:ctx.execution.cluster
+          ~workspace:ctx.execution.workspace
+          ~dir
+          ~namespace
+          ~ddl_creds_name
+          ?ca_configmap
+          ()
+      with
+      | Sol_cli_migration_gate.No_migrations -> Ok ()
+      | Sol_cli_migration_gate.Satisfied applied ->
+        Sol_cli_report.app
+          "Migrations: OK -- %d declared migration(s) present in schema_migrations"
+          (List.length applied);
+        Ok ()
+      | Sol_cli_migration_gate.Unsatisfied missing ->
+        Error
+          (Failed
+             (Printf.sprintf
+                "\n\
+                 error: the required migration set is not applied. Missing: %s\n\
+                \  Migrations are workspace-wide, so this is the same set for every \
+                 deploy. Run `sol migrate apply %s`, then deploy again."
+                (String.concat ", " (List.map Sol_cli_migration.to_string missing))
+                ctx.target_name))
+      | Sol_cli_migration_gate.Drifted drifted ->
+        Error
+          (Failed
+             (Printf.sprintf
+                "\n\
+                 error: an already-applied migration no longer matches the file this \
+                 revision carries, so the applied schema record and the deployable \
+                 revision disagree:\n\
+                 %s\n\
+                \  Restore each file to the content that was applied, or put the change \
+                 in a new migration and apply it with `sol migrate apply %s`. Deploying \
+                 while they disagree would record a boundary whose schema is one of the \
+                 two, not both."
+                (String.concat
+                   "\n"
+                   (List.map
+                      (fun d -> "  - " ^ Sol_cli_migration.drift_message d)
+                      drifted))
+                ctx.target_name))
+      | Sol_cli_migration_gate.Unavailable reason ->
+        Error
+          (Failed
+             (Printf.sprintf
+                "\n\
+                 error: cannot verify the required migration state: %s\n\
+                \  A deploy fails closed here rather than assume the schema is \
+                 compatible: any target that carries migrations is verified. Migrations \
+                 are workspace-wide -- a deploy does not select them -- so `sol migrate \
+                 apply %s` checks the same required set this deploy did (it reports the \
+                 applied set). Run it, then deploy again."
+                reason
+                ctx.target_name)))
 ;;
 
 let substrate_prerequisite ctx ~plan ~live =
