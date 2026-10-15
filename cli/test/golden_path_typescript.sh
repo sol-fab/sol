@@ -28,20 +28,36 @@ if sol local deploy --scope=demo_ts >"$first_deploy_log" 2>&1; then
   cat "$first_deploy_log"
   echo "::error::first deploy unexpectedly accepted pending migrations"
   exit 1
+else
+  first_deploy_rc=$?
+  if [ "$first_deploy_rc" -ne 1 ]; then
+    cat "$first_deploy_log"
+    echo "::error::initial migration refusal returned $first_deploy_rc, expected 1"
+    exit 1
+  fi
 fi
 cat "$first_deploy_log"
 grep -Fq 'the required migration set is not applied' "$first_deploy_log"
 grep -Fq 'sol local migrate' "$first_deploy_log"
 rm -f "$first_deploy_log"
-if [ -n "$(kubectl get deployments,statefulsets,jobs,cronjobs -n pluto-demo-ts -o name)" ]; then
+initial_workloads=$(kubectl get deployments,statefulsets,jobs,cronjobs -n pluto-demo-ts -o name)
+if [ -n "$initial_workloads" ]; then
   echo "::error::pending migrations must prevent workload application"
   exit 1
 fi
+
+cluster_uid=$(kubectl get namespace kube-system -o jsonpath='{.metadata.uid}')
+postgres_uid=$(kubectl get statefulset postgresql -n postgresql -o jsonpath='{.metadata.uid}')
+test -n "$cluster_uid" && test -n "$postgres_uid"
 
 # This must work with infrastructure alone: no successful workload deployment,
 # workload namespace, or class Secret is a prerequisite for local migration.
 sol local migrate
 sol local deploy --scope=demo_ts
+
+test "$cluster_uid" = "$(kubectl get namespace kube-system -o jsonpath='{.metadata.uid}')"
+test "$postgres_uid" = "$(kubectl get statefulset postgresql -n postgresql -o jsonpath='{.metadata.uid}')"
+echo "migration gate: refused without workloads; migrated and deployed using the same infrastructure"
 
 demo_ns=$(kubectl get ns -o name | sed 's|namespace/||' | grep -- '-demo-ts$' | head -1)
 
