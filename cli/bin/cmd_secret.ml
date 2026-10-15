@@ -121,11 +121,9 @@ let find_unit_config facts address =
   | Some { config = Ok config; _ } -> Ok config
 ;;
 
-let required_keys (target : Sol_cli_config.target) (toml : Sol_cli_toml.t) =
+let required_keys ~platform_shape (toml : Sol_cli_toml.t) =
   Sol_cli_manifest.required_secret_keys
-    ~transport:
-      (Sol_cli_manifest.kafka_transport
-         (Sol_cli_profile.platform_shape target.Sol_cli_config.profile))
+    ~transport:(Sol_cli_manifest.kafka_transport platform_shape)
     toml.secret_keys
 ;;
 
@@ -133,10 +131,8 @@ let required_keys (target : Sol_cli_config.target) (toml : Sol_cli_toml.t) =
    delivered by the deploy — `<target>-dml-creds` to a consumer unit and `<target>-ddl-creds`
    to the migration Job — so there is no operator value to set or delete. Only the Kafka
    credentials remain platform inputs until #1344c binds them. *)
-let platform_keys (target : Sol_cli_config.target) =
-  match
-    Sol_cli_manifest.kafka_transport (Sol_cli_profile.platform_shape target.profile)
-  with
+let platform_keys ~platform_shape =
+  match Sol_cli_manifest.kafka_transport platform_shape with
   | Sol_cli_manifest.Plaintext -> []
   | Sasl_ssl -> [ "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ]
 ;;
@@ -150,7 +146,7 @@ let target_namespaces ~config ~facts ~workspace =
   |> Result.map (List.sort_uniq String.compare)
 ;;
 
-let check_platform_key config key =
+let check_platform_key ~platform_shape key =
   if String.equal key "POSTGRES_URL"
   then
     Error
@@ -158,7 +154,7 @@ let check_platform_key config key =
        database reads `<target>-dml-creds` and the migration Job reads \
        `<target>-ddl-creds`, both delivered by the deploy. There is no operator value to \
        set."
-  else if List.mem key (platform_keys config.Sol_cli_config.target)
+  else if List.mem key (platform_keys ~platform_shape)
   then Ok ()
   else Error (Printf.sprintf "%s is not required by this target's Sol platform Jobs" key)
 ;;
@@ -194,6 +190,7 @@ let run_set target address from_stdin from_file =
   let open Result.Syntax in
   let* address = parse_secret_address address in
   let* config = load_target target in
+  let* platform_shape = Sol_cli_config.platform_shape config in
   let* facts = Sol_cli_workspace_model.load_cwd () in
   (* The namespace is "<workspace-name>-<domain>", where the name is the workspace directory's
      basename — the same value every other command uses (`current_name`). Passing the resolved
@@ -216,7 +213,7 @@ let run_set target address from_stdin from_file =
       in
       Ok (`Unit (unit_address, namespace, secret_name, address))
     | Platform key ->
-      let* () = check_platform_key config key in
+      let* () = check_platform_key ~platform_shape key in
       let* namespaces = target_namespaces ~config ~facts ~workspace in
       if namespaces = []
       then Error "target has no active workload namespaces for Sol platform Jobs"
@@ -277,11 +274,12 @@ let run_delete target address =
   let open Result.Syntax in
   let* address = parse_secret_address address in
   let* config = load_target target in
+  let* platform_shape = Sol_cli_config.platform_shape config in
   let* facts = Sol_cli_workspace_model.load_cwd () in
   let* ctx = destination_context config in
   match address with
   | Platform key ->
-    if List.mem key (platform_keys config.target)
+    if List.mem key (platform_keys ~platform_shape)
     then
       Error
         (Printf.sprintf
@@ -306,7 +304,7 @@ let run_delete target address =
     let unit_address = address.domain ^ "/" ^ address.unit_name in
     let* toml = find_unit_config facts unit_address in
     let* is_currently_declared =
-      Ok (List.mem address.key (required_keys config.target toml))
+      Ok (List.mem address.key (required_keys ~platform_shape toml))
     in
     if is_currently_declared
     then
@@ -369,6 +367,7 @@ let run_delete target address =
 let run_status target =
   let open Result.Syntax in
   let* config = load_target target in
+  let* platform_shape = Sol_cli_config.platform_shape config in
   let* facts = Sol_cli_workspace_model.load_cwd () in
   let* ctx = destination_context config in
   let* workspace =
@@ -382,7 +381,7 @@ let run_status target =
       match workload.config with
       | Error error -> Error (Sol_cli_toml.parse_error_to_string error)
       | Ok toml ->
-        let keys = required_keys config.target toml in
+        let keys = required_keys ~platform_shape toml in
         let* namespace, secret_name =
           namespace_and_secret
             ~workspace
@@ -442,7 +441,7 @@ let run_status target =
       namespaces
   in
   let platform_rows =
-    platform_keys config.target
+    platform_keys ~platform_shape
     |> List.map (fun key ->
       let missing =
         List.filter_map

@@ -97,6 +97,7 @@ cat >"$tmp/work/sol/environments.yml" <<'EOF'
 qual:
   base_domain: qual.example.test
   dns_zone_ownership: sol
+  shape: local
   letsencrypt_email: ops@qual.example.test
   targets:
     aws/us-east-1:

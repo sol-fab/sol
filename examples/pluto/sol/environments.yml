@@ -4,6 +4,7 @@
 # name never selects one (see pilot).
 prod:
   base_domain: pluto.example.com
+  shape: local
   # Sol creates this zone once in the installation and owns it: every environment on
   # this domain shares it, and no environment destroy removes it.
   dns_zone_ownership: sol
@@ -43,6 +44,7 @@ prod:
 # Configure a real alert receiver; never embed routing credentials in its URL.
 pilot:
   profile: production-single-region
+  shape: durable
   base_domain: pluto.example.com
   dns_zone_ownership: sol
   letsencrypt_email: ops@pluto.example.com
@@ -98,6 +100,7 @@ pilot:
 # cluster and the platform only. Replace the domain and contact address.
 dev:
   base_domain: dev.pluto.example.com
+  shape: local
   # The developer registered this one, so Sol deploys into it and never removes it.
   dns_zone_ownership: user
   cluster_issuer: letsencrypt-staging
@@ -131,6 +134,7 @@ dev:
 # `--registry` to `sol deploy`, or add `registry:` to the target.
 customer_cloud:
   base_domain: customer.pluto.example.com
+  shape: local
   # The customer's own DNS: Sol asks for the delegation and does not own the zone.
   dns_zone_ownership: external
   letsencrypt_email: ops@pluto.example.com

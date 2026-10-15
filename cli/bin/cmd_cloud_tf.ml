@@ -92,7 +92,7 @@ let target_vars ~strict target =
     ~strict
     ~workspace:(Sol_cli_workspace.current_name ())
     target
-  |> Result.map (fun (vars, target_cfg) -> Sol_cli_terraform.kv_args vars, target_cfg)
+  |> Result.map (fun (vars, config) -> Sol_cli_terraform.kv_args vars, config)
   |> Sol_cli_exit.of_msg
 ;;
 
@@ -262,8 +262,11 @@ let cloud_destroy ~target ~resolved_config ~var_file ~vars ~action ~accept_unrel
     | Some raw ->
       Sol_cli_cloud_lifecycle.destroy_retention_of_string raw |> Sol_cli_exit.of_msg
   in
+  let* platform_shape =
+    Sol_cli_config.platform_shape resolved_config |> Sol_cli_exit.of_msg
+  in
   let* cloud_target =
-    Sol_cli_cloud_lifecycle.cloud_target target_cfg |> Sol_cli_exit.of_msg
+    Sol_cli_cloud_lifecycle.cloud_target ~platform_shape target_cfg |> Sol_cli_exit.of_msg
   in
   let target_cfg = Sol_cli_cloud_lifecycle.target cloud_target in
   let cloud_backend = Sol_cli_cloud_lifecycle.cloud_backend cloud_target in
@@ -447,7 +450,8 @@ let cloud_reconcile ~target ~var_file ~vars ~dry_run ~explain () =
   let* assets = resolve_assets () in
   let* cluster_assets = asset_root ~assets provider Sol_cli_platform_assets.Cluster in
   let run_log = Sol_cli_run_log.create ~prefix:"cloud-reconcile" () in
-  let* config_vars, target_cfg = target_vars ~strict:true target in
+  let* config_vars, config = target_vars ~strict:true target in
+  let target_cfg = config.Sol_cli_config.target in
   let var_file = resolve_var_file ~flag:var_file ~target:target_cfg.terraform_var_file in
   let vars = config_vars @ vars in
   let* () = refuse_sensitive_vars ~infra_dir:cluster_assets ~vars in
@@ -458,8 +462,9 @@ let cloud_reconcile ~target ~var_file ~vars ~dry_run ~explain () =
       ~leaves_target_standing:true
     |> Sol_cli_exit.of_msg
   in
+  let* platform_shape = Sol_cli_config.platform_shape config |> Sol_cli_exit.of_msg in
   let* cloud_target =
-    Sol_cli_cloud_lifecycle.cloud_target target_cfg |> Sol_cli_exit.of_msg
+    Sol_cli_cloud_lifecycle.cloud_target ~platform_shape target_cfg |> Sol_cli_exit.of_msg
   in
   let target_cfg = Sol_cli_cloud_lifecycle.target cloud_target in
   let cloud_backend = Sol_cli_cloud_lifecycle.cloud_backend cloud_target in

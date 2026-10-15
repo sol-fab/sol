@@ -9,6 +9,7 @@ val plan_of_services
   -> facts:Sol_cli_workspace_model.t
   -> ?requested_scope:string
   -> ?declared:Sol_cli_config.declared
+  -> platform_shape:Sol_cli_profile.platform_shape
   -> ?image_refs:(string * string) list
   -> ?inventory:Sol_cli_manifest.service list
   -> ?target:string
@@ -28,6 +29,7 @@ type request =
   { env : Sol_cli_deployment_plan.env_config
   ; requested_scope : string option
   ; declared : Sol_cli_config.declared option
+  ; platform_shape : Sol_cli_profile.platform_shape
   ; target : string option
   ; target_database : string option
   ; provisioned_database : string option

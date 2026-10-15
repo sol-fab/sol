@@ -59,6 +59,7 @@ EOF
 cat >"$tmp/work/sol/environments.yml" <<'EOF'
 prod:
   base_domain: prod.example.test
+  shape: local
   dns_zone_ownership: sol
   targets:
     aws/us-east-1:
@@ -84,6 +85,7 @@ prod:
         operator_role_arn: arn:aws:iam::111122223333:role/sol-operator
 stale:
   base_domain: stale.example.test
+  shape: local
   dns_zone_ownership: sol
   targets:
     aws/us-east-1:

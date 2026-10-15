@@ -14,6 +14,6 @@ val of_target
   :  strict:bool
   -> workspace:string
   -> string
-  -> ((string * string) list * Sol_cli_config.target, string) result
+  -> ((string * string) list * Sol_cli_config.t, string) result
 
 val resolved : string -> var_files:string list -> vars:string list -> string option

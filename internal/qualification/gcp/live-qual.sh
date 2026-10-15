@@ -256,8 +256,10 @@ $TARGET_ENV:
       dns_zone_ownership: sol
       # No profile is selected at any phase. This row qualifies the application path and
       # claims nothing the production profile's guarantees would promise; the profile is
-      # AWS-qualified, so selecting it on GCP could only be refused by its preflight.
-      # write_app_target states the same for the phase that deploys the workloads.
+      # AWS-qualified, so selecting it on GCP could only be refused by its preflight. The
+      # *shape* is still declared: the platform publishes the authenticated Kafka
+      # credential the row's units read, and write_app_target declares the same shape.
+      shape: durable
       letsencrypt_email: $LE_EMAIL
       cluster_issuer: $CLUSTER_ISSUER
       terraform_var_file: $TFVARS
@@ -272,10 +274,9 @@ $TARGET_ENV:
 
       destroy_retention: none
 
-      # This target selects a profile, and a profiled target requires an authority for every
-      # key its units need. The production profile's Kafka is authenticated, so each unit the
-      # row includes needs these two declared; the platform supplies them, so the authority is
-      # sol. The same declaration the example's own profile target makes.
+      # The durable shape's Kafka is authenticated, so each unit the row includes needs these
+      # two declared; the platform supplies them, so the authority is sol. The same
+      # declaration the example's own durable target makes.
       secrets:
         payments/orders_svc:
           KAFKA_SASL_PASSWORD:
@@ -1122,17 +1123,17 @@ app_secret_set_platform() {
 # POSTGRES_URL.
 app_supply_secrets() {
   local password ca
-  # A profile-less target's platform publishes no broker credential Secret: its Kafka
-  # transport is the platform's default (plaintext), and the units require no Kafka keys
-  # (#1403). There is nothing to supply; record that instead of refusing the run.
+  # The durable target's platform publishes the broker credential Secret; if it is absent the
+  # operator prerequisite was never created, so record that and supply nothing rather than
+  # refusing the whole run.
   if ! kubectl get secret redpanda-users -n redpanda >/dev/null 2>&1; then
     {
-      printf 'platform_secret_keys: none (a profile-less target publishes no broker credential Secret; #1403)\n'
+      printf 'platform_secret_keys: none (the platform published no broker credential Secret)\n'
       printf 'secret_values: never recorded\n'
       printf 'database_delivery: delivered by the deploy from the target binding; no operator copy\n'
-      printf 'scoped_out: "the platform'"'"'s authenticated Kafka transport" (profile-derived; #1403)\n'
+      printf 'scoped_out: "the platform'"'"'s authenticated Kafka transport" (shape-derived; #1403)\n'
     } >>"$LOG_DIR/prerequisites.txt"
-    say "app: this profile-less target publishes no broker credential, so there are no platform Kafka secrets to supply; the units require none"
+    say "app: the platform published no broker credential Secret, so there are no platform Kafka secrets to supply"
     return 0
   fi
   if ! password="$(app_read_platform_password)"; then
@@ -1155,11 +1156,13 @@ app_supply_secrets() {
     printf 'platform_secret_keys: KAFKA_SASL_PASSWORD KAFKA_SSL_CA_CERT\n'
     printf 'secret_values: never recorded\n'
     printf 'database_delivery: delivered by the deploy from the target binding; no operator copy\n'
-    # This row's target selects no profile, and a profile-less deploy does not fire these two
-    # gates at all (#1403). They are scoped out of what this row claims, not bypassed by it;
-    # profile-carrying rows and the unit tests still exercise them.
-    printf 'scoped_out: "Sol refuses absent operator secrets" (a profile-less deploy has no required-secret stop; #1403)\n'
-    printf 'scoped_out: "A deploy refuses to move workloads against an unapplied migration" (a profile-less deploy has no migration gate; #1403)\n'
+    # The row supplies the platform credential and applies migrations before its steady-state
+    # deploy, so it does not stage the refusal each gate produces. The gates are scoped out of
+    # what this row records as claimed, not bypassed by it; the migration gate is
+    # shape-independent (#1468) and the required-secret stop follows the durable shape's
+    # authenticated Kafka.
+    printf 'scoped_out: "Sol refuses absent operator secrets" (this row supplies the credential before its steady-state deploy; #1403)\n'
+    printf 'scoped_out: "A deploy refuses to move workloads against an unapplied migration" (this row applies migrations before its steady-state deploy)\n'
   } >>"$LOG_DIR/prerequisites.txt"
   say "app: supplied the Kafka platform secrets through sol secret set; the database is delivered by the deploy"
 }
@@ -1195,6 +1198,10 @@ $TARGET_ENV:
       # deploy re-establishes it before it deploys: without this the deploy refuses with
       # "the target declares no dns_zone_ownership" and never reaches the app path.
       dns_zone_ownership: sol
+      # The durable shape matches the installation the cloud phase created: its Kafka is
+      # authenticated, so the included units require the platform's Kafka credential and
+      # the target must map an authority for it.
+      shape: durable
       letsencrypt_email: $LE_EMAIL
       cluster_issuer: $CLUSTER_ISSUER
       terraform_var_file: $TFVARS
@@ -1208,6 +1215,28 @@ $TARGET_ENV:
       kube_context: $(app_kube_context)
 
       destroy_retention: none
+
+      secrets:
+        payments/orders_svc:
+          KAFKA_SASL_PASSWORD:
+            authority: sol
+          KAFKA_SSL_CA_CERT:
+            authority: sol
+        comms/fulfilment_worker:
+          KAFKA_SASL_PASSWORD:
+            authority: sol
+          KAFKA_SSL_CA_CERT:
+            authority: sol
+        demo_ts/order_svc:
+          KAFKA_SASL_PASSWORD:
+            authority: sol
+          KAFKA_SSL_CA_CERT:
+            authority: sol
+        demo_ts/fulfillment_worker:
+          KAFKA_SASL_PASSWORD:
+            authority: sol
+          KAFKA_SSL_CA_CERT:
+            authority: sol
 
       resources:
         app_db:
@@ -1412,14 +1441,12 @@ phase_app() {
     return 1
   fi
   say "app-secrets-bootstrap"
-  # This target selects no profile (see write_app_target), so the deploy has neither the
-  # migration gate nor the required-secret stop a profile-carrying deploy has (#1403): it
-  # establishes the namespaces and their scoped RBAC, runs the database setup, and applies the
-  # workloads, which can fail on a rollout before the operator secrets exist. What the next
-  # steps need is the established namespaces; the exit is recorded, not gated on the secret
-  # refusal the profile used to produce.
+  # The durable target's deploy refuses at its required-secret stop before it applies any
+  # workload (#1403), after establishing the namespaces and their scoped RBAC the next steps
+  # need. The exit is recorded, the platform credential and the unit secrets are supplied
+  # below, and the steady-state deploy then resumes.
   if ! run app-deploy-bootstrap "$SOL" deploy "$TARGET" --registry "$(app_registry)" $image_ref_args; then
-    say "app: the bootstrap deploy did not complete; a profile-less deploy establishes namespaces and applies workloads with no profile gates (#1403), so the operator secrets are supplied next"
+    say "app: the bootstrap deploy did not complete; a fresh durable target refuses at its required-secret stop until the operator credentials exist, so they are supplied next"
   fi
   if ! app_supply_secrets; then
     capture_app_evidence

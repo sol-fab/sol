@@ -7,6 +7,11 @@
 prod:
   targets:
     aws/us-east-1:
+      # A cloud target must declare its platform shape. `local` is a deliberate
+      # development posture (plaintext Kafka, no broker credential). `durable` renders
+      # authenticated Kafka and requires an authority for every Kubernetes credential
+      # the target's units declare.
+      shape: local
       # registry: <your-registry-url>
       secrets:
         # 2b: no POSTGRES_URL copy. A unit that consumes the workspace's `app_db`

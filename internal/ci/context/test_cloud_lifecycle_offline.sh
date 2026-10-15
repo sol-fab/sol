@@ -80,6 +80,7 @@ prod:
       # Ready/Production invariant rds_deletion_protection=true, which is exactly
       # the policy the Destroy policy must override after PrepareDestroy (finding 15).
       profile: production-single-region
+      shape: durable
       base_domain: example.test
       dns_zone_ownership: sol
       cluster_name: lifecycle-test
@@ -119,6 +120,7 @@ prod:
           KAFKA_SSL_CA_CERT:
             authority: sol
     gcp/us-central1:
+      shape: local
       base_domain: qual.example.test
       dns_zone_ownership: sol
       cluster_name: sol-qual

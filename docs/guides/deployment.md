@@ -30,6 +30,7 @@ Two layers, doing two different jobs (`DEC-016`):
 prod:
   base_domain: pluto.example.com
   letsencrypt_email: ops@pluto.example.com
+  shape: local
   services:
     charge_svc:
       scale:
@@ -49,6 +50,12 @@ commit go in `sol/environments.local.yml`, which is gitignored and may only add 
 An environment's **name never selects a profile**. `prod` above deliberately has none, and
 `pilot` selects the production profile explicitly with `profile: production-single-region` — so a
 "production" deployment is a decision you write down, not a name you type.
+
+Every cloud target also **declares its platform shape** — `shape: local` for a deliberate
+development posture (plaintext Kafka), `shape: durable` for authenticated Kafka and durable
+infrastructure. `production-single-region` requires `durable`. A plan against a cloud target
+that omits `shape` is refused before anything is provisioned, rather than silently defaulting
+to a development shape.
 
 Inspect what a target resolves to before changing anything:
 

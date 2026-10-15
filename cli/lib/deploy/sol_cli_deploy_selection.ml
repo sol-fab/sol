@@ -114,10 +114,8 @@ let check_unit_secret_write
       ~key
   =
   let* db_uses_target = unit_consumes_target_database ~config ~unit_name in
-  let transport =
-    Sol_cli_manifest.kafka_transport
-      (Sol_cli_profile.platform_shape config.Sol_cli_config.target.profile)
-  in
+  let* platform_shape = Sol_cli_config.platform_shape config in
+  let transport = Sol_cli_manifest.kafka_transport platform_shape in
   let owners =
     unit_input_owners ~config ~unit_address ~transport ~db_uses_target ~declared
   in
@@ -363,6 +361,7 @@ let plan (input : Planning_input.t) =
      | _ -> Ok ())
     |> refused
   in
+  let* platform_shape = Sol_cli_config.platform_shape config |> refused in
   let* plan =
     Sol_cli_factory.plan_of_services
       ~workspace
@@ -370,6 +369,7 @@ let plan (input : Planning_input.t) =
       ~facts
       ~requested_scope
       ~declared:(Sol_cli_config.declared_of_config config)
+      ~platform_shape
       ~image_refs
       ~inventory
       ~target

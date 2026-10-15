@@ -40,12 +40,21 @@ let with_workspace f =
 
 let write_target path body = Targets_fixture.write ~target:path body
 let prod_aws = "prod/aws/us-east-1"
-let selecting = "target:\n  profile: production-single-region\n"
+
+(* A production profile requires the durable shape, which is now a separate declaration
+   rather than something the profile implies. *)
+let selecting = "target:\n  profile: production-single-region\n  shape: durable\n"
 
 let load target =
   match Sol_cli_config.load_for_target ~target with
   | Ok cfg -> cfg
   | Error e -> Windtrap.fail (Sol_cli_config.error_to_string e)
+;;
+
+let shape_of target =
+  match Sol_cli_config.platform_shape (load target) with
+  | Ok shape -> shape
+  | Error message -> Windtrap.fail message
 ;;
 
 let load_error target =
@@ -149,6 +158,27 @@ let test_shared_sol_yml_profile_rejected () =
          (load_error "prod/aws/us-east-1")))
 ;;
 
+let test_shared_sol_yml_shape_rejected () =
+  with_workspace (fun () ->
+    write "sol.yml" "project: pluto\ntarget:\n  shape: durable\n";
+    write_target prod_aws "target:\n  cluster_name: pluto-prod\n";
+    check_bool
+      "sol.yml cannot declare a shape every target inherits"
+      true
+      (Sol_cli_string.contains
+         ~needle:"shape must be declared in an environment or target"
+         (load_error "prod/aws/us-east-1")));
+  with_workspace (fun () ->
+    write "sol.yml" "project: pluto\ntarget:\n  shape: local\n";
+    write_target prod_aws "target:\n  cluster_name: pluto-prod\n";
+    check_bool
+      "and a local shape is rejected there too"
+      true
+      (Sol_cli_string.contains
+         ~needle:"shape must be declared in an environment or target"
+         (load_error "prod/aws/us-east-1")))
+;;
+
 let test_unrelated_value_does_not_change_selection () =
   with_workspace (fun () ->
     write_target
@@ -195,6 +225,7 @@ let plan_for ?(services = [ charge_svc ]) ?(image_refs = []) ?scope target =
       ~workspace:"pluto"
       ~env
       ~declared:(Sol_cli_config.declared_of_config (load target))
+      ~platform_shape:(shape_of target)
       ~image_refs
       ?requested_scope:scope
       services
@@ -230,6 +261,7 @@ let node_failure_tolerant_plan target =
       ~workspace:"pluto"
       ~env
       ~declared:(Sol_cli_config.declared_of_config (load target))
+      ~platform_shape:(shape_of target)
       [ charge_svc ]
   with
   | Ok plan -> plan
@@ -245,6 +277,7 @@ let availability_rejection service ~toml =
       ~workspace:"pluto"
       ~env
       ~declared:(Sol_cli_config.declared_of_config (load "prod/aws/us-east-1"))
+      ~platform_shape:(shape_of "prod/aws/us-east-1")
       [ service ]
   with
   | Ok _ -> Windtrap.fail "expected the availability claim to be refused"
@@ -461,7 +494,7 @@ let test_whole_workspace_topic_without_declaration_fails_closed () =
 
 let test_plan_without_profile_is_unchanged () =
   with_workspace (fun () ->
-    write_target prod_aws "target:\n  cluster_name: pluto-prod\n";
+    write_target prod_aws "target:\n  cluster_name: pluto-prod\n  shape: local\n";
     let plan = plan_for "prod/aws/us-east-1" in
     check_bool "no claim" true (plan.profile = None);
     check_bool
@@ -475,7 +508,9 @@ let test_plan_without_profile_is_unchanged () =
 let test_profile_declares_the_kafka_posture () =
   with_workspace (fun () ->
     write_target prod_aws selecting;
-    write_target "prod/aws/us-west-2" "target:\n  cluster_name: pluto-west\n";
+    write_target
+      "prod/aws/us-west-2"
+      "target:\n  cluster_name: pluto-west\n  shape: local\n";
     let claimed = plan_for "prod/aws/us-east-1" in
     let unclaimed = plan_for "prod/aws/us-west-2" in
     let protocol (plan : Sol_cli_deployment_plan.t) =
@@ -527,7 +562,7 @@ let capabilities fs =
 
 let test_no_profile_skips_preflight () =
   with_workspace (fun () ->
-    write_target "prod/gcp/us-central1" "target:\n  cluster_name: pluto\n";
+    write_target "prod/gcp/us-central1" "target:\n  cluster_name: pluto\n  shape: local\n";
     check_bool
       "an unqualified provider and GitOps are fine without a profile"
       true
@@ -585,6 +620,7 @@ let test_remote_state_established_by_declaration () =
       prod_aws
       "target:\n\
       \  profile: production-single-region\n\
+      \  shape: durable\n\
       \  state_bucket: acme-tfstate\n\
       \  aws:\n\
       \    state_lock_table: acme-tflock\n";
@@ -623,6 +659,7 @@ let test_world_reachable_endpoint_is_rejected () =
       prod_aws
       "target:\n\
       \  profile: production-single-region\n\
+      \  shape: durable\n\
       \  aws:\n\
       \    provisioner_role_arn: arn:aws:iam::1:role/provisioner\n\
       \    cluster_access_role_arn: arn:aws:iam::1:role/cluster-access\n\
@@ -651,6 +688,7 @@ let test_scoped_identities_established () =
       prod_aws
       "target:\n\
       \  profile: production-single-region\n\
+      \  shape: durable\n\
       \  aws:\n\
       \    provisioner_role_arn: arn:aws:iam::1:role/provisioner\n\
       \    cluster_access_role_arn: arn:aws:iam::1:role/cluster-access\n\
@@ -778,6 +816,7 @@ let test_complete_alert_contract_establishes_delivery () =
       prod_aws
       "target:\n\
       \  profile: production-single-region\n\
+      \  shape: durable\n\
       \  alert_receiver_type: webhook\n\
       \  alert_receiver_url: https://hooks.example.com/sol-alerts\n\
       \  alert_owner: payments-oncall\n\
@@ -797,6 +836,7 @@ let test_unroutable_alert_receiver_is_a_target_finding () =
       prod_aws
       "target:\n\
       \  profile: production-single-region\n\
+      \  shape: durable\n\
       \  alert_receiver_type: webhook\n\
       \  alert_receiver_url: not-a-url\n\
       \  alert_owner: payments-oncall\n\
@@ -837,26 +877,28 @@ let test_unqualified_provider_is_a_target_finding () =
         (Sol_cli_string.contains ~needle:"gcp" f.reason))
 ;;
 
-(* Shape and qualification are separate axes, and the shape has one source. A
-   profile is claimed on an environment or a target, never in [sol.yml], so only
-   [load_for_target]'s merged intent carries it: a plan that reconstructed the
-   intent from the profile-less base manifest (or the raw target, missing the
-   environment's claim) would resolve [Local] and diverge from the cloud
-   lifecycle. *)
+(* Shape is a declaration, not a derivation, and it has one source: both the plan and the
+   cloud lifecycle read [Sol_cli_config.platform_shape] from the merged target intent. A
+   plan that reconstructed the shape from the profile-less base manifest (or the raw
+   target, missing the environment's declaration) would diverge. *)
 let test_plan_and_cloud_share_the_resolved_intent () =
   with_workspace (fun () ->
     mkdir_p "sol";
     write
       "sol/environments.yml"
-      "pilot:\n  profile: production-single-region\n  targets:\n    aws/us-east-1:\n";
+      "pilot:\n  shape: durable\n  targets:\n    aws/us-east-1:\n";
     let cfg = load "pilot/aws/us-east-1" in
-    let resolved = P.platform_shape (target_of cfg).profile in
+    let resolved =
+      match Sol_cli_config.platform_shape cfg with
+      | Ok shape -> shape
+      | Error message -> Windtrap.fail message
+    in
     check_bool
-      "the environment's profile resolves onto the target"
+      "the environment's declared shape resolves onto the target"
       true
       (resolved = P.Durable);
     check_bool
-      "the plan derives its shape from the same resolved intent the cloud lifecycle uses"
+      "the plan reads the same resolved shape the cloud lifecycle uses"
       true
       ((plan_for "pilot/aws/us-east-1").Sol_cli_deployment_plan.platform_shape = resolved))
 ;;
@@ -977,7 +1019,10 @@ let test_node_failure_tolerant_established_with_headroom () =
   with_workspace (fun () ->
     write_target
       prod_aws
-      "target:\n  profile: production-single-region\n  node_failure_headroom_nodes: 1\n";
+      "target:\n\
+      \  profile: production-single-region\n\
+      \  shape: durable\n\
+      \  node_failure_headroom_nodes: 1\n";
     let plan = node_failure_tolerant_plan "prod/aws/us-east-1" in
     let fs =
       findings (preflight ~plan ~apply_mode:Sol_cli_release.Direct "prod/aws/us-east-1")
@@ -1226,6 +1271,10 @@ let%test "selection: unknown profile rejected" = test_unknown_profile_rejected (
 
 let%test "selection: shared sol.yml profile rejected" =
   test_shared_sol_yml_profile_rejected ()
+;;
+
+let%test "selection: shared sol.yml shape rejected" =
+  test_shared_sol_yml_shape_rejected ()
 ;;
 
 let%test "selection: unrelated value does not change selection" =

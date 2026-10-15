@@ -1164,6 +1164,7 @@ let test_of_services_result_surfaces_toml_parse_error () =
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~workspace:"myworkspace"
         ~env
         ~facts:(facts ())
@@ -1237,6 +1238,7 @@ let test_a_scoped_plan_carries_the_whole_workspace_group_set () =
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~workspace:"myworkspace"
         ~env:deploy_env
         ~facts:(facts ())
@@ -1265,6 +1267,7 @@ let test_a_group_the_workspace_no_longer_declares_is_not_reported () =
     write_file (Filename.concat notify.dir "sol.toml") "";
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~workspace:"myworkspace"
         ~env:deploy_env
         ~facts:(facts ())
@@ -1315,6 +1318,7 @@ let test_sol_yml_scale_overrides_toml_replicas_on_resolved_target () =
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
         ~env:deploy_env
@@ -1340,6 +1344,7 @@ let test_sol_yml_scale_falls_back_to_scale_min_when_no_max () =
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
         ~env:deploy_env
@@ -1362,6 +1367,7 @@ let test_no_resolved_config_uses_toml_replicas () =
     write_file "app/payments/charge_svc/sol.toml" "[infra.scale]\nreplicas = 2\n";
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
         ~env:deploy_env
@@ -1386,6 +1392,7 @@ let test_no_matching_sol_yml_service_uses_toml_replicas () =
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
         ~env:deploy_env
@@ -1413,6 +1420,7 @@ let test_toml_volumes_carry_into_service_spec () =
        access_mode = \"ReadWriteOnce\"\n";
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
         ~env:deploy_env
@@ -1452,6 +1460,7 @@ let test_multi_replica_volume_fails_after_scale_resolution () =
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
         ~env:deploy_env
@@ -1482,6 +1491,7 @@ let test_zero_replica_volume_fails () =
        size = \"10Gi\"\n";
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
         ~env:deploy_env
@@ -1505,6 +1515,7 @@ let plan_for_fn toml =
       }
     in
     Sol_cli_deployment_plan.of_services_result
+      ~platform_shape:Sol_cli_profile.Local
       ~facts:(facts ())
       ~workspace:"myworkspace"
       ~env:deploy_env
@@ -1556,6 +1567,7 @@ let test_function_volume_fails () =
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
         ~env:deploy_env
@@ -1591,6 +1603,7 @@ calls = ["checkout/checkout_svc"]
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
         ~env:deploy_env
@@ -1637,6 +1650,7 @@ calls = ["checkout/missing_svc"]
 |};
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
         ~env:deploy_env
@@ -1668,6 +1682,7 @@ calls = ["checkout/checkout_svc"]
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
         ~env:deploy_env
@@ -1713,6 +1728,7 @@ calls = ["checkout/checkout_svcc"]
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
         ~env:deploy_env
@@ -1772,6 +1788,7 @@ calls = ["payments/charge_svc"]
     let plan ?(selected = [ charge_svc_service ]) () =
       match
         Sol_cli_deployment_plan.of_services_result
+          ~platform_shape:Sol_cli_profile.Local
           ~facts:(facts ())
           ~workspace:"myworkspace"
           ~env:deploy_env
@@ -1854,6 +1871,7 @@ config = { CHECKOUT_SVC_URL = "http://example.invalid" }
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
         ~env:deploy_env
@@ -2238,6 +2256,7 @@ let test_the_ca_mount_follows_the_sol_provisioned_resource () =
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~platform_shape:Sol_cli_profile.Local
         ~workspace:"myworkspace"
         ~env:deploy_env
         ~facts:(facts ())
@@ -2362,6 +2381,7 @@ let test_the_reader_routes_on_the_capability_not_the_key_name () =
     let plan ~provisioned_database =
       match
         Sol_cli_deployment_plan.of_services_result
+          ~platform_shape:Sol_cli_profile.Local
           ~workspace:"myworkspace"
           ~env:deploy_env
           ~facts:(facts ())

@@ -94,6 +94,7 @@ cat >"$cloud/ws/sol/environments.yml" <<'YAML'
 prod:
   targets:
     aws/us-east-1:
+      shape: local
       base_domain: example.test
       cluster_name: installed-smoke
       letsencrypt_email: ops@example.test

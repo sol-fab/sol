@@ -86,7 +86,7 @@ let of_target ~strict ~workspace target_path =
     else Ok ()
   in
   let* vars = of_config ~workspace cfg in
-  Ok (vars, cfg.target)
+  Ok (vars, cfg)
 ;;
 
 let trim_quotes s =

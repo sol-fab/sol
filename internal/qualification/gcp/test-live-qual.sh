@@ -707,14 +707,15 @@ lacks "the cloud phase never runs an application deploy" "migrate apply" "$TMP/c
 has "the target is written for the run" "cluster_name" "$TARGET_FILE"
 has "the generated target asks for TLS, which DEC-055 made installable on GCP" "cluster_issuer: letsencrypt-staging" "$TARGET_FILE"
 lacks "the cloud target selects no profile, so this row makes no profile claim" "profile:" "$TARGET_FILE"
+has "the cloud target declares the durable shape it does not derive from a profile" "shape: durable" "$TARGET_FILE"
 has "the cloud target declares the app database the enabled units use" "app_db:" "$TARGET_FILE"
 has "and the events resource" "events: {}" "$TARGET_FILE"
 has "and the OCaml units the alpha scenario runs" "orders_svc: {}" "$TARGET_FILE"
 has "and the TypeScript units" "order_svc: {}" "$TARGET_FILE"
-# A profiled target requires an authority for every key its units need; the profile's
-# authenticated Kafka makes KAFKA_SASL_PASSWORD/KAFKA_SSL_CA_CERT required for each
-# included unit, so the written target must declare them or `sol check` refuses.
-has "the profiled target maps the platform Kafka keys the included OCaml units need" \
+# A durable target requires an authority for every key its units need; the durable shape's
+# authenticated Kafka makes KAFKA_SASL_PASSWORD/KAFKA_SSL_CA_CERT required for each included
+# unit, so the written target must declare them or `sol check` refuses.
+has "the durable target maps the platform Kafka keys the included OCaml units need" \
   "payments/orders_svc:" "$TARGET_FILE"
 has "for the worker too" "comms/fulfilment_worker:" "$TARGET_FILE"
 has "and the TypeScript units the row includes" "demo_ts/order_svc:" "$TARGET_FILE"
@@ -868,17 +869,17 @@ export CURL_LOG="$TMP/app-curl.argv"
 : >"$CURL_LOG"
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ok app
 is "the app phase exits 0 when every step succeeds" "$(cat "$TMP/app-ok.rc")" "0"
-# A profile-less target's platform publishes no broker credential and the units require no
-# Kafka keys, so there is nothing to supply; the phase records that and proceeds. Runs before
-# the delegation curl stub replaces the transaction one.
-printf '\nscenario: a profile-less target with no broker credential supplies nothing\n'
+# A durable target whose platform published no broker credential Secret has nothing to supply;
+# the phase records that and proceeds. Runs before the delegation curl stub replaces the
+# transaction one.
+printf '\nscenario: a durable target with no broker credential supplies nothing\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_NO_BROKER_CRED=1 run_case app-nobroker app
 is "the app phase exits 0 without a broker credential" "$(cat "$TMP/app-nobroker.rc")" "0"
 has "and records that there is nothing to supply" \
-  "platform_secret_keys: none (a profile-less target publishes no broker credential Secret; #1403)" \
+  "platform_secret_keys: none (the platform published no broker credential Secret)" \
   "$TMP/app-nobroker.logs/prerequisites.txt"
 has "scoping out the authenticated transport it does not have" \
-  "scoped_out: \"the platform's authenticated Kafka transport\" (profile-derived; #1403)" \
+  "scoped_out: \"the platform's authenticated Kafka transport\" (shape-derived; #1403)" \
   "$TMP/app-nobroker.logs/prerequisites.txt"
 mv "$TMP/bin/curl.delegation" "$TMP/bin/curl"
 has "it builds each image from that service's own Dockerfile" \
@@ -936,19 +937,24 @@ has "the supplied keys are recorded without their values" \
 has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
   "database_delivery: qual-gcp-us-central1-ddl-creds@pluto-comms (migration Job, as the deploy declared it), qual-gcp-us-central1-dml-creds@pluto-payments (unit consumer)" \
   "$TMP/app-ok.logs/prerequisites.txt"
-# A profile-less deploy fires neither gate, so this row scopes them out and names the bug
-# that must make them fire on any deploy (#1403) rather than claiming them here.
-has "the secret-stop observation is scoped out, naming the gating bug" \
-  "scoped_out: \"Sol refuses absent operator secrets\" (a profile-less deploy has no required-secret stop; #1403)" \
+# The row supplies the platform credential and applies migrations before its steady-state
+# deploy, so it does not stage the refusal each gate produces; the gates are scoped out of what
+# the row records, not bypassed by it.
+has "the secret-stop observation is scoped out, naming why the row does not stage it" \
+  "scoped_out: \"Sol refuses absent operator secrets\" (this row supplies the credential before its steady-state deploy; #1403)" \
   "$TMP/app-ok.logs/prerequisites.txt"
 has "and the migration-gate observation too" \
-  "scoped_out: \"A deploy refuses to move workloads against an unapplied migration\" (a profile-less deploy has no migration gate; #1403)" \
+  "scoped_out: \"A deploy refuses to move workloads against an unapplied migration\" (this row applies migrations before its steady-state deploy)" \
   "$TMP/app-ok.logs/prerequisites.txt"
 has "the run identity records the bundle version" \
   "sol_version: $VERSION" "$TMP/app-ok.logs/sol-identity.txt"
 has "and the bundle's digest-pinned migration runner" \
   "migration_runner_image: $RUNNER" "$TMP/app-ok.logs/sol-identity.txt"
 lacks "the app target selects no profile, so the row claims none of its guarantees" "profile:" "$TARGET_FILE"
+has "the app target declares the durable shape it does not derive from a profile" \
+  "shape: durable" "$TARGET_FILE"
+has "and maps the Kafka authority the durable shape's units require" \
+  "KAFKA_SASL_PASSWORD:" "$TARGET_FILE"
 has "but it still declares the durable installation the cloud phase created" \
   "dns_zone_ownership: sol" "$TARGET_FILE"
 has "the target declares the project the residue probe needs" "project_id: sol-qualification" "$TARGET_FILE"

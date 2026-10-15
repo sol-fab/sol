@@ -198,6 +198,34 @@ let test_profileless_deploy_without_migrations_is_not_gated () =
       Windtrap.failf "unexpected refusal: %s" message)
 ;;
 
+(** **#1403: the migration gate follows the work, not the shape.** A cloud target that declares
+    the local shape must still refuse to roll workloads against an unapplied schema; the gate
+    is shape-independent, so a durable shape does not change it either. *)
+let test_migration_gate_is_shape_independent () =
+  with_context ~migrations:[ "001_init.sql" ] (fun ctx ->
+    List.iter
+      (fun shape ->
+         let plan = { (plan []) with Sol_cli_deployment_plan.platform_shape = shape } in
+         match gate ctx ~plan ~live:true with
+         | Ok (), _ ->
+           Windtrap.fail
+             (Printf.sprintf
+                "a live deploy with migrations and the %s shape must not skip \
+                 verification"
+                (Sol_cli_profile.platform_shape_to_string shape))
+         | Error (Sol_cli_deploy_run.Failed message), _ ->
+           Windtrap.equal
+             Windtrap.bool
+             ~msg:"the refusal is the unverifiable migration state"
+             true
+             (Sol_cli_string.contains
+                ~needle:"cannot verify the required migration state"
+                message)
+         | Error (Sol_cli_deploy_run.Refused message), _ ->
+           Windtrap.failf "unexpected refusal: %s" message)
+      [ Sol_cli_profile.Local; Sol_cli_profile.Durable ])
+;;
+
 let test_offline_run_reports_not_verified () =
   with_context ~migrations:[ "001_init.sql" ] (fun ctx ->
     match gate ctx ~plan:(plan ~profile:production []) ~live:false with
@@ -1146,6 +1174,10 @@ let%test "migration gate (#1403): a profile-less deploy is checked" =
 
 let%test "migration gate (#1403): a profile-less deploy with no migrations is not gated" =
   test_profileless_deploy_without_migrations_is_not_gated ()
+;;
+
+let%test "migration gate (#1403): an explicit local shape is still checked" =
+  test_migration_gate_is_shape_independent ()
 ;;
 
 let%test "migration gate (AUDIT-069): offline: not verified" =

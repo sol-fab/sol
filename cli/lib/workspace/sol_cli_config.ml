@@ -1550,16 +1550,26 @@ let validate_uses cfg =
     validate_services (active_services cfg)
 ;;
 
-let reject_shared_profile ~path (base : layer) =
-  match base.target with
-  | Some { profile = Some _; _ } ->
+(* `profile` and `shape` are per-target claims: sol.yml's `target:` section is shared by every
+   target, so a claim there would opt every environment in rather than being declared where it
+   applies. Both are rejected, not inherited. *)
+let reject_shared_claims ~path (base : layer) =
+  let refuse claim guidance =
     Error
       { path
       ; line = 0
       ; message =
-          "profile must be selected in an environment or target (sol/environments.yml), \
-           not in sol.yml, whose target section every target inherits"
+          Printf.sprintf
+            "%s must be %s (sol/environments.yml), not in sol.yml, whose target section \
+             every target inherits"
+            claim
+            guidance
       }
+  in
+  match base.target with
+  | Some { profile = Some _; _ } ->
+    refuse "profile" "selected in an environment or target"
+  | Some { shape = Some _; _ } -> refuse "shape" "declared in an environment or target"
   | _ -> Ok ()
 ;;
 
@@ -1723,9 +1733,8 @@ let platform_shape (cfg : t) =
       (Printf.sprintf
          "target %s declares no platform shape. Declare `shape: durable` (authenticated \
           Kafka and durable infrastructure) or `shape: local` (a deliberate development \
-          posture) under `targets.%s` in %s; Sol does not infer it from the presence of \
-          a profile."
-         cfg.target.name
+          posture) on the target or its environment in %s; Sol does not infer it from \
+          the presence of a profile."
          cfg.target.name
          environments_file)
 ;;
@@ -1749,7 +1758,7 @@ let load_for_target ~target =
   in
   let sol_yml = Filename.concat root "sol.yml" in
   let* base = load sol_yml in
-  let* () = reject_shared_profile ~path:sol_yml base in
+  let* () = reject_shared_claims ~path:sol_yml base in
   let* envs = load_environments ~root in
   let* cfg = resolve ~base ~envs target in
   let* cfg = validate_uses cfg in

@@ -586,7 +586,7 @@ let test_check_requires_and_accepts_explicit_secret_authorities () =
     declare_api_key "app/comms/notify_worker/sol.toml";
     write
       "sol/environments.yml"
-      "prod:\n  targets:\n    aws/us-east-1:\n      secrets: {}\n";
+      "prod:\n  targets:\n    aws/us-east-1:\n      shape: local\n      secrets: {}\n";
     let code, _stdout, stderr = run_sol ~root [ "check" ] in
     Windtrap.equal Windtrap.int ~msg:"unmapped required keys fail check" 2 code;
     Windtrap.equal
@@ -599,6 +599,7 @@ let test_check_requires_and_accepts_explicit_secret_authorities () =
       "prod:\n\
       \  targets:\n\
       \    aws/us-east-1:\n\
+      \      shape: local\n\
       \      secrets:\n\
       \        payments/charge_svc:\n\
       \          POSTGRES_URL:\n\
@@ -693,6 +694,7 @@ let with_plan_workspace f =
          "prod:\n\
          \  targets:\n\
          \    aws/us-east-1:\n\
+         \      shape: local\n\
          \      cluster_name: probe\n\
          \      secrets:\n\
          \        payments/charge_svc:\n\

@@ -60,6 +60,7 @@ let test_run_without_cmdliner () =
           { Sol_cli_factory.env
           ; requested_scope = Some "payments"
           ; declared = None
+          ; platform_shape = Sol_cli_profile.Local
           ; target = None
           ; target_database = None
           ; provisioned_database = None

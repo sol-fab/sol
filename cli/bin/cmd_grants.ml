@@ -28,13 +28,13 @@ let target_vars ~strict target =
     ~strict
     ~workspace:(Sol_cli_workspace.current_name ())
     target
-  |> Result.map (fun (vars, target_cfg) -> Sol_cli_terraform.kv_args vars, target_cfg)
+  |> Result.map (fun (vars, config) -> Sol_cli_terraform.kv_args vars, config)
   |> Sol_cli_exit.of_msg
 ;;
 
 let config_vars (config : Sol_cli_config.t) =
   Sol_cli_terraform_vars.of_config ~workspace:(Sol_cli_workspace.current_name ()) config
-  |> Result.map (fun vars -> Sol_cli_terraform.kv_args vars, config.target)
+  |> Result.map (fun vars -> Sol_cli_terraform.kv_args vars, config)
   |> Sol_cli_exit.of_msg
 ;;
 
@@ -99,11 +99,12 @@ let report_plan ~target lines =
 let run ?config ?destination ~action ~target ~var_file ~vars () =
   let* () = check_terraform () in
   let* assets = resolve_assets () in
-  let* config_vars, target_cfg =
+  let* config_vars, resolved_config =
     match config with
     | Some config -> config_vars config
     | None -> target_vars ~strict:(action = Apply) target
   in
+  let target_cfg = resolved_config.Sol_cli_config.target in
   let provider = target_cfg.Sol_cli_config.provider in
   let* identity =
     Sol_cli_authorization_identity.of_target target_cfg |> Sol_cli_exit.of_msg
