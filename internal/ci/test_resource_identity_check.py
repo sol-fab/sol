@@ -63,7 +63,7 @@ def main():
     cases.append(("a directly managed resource with no registry entry", tmp))
 
     sql_entry = (
-        '      "google_sql_database_instance.postgres"\n'
+        '      "google_sql_database_instance.postgres[0]"\n'
         '      direct\n'
         '      ~resource_class:"Cloud SQL instance"\n'
         '      ~observed_as:(cluster_name ^ "-postgres")\n'
@@ -97,6 +97,15 @@ def main():
         sql_entry.replace('~observed_as:(cluster_name ^ "-postgres")', '~observed_as:""'),
     )
     cases.append(("a Direct entry the inventory could not map back to", tmp))
+
+    tmp = scratch()
+    mutate(
+        tmp,
+        "cli/lib/cloud/sol_cli_resource_identity.ml",
+        '"google_sql_database_instance.postgres[0]"',
+        '"google_sql_database_instance.postgres"',
+    )
+    cases.append(("a Direct entry on a counted resource with no instance key (#1476)", tmp))
 
     tmp = scratch()
     mutate(
@@ -141,8 +150,8 @@ def main():
     print(
         "test_resource_identity_check: the guard accepts the real tree and rejects an unregistered "
         "directly managed resource, a Direct entry without an import identity or an observed name, "
-        "a mapping naming a class no inventory reports, a stale entry, and a class-level rule that "
-        "stopped covering its family"
+        "a Direct entry on a counted resource with no instance key, a mapping naming a class no "
+        "inventory reports, a stale entry, and a class-level rule that stopped covering its family"
     )
     return 0
 

@@ -170,8 +170,13 @@ let gcp ~cluster_name =
       ~observed_as:cluster_name
       ~identity:cluster_name
       ~import_identity:cluster_name
+    (* The cluster root declares the Cloud SQL instance with `count = var.create_database ? 1 : 0`,
+     so its Terraform address is indexed. The address must be the one `terraform import` can
+     resolve against the configuration and the one a state read reports; a bare address for a
+     counted resource fails with "Configuration for import target does not exist" and would
+     leave the instance unadoptable (#1476). *)
   ; entry
-      "google_sql_database_instance.postgres"
+      "google_sql_database_instance.postgres[0]"
       direct
       ~resource_class:"Cloud SQL instance"
       ~observed_as:(cluster_name ^ "-postgres")
