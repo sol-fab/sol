@@ -48,7 +48,8 @@ fi
 
 cluster_uid=$(kubectl get namespace kube-system -o jsonpath='{.metadata.uid}')
 postgres_uid=$(kubectl get statefulset postgresql -n postgresql -o jsonpath='{.metadata.uid}')
-test -n "$cluster_uid" && test -n "$postgres_uid"
+test -n "$cluster_uid"
+test -n "$postgres_uid"
 
 # This must work with infrastructure alone: no successful workload deployment,
 # workload namespace, or class Secret is a prerequisite for local migration.
