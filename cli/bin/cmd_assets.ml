@@ -61,6 +61,15 @@ let runner_check () =
      A.migration_runner_image assets)
 ;;
 
+(** The database setup image is a release asset like the runner: a target that provisions its
+    own database must be able to resolve it from the release, without an ambient variable. *)
+let setup_image_check () =
+  check
+    "database setup image"
+    (let* assets = A.resolve () |> Result.map_error A.error_to_string in
+     A.setup_image assets)
+;;
+
 let template_checks assets =
   let root = A.templates_root assets in
   Sol_cli_scaffold_tree.kinds
@@ -90,6 +99,7 @@ let checks assets =
          |> as_detail "")
     ; check "alloy" (Sol_cli_dev_observability.alloy_values_yaml ~assets |> as_detail "")
     ; runner_check ()
+    ; setup_image_check ()
     ]
   in
   List.concat

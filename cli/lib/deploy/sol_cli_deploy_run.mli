@@ -97,6 +97,10 @@ val run_lifecycle
   -> Sol_cli_deployment_plan.t
   -> (unit, string) result
 
+(** [resolve_setup_image] is the caller's policy for which image a provisioned database needs.
+    It runs **before** the substrate gate, so a missing or unpinnable image is refused before
+    infrastructure is created; its result ([Some] image, or [None] when the deployment does not
+    provision a database) is what [database_setup] receives, so nothing re-resolves it later. *)
 val apply
   :  context
   -> present_plan:(Sol_cli_deployment_plan.t -> (unit, string) result)
@@ -105,7 +109,8 @@ val apply
   -> push_events:(Sol_cli_deploy_event.t list -> unit)
   -> report_success:(Sol_cli_deployment_plan.t -> Sol_cli_executor.result list -> unit)
   -> confirm_group_change:bool
-  -> ?database_setup:(unit -> (unit, string) result)
+  -> ?resolve_setup_image:(unit -> (string option, string) result)
+  -> ?database_setup:(setup_image:string option -> unit -> (unit, string) result)
   -> Sol_cli_deployment_plan.t
   -> (unit, string) result
 

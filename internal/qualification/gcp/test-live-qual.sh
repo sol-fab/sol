@@ -87,6 +87,10 @@ mkdir -p "$TMP/bin"
 VERSION="v0.1.0-alpha.7"
 DIGEST64="$(printf 'a%.0s' $(seq 1 64))"
 RUNNER="ghcr.io/example/sol-migration-runner:$VERSION@sha256:$DIGEST64"
+# The setup image is a public image pinned by digest. It ships *inside* the release bundle
+# (share/sol/<version>/setup-image), so the harness must not export SOL_SETUP_POSTGRES_IMAGE:
+# an installed release refuses an ambient override (#1427).
+SETUP="postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d"
 INSTALL="$TMP/install"
 
 bundle() {
@@ -94,6 +98,7 @@ bundle() {
   mkdir -p "$dir/bin" "$dir/share/sol/$VERSION/platform/shared" \
     "$dir/share/sol/$VERSION/platform/cloud/gcp/bootstrap"
   printf '{\n  "components": {}\n}\n' >"$dir/share/sol/$VERSION/platform/shared/components.json"
+  printf '%s\n' "$SETUP" >"$dir/share/sol/$VERSION/setup-image"
   cat >"$dir/bin/sol" <<'STUB'
 #!/usr/bin/env bash
 if [ "${1:-}" = "--version" ]; then
@@ -586,6 +591,21 @@ printf 'lifecycle phase: CloudBootstrap\n' >"$SOL_DATA/runs/cloud-apply-20260925
 printf 'root=platform/cloud/gcp/cluster\n' >"$SOL_DATA/runs/cloud-apply-20260925T000000Z-1234/meta"
 printf 'exited 0\n' >"$SOL_DATA/runs/cloud-apply-20260925T000000Z-1234/exit"
 
+# Bind fixture installs to real archive bytes, including every bundled asset.
+python3 - "$TMP" "$INSTALL" <<'PYTHON'
+import hashlib, json, pathlib, sys, tarfile
+root, install = map(pathlib.Path, sys.argv[1:])
+archive = install / "fixture.tar.gz"
+with tarfile.open(archive, "w:gz") as bundle:
+    bundle.add(install / "bin", arcname="sol-fixture/bin")
+    bundle.add(install / "share", arcname="sol-fixture/share")
+digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+for document in root.rglob("candidate*.json"):
+    candidate = json.loads(document.read_text())
+    candidate.update(bundle=str(archive), bundle_sha256=digest)
+    document.write_text(json.dumps(candidate))
+PYTHON
+
 run_case() {
   local name="$1" sub="$2"
   shift 2
@@ -896,9 +916,12 @@ lacks "no mutable tag is passed to a profile that requires immutable artifacts" 
   "--image-tag" "$TMP/app-ok.argv"
 lacks "no operator POSTGRES_URL is set for the migration path" \
   "secret set POSTGRES_URL" "$TMP/app-ok.argv"
-has "the database setup image is named by digest, so the setup step can run (#1402)" \
-  "[setup=postgres@sha256:" "$TMP/app-ok.argv"
-lacks "and never left unset for a deploy that must deliver class credentials" \
+# The image a deploy resolves is the release's own, so what must hold is that the bundle
+# carries a digest-pinned reference -- not that the harness exported one, which an installed
+# release refuses (#1427).
+has "the database setup image is pinned by digest in the release bundle (#1402, #1427)" \
+  "postgres@sha256:" "$INSTALL/share/sol/$VERSION/setup-image"
+has "and the harness hands no ambient override, which an installed release would refuse" \
   "[setup=unset]" "$TMP/app-ok.argv"
 has "and the Kafka credential and CA as platform Job inputs" \
   "secret set qual/gcp/us-central1 @platform/KAFKA_SSL_CA_CERT" "$TMP/app-ok.argv"

@@ -35,8 +35,10 @@ export APP_TAG
 # The database setup Job's image, pinned by digest. It is public, so there is nothing to
 # publish -- only a digest to name. Without it the deploy cannot run the database setup step,
 # so it can neither deliver the class credentials nor fail closed on a missing one (#1402).
-SOL_SETUP_POSTGRES_IMAGE="${SOL_SETUP_POSTGRES_IMAGE:-postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d}"
-export SOL_SETUP_POSTGRES_IMAGE
+# The setup image comes from the installed release's own bundle (share/sol/<version>/
+# setup-image), which is the only place a release may take it from: an explicit
+# SOL_SETUP_POSTGRES_IMAGE is refused for an installed release, so the harness must not set one
+# (#1427).
 
 case "${1:-}" in
   cloud | platform | app)

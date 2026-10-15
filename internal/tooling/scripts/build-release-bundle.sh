@@ -2,11 +2,12 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../../.." && pwd)"
-version="" runner="" out="" binary="" support_refs="" revision=""
+version="" runner="" setup_image="" out="" binary="" support_refs="" revision=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) version="$2"; shift 2 ;;
     --runner-image) runner="$2"; shift 2 ;;
+    --setup-image) setup_image="$2"; shift 2 ;;
     --out) out="$2"; shift 2 ;;
     --binary) binary="$2"; shift 2 ;;
     --support-refs) support_refs="$2"; shift 2 ;;
@@ -14,12 +15,19 @@ while [ $# -gt 0 ]; do
     *) echo "build-release-bundle: unknown argument $1" >&2; exit 2 ;;
   esac
 done
-[ -n "$version" ] && [ -n "$runner" ] && [ -n "$out" ] || {
+[ -n "$version" ] && [ -n "$runner" ] && [ -n "$setup_image" ] && [ -n "$out" ] || {
   sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 if ! [[ "$runner" =~ @sha256:[0-9a-f]{64}$ ]]; then
   echo "build-release-bundle: --runner-image must be a digest reference (<image>@sha256:<64 hex>), got $runner" >&2
+  exit 2
+fi
+# The database setup image is public, so unlike the runner there is nothing to publish -- but it
+# still has to be *shipped*, because a release uses only its own assets: a deploy that provisions
+# a database must not depend on an ambient variable being set on the operator's machine (#1427).
+if ! [[ "$setup_image" =~ @sha256:[0-9a-f]{64}$ ]]; then
+  echo "build-release-bundle: --setup-image must be a digest reference (<image>@sha256:<64 hex>), got $setup_image" >&2
   exit 2
 fi
 
@@ -61,6 +69,7 @@ install -m 0755 "$binary" "$prefix/bin/sol"
 printf '%s\n' "$version" >"$share/VERSION"
 printf '%s\n' "$revision" >"$share/REVISION"
 printf '%s\n' "$runner" >"$share/migration-runner-image"
+printf '%s\n' "$setup_image" >"$share/setup-image"
 if [ -n "$support_refs" ]; then cp "$support_refs" "$share/SUPPORT_REFS"; fi
 git -C "$root" ls-files -z -- platform | (cd "$root" && xargs -0 cp --parents -t "$share")
 

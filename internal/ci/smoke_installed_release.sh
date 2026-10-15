@@ -41,6 +41,14 @@ grep -qx "assets: installed release $version" <<<"$out" || die "not resolved as 
 grep -qx "  root: /opt/sol/share/sol/$version" <<<"$out" || die "root is not the installed bundle"
 grep -qx "  ok  migration runner  $runner" <<<"$out" || die "runner is not the release's published digest"
 grep -qx "all assets present" <<<"$out" || die "assets incomplete"
+# Both image references the bundle needs must be in the assembled artifact itself: a release
+# that provisions a database must not depend on an ambient variable (#1427). The report line
+# and the file are checked, so a bundle that carries a file nothing resolves still fails.
+setup="$(cat "$install/share/sol/$version/setup-image")" \
+  || die "the installed bundle has no setup-image"
+grep -qx "  ok  database setup image  $setup" <<<"$out" \
+  || die "the setup image is not the release's pinned digest"
+pass "sol assets: the setup image is the release's pinned digest"
 pass "sol assets: installed bundle, every consumer ran, runner is $runner"
 
 if in_container "$install" env SOL_HOME=/nonexistent /opt/sol/bin/sol assets >/dev/null 2>&1; then

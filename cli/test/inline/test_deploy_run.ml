@@ -843,9 +843,70 @@ let test_deploy_removal_is_retryable_after_a_partial_failure () =
               log)))
 ;;
 
+(* The library-level check covers ordering before Kubernetes substrate creation.
+   test_deploy_environment_stage.sh covers the earlier CLI infrastructure stage. *)
+let test_setup_image_is_resolved_before_the_substrate_gate () =
+  with_fake_kubectl ~live_listing:{|{"items":[]}|} (fun ~calls:_ ->
+    with_context (fun ctx ->
+      let plan =
+        plan [ spec ~domain:"payments" ~name:"charge_svc" ~k8s:"charge-svc" Svc ]
+      in
+      let apply
+            ?(resolve = fun () -> Ok (Some "resolved-setup-image"))
+            ?(database_setup = fun ~setup_image:_ () -> Ok ())
+            ()
+        =
+        Sol_cli_deploy_run.apply
+          ctx
+          ~present_plan:(fun _ -> Ok ())
+          ~effective_access:(fun () -> Ok ())
+          ~on_substrate_refused:(fun _ -> ())
+          ~confirm_group_change:true
+          ~push_events:(fun _ -> ())
+          ~report_success:(fun _ _ -> ())
+          ~resolve_setup_image:resolve
+          ~database_setup
+          plan
+      in
+      (match
+         apply ~resolve:(fun () -> Error "no database setup image was resolved") ()
+       with
+       | Ok () ->
+         Windtrap.fail "a deployment whose setup image cannot be resolved must refuse"
+       | Error message ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the refusal is the resolver's, so it ran before the substrate gate"
+           true
+           (Sol_cli_string.contains
+              ~needle:"no database setup image was resolved"
+              message));
+      let seen = ref `Not_run in
+      (match
+         apply
+           ~database_setup:(fun ~setup_image () ->
+             seen := `Ran setup_image;
+             Ok ())
+           ()
+       with
+       | Ok () -> ()
+       | Error message -> Windtrap.failf "the control deployment failed: %s" message);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the setup step consumes the resolved image instead of looking one up"
+        true
+        (match !seen with
+         | `Ran (Some "resolved-setup-image") -> true
+         | `Ran _ | `Not_run -> false)))
+;;
+
 (* The lifecycle half: an incomplete removal fails the deploy before the new release is
    recorded (report_success runs only after recording), so the superseded release stays
    authoritative and the next deploy retries with its recorded UID evidence. *)
+let%test "1427: a setup image is resolved before the substrate gate" =
+  test_setup_image_is_resolved_before_the_substrate_gate ()
+;;
+
 let test_lifecycle_fails_before_recording_when_removal_is_incomplete () =
   with_fake_kubectl (fun ~calls:_ ->
     with_context (fun ctx ->

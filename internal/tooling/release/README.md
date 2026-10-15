@@ -33,6 +33,11 @@ the tag's commit, then builds from that revision:
 - the platform bundle;
 - the version-aligned migration-runner image, published once and reused by
   digest on a resume;
+- the pinned public database setup image (`share/sol/<version>/setup-image`),
+  taken from the repository variable `SOL_SETUP_POSTGRES_IMAGE`. The build fails
+  closed when it is unset or is not a digest reference: an installed release
+  refuses an ambient `SOL_SETUP_POSTGRES_IMAGE`, so a release that cannot name
+  the image it tested would otherwise fail a deploy *after* creating a database;
 - `candidate.json`, the candidate identity.
 
 It records the candidate as a **draft** GitHub release with the bundle and
@@ -84,7 +89,9 @@ Qualification is the live AWS and GCP campaign in
 automated by the release workflow: it provisions billable infrastructure and
 performs destructive lifecycle actions, so an operator authorizes it
 explicitly. Run it against the installed candidate — extract the draft's bundle
-and set `SOL_INSTALL` to its `sol-<version>` prefix — and follow the provider's
+and set `SOL_INSTALL` to its `sol-<version>` prefix. Keep the draft’s archive beside
+`SOL_CANDIDATE` (`candidate.json`): the harness verifies its recorded bundle hash and
+compares installed files with that archive, including `setup-image`. Then follow the provider's
 procedure (`aws/aws-run-procedure.md`, `gcp/gcp-production-single-region-v1-matrix.md`).
 
 The bundle also names the revision it was built from

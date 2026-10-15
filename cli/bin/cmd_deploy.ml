@@ -701,6 +701,7 @@ let run_database_setup_step
       ~ctx
       ~infra_dir
       ~plan
+      ~setup_image
   =
   let open Result.Syntax in
   (* [target.name] is the resolved target path ([<env>/<provider>/<region>]), which is not a
@@ -827,10 +828,16 @@ let run_database_setup_step
         in
         Ok (master_url, ca_cert)
     in
+    (* **#1427: the image was resolved before the substrate gate and is passed down.** [None]
+       here would mean no image was required for a database this branch is setting up, which is
+       a contradiction rather than a fallback: refuse instead of provisioning with nothing. *)
     let* image =
-      Sol_cli_database_setup.setup_image ()
-      |> Result.map_error (fun message ->
-        "the database setup image could not be resolved: " ^ message)
+      match setup_image with
+      | Some image -> Ok image
+      | None ->
+        Error
+          "a Sol-provisioned database needs a database setup image, and none was \
+           resolved before the infrastructure gate"
     in
     (* The mode is the provider's, not a constant here: the contract is authenticated server
        identity and each provider establishes it its own way. *)
@@ -943,6 +950,10 @@ let run_apply
       ~image_refs:planning.Sol_cli_deploy_selection.Target_plan_input.image_refs
     |> Sol_cli_exit.of_msg
   in
+  let* setup_image =
+    Sol_cli_database_setup_run.setup_image_preflight planning.config
+    |> Sol_cli_exit.of_msg
+  in
   let* destination, established, infra_dir =
     destination_or_environment_stage
       ~planning
@@ -979,8 +990,13 @@ let run_apply
   in
   let ctx : Sol_cli_deploy_run.context = context_of ~destination in
   let* plan = project_trusted_workload_issuer ctx.target_cfg plan in
-  let database_setup () =
-    run_database_setup_step ~planning ~ctx:ctx.execution.cluster ~infra_dir ~plan
+  let database_setup ~setup_image () =
+    run_database_setup_step
+      ~planning
+      ~ctx:ctx.execution.cluster
+      ~infra_dir
+      ~plan
+      ~setup_image
   in
   Sol_cli_deploy_run.apply
     ctx
@@ -996,6 +1012,7 @@ let run_apply
           ~await_delegation
         |> ignore)
     ~confirm_group_change
+    ~resolve_setup_image:(fun () -> Ok setup_image)
     ~database_setup
     ~push_events:
       (push_deploy_events

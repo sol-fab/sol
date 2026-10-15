@@ -7,41 +7,6 @@
     The step is part of the *provisioning path*, not a consumer: it receives the master
     for the duration of one Job and never appears in the class model as a role. *)
 
-(** Where the image digest is configured. Mirrors the runner's mechanism
-    ([SOL_MIGRATION_RUNNER_IMAGE]): a digest reference is required and a tag is refused.
-    The *instruction* differs, because this image is public — see {!setup_image}. *)
-let image_env = "SOL_SETUP_POSTGRES_IMAGE"
-
-let not_a_digest_ref ref_ =
-  Printf.sprintf
-    "%s %S is not a digest reference (<image>@sha256:<64 hex>); this Job runs with the \
-     database's administrative credential, so an image reference that can move is not \
-     acceptable"
-    image_env
-    ref_
-;;
-
-(** The setup image.
-
-    Unlike the migration runner, this image is **public**: there is nothing to publish,
-    only a digest to pin. The error names that resolution rather than telling the
-    operator to publish something that does not belong to Sol. *)
-let setup_image () =
-  match Sol_cli_string.env image_env with
-  | Some ref_ when Sol_cli_platform_assets.is_digest_ref ref_ -> Ok ref_
-  | Some ref_ -> Error (not_a_digest_ref ref_)
-  | None ->
-    Error
-      (Printf.sprintf
-         "no database setup image is configured. Set %s to an image pinned by digest, \
-          for example postgres@sha256:<64 hex> - `docker buildx imagetools inspect \
-          postgres:16` prints the current digest (the plain `docker manifest inspect` \
-          form prints the manifest JSON without a digest line). Unlike the migration \
-          runner, this image is public: there is nothing to publish, only a digest to \
-          pin"
-         image_env)
-;;
-
 (** The roles. Fixed names, because the consumer's role determines its credential class
     rather than a user declaration (ADR 0007): the migration Job is DDL, workloads are
     DML, and neither can ask for a higher class. *)
