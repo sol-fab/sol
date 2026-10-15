@@ -96,7 +96,7 @@ source "$ROOT/internal/qualification/candidate-binding.sh"
 source "$ROOT/internal/qualification/attempt.sh"
 
 case "${1:-}" in
-  prepare | cloud | app | destroy | cleanup)
+  prepare | cloud | app | destroy)
     sol_under_test_resolve
     ;;
 esac
@@ -105,7 +105,7 @@ usage() {
   cat <<'USAGE'
 live-row.sh — the AWS regression row: the application contract GCP Attempt 28 established
 
-usage: live-row.sh PHASE      PHASE in: prepare | cloud | transport | app | destroy | cleanup | verify
+usage: live-row.sh PHASE      PHASE in: prepare | cloud | transport | app | destroy | verify
 
 required
   ATTEMPT           a unique identity for this disposable run; the target, state key and
@@ -130,15 +130,19 @@ optional (defaults shown)
   WORKER_NS=pluto-comms          SVC_UNIT=charge_svc
   WORKER_UNIT=notify_worker
   APP_UNITS="checkout_svc charge_svc notify_worker orders_svc fulfilment_worker"
-                                 every workload the target selects is built,
-                                 pushed and pinned by digest
+                                 every workload the target selects is built, published
+                                 into the repositories Sol's deploy creates, and pinned
+                                 by digest
 
 phases
-  cloud      whole-target plan and bootstrap deploy (inline installation, cluster and
-             platform), the deploy identity's kubeconfig, node evidence, state capture
+  prepare    build the application images bound to the candidate; touches no provider state
+  cloud      the cold deploy (inline installation, cluster and platform; refuse at the
+             artifact gate), then publish the built images into the repositories Sol
+             created, the read-only whole-target plan, the deploy identity's kubeconfig,
+             node evidence, and state capture
   transport  establish and verify the qualification-only transport (INFRA-060 / DEC-039)
-  app        the publisher's work, then Sol's: build, ECR login and push, runtime secrets,
-             migrate apply, deploy, the transaction
+  app        Sol's work: runtime secrets, migrate apply, deploy with the published digests,
+             the transaction
   destroy    supported teardown, then the independent inventory
   verify     the independent inventory only; invokes no teardown
 
@@ -193,14 +197,13 @@ run() {
 bootstrap_deploy() {
   local name="$1"
   say "$name"
-  # A profiled target's preflight refuses a mutable tag, so the deploy names the digests
-  # `prepare` published. A cold target has none to inherit (issue #1408).
+  # A profiled target's preflight refuses a mutable tag, so every deploy that moves workloads
+  # names the digests published into Sol's repositories. The *cold* deploy has none: it is the
+  # run that provisions the target, creates those repositories and then refuses at the artifact
+  # gate with "Deployment incomplete" (issue #1413). So an empty argument list is expected here
+  # and the phase reads the deploy's refusal, not its exit code.
   local image_ref_args
   image_ref_args="$(app_image_ref_args)"
-  if [ -z "$image_ref_args" ]; then
-    say "no published image digests for $TARGET; run live-row.sh prepare before this phase"
-    return 1
-  fi
   local command="cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args"
   if command -v script >/dev/null 2>&1; then
     printf 'y\n' | timeout "$PHASE_TIMEOUT" script -qec "$command" /dev/null \
@@ -208,6 +211,49 @@ bootstrap_deploy() {
   else
     timeout "$PHASE_TIMEOUT" bash -c "$command" >"$LOG_DIR/$name.log" 2>&1
   fi
+}
+
+# The cold deploy's refusal. `sol deploy` provisioned the target, created the repositories its
+# release names, and stopped before any workload moved because the immutable image it requires is
+# not published yet (#1473). This is the phase's contract on a fresh profiled target: infrastructure
+# reconciled, artifacts pending, nothing applied.
+pending_artifacts_refused() {
+  grep -qF 'Deployment incomplete.' "$LOG_DIR"/cloud-apply*.log 2>/dev/null
+}
+
+# The other half of that contract, read from the cluster rather than inferred from the log:
+# reconciliation is not a workload rollout and not a recorded release. A namespace that does not
+# exist yet is not a moved workload; a read that fails for any other reason is UNKNOWN, never
+# absence.
+cold_start_moved_nothing() {
+  local ns out err
+  for ns in $APP_NS $WORKER_NS; do
+    err="$LOG_DIR/cold-start-$ns.err"
+    if ! out="$(kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get deploy -n "$ns" -o name 2>"$err")"; then
+      if grep -q 'not found' "$err" 2>/dev/null; then
+        continue
+      fi
+      say "could not read the deployments in $ns, so whether a workload moved is UNKNOWN (see $err)"
+      return 1
+    fi
+    if [ -n "$out" ]; then
+      say "the cold deploy moved a workload before its immutable artifacts were published: $out"
+      return 1
+    fi
+    if ! out="$(kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get configmap -n "$ns" \
+      -l sol.dev/type=release -o name 2>"$err")"; then
+      if grep -q 'not found' "$err" 2>/dev/null; then
+        continue
+      fi
+      say "could not read the release ConfigMaps in $ns, so whether a release was recorded is UNKNOWN (see $err)"
+      return 1
+    fi
+    if [ -n "$out" ]; then
+      say "the cold deploy recorded a release before its immutable artifacts were published: $out"
+      return 1
+    fi
+  done
+  say "the cold deploy provisioned the target and moved no workload and recorded no release"
 }
 
 # `sol deploy` prints this once the durable installation and the environment are
@@ -273,15 +319,15 @@ supply_platform_credential() {
 }
 
 k8s_name() { printf '%s' "$1" | tr '_' '-'; }
-# Sol's cluster root manages `pluto/<unit>`: the run must not create those names (two owners of
-# one name; Terraform refuses a repository it did not create), and on a cold target it cannot
-# wait for them either, because the profile's immutable-artifact preflight runs before the apply
-# that creates them (issue #1413). The run therefore publishes where it is the only owner.
-# Pushing into a repository Sol created is fine; creating one first is not.
-RUN_REPO_PREFIX="${RUN_REPO_PREFIX:-sol-runs/$ATTEMPT}"
-run_repo() { printf '%s/%s/%s' "$ECR_REGISTRY" "$RUN_REPO_PREFIX" "$(k8s_name "$1")"; }
+# Sol's cluster root owns `pluto/<unit>` — the repositories the target's release names — and the
+# run publishes into exactly those, after the `cloud` phase's deploy has created them (issue
+# #1413). The run never creates a repository itself: the harness owning a parallel `sol-runs/...`
+# registry let a cold start pass without exercising the product's own cold-start path, which is
+# what `sol deploy` now provides (a profiled cold target provisions, then reports its pending
+# artifacts, then resumes once the digests exist). Pushing into a repository Sol created is the
+# operator's legitimate act; creating one is not.
 sol_repo() { printf '%s/pluto/%s' "$ECR_REGISTRY" "$(k8s_name "$1")"; }
-image_ref() { printf '%s:%s' "$(run_repo "$1")" "$APP_TAG"; }
+sol_image_ref() { printf '%s:%s' "$(sol_repo "$1")" "$APP_TAG"; }
 
 # Sol's own repositories, as its target inventory sees them: ABSENT before `cloud` creates them,
 # PRESENT after, ABSENT again after teardown.
@@ -299,52 +345,6 @@ ecr_record_sol_repositories() {
     printf 'ecr-sol-repository[%s]: %s %s\n' "$label" "$name" "$state" >>"$out"
   done
   say "recorded Sol's repositories ($label) in $out"
-}
-
-# The run's own repositories are outside the target's inventory, so the run records and removes
-# them itself -- by prefix, not from what `prepare` happened to record, so a partial publish or
-# an interrupted attempt is still cleaned.
-ecr_run_repositories() {
-  aws ecr describe-repositories \
-    --query "repositories[?starts_with(repositoryName, '$RUN_REPO_PREFIX/')].repositoryName" \
-    --output text 2>/dev/null | tr '\t' '\n' | sed '/^$/d'
-}
-
-ecr_record_run_repositories() {
-  local label="$1" name found=0
-  local out="$LOG_DIR/ecr-run-repositories-$label.txt"
-  : >"$out"
-  for name in $(ecr_run_repositories); do
-    printf 'ecr-run-repository[%s]: %s PRESENT\n' "$label" "$name" >>"$out"
-    found=1
-  done
-  if [ "$found" = 0 ]; then printf 'ecr-run-repository[%s]: none ABSENT\n' "$label" >>"$out"; fi
-  say "recorded the run's repositories ($label) in $out"
-}
-
-cleanup_run_repositories() {
-  local name
-  for name in $(ecr_run_repositories); do
-    if run "ecr-delete-$(printf '%s' "$name" | tr '/' '-')" \
-      aws ecr delete-repository --repository-name "$name" --force >/dev/null 2>&1; then
-      say "  removed run-owned repository $name"
-    else
-      say "could not remove the run-owned repository $name"
-      return 1
-    fi
-  done
-  ecr_record_run_repositories absent
-  if grep -q PRESENT "$LOG_DIR/ecr-run-repositories-absent.txt" 2>/dev/null; then
-    say "a run-owned ECR repository survived cleanup"
-    return 1
-  fi
-}
-
-# `cleanup` is runnable on its own so a failed or interrupted attempt can be swept without a
-# target: it removes every repository under the run's prefix and records their absence.
-phase_cleanup() {
-  cleanup_run_repositories || return 1
-  say "the run's own repositories are absent; nothing outside the target inventory remains"
 }
 
 unit_dir() {
@@ -587,18 +587,47 @@ phase_cloud() {
   require_target_terraform_var_file || return 1
   # A fixed repository name is not made fresh by a fresh target name, so record it on the way in.
   ecr_record_sol_repositories before
-  # `sol plan` is the read-only whole-target preview. `sol deploy` is the only command
-  # that reconciles the substrate now: it establishes the durable installation inline and
-  # applies the environment's cluster and platform roots.
-  #
-  # `prepare` has published every selected workload, so the whole-target preview names those
-  # digests. A cold target no longer skips the plan for want of images (issue #1408): the plan
-  # is reachable exactly as a warm run's is, with digests rather than an inherited release.
+  # The cold deploy. `sol deploy` establishes the durable installation inline, applies the
+  # environment's cluster and platform roots (which create `pluto/<unit>`), and then -- because
+  # this run has published no images yet -- refuses at the immutable-artifact gate with
+  # "Deployment incomplete" (#1473). That refusal is this phase's contract on a fresh profiled
+  # target: infrastructure reconciled, no workload moved, no release recorded. The deploy's exit
+  # code is not what decides the phase.
+  local deploy_rc=0
+  bootstrap_deploy cloud-apply || deploy_rc=$?
+  if cloud_mutated; then CLOUD_APPLIED=1; fi
+  if [ "$deploy_rc" != 0 ] && platform_credential_missing; then
+    say "the bootstrap deploy stopped at the platform's documented credential prerequisite; supplying it and resuming"
+    ensure_contexts || return 1
+    supply_platform_credential || return 1
+    bootstrap_deploy cloud-apply-resume || deploy_rc=$?
+    if cloud_mutated; then CLOUD_APPLIED=1; fi
+  fi
+  if ! environment_reconciled; then
+    say "the bootstrap deploy did not reconcile the environment $TARGET (full log $LOG_DIR/cloud-apply.log)"
+    return 1
+  fi
+  # The environment stage ran; the artifact gate is the next step the same deploy checks. Its
+  # refusal is the cold-start claim -- provisioned, nothing applied.
+  if ! pending_artifacts_refused; then
+    say "the cold deploy reconciled the environment but did not refuse at the artifact gate"
+    say "(expected 'Deployment incomplete.' in $LOG_DIR/cloud-apply*.log)"
+    return 1
+  fi
+  # Infrastructure reconciled is not the same as workloads moved. Before this run publishes the
+  # immutable artifacts, establish from the cluster that the cold deploy moved no workload and
+  # recorded no release -- the distinction #1473 makes and a successful cold-start row must show.
+  ensure_contexts || return 1
+  cold_start_moved_nothing || return 1
+  # Publish the images `prepare` built into the repositories the deploy just created, then preview
+  # the whole target with the digests those pushes resolved to. `sol plan` is the read-only
+  # whole-target preview; `sol deploy` is the only command that reconciles the substrate.
+  app_push_images || return 1
   say "cloud-plan"
   local plan_image_refs plan_rc=0
   plan_image_refs="$(app_image_ref_args)"
   if [ -z "$plan_image_refs" ]; then
-    say "no published image digests for $TARGET; run live-row.sh prepare before this phase"
+    say "the run published no image digests, so the whole-target preview has nothing to name"
     return 1
   fi
   if ! timeout "$PHASE_TIMEOUT" bash -c "cd '$WORKSPACE' && exec '$SOL' plan '$TARGET' --var-file '$TFVARS' $plan_image_refs" \
@@ -610,24 +639,6 @@ phase_cloud() {
     tail -n 40 "$LOG_DIR/cloud-plan.log"
     return 1
   fi
-  local deploy_rc=0
-  bootstrap_deploy cloud-apply || deploy_rc=$?
-  if cloud_mutated; then CLOUD_APPLIED=1; fi
-  if [ "$deploy_rc" != 0 ] && platform_credential_missing; then
-    say "the bootstrap deploy stopped at the platform's documented credential prerequisite; supplying it and resuming"
-    ensure_contexts || return 1
-    supply_platform_credential || return 1
-    bootstrap_deploy cloud-apply-resume || deploy_rc=$?
-    if cloud_mutated; then CLOUD_APPLIED=1; fi
-  fi
-  # The bootstrap deploy is expected to stop at the workloads whose digests phase_app has
-  # not published yet: their ECR repositories did not exist when this phase began. What
-  # decides the phase is the reconciled environment, not the deploy's exit code.
-  if ! environment_reconciled; then
-    say "the bootstrap deploy did not reconcile the environment $TARGET (full log $LOG_DIR/cloud-apply.log)"
-    return 1
-  fi
-  ensure_contexts || return 1
   run nodes kubectl --kubeconfig "$ACCESS_KUBECONFIG" get nodes -o wide || return 1
   capture_kube_evidence
   capture_state
@@ -637,9 +648,13 @@ phase_cloud() {
   say "the substrate and platform install completed; evidence in $LOG_DIR"
 }
 
-app_publish_images() {
-  local unit dir ref digest
-  : >"$LOG_DIR/app-image-refs.txt"
+
+# `prepare` builds the run's images and nothing else: a build touches no provider state, so the
+# `cloud` phase still sees a fresh target. The images stay in the local daemon; `cloud` pushes
+# them into the repositories Sol's deploy creates.
+app_build_images() {
+  local unit dir ref
+  : >"$LOG_DIR/app-built-tags.txt"
   local context="$LOG_DIR/app-build-context" pins
   if ! pins="$(sol_candidate_bind_context "$WORKSPACE" "$SOL_REVISION" "$context")"; then
     say "refusing to build the application: it cannot be bound to candidate $SOL_REVISION"
@@ -647,8 +662,6 @@ app_publish_images() {
   fi
   sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$context" "$pins" "$(git -C "$WORKSPACE" rev-parse HEAD)"
   say "app images build from candidate $SOL_REVISION ($WORKSPACE at that revision, framework pinned to it)"
-  run ecr-login bash -c \
-    "aws ecr get-login-password --region '$AWS_REGION' | docker login --username AWS --password-stdin '$ECR_REGISTRY'" || return 1
   for unit in $APP_UNITS; do
     if ! dir="$(unit_dir "$unit")"; then
       say "no app/*/$unit directory with a Dockerfile in $WORKSPACE"
@@ -658,19 +671,40 @@ app_publish_images() {
       say "candidate $SOL_REVISION has no app/*/$unit directory with a Dockerfile"
       return 1
     fi
-    ref="$(image_ref "$unit")"
+    ref="$(sol_image_ref "$unit")"
     run "app-build-$unit" docker build -f "$context/$dir/Dockerfile" -t "$ref" "$context" || return 1
+    printf '%s=%s\n' "$unit" "$ref" >>"$LOG_DIR/app-built-tags.txt"
+    say "  $unit built as $ref"
+  done
+}
+
+# Publish the built images into the repositories Sol's deploy created, and record the immutable
+# digest each push resolved to; those digests are what every later deploy names.
+app_push_images() {
+  local unit ref digest
+  : >"$LOG_DIR/app-image-refs.txt"
+  if [ ! -s "$LOG_DIR/app-built-tags.txt" ]; then
+    say "no built images to publish for $TARGET; run live-row.sh prepare first"
+    return 0
+  fi
+  run ecr-login bash -c \
+    "aws ecr get-login-password --region '$AWS_REGION' | docker login --username AWS --password-stdin '$ECR_REGISTRY'" || return 1
+  while IFS= read -r line; do
+    unit="${line%%=*}"
+    ref="${line#*=}"
+    [ -n "$unit" ] || continue
+    [ -n "$ref" ] || continue
     run "app-push-$unit" docker push "$ref" || return 1
     if ! digest="$(image_digest "$ref")"; then return 1; fi
     printf '%s=%s\n' "$unit" "$digest" >>"$LOG_DIR/app-image-refs.txt"
     say "  $unit -> $digest"
-  done
+  done <"$LOG_DIR/app-built-tags.txt"
 }
 
-# The digests this run pins, as `sol deploy --image-ref` arguments. A profiled target's
-# preflight refuses a mutable tag, and on a cold target the digests cannot exist before the
-# ECR repositories do; `prepare` publishes them before `cloud`, and every later deploy names
-# them (the cold-target ordering, issue #1408).
+# The digests this run pins, as `sol deploy --image-ref` arguments. A profiled target's preflight
+# refuses a mutable tag, and on a cold target the digests cannot exist before the deploy creates
+# the repositories; `cloud` publishes them once the environment is reconciled, and every later
+# deploy names them (the cold-target ordering, issue #1413).
 app_image_ref_args() {
   local ref args=""
   while IFS= read -r ref; do
@@ -680,60 +714,23 @@ app_image_ref_args() {
   printf '%s' "$args"
 }
 
-# The repositories the run publishes into. The cluster root creates them during a warm path's
-# `cloud`; `prepare` runs before that, so this stands in for the operator who creates them.
-ecr_ensure_repositories() {
-  local unit name
-  for unit in $APP_UNITS; do
-    name="$RUN_REPO_PREFIX/$(k8s_name "$unit")"
-    if aws ecr describe-repositories --repository-names "$name" >/dev/null 2>&1; then
-      continue
-    fi
-    if ! run "ecr-create-$unit" aws ecr create-repository --repository-name "$name" \
-      >/dev/null 2>&1; then
-      say "could not create the ECR repository $name"
-      return 1
-    fi
-    say "  ecr repository: $name"
-  done
-}
-
-# Publish once per attempt: `app` reuses the digests the cloud deploy was given instead of
-# moving the target to new ones.
-app_ensure_images() {
+# `app` reuses the digests `cloud` published into Sol's repositories; it never publishes its own.
+app_require_published_images() {
   if [ -s "$LOG_DIR/app-image-refs.txt" ]; then
-    say "app images were published for this attempt; reusing their digests"
+    say "reusing the digests the cloud phase published into Sol's repositories"
     return 0
   fi
-  app_publish_images
+  say "no published image digests for $TARGET: run live-row.sh cloud first, which provisions the"
+  say "target's repositories and publishes the images built by live-row.sh prepare"
+  return 1
 }
 
-# `prepare` runs before `cloud`: a profiled target's first deploy names immutable digests, and
-# on a cold target they cannot exist until this run has created its ECR repositories and
-# published. It touches no provider state, so `cloud` still sees a fresh specimen.
+# `prepare` runs before `cloud`: it builds the application images bound to the candidate and
+# touches no provider state, so `cloud` still sees a fresh specimen.
 phase_prepare() {
   require_target_terraform_var_file || return 1
-  ecr_ensure_repositories || return 1
-  app_ensure_images || return 1
-  say "the run images are published; cloud deploys with their digests"
-}
-
-app_populate_sol_repositories() {
-  local unit
-  local ref
-  while IFS= read -r line; do
-    unit="${line%%=*}"
-    # The recorded artifact is the digest, which is what the run publishes and what the deploy
-    # was given; it is not guaranteed to be in this host's docker daemon (the publish path may
-    # not load it), so pull the digest before re-tagging it into Sol's repository (#1447).
-    ref="${line#*=}"
-    [ -n "$unit" ] || continue
-    [ -n "$ref" ] || continue
-    run "app-populate-$unit" bash -c \
-      "docker pull '$ref' >/dev/null && docker tag '$ref' '$(sol_repo "$unit"):$APP_TAG' && docker push '$(sol_repo "$unit"):$APP_TAG'" \
-      || return 1
-  done <"$LOG_DIR/app-image-refs.txt"
-  say "published the run's images into Sol's repositories, so teardown removes populated ones"
+  app_build_images || return 1
+  say "the run images are built; the cloud phase publishes them into the repositories Sol creates"
 }
 
 app_secret_failure() {
@@ -902,7 +899,7 @@ phase_app() {
   require_target_terraform_var_file || return 1
   ensure_contexts || return 1
   verify_identity_boundary || return 1
-  app_ensure_images || return 1
+  app_require_published_images || return 1
   say "runner: release $SOL_BUNDLE_VERSION names $SOL_RUNNER_IMAGE; the publisher publishes nothing"
   capture_state
   local url
@@ -963,10 +960,9 @@ phase_app() {
   app_supply_secrets || return 1
   run app-deploy bash -c "cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args" || return 1
   app_verify_database_delivery || return 1
-  # ADR 0004: destruction removes what the lifecycle created. The run's images live in its own
-  # repositories, so Sol's would be empty at teardown and a populated teardown would go
-  # untested. Push the same digests into the repositories Sol created.
-  app_populate_sol_repositories || return 1
+  # ADR 0004: destruction removes what the lifecycle created, and the images this run published
+  # live in the `pluto/<unit>` repositories Sol's own deploy created (#1413). The destroy phase's
+  # independent inventory therefore decides a *populated* teardown.
   for ns in $deploy_namespaces; do
     if ! kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get rolebinding sol-deploy -n "$ns" >/dev/null 2>&1; then
       say "the deploy completed into $ns without establishing its scoped deploy RBAC"
@@ -1007,21 +1003,12 @@ phase_destroy() {
     say "destroy exited non-zero; the independent inventory decides absence"
   fi
   aws_inventory || verdict_rc=$?
-  # Sol's repositories are the target's, so teardown must remove them; the run's are not, so the
-  # run removes its own. Both are read back and recorded. NOT ASSERTED HERE: the row's stub
-  # cannot model Sol's repository lifecycle inside a phase, so a hard check would pass on the
-  # fixture rather than on Sol. Tighten when it can -- issue #1415.
+  # Sol's repositories are the target's, so the independent inventory above decides them: every
+  # `pluto/<unit>` repository this run published into must read ABSENT after teardown. The run owns
+  # no repositories of its own (issue #1413), so there is nothing outside the inventory to remove.
   ecr_record_sol_repositories after-destroy
-  local cleanup_rc=0
-  cleanup_run_repositories || cleanup_rc=1
   if [ "$verdict_rc" != 0 ]; then
     say "the independent inventory does not read ABSENT, so teardown is not complete"
-    return 1
-  fi
-  # The run's own repositories are outside the target inventory, so no independent probe will
-  # catch them; a destroy that cannot remove them must not report success. `cleanup` re-runs.
-  if [ "$cleanup_rc" != 0 ]; then
-    say "the run's own repositories could not all be removed; re-run live-row.sh cleanup"
     return 1
   fi
   return "$destroy_rc"
@@ -1060,7 +1047,6 @@ esac
 case "${1:-}" in
   cloud) phase_cloud ;;
   prepare) phase_prepare ;;
-  cleanup) phase_cleanup ;;
   transport) phase_transport ;;
   app) phase_app ;;
   destroy) phase_destroy ;;

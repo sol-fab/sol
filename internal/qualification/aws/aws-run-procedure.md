@@ -154,7 +154,7 @@ absolute (tear down before asking). The target creates, at least:
 | VPC, subnets, route tables, one NAT gateway + EIPs | cluster root | network |
 | EBS volumes (PVCs, node root disks) | storage class / PVCs | storage |
 | Application/ingress load balancer | platform (ingress) | load balancer |
-| ECR repositories | cluster/platform root + the runner repository the harness creates | registry (empty after teardown) |
+| ECR repositories | cluster root (`pluto/<unit>`, the release's own) | registry (empty after teardown) |
 | CloudWatch log groups | platform | logs |
 | Route 53 `qual-aws.sol-fab.dev` | durable bootstrap root | **retained** (durable, not a target resource) |
 
@@ -170,22 +170,30 @@ installed release's `sol deploy <target>` — its first-run offer is confirmed t
 on a fresh account — and every disposable-target step
 goes through Sol. `SOL` selects the released bundle.
 
-**`cloud`** — `sol plan <target> --var-file <tfvars>` previews the whole target;
-`sol deploy <target> --registry <registry> --image-tag <tag>` reconciles the durable
-installation, the cluster and the platform (the row's `qual-aws-row.tfvars` reach the roots
-through the target's `terraform_var_file`, since `sol deploy` takes no `--var-file`). Because
-no image digest exists before the cluster root creates its ECR repositories, this bootstrap
-deploy names a tag and is expected to stop at the workloads phase_app has not published yet;
-the phase succeeds on the reconciled environment (`The environment for <target> is
-reconciled.`), not on the deploy's exit code. When the deploy
-stops at the pre-platform `redpanda-users` credential, create the Secret with the run's
-generated or operator-supplied `sol-workloads` SCRAM credential, record the supplied input,
-and re-run the same deploy to resume; build the deploy/access/operator kubeconfigs; capture
-nodes and the cluster root state. The profile still emits its `-var` arguments after the var
-file, so the profile wins on every variable it sets. Evidence:
-`cloud-plan.log`, `cloud-apply.log`, `cloud-apply-resume.log`, `platform-credential.log`,
-`prerequisites.txt`, `k8s-nodes.txt`, `state/cloud.tfstate`, and the verbatim
-`lifecycle phase:` line per invocation. Rows: I1, I2, I4, A, F1, F2.
+**`prepare`** — build the application images bound to the candidate (`sol_candidate_bind_context`)
+and touch no provider state, so the specimen stays fresh for `cloud`. Evidence: `app-build.log`,
+`app-build-context/`, `candidate-binding.txt`, `app-built-tags.txt`.
+
+**`cloud`** — `sol deploy <target> --registry <registry>` with **no** `--image-ref`: the release
+names no digest yet, so Sol reconciles the durable installation, the cluster and the platform
+(the row's `qual-aws-row.tfvars` reach the roots through the target's `terraform_var_file`, since
+`sol deploy` takes no `--var-file`) — the cluster root creates the `pluto/<unit>` repositories the
+target's release names — and then refuses at the immutable-artifact gate with `Deployment
+incomplete.`, before any workload moves (issue #1473). The phase succeeds on the reconciled
+environment (`The environment for <target> is reconciled.`) **and** that refusal, not on the
+deploy's exit code. When the deploy stops at the pre-platform `redpanda-users` credential, create
+the Secret with the run's generated or operator-supplied `sol-workloads` SCRAM credential, record
+the supplied input, and re-run the same deploy to resume. Before publishing, read the cluster to
+establish the cold-start boundary itself: no Deployment in `pluto-payments`/`pluto-comms` and no
+`sol.dev/type=release` ConfigMap — an unreadable namespace is UNKNOWN, never absence. Then publish
+the images `prepare` built into the repositories Sol created, `docker inspect` each for its digest,
+and preview the whole target with `sol plan <target> --var-file <tfvars> --image-ref
+<unit>=<repo>@sha256:<digest>`; build the deploy/access/operator kubeconfigs; capture nodes and the
+cluster root state. Evidence: `cloud-apply.log`, `cloud-apply-resume.log`,
+`platform-credential.log`, `cold-start-*.err`, `cloud-plan.log`,
+`ecr-sol-repositories-before.txt`, `ecr-sol-repositories-after.txt`, `prerequisites.txt`,
+`k8s-nodes.txt`, `state/cloud.tfstate`, and the verbatim `lifecycle phase:` line per invocation.
+Rows: I1, I2, I4, A, F1, F2.
 
 **`transport`** — probe the production identities for `pods/portforward` (must answer `no`),
 establish the qualification transport
@@ -197,9 +205,9 @@ confirm the qualifier can open the transport. Evidence:
 the transport identity separately from the identities under qualification, and shows none of
 the latter holds `pods/portforward` before or after.
 
-**`app`** — the publisher's work, then Sol's: build and push the workload images, publish the
-migration runner (below), set the runtime secrets, `sol migrate apply <target>`,
-`sol deploy <target> --registry <registry> --image-tag <tag>`, then drive the representative
+**`app`** — Sol's work with the digests the cloud phase published: set the runtime secrets,
+`sol migrate apply <target>`, `sol deploy <target> --registry <registry> --image-ref
+<unit>=<repo>@sha256:<digest>` for every selected unit, then drive the representative
 transaction through the transport (`transport-transaction.sh`, port-forward to the private
 `ClusterIP`). Evidence: `app-transaction.log`, `transport-port-forward.log`,
 `transport-transaction.txt`, `k8s-pods.txt`, `state/cloud.tfstate`. Rows: B1, B3, B4, C1–C6,

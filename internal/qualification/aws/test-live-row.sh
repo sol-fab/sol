@@ -6,6 +6,9 @@ REPO="$(cd "$HERE/../../.." && pwd)"
 TMP="$(mktemp -d)"
 export TMP
 export ATTEMPT="${ATTEMPT:-aws-self-test}"
+# A fixed image tag: `prepare` builds under it and `cloud` publishes under it, so the seeding
+# helpers and the harness name the same tag. The harness's own default is `row-<timestamp>`.
+export APP_TAG="${APP_TAG:-row-self-test}"
 # The workspace whose repositories the target declares; it matches the "pluto"
 # image path the harness publishes under.
 export WORKSPACE_NAME=pluto
@@ -114,7 +117,18 @@ if [ "${1:-}" = "deploy" ]; then
     "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-db-credentials" \
     "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-db-ca"
   printf 'The environment for %s is reconciled.\n' "${2:-}"
-  exit 0
+  # The cold deploy's artifact gate (#1473): with no --image-ref the target is provisioned but
+  # its workloads name no immutable image, so the deploy refuses after reconciling the
+  # environment. A deploy that names digests continues to the workload stage (and its own
+  # refusal sequence, modelled above).
+  case " $* " in
+    *" --image-ref "*) exit 0 ;;
+    *)
+      printf 'Deployment incomplete.\n'
+      printf 'The environment is reconciled and no workload has moved. Publish the images and re-run: sol deploy %s\n' "${2:-}"
+      exit 1
+      ;;
+  esac
 fi
 if [ "${1:-}" = "destroy" ]; then rm -f "${TMP:-/tmp}/ecr-sol-created"; fi
 if [ -n "${STUB_SOL_SLEEP:-}" ]; then sleep "$STUB_SOL_SLEEP"; fi
@@ -255,14 +269,6 @@ case "$1 $2" in
       *) printf '123456789012\n' ;;
     esac
     ;;
-  "ecr delete-repository")
-    if [ "${STUB_ECR_DELETE_FAILS:-0}" = "1" ]; then
-      printf 'AccessDeniedException\n' >&2
-      exit 1
-    fi
-    printf '%s\n' "${4:-}" >>"${TMP:-/tmp}/run-ecr-deleted"
-    printf '{"repository":{}}\n'
-    ;;
   "s3api head-object")
     if [ "${STUB_STATE_PRESENT:-0}" = "1" ]; then exit 0; fi
     printf 'An error occurred (404) when calling the HeadObject operation: Not Found\n' >&2
@@ -344,37 +350,27 @@ case "$1 $2" in
     printf '{"TagDescriptions":[{"ResourceArn":"arn:aws:elbv2:us-east-1:123456789012:loadbalancer/app/k8s-live/1","Tags":[{"Key":"kubernetes.io/cluster/test-cluster","Value":"owned"}]}]}\n'
     ;;
   "ecr describe-repositories")
+    # The lifecycle model is about *the target's own* repositories, which Sol names. The
+    # whole-account listing (the inventory's probe) keeps its own fixture.
     case "$*" in
-      *--query*)
-        local name
-        for name in ${STUB_RUN_ECR_REPOS:-}; do
-          grep -qxF "$name" "${TMP:-/tmp}/run-ecr-deleted" 2>/dev/null || printf '%s\n' "$name"
-        done
-        ;;
-      *)
-        # The lifecycle model is about *the target's own* repositories, which Sol names. The
-        # whole-account listing (the inventory's probe) keeps its own fixture.
-        case "$*" in
-          *--repository-names*)
-            if [ "${STUB_ECR_LIFECYCLE:-0}" = "1" ]; then
-              # Sol's repositories exist only once its apply created them, and go again with the
-              # destroy: the phases read absent -> present -> absent for real.
-              if [ -s "${TMP:-/tmp}/ecr-sol-created" ]; then
-                printf '{"repositories":[{"repositoryName":"pluto/charge-svc"}]}\n'
-                exit 0
-              fi
-              printf 'An error occurred (RepositoryNotFoundException) when calling the DescribeRepositories operation\n' >&2
-              exit 1
-            fi
-            ;;
-        esac
-        if [ "${STUB_LIVE_ECR:-0}" = "1" ]; then
-          printf '{"repositories":[{"repositoryName":"pluto/charge-svc"}]}\n'
-        else
-          printf '{"repositories":[]}\n'
+      *--repository-names*)
+        if [ "${STUB_ECR_LIFECYCLE:-0}" = "1" ]; then
+          # Sol's repositories exist only once its apply created them, and go again with the
+          # destroy: the phases read absent -> present -> absent for real.
+          if [ -s "${TMP:-/tmp}/ecr-sol-created" ]; then
+            printf '{"repositories":[{"repositoryName":"pluto/charge-svc"}]}\n'
+            exit 0
+          fi
+          printf 'An error occurred (RepositoryNotFoundException) when calling the DescribeRepositories operation\n' >&2
+          exit 1
         fi
         ;;
     esac
+    if [ "${STUB_LIVE_ECR:-0}" = "1" ]; then
+      printf '{"repositories":[{"repositoryName":"pluto/charge-svc"}]}\n'
+    else
+      printf '{"repositories":[]}\n'
+    fi
     ;;
   "rds describe-db-subnet-groups")
     if [ "${STUB_LIVE_RDS_SUBNET_GROUP:-0}" = "1" ]; then
@@ -448,6 +444,18 @@ case " $* " in
     fi
     : >"${TMP:-/tmp}/credential-supplied"
     printf 'secret/redpanda-users created\n'
+    exit 0
+    ;;
+  # The cold-start boundary (#1473): the phase reads the cluster for a workload that moved or a
+  # release that was recorded before the immutable artifacts existed. The default is "nothing
+  # there" (the deploy refused before it established the workload namespaces); each flag models
+  # the failure the assertion must catch.
+  *" get deploy -n "*)
+    if [ "${STUB_COLD_WORKLOAD:-0}" = "1" ]; then printf 'deployment.apps/charge-svc\n'; fi
+    exit 0
+    ;;
+  *" get configmap -n "*" sol.dev/type=release "*)
+    if [ "${STUB_COLD_RELEASE:-0}" = "1" ]; then printf 'configmap/sol-release-current-pluto\n'; fi
     exit 0
     ;;
   *" get secret redpanda-users "*)
@@ -599,11 +607,13 @@ exit 0
 STUB
 chmod +x "$TMP/bin/terraform"
 
-# `cloud` needs the run's digests published first. These scenarios are about the phases, not
-# the publishing, so they seed the digests directly; the prepare scenario exercises the real
-# `prepare` end to end. SKIP_PREPARE=1 leaves them absent for the refusal scenario.
+# `cloud` publishes what `prepare` built into the repositories Sol's deploy creates. These
+# scenarios are about the phases, not the publishing, so the cloud scenarios seed the *built tags*
+# and let the publish step (and the fake docker push) produce the digests; an `app`-only scenario
+# seeds the published digests directly, because `app` reuses the cloud phase's and never publishes
+# its own. SKIP_PREPARE=1 leaves both absent for the refusal scenarios.
 stub_prepare() {
-  local unit digest
+  local unit
   mkdir -p "$LOG_DIR"
   # The attempt identity a real prepare writes; without it the cloud run refuses a log dir
   # that holds evidence for no attempt.
@@ -613,11 +623,26 @@ stub_prepare() {
     printf 'target=%s\n' "qualreg/aws/us-east-1"
     printf 'state_key=%s\n' "sol/qualreg/aws/us-east-1/cloud.tfstate"
   } >"$LOG_DIR/attempt.txt"
+  : >"$LOG_DIR/app-built-tags.txt"
+  for unit in checkout_svc charge_svc notify_worker orders_svc fulfilment_worker; do
+    printf '%s=%s/pluto/%s:%s\n' \
+      "$unit" "$ECR" "$(printf '%s' "$unit" | tr '_' '-')" "$APP_TAG" >>"$LOG_DIR/app-built-tags.txt"
+  done
+}
+
+stub_published_refs() {
+  local unit
+  mkdir -p "$LOG_DIR"
+  {
+    printf 'attempt=%s\n' "$ATTEMPT"
+    printf 'row=%s\n' "qualreg"
+    printf 'target=%s\n' "qualreg/aws/us-east-1"
+    printf 'state_key=%s\n' "sol/qualreg/aws/us-east-1/cloud.tfstate"
+  } >"$LOG_DIR/attempt.txt"
   : >"$LOG_DIR/app-image-refs.txt"
   for unit in checkout_svc charge_svc notify_worker orders_svc fulfilment_worker; do
-    digest="$(printf '%s' "$unit" | tr '_' '-')"
-    printf '%s=%s/sol-runs/aws-self-test/%s@sha256:%s\n' \
-      "$unit" "$ECR" "$digest" "$(printf 'b%.0s' $(seq 1 64))" >>"$LOG_DIR/app-image-refs.txt"
+    printf '%s=%s/pluto/%s@sha256:%s\n' \
+      "$unit" "$ECR" "$(printf '%s' "$unit" | tr '_' '-')" "$(printf 'b%.0s' $(seq 1 64))" >>"$LOG_DIR/app-image-refs.txt"
   done
 }
 
@@ -655,6 +680,9 @@ run_row() {
   : >"$ESTABLISH_LOG"
   : >"$TERRAFORM_LOG"
   rm -rf "$LOG_DIR"
+  # The app phase reuses the digests `cloud` published into Sol's repositories; a scenario that
+  # runs `app` alone seeds them exactly as a publish would have.
+  stub_published_refs
   # The app phase runs against the real refusal sequence: the first deploy refuses at the
   # migration gate, `sol migrate apply` clears it, the second refuses the absent operator
   # secrets, and `sol secret set` clears that. Fresh markers per scenario keep one row's
@@ -691,17 +719,19 @@ run_phase() {
   : >"$TRANSPORT_LOG"
   : >"$ESTABLISH_LOG"
   : >"$TERRAFORM_LOG"
-  # `prepare` and `cloud` share one evidence directory: the digests `prepare` publishes are
-  # what `cloud`'s first deploy names. KEEP_LOG_DIR keeps it across the two invocations.
+  # `prepare` and `cloud` share one evidence directory: the built tags `prepare` writes are what
+  # `cloud` publishes. KEEP_LOG_DIR keeps it across the two invocations.
   [ "${KEEP_LOG_DIR:-0}" = 1 ] || rm -rf "$LOG_DIR"
   rm -f "$TMP/credential-supplied"
   # Sol's repository marker belongs to the scenario that ran the apply; leaving it makes the
   # next scenario read this one's leftovers (issue #1415).
   rm -f "$TMP/ecr-sol-created"
-  rm -f "$TMP/run-ecr-deleted"
   if [ "$phase" = cloud ] && [ "${SKIP_PREPARE:-0}" != 1 ]; then stub_prepare "$name"; fi
+  # A scenario that runs `app` alone is running after a `cloud` that published the digests, so seed
+  # them (the app phase reuses the cloud phase's and never publishes its own).
+  if [ "$phase" = app ]; then stub_published_refs; fi
   case "$phase" in
-    prepare | cloud | app | destroy | cleanup) STUB_ECR_LIFECYCLE=1 ;;
+    prepare | cloud | app | destroy) STUB_ECR_LIFECYCLE=1 ;;
     *) STUB_ECR_LIFECYCLE=0 ;;
   esac
   export STUB_ECR_LIFECYCLE
@@ -810,11 +840,10 @@ printf '\nscenario: installation failure stops cloud lifecycle at the supported 
 KEEP_LOG_DIR=1 run_phase bootstrap-refused prepare
 KEEP_LOG_DIR=1 run_phase bootstrap-refused cloud STUB_INSTALL_REFUSED=1
 refused bootstrap-refused "an unresolved installation refuses the cloud phase"
-has "the whole-target preview runs first" \
-  "sol plan qualreg/aws/us-east-1 --var-file $ROOT/internal/qualification/aws/qual-aws-row.tfvars" \
-  "$TMP/bootstrap-refused.sol"
 has "and Sol owns durable reconciliation through the whole-target deploy" \
-  "sol deploy qualreg/aws/us-east-1 --registry $ECR --image-ref checkout_svc=$ECR/sol-runs/aws-self-test/checkout-svc@sha256:" "$TMP/bootstrap-refused.sol"
+  "sol deploy qualreg/aws/us-east-1 --registry $ECR" "$TMP/bootstrap-refused.sol"
+lacks "the cold deploy names no image references, because none are published yet" \
+  "--image-ref" "$TMP/bootstrap-refused.sol"
 lacks "no removed cloud subcommand is invoked" "cloud bootstrap" "$TMP/bootstrap-refused.sol"
 lacks "and neither is the removed partial apply" "cloud apply" "$TMP/bootstrap-refused.sol"
 [ ! -s "$TMP/bootstrap-refused.terraform" ] && ok "no direct Terraform operation runs" \
@@ -825,8 +854,10 @@ run_row ok TRANSPORT=0
 is "exit 0" "$(cat "$TMP/ok.rc")" "0"
 has "the installed bundle is named in the transcript" \
   "sol-under-test: release $VERSION at $INSTALL" "$TMP/ok.out"
-has "the application images are still built and pushed by the harness" \
-  "docker push $ECR/sol-runs/aws-self-test/charge-svc:row-" "$TMP/ok.docker"
+has "the app deploy names the digests the cloud phase published into Sol's repositories" \
+  "--image-ref charge_svc=$ECR/pluto/charge-svc@sha256:" "$TMP/ok.sol"
+lacks "and the app phase never builds or pushes an image itself" \
+  "docker push" "$TMP/ok.docker"
 lacks "but the harness publishes no migration runner" \
   "sol-migration-runner" "$TMP/ok.docker"
 has "Sol applies the workspace's migrations" \
@@ -834,9 +865,9 @@ has "Sol applies the workspace's migrations" \
 lacks "without being asked to publish or name a runner" \
   "migrate apply qualreg/aws/us-east-1 --registry" "$TMP/ok.sol"
 has "the deploy resolves the workspace's own images from the target's registry" \
-  "deploy qualreg/aws/us-east-1 --registry $ECR --image-ref checkout_svc=$ECR/sol-runs/aws-self-test/checkout-svc@sha256:" "$TMP/ok.sol"
+  "deploy qualreg/aws/us-east-1 --registry $ECR --image-ref checkout_svc=$ECR/pluto/checkout-svc@sha256:" "$TMP/ok.sol"
 has "and pins every selected workload by digest, not a mutable tag" \
-  "image-ref charge_svc=$ECR/sol-runs/aws-self-test/charge-svc@sha256:" "$TMP/ok.sol"
+  "image-ref charge_svc=$ECR/pluto/charge-svc@sha256:" "$TMP/ok.sol"
 lacks "no mutable tag is passed to a profile that requires immutable artifacts" \
   "--image-tag" "$TMP/ok.sol"
 lacks "no operator POSTGRES_URL is set for the migration path" \
@@ -1012,43 +1043,63 @@ refused txnoopen "a port-forward with no local port fails the transaction"
 has "and the refusal names the transport" \
   "the qualification transport did not open" "$TMP/txnoopen.out"
 
-printf '\nscenario: the cloud phase previews with the row var file and deploys the whole target\n'
+printf '\nscenario: the cloud phase runs the cold deploy, publishes into Sol'"'"'s repositories, then previews\n'
 KEEP_LOG_DIR=1 run_phase cloudrun prepare
 KEEP_LOG_DIR=1 run_phase cloudrun cloud
 is "exit 0" "$(cat "$TMP/cloudrun.rc")" "0"
-has "the preview carries the row's var file" \
-  "plan qualreg/aws/us-east-1 --var-file $ROOT/internal/qualification/aws/qual-aws-row.tfvars" \
+has "the cold deploy runs with no image references" \
+  "deploy qualreg/aws/us-east-1 --registry $ECR [runner=" "$TMP/cloudrun.sol"
+has "it reconciles the environment" \
+  "The environment for qualreg/aws/us-east-1 is reconciled." "$TMP/cloudrun.logs/cloud-apply.log"
+has "then refuses at the artifact gate, before any workload moves" \
+  "Deployment incomplete." "$TMP/cloudrun.logs/cloud-apply.log"
+has "the run publishes the built images into the repository Sol's deploy created" \
+  "docker push $ECR/pluto/charge-svc:$APP_TAG" "$TMP/cloudrun.docker"
+has "and the preview names the published digest and the row's var file" \
+  "plan qualreg/aws/us-east-1 --var-file $ROOT/internal/qualification/aws/qual-aws-row.tfvars --image-ref checkout_svc=$ECR/pluto/checkout-svc@sha256:" \
   "$TMP/cloudrun.sol"
-has "and the whole-target deploy reconciles the environment by tag" \
-  "deploy qualreg/aws/us-east-1 --registry $ECR --image-ref checkout_svc=$ECR/sol-runs/aws-self-test/checkout-svc@sha256:" "$TMP/cloudrun.sol"
 lacks "the removed partial cloud apply is never invoked" "cloud apply" "$TMP/cloudrun.sol"
+has "and it asserts from the cluster that no workload moved before the publish" \
+  "get deploy -n pluto-payments" "$TMP/cloudrun.kubectl"
+has "and that no release was recorded" \
+  "get configmap -n pluto-payments" "$TMP/cloudrun.kubectl"
 
-printf '\nscenario: cleanup sweeps the run-owned repositories an interrupted attempt left\n'
-STUB_RUN_ECR_REPOS="sol-runs/aws-self-test/charge-svc" run_phase cleanuprun cleanup
-is "exit 0" "$(cat "$TMP/cleanuprun.rc")" "0"
-has "the run removes its own repository by name, not by what was recorded" \
-  "ecr delete-repository --repository-name sol-runs/aws-self-test/charge-svc --force" "$TMP/cleanuprun.aws"
-has "and reads the absence back rather than assuming it" \
-  "none ABSENT" "$TMP/cleanuprun.logs/ecr-run-repositories-absent.txt"
+printf '\nscenario: a cold deploy that moved a workload before publishing is caught (#1473)\n'
+KEEP_LOG_DIR=1 run_phase coldworkload prepare
+KEEP_LOG_DIR=1 run_phase coldworkload cloud STUB_COLD_WORKLOAD=1
+refused coldworkload "a workload that moved before its artifacts were published fails the phase"
+has "and names what moved" \
+  "the cold deploy moved a workload before its immutable artifacts were published" "$TMP/coldworkload.out"
 
-printf '\nscenario: a sweep that cannot remove a run repository fails the phase\n'
-STUB_RUN_ECR_REPOS="sol-runs/aws-self-test/charge-svc" STUB_ECR_DELETE_FAILS=1 run_phase cleanupfail cleanup
-refused cleanupfail "a failed sweep is a failure, not a note"
+printf '\nscenario: a cold deploy that recorded a release before publishing is caught (#1473)\n'
+KEEP_LOG_DIR=1 run_phase coldrelease prepare
+KEEP_LOG_DIR=1 run_phase coldrelease cloud STUB_COLD_RELEASE=1
+refused coldrelease "a release recorded before its artifacts were published fails the phase"
+has "and names the release" \
+  "the cold deploy recorded a release before its immutable artifacts were published" "$TMP/coldrelease.out"
 
-printf '\nscenario: cloud refuses when nothing has been published for it\n'
+printf '\nscenario: the run owns no registry of its own, so the cleanup phase is gone\n'
+run_phase cleanuprun cleanup
+refused cleanuprun "cleanup is no longer a phase"
+lacks "and the usage no longer offers it" "cleanup" "$TMP/cleanuprun.out"
+
+printf '\nscenario: a cloud phase with nothing to publish still refuses at the artifact gate\n'
 SKIP_PREPARE=1 run_phase noprep cloud
-refused noprep "a cold target's first deploy refuses without published digests"
-has "and names the prepare step and why" \
-  "run live-row.sh prepare before this phase" "$TMP/noprep.out"
+refused noprep "a run with no built images cannot preview the target"
+has "the cold deploy still refuses at the artifact gate" \
+  "Deployment incomplete." "$TMP/noprep.logs/cloud-apply.log"
+has "and the phase says why it cannot go on" \
+  "the run published no image digests" "$TMP/noprep.out"
 
-printf '\nscenario: prepare publishes the run digests before the first deploy\n'
+printf '\nscenario: prepare builds the run images and touches no provider state\n'
 KEEP_LOG_DIR=1 run_phase prep prepare
 is "exit 0" "$(cat "$TMP/prep.rc")" "0"
-has "the operator stand-in makes sure each repository exists" \
-  "ecr describe-repositories --repository-names sol-runs/aws-self-test/charge-svc" "$TMP/prep.aws"
-has "and the images are pushed" "docker push $ECR/sol-runs/aws-self-test/charge-svc:row-" "$TMP/prep.docker"
-has "with their digests recorded for the deploys that name them" \
-  "charge_svc=$ECR/sol-runs/aws-self-test/charge-svc@sha256:" "$TMP/prep.logs/app-image-refs.txt"
+has "the images are built" "docker build" "$TMP/prep.docker"
+has "tagged into the repository the target declares" \
+  "$ECR/pluto/charge-svc:$APP_TAG" "$TMP/prep.logs/app-built-tags.txt"
+lacks "and prepare creates no repository of its own" \
+  "create-repository" "$TMP/prep.aws"
+lacks "and prepare pushes nothing" "docker push" "$TMP/prep.docker"
 
 printf '\nscenario: a plan that cannot resolve the run images fails, and is never skipped\n'
 KEEP_LOG_DIR=1 run_phase coldplan prepare
@@ -1056,8 +1107,10 @@ KEEP_LOG_DIR=1 run_phase coldplan cloud STUB_COLD_PLAN=1
 refused coldplan "a plan that cannot resolve the run images fails the phase"
 has "the failure is reported, not skipped" "FAILED: cloud-plan" "$TMP/coldplan.out"
 lacks "and the old cold-plan skip is gone" "cloud-plan: skipped" "$TMP/coldplan.out"
-lacks "and no deploy runs behind a plan that could not resolve images" \
-  "sol deploy" "$TMP/coldplan.sol"
+has "the cold deploy that provisions the target ran first" \
+  "sol deploy qualreg/aws/us-east-1 --registry $ECR [runner=" "$TMP/coldplan.sol"
+lacks "and no digest-named deploy runs behind a plan that could not resolve images" \
+  "sol deploy qualreg/aws/us-east-1 --registry $ECR --image-ref" "$TMP/coldplan.sol"
 
 printf '\nscenario: the harness supplies the platform credential the install names, then resumes\n'
 KEEP_LOG_DIR=1 run_phase credential-boundary prepare
@@ -1100,15 +1153,19 @@ has "the destroy carries the same var file, so teardown renders the applied shap
   "destroy qualreg/aws/us-east-1 --apply --var-file $ROOT/internal/qualification/aws/qual-aws-row.tfvars" \
   "$TMP/destroyrun.sol"
 
-printf '\nscenario: the app phase publishes exactly the selected units\n'
-run_row alphaunits TRANSPORT=0 SVC_UNIT=orders_svc WORKER_UNIT=fulfilment_worker \
-  APP_UNITS="orders_svc fulfilment_worker"
+printf '\nscenario: the prepare and cloud phases publish exactly the selected units\n'
+KEEP_LOG_DIR=1 run_phase alphaunits prepare APP_UNITS="orders_svc fulfilment_worker"
+# `run_phase` truncates the docker log per invocation, so keep the build phase's before the cloud
+# phase's publish overwrites it.
+cp "$TMP/alphaunits.docker" "$TMP/alphaunits.prepare-docker"
+KEEP_LOG_DIR=1 SKIP_PREPARE=1 run_phase alphaunits cloud \
+  APP_UNITS="orders_svc fulfilment_worker" SVC_UNIT=orders_svc WORKER_UNIT=fulfilment_worker
 is "exit 0" "$(cat "$TMP/alphaunits.rc")" "0"
 has "the service image is built from the selected unit" \
   "docker build -f $TMP/alphaunits.logs/app-build-context/app/payments/orders_svc/Dockerfile" \
-  "$TMP/alphaunits.docker"
+  "$TMP/alphaunits.prepare-docker"
 has "and from the candidate revision's context, not the checkout" \
-  " $TMP/alphaunits.logs/app-build-context" "$TMP/alphaunits.docker"
+  " $TMP/alphaunits.logs/app-build-context" "$TMP/alphaunits.prepare-docker"
 exists "the run records the revision it bound the build to" \
   "$TMP/alphaunits.logs/candidate-binding.txt"
 has "and that revision is the candidate's" \
@@ -1121,9 +1178,9 @@ has "and pushed under its k8s name" \
   "docker push $ECR/pluto/orders-svc:row-" "$TMP/alphaunits.docker"
 has "the worker image too" \
   "docker push $ECR/pluto/fulfilment-worker:row-" "$TMP/alphaunits.docker"
-lacks "and no unselected image is built" "charge-svc" "$TMP/alphaunits.docker"
+lacks "and no unselected image is built" "charge-svc" "$TMP/alphaunits.prepare-docker"
 has "and every selected unit is pinned by digest" \
-  "image-ref orders_svc=$ECR/sol-runs/aws-self-test/orders-svc@sha256:" "$TMP/alphaunits.sol"
+  "--image-ref orders_svc=$ECR/pluto/orders-svc@sha256:" "$TMP/alphaunits.sol"
 
 printf '\nscenario: a checkout that does not contain the candidate cannot qualify as the candidate\n'
 # A divergent tree: the candidate is not in this history at all, so no amount of harness movement
@@ -1131,7 +1188,7 @@ printf '\nscenario: a checkout that does not contain the candidate cannot qualif
 git -C "$WORKSPACE" checkout -q --orphan divergent
 git -c user.name=qualification -c user.email=qualification@example.invalid \
   -C "$WORKSPACE" commit -q -m "a tree that does not contain the candidate"
-run_row divergentrev TRANSPORT=0 APP_UNITS="orders_svc"
+run_phase divergentrev prepare APP_UNITS="orders_svc"
 refused divergentrev "the run refuses a checkout that does not contain the candidate"
 lacks "and builds nothing" "docker build" "$TMP/divergentrev.docker"
 lacks "and records no candidate binding" "candidate_revision" "$TMP/divergentrev.logs/candidate-binding.txt"
@@ -1144,7 +1201,7 @@ printf '\nscenario: a harness ahead of the candidate binds the candidate, and th
 git -c user.name=qualification -c user.email=qualification@example.invalid \
   -C "$WORKSPACE" commit -q --allow-empty -m "a harness fix cut after the candidate"
 HARNESS_AHEAD="$(git -C "$WORKSPACE" rev-parse HEAD)"
-run_row aheadoftag TRANSPORT=0 APP_UNITS="orders_svc"
+run_phase aheadoftag prepare APP_UNITS="orders_svc"
 is "the run exits 0" "$(cat "$TMP/aheadoftag.rc")" "0"
 has "the build context is the candidate revision's, not the harness's" \
   "docker build -f $TMP/aheadoftag.logs/app-build-context/app/payments/orders_svc/Dockerfile" \
