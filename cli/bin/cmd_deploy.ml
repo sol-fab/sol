@@ -950,6 +950,10 @@ let run_apply
       ~image_refs:planning.Sol_cli_deploy_selection.Target_plan_input.image_refs
     |> Sol_cli_exit.of_msg
   in
+  let* setup_image =
+    Sol_cli_database_setup_run.setup_image_preflight planning.config
+    |> Sol_cli_exit.of_msg
+  in
   let* destination, established, infra_dir =
     destination_or_environment_stage
       ~planning
@@ -1008,9 +1012,7 @@ let run_apply
           ~await_delegation
         |> ignore)
     ~confirm_group_change
-    ~resolve_setup_image:(fun () ->
-      Sol_cli_database_setup_run.setup_image_preflight
-        planning.Sol_cli_deploy_selection.Target_plan_input.config)
+    ~resolve_setup_image:(fun () -> Ok setup_image)
     ~database_setup
     ~push_events:
       (push_deploy_events

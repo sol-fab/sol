@@ -1,7 +1,7 @@
 (library
  (name sol_cli_base)
  (wrapped false)
- (libraries unix yojson ptime yaml logs pg-eio eio_main))
+ (libraries str unix yojson ptime yaml logs pg-eio eio_main))
 
 (rule
  (targets sol_cli_build_info.ml)

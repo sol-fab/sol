@@ -479,3 +479,49 @@ let%test "assets: a release refuses an explicit setup image" =
 let%test "assets: a checkout's setup guidance names the public route" =
   test_checkout_setup_image_guides_the_public_route ()
 ;;
+
+let%test "assets: digest references require a valid image name" =
+  let suffix = "@sha256:" ^ String.make 64 'a' in
+  let accepts reference =
+    with_layout (fun ~root ~bin:_ ~bundle:_ ->
+      match A.resolve_from ~sol_home:(Some root) ~exe_dir:root ~release_version:None with
+      | Error error -> Windtrap.fail (A.error_to_string error)
+      | Ok assets ->
+        with_setup_ref reference (fun () -> Result.is_ok (A.setup_image assets)))
+  in
+  List.iter
+    (fun name ->
+       Windtrap.equal
+         Windtrap.bool
+         ~msg:("invalid image: " ^ name)
+         false
+         (accepts (name ^ suffix)))
+    [ ""
+    ; "/postgres"
+    ; "postgres/"
+    ; "a//b"
+    ; "Postgres"
+    ; "a b"
+    ; "https://host/repo"
+    ; "repo!"
+    ; "a..b"
+    ; "repo:"
+    ; "repo\n"
+    ; "repo:" ^ String.make 129 'a'
+    ; String.make 256 'a'
+    ];
+  List.iter
+    (fun name ->
+       Windtrap.equal
+         Windtrap.bool
+         ~msg:("valid image: " ^ name)
+         true
+         (accepts (name ^ suffix)))
+    [ "postgres"
+    ; "postgres:16"
+    ; "ghcr.io/sol-fab/runner"
+    ; "localhost:5000/a/b"
+    ; "[::1]:5000/repo"
+    ; "a__b/c--d"
+    ]
+;;

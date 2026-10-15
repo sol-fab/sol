@@ -843,108 +843,61 @@ let test_deploy_removal_is_retryable_after_a_partial_failure () =
               log)))
 ;;
 
-(* A terraform that only records its invocations. The ordering test needs to know whether the
-   substrate gate reached terraform at all; it does not fake a reconcile. *)
-let with_fake_terraform f =
-  let dir = Filename.temp_file "sol-fake-terraform-" "" in
-  Sys.remove dir;
-  Unix.mkdir dir 0o755;
-  let log = Filename.concat dir "calls.log" in
-  let bin = Filename.concat dir "terraform" in
-  write_file bin (Printf.sprintf "#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %s\nexit 0\n" log);
-  Unix.chmod bin 0o755;
-  let old_path =
-    try Sys.getenv "PATH" with
-    | Not_found -> ""
-  in
-  Unix.putenv "PATH" (dir ^ ":" ^ old_path);
-  Fun.protect
-    ~finally:(fun () ->
-      Unix.putenv "PATH" old_path;
-      (try Sys.remove bin with
-       | _ -> ());
-      (try Sys.remove log with
-       | _ -> ());
-      try Unix.rmdir dir with
-      | _ -> ())
-    (fun () -> f ~log)
-;;
-
-let terraform_ran log =
-  try
-    let ic = open_in log in
-    let n = in_channel_length ic in
-    let body = really_input_string ic n in
-    close_in ic;
-    String.trim body <> ""
-  with
-  | Sys_error _ -> false
-;;
-
-(** **#1427: a missing database setup image is refused before infrastructure exists.** The
-    resolver runs before the substrate gate, so when it fails the gate never runs at all —
-    which is what "terraform was never invoked" asserts. The control run shows the same
-    fixture proceeds when the resolver succeeds, so the refusal is the resolver's and not this
-    fixture failing everywhere. *)
+(* The library-level check covers ordering before Kubernetes substrate creation.
+   test_deploy_environment_stage.sh covers the earlier CLI infrastructure stage. *)
 let test_setup_image_is_resolved_before_the_substrate_gate () =
   with_fake_kubectl ~live_listing:{|{"items":[]}|} (fun ~calls:_ ->
-    with_fake_terraform (fun ~log ->
-      with_context (fun ctx ->
-        let plan =
-          plan [ spec ~domain:"payments" ~name:"charge_svc" ~k8s:"charge-svc" Svc ]
-        in
-        let apply
-              ?(resolve = fun () -> Ok None)
-              ?(database_setup = fun ~setup_image:_ () -> Ok ())
-              ()
-          =
-          Sol_cli_deploy_run.apply
-            ctx
-            ~present_plan:(fun _ -> Ok ())
-            ~effective_access:(fun () -> Ok ())
-            ~on_substrate_refused:(fun _ -> ())
-            ~confirm_group_change:true
-            ~push_events:(fun _ -> ())
-            ~report_success:(fun _ _ -> ())
-            ~resolve_setup_image:resolve
-            ~database_setup
-            plan
-        in
-        (match
-           apply ~resolve:(fun () -> Error "no database setup image was resolved") ()
-         with
-         | Ok () ->
-           Windtrap.fail "a deployment whose setup image cannot be resolved must refuse"
-         | Error message ->
-           Windtrap.equal
-             Windtrap.bool
-             ~msg:"the refusal is the resolver's, so it ran before the substrate gate"
-             true
-             (Sol_cli_string.contains
-                ~needle:"no database setup image was resolved"
-                message));
-        Windtrap.equal
-          Windtrap.bool
-          ~msg:"and the gate never reached terraform"
-          false
-          (terraform_ran log);
-        let seen = ref `Not_run in
-        (match
-           apply
-             ~database_setup:(fun ~setup_image () ->
-               seen := `Ran setup_image;
-               Ok ())
-             ()
-         with
-         | Ok () -> ()
-         | Error message -> Windtrap.failf "the control deployment failed: %s" message);
-        Windtrap.equal
-          Windtrap.bool
-          ~msg:"the setup step consumes the resolved image instead of looking one up"
-          true
-          (match !seen with
-           | `Ran None -> true
-           | `Ran (Some _) | `Not_run -> false))))
+    with_context (fun ctx ->
+      let plan =
+        plan [ spec ~domain:"payments" ~name:"charge_svc" ~k8s:"charge-svc" Svc ]
+      in
+      let apply
+            ?(resolve = fun () -> Ok (Some "resolved-setup-image"))
+            ?(database_setup = fun ~setup_image:_ () -> Ok ())
+            ()
+        =
+        Sol_cli_deploy_run.apply
+          ctx
+          ~present_plan:(fun _ -> Ok ())
+          ~effective_access:(fun () -> Ok ())
+          ~on_substrate_refused:(fun _ -> ())
+          ~confirm_group_change:true
+          ~push_events:(fun _ -> ())
+          ~report_success:(fun _ _ -> ())
+          ~resolve_setup_image:resolve
+          ~database_setup
+          plan
+      in
+      (match
+         apply ~resolve:(fun () -> Error "no database setup image was resolved") ()
+       with
+       | Ok () ->
+         Windtrap.fail "a deployment whose setup image cannot be resolved must refuse"
+       | Error message ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the refusal is the resolver's, so it ran before the substrate gate"
+           true
+           (Sol_cli_string.contains
+              ~needle:"no database setup image was resolved"
+              message));
+      let seen = ref `Not_run in
+      (match
+         apply
+           ~database_setup:(fun ~setup_image () ->
+             seen := `Ran setup_image;
+             Ok ())
+           ()
+       with
+       | Ok () -> ()
+       | Error message -> Windtrap.failf "the control deployment failed: %s" message);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the setup step consumes the resolved image instead of looking one up"
+        true
+        (match !seen with
+         | `Ran (Some "resolved-setup-image") -> true
+         | `Ran _ | `Not_run -> false)))
 ;;
 
 (* The lifecycle half: an incomplete removal fails the deploy before the new release is

@@ -621,6 +621,21 @@ stub_prepare() {
   done
 }
 
+# Bind fixture installs to real archive bytes, including every bundled asset.
+python3 - "$TMP" "$INSTALL" <<'PYTHON'
+import hashlib, json, pathlib, sys, tarfile
+root, install = map(pathlib.Path, sys.argv[1:])
+archive = install / "fixture.tar.gz"
+with tarfile.open(archive, "w:gz") as bundle:
+    bundle.add(install / "bin", arcname="sol-fixture/bin")
+    bundle.add(install / "share", arcname="sol-fixture/share")
+digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+for document in root.rglob("candidate*.json"):
+    candidate = json.loads(document.read_text())
+    candidate.update(bundle=str(archive), bundle_sha256=digest)
+    document.write_text(json.dumps(candidate))
+PYTHON
+
 run_row() {
   local name="$1"
   shift

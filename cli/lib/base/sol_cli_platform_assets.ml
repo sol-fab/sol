@@ -190,11 +190,44 @@ let runner_image_env = "SOL_MIGRATION_RUNNER_IMAGE"
 let setup_image_file t = Filename.concat t.dir "setup-image"
 let setup_image_env = "SOL_SETUP_POSTGRES_IMAGE"
 
+(* Docker distribution/reference's name grammar, with a required SHA-256 digest.
+   https://github.com/distribution/reference/blob/main/regexp.go *)
+let image_name_pattern =
+  let alnum = "[a-z0-9]+" in
+  let component = alnum ^ "\\(\\([._]\\|__\\|-+\\)" ^ alnum ^ "\\)*" in
+  let host_component = "[a-zA-Z0-9]\\([a-zA-Z0-9-]*[a-zA-Z0-9]\\)?" in
+  let host = host_component ^ "\\(\\." ^ host_component ^ "\\)*" in
+  let ipv6 = "\\[[a-fA-F0-9:]+\\]" in
+  let registry = "\\(" ^ host ^ "\\|" ^ ipv6 ^ "\\)\\(:[0-9]+\\)?/" in
+  Str.regexp
+    ("^\\("
+     ^ registry
+     ^ "\\)?"
+     ^ component
+     ^ "\\(/"
+     ^ component
+     ^ "\\)*\\(:[a-zA-Z0-9_][a-zA-Z0-9_.-]*\\)?$")
+;;
+
 let is_digest_ref s =
   match String.index_opt s '@' with
   | Some i ->
     let d = String.sub s (i + 1) (String.length s - i - 1) in
-    String.length d = 71
+    let name = String.sub s 0 i in
+    let tag_start =
+      match String.rindex_opt name ':' with
+      | Some colon when colon > Option.value (String.rindex_opt name '/') ~default:(-1) ->
+        Some colon
+      | _ -> None
+    in
+    let repository_length = Option.value tag_start ~default:(String.length name) in
+    repository_length <= 255
+    && (match tag_start with
+        | None -> true
+        | Some colon -> String.length name - colon - 1 <= 128)
+    && Str.string_match image_name_pattern name 0
+    && Str.match_end () = String.length name
+    && String.length d = 71
     && String.sub d 0 7 = "sha256:"
     && String.for_all
          (function

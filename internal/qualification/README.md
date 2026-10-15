@@ -41,7 +41,9 @@ success. A skipped capability is named as skipped; it is not silently promoted.
    revision, or cut a candidate that contains it.
 2. Name the candidate, not just the prefix. `SOL_CANDIDATE` is the draft's `candidate.json`, and
    `sol-under-test.sh` verifies the installed release is that candidate — version, revision and
-   pinned runner image — before anything is provisioned. An install prefix alone cannot say which
+   pinned runner image — before anything is provisioned. Keep the recorded archive beside
+   `candidate.json`: verification checks its `bundle_sha256` and compares the installed files
+   with the archive, including the database setup image. An install prefix alone cannot say which
    candidate it holds, so a run told only a prefix could file another candidate's evidence under
    this one's name.
 3. Give every disposable run a unique identity and evidence directory. `attempt.sh` refuses

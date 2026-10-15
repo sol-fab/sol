@@ -180,6 +180,12 @@ check_absent \
 sed -i 's|^      state_bucket: lifecycle-state$|      state_bucket: lifecycle-state\n      alert_receiver_type: webhook\n      alert_receiver_url: https://alerts.example.test/hook\n      alert_owner: ops@example.test\n      alert_runbook_url: https://runbooks.example.test/prod|' \
   "$tmp/work/sol/environments.yml"
 
+SOL_SETUP_POSTGRES_IMAGE= run_deploy prod/aws/us-east-1 --image-ref "$image_ref"
+check "a missing setup image refuses" 1 "$rc"
+check_contains "the refusal names the setup image" "SOL_SETUP_POSTGRES_IMAGE" "$output"
+check_absent "a missing setup image never reaches Terraform" "terraform" "$(lifecycle_log)"
+export SOL_SETUP_POSTGRES_IMAGE="postgres@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
 run_deploy prod/aws/us-east-1 --image-ref "$image_ref"
 check_contains "the profile preflight passes before provisioning" \
   "Profile: production-single-region/v1 (preflight passed)" "$output"

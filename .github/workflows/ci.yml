@@ -315,7 +315,9 @@ jobs:
       # real git trees and mutation-checks the pin rewrite.
       - name: Candidate-binding test
         if: needs.classify.outputs.kind != 'docs-only'
-        run: internal/qualification/test-candidate-binding.sh
+        run: |
+          internal/qualification/test-candidate-binding.sh
+          bash internal/qualification/test-installed-candidate.sh
 
       # One attempt is one candidate and one specimen, and a run never reads what
       # an earlier run of the same attempt left behind: an alpha.15 attempt once

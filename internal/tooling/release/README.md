@@ -89,7 +89,9 @@ Qualification is the live AWS and GCP campaign in
 automated by the release workflow: it provisions billable infrastructure and
 performs destructive lifecycle actions, so an operator authorizes it
 explicitly. Run it against the installed candidate — extract the draft's bundle
-and set `SOL_INSTALL` to its `sol-<version>` prefix — and follow the provider's
+and set `SOL_INSTALL` to its `sol-<version>` prefix. Keep the draft’s archive beside
+`SOL_CANDIDATE` (`candidate.json`): the harness verifies its recorded bundle hash and
+compares installed files with that archive, including `setup-image`. Then follow the provider's
 procedure (`aws/aws-run-procedure.md`, `gcp/gcp-production-single-region-v1-matrix.md`).
 
 The bundle also names the revision it was built from

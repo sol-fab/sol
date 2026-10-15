@@ -98,6 +98,47 @@ sol_under_test_verify_candidate() {
     sol_under_test_die "release $SOL_BUNDLE_VERSION was built from revision $SOL_REVISION but candidate $expected_version is revision $expected_revision: this install prefix is not that candidate"
   [ "$SOL_RUNNER_IMAGE" = "$expected_runner" ] ||
     sol_under_test_die "release $SOL_BUNDLE_VERSION pins migration runner $SOL_RUNNER_IMAGE but candidate $expected_version pins $expected_runner: this install prefix is not that candidate"
+  # Compare the installed bytes with the archive covered by bundle_sha256.
+  # Keep the downloaded archive beside candidate.json, as promotion does.
+  python3 - "$path" "$SOL_INSTALL" <<'PYTHON' ||
+import hashlib
+import json
+from pathlib import Path
+import sys
+import tarfile
+
+candidate_path, install = map(Path, sys.argv[1:])
+try:
+    candidate = json.loads(candidate_path.read_text())
+    archive = candidate_path.parent / candidate["bundle"]
+    with archive.open("rb") as stream:
+        actual = hashlib.file_digest(stream, "sha256").hexdigest()
+    if actual != candidate["bundle_sha256"]:
+        raise ValueError("candidate bundle_sha256 does not match the archive")
+    with tarfile.open(archive) as bundle:
+        for member in bundle:
+            relative = Path(member.name).parts[1:]
+            if not relative:
+                continue
+            if ".." in relative or Path(member.name).is_absolute():
+                raise ValueError(f"invalid bundle member: {member.name}")
+            installed = install.joinpath(*relative)
+            if member.isfile():
+                if installed.is_symlink():
+                    raise ValueError(f"installed file is a symlink: {installed}")
+                if installed.stat().st_mode & 0o111 != member.mode & 0o111:
+                    raise ValueError(f"installed executable permissions differ: {installed}")
+                with bundle.extractfile(member) as source, installed.open("rb") as target:
+                    if hashlib.file_digest(source, "sha256").digest() != hashlib.file_digest(target, "sha256").digest():
+                        raise ValueError(f"installed file differs from candidate bundle: {installed}")
+            elif member.issym():
+                if not installed.is_symlink() or installed.readlink() != Path(member.linkname):
+                    raise ValueError(f"installed symlink differs from candidate bundle: {installed}")
+except (OSError, ValueError, KeyError, tarfile.TarError) as error:
+    print(f"sol-under-test: candidate bundle verification failed: {error}", file=sys.stderr)
+    sys.exit(1)
+PYTHON
+    sol_under_test_die "keep the candidate's recorded archive beside SOL_CANDIDATE and extract that exact bundle into SOL_INSTALL"
   SOL_CANDIDATE_VERSION="$expected_version"
   SOL_CANDIDATE_REVISION="$expected_revision"
 }
