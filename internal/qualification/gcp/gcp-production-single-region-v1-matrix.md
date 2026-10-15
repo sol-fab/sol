@@ -80,3 +80,75 @@ prerequisite.
 Run only the phases needed for the claims being exercised. On any blocker while billable
 resources exist, preserve evidence, destroy through Sol, independently verify provider absence,
 then stop.
+
+## Operator preflight (read-only)
+
+Everything in this section is a provider read. It is what to finish before requesting
+authorization for a billable window; none of it creates a resource.
+
+### What the harness drives
+
+The run exercises the installed release through the product lifecycle only: `sol deploy`
+reconciles the environment and the workloads, `sol secret set` supplies the operator inputs,
+`sol migrate apply` runs the migrations, and `sol destroy` tears the target down. The
+application images are built and pushed in the `app` phase into the Artifact Registry
+repository the `cloud` phase's `sol deploy` created (the cluster-named repository at
+`<region>-docker.pkg.dev/<project>/<cluster>/pluto/<unit>`) — not into a harness-owned
+registry. The GCP row deliberately selects no profile, so it does not depend on #1413's
+cold-start change: a profile-less durable target never required a pre-published digest. The
+cold-start cycle (#1413) applies to a target that selects `production-single-region`, which is
+AWS-only.
+
+### GCP project prerequisites (verify read-only)
+
+- **APIs enabled** in the project: `container`, `compute`, `sqladmin`, `artifactregistry`,
+  `dns`, `iam`, `iamcredentials`, `storage`, `secretmanager`, and `servicenetworking` for the
+  VPC peering.
+- **Calling identity** (`IMPERSONATOR`, e.g. `user:you@example.com`) must read each class the
+  inventory probes with a viewer-level role, so an absence read is `ABSENT` rather than
+  `UNKNOWN`. An unreadable class fails the absence verdict.
+- **Target identities**: the provisioner / cluster-access / deploy / operator contracts come
+  from `docs/deployment/production-bootstrap.md`; the target names them and `sol deploy` fails
+  closed without them.
+- **Quotas** to confirm before the window: regional CPUs and SSD for the GKE node pool, one
+  in-use regional static IP, one Cloud SQL instance of the declared tier, and Artifact Registry
+  repository count.
+- **Durable prerequisites**, which teardown must leave intact: the state bucket (`STATE_BUCKET`)
+  and the delegated DNS zone for `BASE_DOMAIN`. These are not target residue.
+
+### Collision inspection
+
+Give the run a fresh `ATTEMPT` and `CLUSTER`. The harness records the provider inventory before
+teardown (`inventory pre`) and after (`verify`), so a pre-existing name is attributed rather
+than silently read as this run's. Before provisioning, the read-only `inventory` probes (or the
+console) confirm no resource in the target's class set already carries the chosen `CLUSTER`
+name.
+
+### Phases and stopping conditions
+
+The run's phases are `cloud` (provision), `app` (build/publish, deploy and the reference
+transaction), `identity` (read-only mechanism facts for VERIF-021/VERIF-022), `destroy`, and
+`verify`; each is a separate invocation with its own evidence directory:
+
+| Phase | Pass condition | Stop condition |
+|---|---|---|
+| `identity` | the target's identities and grants are observed | an unreadable identity read is UNKNOWN |
+| `cloud` | the environment is reconciled and the platform discriminator observed | a prerequisite (installation, DNS delegation, broker credential) is unmet |
+| `app` | the workloads are healthy and the reference transaction completes | a deploy refuses at a prerequisite; evidence is captured, never bypassed |
+| `destroy` | Sol destroys the target and the pre-teardown inventory is attributed | destroy cannot start; nothing is recorded as attempted |
+| `verify` | every target-owned class is ABSENT and each durable prerequisite PRESENT | any class is PRESENT or UNKNOWN |
+
+### Residue classes the inventory verifies
+
+GKE-labelled **persistent disks**, the GKE cluster, networks/subnets/routers/NAT/addresses/
+forwarding rules, **Cloud SQL**, the **Artifact Registry** repository, service accounts and
+their bindings, the custom role, VPC peering, and the state-object namespace; the state bucket
+and DNS zone are asserted PRESENT as durable prerequisites. A class the identity cannot read is
+UNKNOWN and fails the verdict.
+
+### Evidence classes
+
+Every matrix row records its evidence class. A complete run has one result per row, each `PASS`
+at the row's required class, or the profile is non-conformant. Behavioral rows need live
+observation; mechanism rows need an executable or rendered artifact. A skipped, blocked, or
+unread class is recorded as such, never promoted to a pass.
