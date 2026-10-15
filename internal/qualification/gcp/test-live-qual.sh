@@ -414,9 +414,17 @@ case "$*" in
     printf 'secret/redpanda-users created\n'
     exit 0 ;;
   "get secret redpanda-users"*)
-    # A profile-less target's platform publishes no broker credential; the app phase must
-    # record that rather than fail (the units require no Kafka keys).
-    [ "${STUB_NO_BROKER_CRED:-0}" = "1" ] && exit 1
+    # A durable target requires the broker credential Secret. `STUB_NO_BROKER_CRED` models an
+    # observed absence (NotFound); `STUB_UNREADABLE_BROKER_CRED` models a check that fails
+    # without saying not-found (Forbidden), which the harness must not read as absence.
+    if [ "${STUB_NO_BROKER_CRED:-0}" = "1" ]; then
+      printf 'Error from server (NotFound): secrets "redpanda-users" not found\n' >&2
+      exit 1
+    fi
+    if [ "${STUB_UNREADABLE_BROKER_CRED:-0}" = "1" ]; then
+      printf 'Error from server (Forbidden): secrets "redpanda-users" is forbidden: User "sol-qual" cannot get resource "secrets" in API group "" in the namespace "redpanda"\n' >&2
+      exit 1
+    fi
     printf '%s' 'sol-workloads:testpass:SCRAM-SHA-256' | base64
     exit 0 ;;
   "get secret redpanda-default-cert"*)
@@ -869,18 +877,35 @@ export CURL_LOG="$TMP/app-curl.argv"
 : >"$CURL_LOG"
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ok app
 is "the app phase exits 0 when every step succeeds" "$(cat "$TMP/app-ok.rc")" "0"
-# A durable target whose platform published no broker credential Secret has nothing to supply;
-# the phase records that and proceeds. Runs before the delegation curl stub replaces the
-# transaction one.
-printf '\nscenario: a durable target with no broker credential supplies nothing\n'
+# A durable target whose platform did not publish the broker credential Secret has a missing
+# prerequisite, not a reason to skip the authenticated transport: the phase must refuse. Runs
+# before the delegation curl stub replaces the transaction one.
+printf '\nscenario: an absent broker credential refuses the app phase\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_NO_BROKER_CRED=1 run_case app-nobroker app
-is "the app phase exits 0 without a broker credential" "$(cat "$TMP/app-nobroker.rc")" "0"
-has "and records that there is nothing to supply" \
-  "platform_secret_keys: none (the platform published no broker credential Secret)" \
+is "the app phase refuses an absent broker credential" "$(cat "$TMP/app-nobroker.rc")" "1"
+has "and names the Secret it needs" "redpanda/redpanda-users" "$TMP/app-nobroker.out"
+has "and gives the command that creates it" \
+  "kubectl create secret generic redpanda-users -n redpanda" "$TMP/app-nobroker.out"
+has "and records the refusal as an observed absence" \
+  "refused: the durable shape requires the platform broker credential Secret redpanda/redpanda-users, which is absent" \
   "$TMP/app-nobroker.logs/prerequisites.txt"
-has "scoping out the authenticated transport it does not have" \
-  "scoped_out: \"the platform's authenticated Kafka transport\" (shape-derived; #1403)" \
-  "$TMP/app-nobroker.logs/prerequisites.txt"
+lacks "and never records skipping the authenticated transport as acceptable" \
+  "scoped_out" "$TMP/app-nobroker.logs/prerequisites.txt"
+lacks "and supplies no Kafka platform secret" \
+  "app-secret-platform-KAFKA_SASL_PASSWORD" "$TMP/app-nobroker.argv"
+# A read that fails without saying not-found is not an absent Secret: the phase must distinguish
+# it, refuse, and keep the failed read's own evidence.
+printf '\nscenario: an unreadable broker credential refuses the app phase\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_UNREADABLE_BROKER_CRED=1 run_case app-broker-unreadable app
+is "the app phase refuses an unreadable broker credential" "$(cat "$TMP/app-broker-unreadable.rc")" "1"
+has "and says it could not establish presence" \
+  "could not establish whether redpanda/redpanda-users exists" "$TMP/app-broker-unreadable.out"
+has "and keeps the failed read's own error" "Forbidden" "$TMP/app-broker-unreadable.out"
+has "and records the read as unobservable, not absent" \
+  "platform_secret_keys: unobservable (the redpanda-users read failed without saying not-found)" \
+  "$TMP/app-broker-unreadable.logs/prerequisites.txt"
+lacks "and does not report absence it did not establish" \
+  "redpanda/redpanda-users is absent" "$TMP/app-broker-unreadable.logs/prerequisites.txt"
 mv "$TMP/bin/curl.delegation" "$TMP/bin/curl"
 has "it builds each image from that service's own Dockerfile" \
   "docker build -f $TMP/app-ok.logs/app-build-context/app/payments/orders_svc/Dockerfile" "$DOCKER_LOG"

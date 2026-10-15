@@ -1121,21 +1121,50 @@ app_secret_set_platform() {
 # contract Job declares and fails closed. The database is *not* one of them: the deploy
 # delivers it from the target's binding (2b), so the harness neither holds nor sets a
 # POSTGRES_URL.
-app_supply_secrets() {
-  local password ca
-  # The durable target's platform publishes the broker credential Secret; if it is absent the
-  # operator prerequisite was never created, so record that and supply nothing rather than
-  # refusing the whole run.
-  if ! kubectl get secret redpanda-users -n redpanda >/dev/null 2>&1; then
-    {
-      printf 'platform_secret_keys: none (the platform published no broker credential Secret)\n'
-      printf 'secret_values: never recorded\n'
-      printf 'database_delivery: delivered by the deploy from the target binding; no operator copy\n'
-      printf 'scoped_out: "the platform'"'"'s authenticated Kafka transport" (shape-derived; #1403)\n'
-    } >>"$LOG_DIR/prerequisites.txt"
-    say "app: the platform published no broker credential Secret, so there are no platform Kafka secrets to supply"
-    return 0
+#
+# The durable target's platform publishes the broker credential Secret, and the row must supply
+# the Kafka inputs the deploy requires. An absent Secret is therefore a missing prerequisite,
+# not a reason to skip the authenticated transport; and a read that fails without saying
+# "not found" cannot establish absence (permissions, connectivity), so it fails closed too. An
+# unreadable read is never an absent one.
+app_broker_credential_presence() {
+  local out="$LOG_DIR/broker-credential.out" err="$LOG_DIR/broker-credential.stderr"
+  mkdir -p "$LOG_DIR"
+  if kubectl get secret redpanda-users -n redpanda -o name >"$out" 2>"$err"; then
+    printf 'present'
+  elif grep -qiE '(not[_. -]?found|does not exist|was not found|404|No URLs matched)' "$err" "$out"; then
+    printf 'absent'
+  else
+    printf 'unobservable'
   fi
+}
+
+app_supply_secrets() {
+  local password ca presence
+  presence="$(app_broker_credential_presence)"
+  case "$presence" in
+    present) : ;;
+    absent)
+      {
+        printf 'platform_secret_keys: none (redpanda/redpanda-users is absent)\n'
+        printf 'secret_values: never recorded\n'
+        printf 'refused: the durable shape requires the platform broker credential Secret redpanda/redpanda-users, which is absent\n'
+      } >>"$LOG_DIR/prerequisites.txt"
+      say "app: refusing: the durable target's platform requires the broker credential Secret redpanda/redpanda-users, and it is absent; the units read the authenticated Kafka transport, so the deploy cannot proceed without it. Create it and re-run:"
+      say "       kubectl create secret generic redpanda-users -n redpanda --from-literal=users.txt=\"sol-workloads:<password>:SCRAM-SHA-256\""
+      return 1
+      ;;
+    unobservable)
+      {
+        printf 'platform_secret_keys: unobservable (the redpanda-users read failed without saying not-found)\n'
+        printf 'secret_values: never recorded\n'
+        printf 'refused: could not establish whether redpanda/redpanda-users exists; an unreadable read is not an absent one\n'
+      } >>"$LOG_DIR/prerequisites.txt"
+      say "app: refusing: could not establish whether redpanda/redpanda-users exists, and will not read a failed check as an absent one: $(tr '\n' ' ' <"$LOG_DIR/broker-credential.stderr" 2>/dev/null | cut -c1-200)"
+      say "       resolve the kubectl read, then re-run the app phase"
+      return 1
+      ;;
+  esac
   if ! password="$(app_read_platform_password)"; then
     say "app: could not establish KAFKA_SASL_PASSWORD: set it in the environment, or ensure redpanda/redpanda-users exists"
     return 1
