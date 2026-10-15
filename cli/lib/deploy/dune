@@ -7,4 +7,5 @@
   sol_cli_workspace
   sol_cli_cloud
   unix
-  yojson))
+  yojson
+  base64))

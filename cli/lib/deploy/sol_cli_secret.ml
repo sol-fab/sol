@@ -243,6 +243,164 @@ let existing_data = function
       (data_keys json)
 ;;
 
+let labels_of = function
+  | `Assoc fields ->
+    (match List.assoc_opt "metadata" fields with
+     | Some (`Assoc metadata) ->
+       (match List.assoc_opt "labels" metadata with
+        | Some (`Assoc labels) -> labels
+        | _ -> [])
+     | _ -> [])
+  | _ -> []
+;;
+
+let has_data_field = function
+  | `Assoc fields -> List.mem_assoc "data" fields
+  | _ -> false
+;;
+
+(** Did a `kubectl` failure carry this server reason? The reason is the diagnostic Kubernetes
+    emitted, not a Sol guess — Sol only branches on it to decide the next call. *)
+let failure_says failure needle =
+  match failure with
+  | Sol_cli_process.Non_zero { stderr; stdout; _ } ->
+    Sol_cli_string.contains ~needle stderr || Sol_cli_string.contains ~needle stdout
+  | Sol_cli_process.Spawn_failed _ | Sol_cli_process.Timeout _ -> false
+;;
+
+(** A key-scoped write: one JSON patch adds just this key to the live object's `data` (or
+    creates `data` when the object has none), so a concurrent writer of a *different* key is
+    merged, not overwritten.
+
+    The old write re-applied a whole-object manifest built from a snapshot read before the
+    other writer ran, so whichever applied last restored the other's old value (#1426). The
+    patch cannot do that: it names one path.
+
+    `data` is the field, matching the delete path (`/data/<key>`), so the module has one
+    encoding — standard base64, the Secret's stored form — rather than mixing `data` and the
+    plaintext `stringData` convenience field. The value is base64-encoded here because a patch
+    addresses stored fields directly; this is the one place Sol must encode.
+
+    The identity precondition rides in the same request: a `test` op on the Sol managed-by
+    label, so under the strict rule there is no window between "this Secret is Sol's" and the
+    write. The permissive runtime rule allows an *absent* label, which a single `test` cannot
+    express, so an unlabeled runtime Secret is written without it — the patch can still only
+    add this one key, and the object had no owner to take from. *)
+let secret_key_patch ~json ~key ~value =
+  let value_b64 = Base64.encode_exn value in
+  let test_label =
+    match List.assoc_opt "app.kubernetes.io/managed-by" (labels_of json) with
+    | Some (`String "sol") ->
+      [ `Assoc
+          [ "op", `String "test"
+          ; "path", `String "/metadata/labels/app.kubernetes.io~1managed-by"
+          ; "value", `String "sol"
+          ]
+      ]
+    | _ -> []
+  in
+  let add_key =
+    if has_data_field json
+    then
+      [ `Assoc
+          [ "op", `String "add"
+          ; "path", `String ("/data/" ^ key)
+          ; "value", `String value_b64
+          ]
+      ]
+    else
+      [ `Assoc
+          [ "op", `String "add"
+          ; "path", `String "/data"
+          ; "value", `Assoc [ key, `String value_b64 ]
+          ]
+      ]
+  in
+  Yojson.Safe.to_string (`List (test_label @ add_key))
+;;
+
+let create_named_secret ~ctx ~namespace ~secret_name ~key ~value =
+  let manifest =
+    named_secret_manifest
+      ~labels:[ "app.kubernetes.io/managed-by", "sol" ]
+      ~secret_name
+      ~existing_data:[]
+      ~namespace
+      ~key
+      ~value
+  in
+  Sol_cli_fs.with_temp_file ~prefix:"sol-secret-" ~suffix:".yaml" manifest (fun path ->
+    Sol_cli_kubectl.create ~ctx ~file:path)
+;;
+
+(** Patch the one key; on a missing object create it; if a concurrent writer created it first
+    (the create races to `AlreadyExists`), **re-read** and retry once.
+
+    The retry re-reads rather than reusing the first body: we read the object as absent, so the
+    first patch carries no `test` op, but the object that won the create is not the one we read.
+    Rebuilding from the fresh json attaches the same identity precondition a normal write has,
+    and re-runs the ownership rule — a winner that is not Sol's is refused instead of written. *)
+let write_named_secret_key
+      ~allow_unlabeled_runtime
+      ~ctx
+      ~namespace
+      ~secret_name
+      ~key
+      ~value
+      ~existing
+  =
+  let verify_owner =
+    if allow_unlabeled_runtime
+    then verify_runtime_secret_owner
+    else verify_sol_managed_secret
+  in
+  let redact message = Sol_cli_process.apply_redactions [ value ] message in
+  let patch_once json =
+    Sol_cli_fs.with_temp_file
+      ~prefix:"sol-secret-patch-"
+      ~suffix:".json"
+      (secret_key_patch ~json ~key ~value)
+      (fun file ->
+         Sol_cli_kubectl.patch_file
+           ~ctx
+           ~resource:"secret"
+           ~name:secret_name
+           ~namespace
+           ~patch_type:"json"
+           ~file)
+  in
+  let rec attempt retries json =
+    match patch_once json with
+    | Error message -> Error (redact message)
+    | Ok (Ok _) -> Ok ()
+    | Ok (Error failure) when failure_says failure "NotFound" && retries > 0 ->
+      (match create_named_secret ~ctx ~namespace ~secret_name ~key ~value with
+       | Error message -> Error (redact message)
+       | Ok (Ok _) -> Ok ()
+       | Ok (Error failure) when failure_says failure "AlreadyExists" && retries > 0 ->
+         let* fresh = get_named_secret_json ~ctx ~name:secret_name namespace in
+         let* () = verify_owner fresh in
+         attempt (retries - 1) (Option.value fresh ~default:`Null)
+       | Ok (Error failure) ->
+         Error
+           (redact
+              (Printf.sprintf
+                 "could not write Secret %s/%s: %s"
+                 namespace
+                 secret_name
+                 (Sol_cli_process.error_to_string failure))))
+    | Ok (Error failure) ->
+      Error
+        (redact
+           (Printf.sprintf
+              "could not write Secret %s/%s: %s"
+              namespace
+              secret_name
+              (Sol_cli_process.error_to_string failure)))
+  in
+  attempt 1 (Option.value existing ~default:`Null)
+;;
+
 let require_namespaces namespaces =
   match namespaces with
   | [] -> Error "no target namespaces found for this workspace"
@@ -380,32 +538,30 @@ let set_named_key
     then verify_runtime_secret_owner existing
     else verify_sol_managed_secret existing
   in
-  let* before_version =
+  (* "Changed" is this one key's stored value against what is about to be written — not a
+     before/after of the whole object, which is the read-modify-write shape #1426 removed. A
+     value another tool stored with different base64 padding reads as changed here, which only
+     costs a redundant patch of the same logical value. *)
+  let unchanged =
     match existing with
-    | None -> Ok None
-    | Some json -> secret_resource_version json
+    | Some json ->
+      List.assoc_opt key (data_keys json) = Some (`String (Base64.encode_exn value))
+    | None -> false
   in
-  let existing_data = existing_data existing in
-  let* () =
-    apply_manifest
-      ~ctx
-      ~redact:(List.map snd existing_data @ [ value ])
-      (named_secret_manifest
-         ~labels:[ "app.kubernetes.io/managed-by", "sol" ]
-         ~secret_name
-         ~existing_data
-         ~namespace
-         ~key
-         ~value)
-  in
-  let* after = get_named_secret_json ~ctx ~name:secret_name namespace in
-  let* after_version =
-    match after with
-    | None ->
-      Error (Printf.sprintf "Secret %s/%s is absent after apply" namespace secret_name)
-    | Some json -> secret_resource_version json
-  in
-  Ok (before_version <> after_version)
+  if unchanged
+  then Ok false
+  else
+    let* () =
+      write_named_secret_key
+        ~allow_unlabeled_runtime
+        ~ctx
+        ~namespace
+        ~secret_name
+        ~key
+        ~value
+        ~existing
+    in
+    Ok true
 ;;
 
 let set_unit_key ~ctx ~namespace ~secret_name ~key ~value =

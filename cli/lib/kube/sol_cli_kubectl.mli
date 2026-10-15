@@ -78,6 +78,17 @@ val patch
   -> patch:string
   -> (Sol_cli_process.output, Sol_cli_process.error) result
 
+(** As {!patch}, but the body comes from a file, so a patch carrying a secret value never
+    enters the process argv. *)
+val patch_file
+  :  ctx:Sol_cli_kube_destination.context
+  -> resource:string
+  -> name:string
+  -> namespace:string
+  -> patch_type:string
+  -> file:string
+  -> (Sol_cli_process.output, Sol_cli_process.error) result
+
 val create
   :  ctx:Sol_cli_kube_destination.context
   -> file:string

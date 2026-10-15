@@ -72,6 +72,15 @@ case " \$* " in
       exit 1
     fi
     ;;
+  *" patch "*)
+    # The write patches one key by name; the Secret has to exist for it to land.
+    if [ -f "$tmp/applied" ]; then
+      printf '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"api-svc-secrets","namespace":"workspace-payments","resourceVersion":"2"}}\n'
+    else
+      printf 'Error from server (NotFound): secrets "api-svc-secrets" not found\n' >&2
+      exit 1
+    fi
+    ;;
   *" create "*|*" apply "*)
     # The namespace is created first (its manifest is the "sol-secret-ns-" render); only the
     # Secret's own write counts as "the value exists now".
@@ -99,7 +108,7 @@ set -e
 [ "$rc" -eq 0 ] || note "writing before the workload exists must succeed; exit was $rc: $output"
 printf '%s\n' "$output" | grep -F 'Secret updated for payments/api_svc/SOL_API_KEY' >/dev/null \
   || note "the write must report the Secret it updated: $output"
-grep -q 'apply\|create' "$tmp/kubectl.log" || note "the write must reach the cluster"
+grep -Eq 'apply|create|patch' "$tmp/kubectl.log" || note "the write must reach the cluster"
 if grep -q 'rollout' "$tmp/kubectl.log"; then
   note "a write must not restart a workload (activation is the deploy's job): $(cat "$tmp/kubectl.log")"
 fi
