@@ -411,11 +411,17 @@ SOL_API_KEY=dev-internal-key
 SECRETS
 ```
 
-Then deploy:
+Then establish infrastructure and apply the workspace migrations before releasing workloads:
 
 ```bash
-sol local deploy
+sol local deploy    # establishes infrastructure, then refuses pending migrations
+sol local migrate
+sol local deploy    # reuses the cluster and deploys against the migrated schema
 ```
+
+The first refusal applies no workloads. Migration uses the local PostgreSQL service;
+it does not need an earlier successful workload deployment. Applied migration files
+must also retain their recorded checksums before deploy can continue.
 
 For each service that has a `Dockerfile`, Sol:
 
@@ -497,7 +503,10 @@ charge-svc-5464d77bd4-2lnb9    1/1     Running   0          2m
 
 ---
 
-## Part 4 — Run database migrations
+## Part 4 — Manage database migrations
+
+The initial migrations were applied before deployment in Part 3. After adding a new
+migration file, run the same command before deploying the changed application:
 
 ```bash
 sol local migrate
@@ -538,7 +547,7 @@ VER     NAME                            DRIFT     APPLIED AT
 1       0001_notifications              -         2026-06-05T12:34:56Z
 ```
 
-Each applied version also records the checksum of the file that was applied. If you edit a migration after applying it, `sol migrate status` marks its row `yes` in the DRIFT column and exits non-zero, `sol migrate apply` refuses to run, and a production deploy fails before any workload moves — the applied record and the files you are deploying must agree. Restore the file, or put the change in a new migration and apply that. A migration applied before Sol recorded checksums has no baseline, so it shows as `-` rather than as drift.
+Each applied version also records the checksum of the file that was applied. If you edit a migration after applying it, `sol migrate status` marks its row `yes` in the DRIFT column and exits non-zero, `sol migrate apply` refuses to run, and a local or production deploy fails before any workload moves — the applied record and the files you are deploying must agree. Restore the file, or put the change in a new migration and apply that. A migration applied before Sol recorded checksums has no baseline, so it shows as `-` rather than as drift.
 
 ---
 

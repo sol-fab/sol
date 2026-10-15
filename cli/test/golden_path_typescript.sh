@@ -21,42 +21,82 @@ SOL_API_KEY=dev-internal-key
 SECRETS
 done
 
-# Establish the local cluster and its infrastructure (k3d, Postgres, Kafka,
-# registry). `sol local migrate` reaches the cluster's Postgres, so it cannot run
-# before the cluster exists -- there is no infra-only command, and
-# `sol local migrate` says so itself: "Run 'sol local deploy' to establish the
-# local cluster, then retry."
-#
-# This first pass therefore also starts the units, which read a schema the
-# migrations below create, so its rollout wait fails. That outcome is expected
-# and is not this script's verdict; the deploy after the migrations is the one
-# that must succeed.
-sol local deploy --scope=demo_ts || true
+# An independently migrated database must not satisfy the deployment gate for
+# the cluster database. This also exercises standalone POSTGRES_URL migration.
+ambient_db_container="sol-ts-migration-override-$$"
+trap 'docker rm -f "$ambient_db_container" >/dev/null 2>&1 || true' EXIT
+docker run -d --name "$ambient_db_container" \
+  -e POSTGRES_PASSWORD=override-only -e POSTGRES_DB=dev \
+  -p 127.0.0.1::5432 postgres:16 >/dev/null
+ambient_address=$(docker port "$ambient_db_container" 5432/tcp)
+ambient_url="postgresql://postgres:override-only@${ambient_address}/dev"
+ambient_ready=0
+for i in $(seq 1 30); do
+  if docker exec -e PGPASSWORD=override-only "$ambient_db_container" \
+    psql -h 127.0.0.1 -U postgres -d dev -tAc 'SELECT 1' >/dev/null 2>&1; then
+    ambient_ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ambient_ready" -ne 1 ]; then
+  docker logs "$ambient_db_container"
+  echo "::error::the alternate migration database never answered a query"
+  exit 1
+fi
+POSTGRES_URL="$ambient_url" sol local migrate
+ambient_status=$(POSTGRES_URL="$ambient_url" sol migrate status --json)
+jq -e '.migrations | length > 0 and all(.[]; .applied)' <<< "$ambient_status" >/dev/null
+
+# The first deploy establishes infrastructure, then refuses pending migrations
+# before applying any workload. Check that boundary rather than accepting any error.
+first_deploy_log=$(mktemp)
+if POSTGRES_URL="$ambient_url" sol local deploy --scope=demo_ts >"$first_deploy_log" 2>&1; then
+  cat "$first_deploy_log"
+  echo "::error::first deploy unexpectedly accepted pending migrations"
+  exit 1
+else
+  first_deploy_rc=$?
+  if [ "$first_deploy_rc" -ne 1 ]; then
+    cat "$first_deploy_log"
+    echo "::error::initial migration refusal returned $first_deploy_rc, expected 1"
+    exit 1
+  fi
+fi
+cat "$first_deploy_log"
+grep -Fq 'the required migration set is not applied' "$first_deploy_log"
+grep -Fq 'sol local migrate' "$first_deploy_log"
+rm -f "$first_deploy_log"
+initial_workloads=$(kubectl get deployments,statefulsets,jobs,cronjobs -n pluto-demo-ts -o name)
+if [ -n "$initial_workloads" ]; then
+  echo "::error::pending migrations must prevent workload application"
+  exit 1
+fi
+
+cluster_uid=$(kubectl get namespace kube-system -o jsonpath='{.metadata.uid}')
+postgres_uid=$(kubectl get statefulset postgresql -n postgresql -o jsonpath='{.metadata.uid}')
+test -n "$cluster_uid"
+test -n "$postgres_uid"
+
+cluster_migrations=$(kubectl exec -n postgresql postgresql-0 -- \
+  env PGPASSWORD=dev psql -h 127.0.0.1 -U postgres -d dev -tAc \
+  'SELECT count(*) FROM sol_pluto_schema_migrations')
+test "$cluster_migrations" = 0
+echo "migration gate: ignored a fully migrated POSTGRES_URL database and refused the unmigrated cluster"
+
+# This must work with infrastructure alone: no successful workload deployment,
+# workload namespace, or class Secret is a prerequisite for local migration.
+docker rm -f "$ambient_db_container" >/dev/null
+trap - EXIT
+env -u POSTGRES_URL sol local migrate
+# The deployment must also ignore the override after its database is unavailable.
+POSTGRES_URL="$ambient_url" sol local deploy --scope=demo_ts
+
+test "$cluster_uid" = "$(kubectl get namespace kube-system -o jsonpath='{.metadata.uid}')"
+test "$postgres_uid" = "$(kubectl get statefulset postgresql -n postgresql -o jsonpath='{.metadata.uid}')"
+echo "migration gate: refused without workloads; migrated and deployed using the same infrastructure"
 
 demo_ns=$(kubectl get ns -o name | sed 's|namespace/||' | grep -- '-demo-ts$' | head -1)
-
-# The demo's tables are workspace migrations now
-# (db/migrations/0006_orders_ts.sql owns orders_ts, fulfilled_orders_ts
-# and order_confirmations_ts; 0007 adds the accept's trace context), so
-# the units create nothing at runtime and this must run before the deploy that
-# has to succeed. Applying them here is also what proves the migrations cover the
-# TypeScript namespace, rather than the apps' own `CREATE TABLE`. Migrating here,
-# before the deploy below, is what makes the order deterministic: the workload
-# that must become ready never starts before its schema exists.
-sol local migrate
-
-# **Activation is explicit.** The first pass applied the workloads against a
-# schema that did not exist yet, so their Deployment is left in a failed rollout
-# with a pod running the pre-migration code -- its relay says so: "the sol_outbox
-# table does not exist". Re-applying the same spec does not roll it (the pod
-# template is unchanged; `deploy` only observes that the rollout deadline is
-# already past), which is why the restart is explicit rather than implied:
-# `sol secret set` and `sol local migrate` write, and the deploy that follows is
-# what activates. `sol local deploy --scope=demo_ts` then waits for the rollout
-# and fails if the units do not become ready.
-kubectl -n "$demo_ns" rollout restart deployment
-
-sol local deploy --scope=demo_ts
 
 # fulfillment_worker subscribes with `fromBeginning: false`
 # (app code, out of scope to change here). For a genuinely new

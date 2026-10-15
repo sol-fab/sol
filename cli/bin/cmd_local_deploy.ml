@@ -212,14 +212,6 @@ let check_contract ~facts ~services =
   if Sol_cli_check.has_errors findings then Error (Sol_cli_exit.reported ()) else Ok ()
 ;;
 
-(* 2b: the local cluster's Postgres is the local stand-in for the target's master. It is
-   written to the consumer's *class* Secret (`<target>-dml-creds`), the same Secret the cloud
-   deploy writes and the renderer already points the pod's `secretKeyRef` at — never to the
-   unit's own Secret, and never as an operator value to copy in. *)
-let local_postgres_url =
-  "postgresql://postgres:dev@postgresql.postgresql.svc.cluster.local:5432/dev"
-;;
-
 let to_manifest_primitive = Sol_cli_up_execution.manifest_primitive
 
 let print_service_start spec =
@@ -461,7 +453,7 @@ let apply_local_secret_values ~secret_values (plan : Sol_cli_deployment_plan.t) 
                 ~ctx:cluster
                 ~namespace
                 ~secret_name:class_secret
-                [ "POSTGRES_URL", local_postgres_url ]
+                [ "POSTGRES_URL", Sol_cli_local_platform.postgres_workload_url ]
               |> Result.map_error (fun error ->
                 Printf.sprintf
                   "could not write the local database credential %s for %s: %s"
@@ -609,10 +601,50 @@ let report_apply_success ~workspace ~facts plan =
   if summary.pending_migrations > 0
   then
     Printf.printf
-      "\n\
-       Note: %d migration file(s) found in db/migrations/ — run 'sol migrate' to apply.\n"
+      "\nMigrations: %d declared file(s) verified before workload application.\n"
       summary.pending_migrations;
   report_surplus_workloads ~workspace plan
+;;
+
+(* Infrastructure is established by [run] before this check. Read through the same
+   connection and tracking table as [sol local migrate], without requiring workload
+   namespaces or their Secrets: the first deployment has not applied either yet. *)
+let migration_prerequisite ~repo_root ~workspace =
+  let dir = Sol_cli_workspace.migrations_dir ~dir:repo_root in
+  let* required = Sol_cli_migration.required_if_present ~dir in
+  match required with
+  | [] -> Ok ()
+  | _ ->
+    (* Deployment verifies the cluster database whose URL it delivers, regardless
+       of a standalone migration command's ambient POSTGRES_URL override. *)
+    let* url = Sol_cli_local_platform.postgres_cluster_url ~ctx:cluster () in
+    let* rows =
+      Cmd_migrate.read_local_status ~url dir (Sol_cli_migration.table_name ~workspace)
+      |> Result.map_error (fun reason ->
+        "cannot verify the required migration state: " ^ reason)
+    in
+    let status =
+      Cmd_migrate.status_rows rows |> Sol_cli_migration.applied_status_of_rows
+    in
+    (match Sol_cli_migration_gate.verify_status ~required status with
+     | No_migrations | Satisfied _ -> Ok ()
+     | Unsatisfied missing ->
+       Error
+         (Printf.sprintf
+            "the required migration set is not applied. Missing: %s\n\
+            \  Local infrastructure is ready; no workloads were applied. Run `env -u \
+             POSTGRES_URL sol local migrate` to migrate the cluster, then `sol local \
+             deploy` again."
+            (String.concat ", " (List.map Sol_cli_migration.to_string missing)))
+     | Drifted drifted ->
+       Error
+         (String.concat "\n" (List.map Sol_cli_migration.drift_message drifted)
+          ^ "\n\
+            \  No workloads were applied. Restore each applied file, or put the change \
+             in a new migration and run `env -u POSTGRES_URL sol local migrate`, then \
+             `sol local deploy` again.")
+     | Unavailable reason ->
+       Error ("cannot verify the required migration state: " ^ reason))
 ;;
 
 let run_apply
@@ -629,6 +661,7 @@ let run_apply
       ~secret_values
   =
   let* () = check_contract ~facts ~services in
+  let* () = migration_prerequisite ~repo_root ~workspace |> Sol_cli_exit.of_msg in
   print_header ~workspace ~sha ~dry_run:false;
   let* plan = build_plan ~requested_scope ~workspace ~sha ~facts ~declared ~services in
   let pf_failed = ref false in

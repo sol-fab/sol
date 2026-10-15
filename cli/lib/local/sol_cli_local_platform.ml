@@ -276,6 +276,43 @@ type endpoint =
   }
 
 let ingress_local_port = 8088
+
+(* One local PostgreSQL identity, reached through cluster DNS by workloads and a
+   process-owned loopback forward by host migration commands. *)
+let postgres_service = "postgresql"
+let postgres_namespace = "postgresql"
+let postgres_remote_port = 5432
+
+let postgres_url ~host ~port =
+  Printf.sprintf "postgresql://postgres:dev@%s:%d/dev" host port
+;;
+
+let postgres_workload_url =
+  postgres_url
+    ~host:(postgres_service ^ "." ^ postgres_namespace ^ ".svc.cluster.local")
+    ~port:postgres_remote_port
+;;
+
+let postgres_cluster_url ~ctx () =
+  let local_port = 15432 in
+  Sol_cli_report.app "Forwarding postgresql (cluster) → localhost:%d ..." local_port;
+  match
+    Sol_cli_kubectl.temporary_port_forward
+      ~ctx
+      ~service:postgres_service
+      ~namespace:postgres_namespace
+      ~local_port
+      ~remote_port:postgres_remote_port
+  with
+  | Ok () -> Ok (postgres_url ~host:"localhost" ~port:local_port)
+  | Error (Not_started error) ->
+    Error
+      ("could not start kubectl port-forward: " ^ Sol_cli_process.error_to_string error)
+  | Error Not_ready ->
+    Error "the port-forward to the cluster's PostgreSQL did not become ready"
+  | Error (Readiness_check_failed message) -> Error message
+;;
+
 let schema_registry_service = "redpanda"
 let schema_registry_remote_port = 8081
 
@@ -371,12 +408,13 @@ let endpoints ~(req : Sol_cli_workspace.infra_requirements) =
       [ endpoint
           ~required:req.postgres
           "postgres"
-          ~namespace:"postgresql"
-          ~target:"svc/postgresql"
-          ~local_port:5432
-          ~remote_port:5432
-          "  postgres     ✓  postgresql://postgres:dev@localhost:5432/dev  \
-           (port-forwarded)"
+          ~namespace:postgres_namespace
+          ~target:(service postgres_service)
+          ~local_port:postgres_remote_port
+          ~remote_port:postgres_remote_port
+          (Printf.sprintf
+             "  postgres     ✓  %s  (port-forwarded)"
+             (postgres_url ~host:"localhost" ~port:postgres_remote_port))
       ]
     else []
   in

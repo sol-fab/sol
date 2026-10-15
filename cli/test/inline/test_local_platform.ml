@@ -260,3 +260,24 @@ let test_required_endpoints () =
 let%test "REFAC-139 part F: endpoint requiredness follows declarations" =
   test_required_endpoints ()
 ;;
+
+let%test "local PostgreSQL refuses a forward owned by another listener" =
+  let listener = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+  Fun.protect
+    ~finally:(fun () -> Unix.close listener)
+    (fun () ->
+       Unix.bind listener (Unix.ADDR_INET (Unix.inet_addr_loopback, 15432));
+       Unix.listen listener 1;
+       match
+         Sol_cli_local_platform.postgres_cluster_url
+           ~ctx:Sol_cli_kube_destination.local_context
+           ()
+       with
+       | Ok _ -> Windtrap.fail "a foreign listener was accepted as the cluster database"
+       | Error message ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the provider preserves the ownership refusal"
+           true
+           (Sol_cli_string.contains ~needle:"cannot own it" message))
+;;

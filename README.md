@@ -58,14 +58,18 @@ sol assets                # check the install: where its assets come from, and t
 sol new workspace pluto
 cd pluto
 
-# The first `sol local deploy` establishes the local cluster and its
-# infrastructure (Redpanda, PostgreSQL, Loki, Prometheus, Grafana), then stops
-# until the workspace's secrets exist — a deploy only verifies them.
-sol local deploy
-sol local secret set POSTGRES_URL \
-  --value "postgresql://postgres:dev@postgresql.postgresql.svc.cluster.local:5432/dev"
-sol local secret set SOL_API_KEY --value dev-internal-key
+# Ignored local inputs, one file per unit:
+for unit in payments/charge_svc comms/notify_worker; do
+  mkdir -p "sol/secrets.local/${unit%/*}"
+  cat >"sol/secrets.local/${unit}.env" <<'SECRETS'
+POSTGRES_URL=postgresql://postgres:dev@postgresql.postgresql.svc.cluster.local:5432/dev
+SOL_API_KEY=dev-internal-key
+SECRETS
+done
 
+# Infrastructure is ready after the first deploy refuses pending migrations.
+sol local deploy
+sol local migrate
 sol local deploy         # build + deploy, reusing the cluster
 
 curl localhost:8080/health

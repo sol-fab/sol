@@ -24,6 +24,16 @@ local cluster and its infrastructure and deploys the workspace to it, and
 `sol local run` runs workspace services as native processes. There is no
 ambient current remote target.
 
+Local deploy establishes infrastructure before checking the workspace's migration
+state. Pending migrations or checksum drift refuse workload application. Run
+`sol local migrate` after the initial refusal, then retry `sol local deploy`;
+migration needs only the local PostgreSQL service, not a successful workload deploy.
+The retry reuses the local cluster. `--scope` selects workloads; the migration
+prerequisite remains workspace-wide. The deploy gate always checks the cluster
+PostgreSQL delivered to workloads, ignoring ambient `POSTGRES_URL`. Standalone
+migration commands may use that override; unset it when migrating the cluster.
+A dry run does not query migration state.
+
 ## Exit behaviour
 
 - **0** — the command did what it says.

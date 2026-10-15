@@ -65,6 +65,17 @@ SOL_API_KEY=dev-internal-key
 SECRETS
 done
 
+first_deploy_log=$(mktemp)
+if sol local deploy >"$first_deploy_log" 2>&1; then
+  cat "$first_deploy_log"
+  echo "::error::first deploy unexpectedly accepted pending migrations"
+  exit 1
+fi
+cat "$first_deploy_log"
+grep -Fq 'the required migration set is not applied' "$first_deploy_log"
+rm -f "$first_deploy_log"
+sol local migrate
+
 sol local deploy
 
 # `sol local deploy` installs ingress-nginx and forwards
