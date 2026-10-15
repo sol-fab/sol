@@ -212,14 +212,6 @@ let check_contract ~facts ~services =
   if Sol_cli_check.has_errors findings then Error (Sol_cli_exit.reported ()) else Ok ()
 ;;
 
-(* 2b: the local cluster's Postgres is the local stand-in for the target's master. It is
-   written to the consumer's *class* Secret (`<target>-dml-creds`), the same Secret the cloud
-   deploy writes and the renderer already points the pod's `secretKeyRef` at — never to the
-   unit's own Secret, and never as an operator value to copy in. *)
-let local_postgres_url =
-  "postgresql://postgres:dev@postgresql.postgresql.svc.cluster.local:5432/dev"
-;;
-
 let to_manifest_primitive = Sol_cli_up_execution.manifest_primitive
 
 let print_service_start spec =
@@ -461,7 +453,7 @@ let apply_local_secret_values ~secret_values (plan : Sol_cli_deployment_plan.t) 
                 ~ctx:cluster
                 ~namespace
                 ~secret_name:class_secret
-                [ "POSTGRES_URL", local_postgres_url ]
+                [ "POSTGRES_URL", Sol_cli_local_platform.postgres_workload_url ]
               |> Result.map_error (fun error ->
                 Printf.sprintf
                   "could not write the local database credential %s for %s: %s"
@@ -623,11 +615,11 @@ let migration_prerequisite ~repo_root ~workspace =
   match required with
   | [] -> Ok ()
   | _ ->
+    (* Deployment verifies the cluster database whose URL it delivers, regardless
+       of a standalone migration command's ambient POSTGRES_URL override. *)
+    let* url = Sol_cli_local_platform.postgres_cluster_url ~ctx:cluster () in
     let* rows =
-      Cmd_migrate.read_local_status
-        ~ctx:cluster
-        dir
-        (Sol_cli_migration.table_name ~workspace)
+      Cmd_migrate.read_local_status ~url dir (Sol_cli_migration.table_name ~workspace)
       |> Result.map_error (fun reason ->
         "cannot verify the required migration state: " ^ reason)
     in
@@ -640,16 +632,17 @@ let migration_prerequisite ~repo_root ~workspace =
        Error
          (Printf.sprintf
             "the required migration set is not applied. Missing: %s\n\
-            \  Local infrastructure is ready; no workloads were applied. Run `sol local \
-             migrate`, then `sol local deploy` again."
+            \  Local infrastructure is ready; no workloads were applied. Run `env -u \
+             POSTGRES_URL sol local migrate` to migrate the cluster, then `sol local \
+             deploy` again."
             (String.concat ", " (List.map Sol_cli_migration.to_string missing)))
      | Drifted drifted ->
        Error
          (String.concat "\n" (List.map Sol_cli_migration.drift_message drifted)
           ^ "\n\
             \  No workloads were applied. Restore each applied file, or put the change \
-             in a new migration and run `sol local migrate`, then `sol local deploy` \
-             again.")
+             in a new migration and run `env -u POSTGRES_URL sol local migrate`, then \
+             `sol local deploy` again.")
      | Unavailable reason ->
        Error ("cannot verify the required migration state: " ^ reason))
 ;;

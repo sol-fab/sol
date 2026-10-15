@@ -6,31 +6,9 @@ let cluster_pg_exists ~ctx () =
     (Sol_cli_kubectl.get
        ~ctx
        ~resource:"svc"
-       ~name:"postgresql"
-       ~namespace:"postgresql"
+       ~name:Sol_cli_local_platform.postgres_service
+       ~namespace:Sol_cli_local_platform.postgres_namespace
        ~output:"name")
-;;
-
-let auto_forward_pg ~ctx () =
-  Printf.printf "Forwarding postgresql (cluster) → localhost:15432 ...\n%!";
-  let url = "postgresql://postgres:dev@localhost:15432/dev" in
-  match
-    Sol_cli_kubectl.temporary_port_forward
-      ~ctx
-      ~service:"postgresql"
-      ~namespace:"postgresql"
-      ~local_port:15432
-      ~remote_port:5432
-  with
-  | Ok () -> Ok url
-  | Error (Not_started e) ->
-    Error ("could not start kubectl port-forward: " ^ Sol_cli_process.error_to_string e)
-  | Error Not_ready ->
-    Printf.eprintf "warning: port-forward did not become ready in time\n%!";
-    Ok url
-  | Error (Readiness_check_failed msg) ->
-    Printf.eprintf "warning: port-forward readiness check failed: %s\n%!" msg;
-    Ok url
 ;;
 
 let get_postgres_url ~ctx () =
@@ -38,7 +16,7 @@ let get_postgres_url ~ctx () =
   | Some u -> Ok u
   | None ->
     if cluster_pg_exists ~ctx ()
-    then auto_forward_pg ~ctx ()
+    then Sol_cli_local_platform.postgres_cluster_url ~ctx ()
     else
       Error
         "POSTGRES_URL not set and no cluster postgres found.\n\
@@ -262,15 +240,15 @@ let status_rows (rows : Migration.status list) : Sol_cli_migration.status_row li
     rows
 ;;
 
-let read_local_status ~ctx dir table =
-  let* () = require_valid_migrations dir in
-  let* url = get_postgres_url ~ctx () in
+let read_local_status ~url dir table =
   with_pool url (fun ~fs pool ->
     Migration.status ~table pool ~dir ~fs |> Result.map_error (pg_error_to_string ~url))
 ;;
 
 let run_status ~ctx ?(json = false) dir table () =
-  let* statuses = read_local_status ~ctx dir table in
+  let* () = require_valid_migrations dir in
+  let* url = get_postgres_url ~ctx () in
+  let* statuses = read_local_status ~url dir table in
   let rows = status_rows statuses in
   let drifted = List.filter_map Sol_cli_migration.drift_of_row rows in
   if json

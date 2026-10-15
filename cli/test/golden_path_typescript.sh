@@ -21,10 +21,37 @@ SOL_API_KEY=dev-internal-key
 SECRETS
 done
 
+# An independently migrated database must not satisfy the deployment gate for
+# the cluster database. This also exercises standalone POSTGRES_URL migration.
+ambient_db_container="sol-ts-migration-override-$$"
+trap 'docker rm -f "$ambient_db_container" >/dev/null 2>&1 || true' EXIT
+docker run -d --name "$ambient_db_container" \
+  -e POSTGRES_PASSWORD=override-only -e POSTGRES_DB=dev \
+  -p 127.0.0.1::5432 postgres:16 >/dev/null
+ambient_address=$(docker port "$ambient_db_container" 5432/tcp)
+ambient_url="postgresql://postgres:override-only@${ambient_address}/dev"
+ambient_ready=0
+for i in $(seq 1 30); do
+  if docker exec -e PGPASSWORD=override-only "$ambient_db_container" \
+    psql -h 127.0.0.1 -U postgres -d dev -tAc 'SELECT 1' >/dev/null 2>&1; then
+    ambient_ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ambient_ready" -ne 1 ]; then
+  docker logs "$ambient_db_container"
+  echo "::error::the alternate migration database never answered a query"
+  exit 1
+fi
+POSTGRES_URL="$ambient_url" sol local migrate
+ambient_status=$(POSTGRES_URL="$ambient_url" sol migrate status --json)
+jq -e '.migrations | length > 0 and all(.[]; .applied)' <<< "$ambient_status" >/dev/null
+
 # The first deploy establishes infrastructure, then refuses pending migrations
 # before applying any workload. Check that boundary rather than accepting any error.
 first_deploy_log=$(mktemp)
-if sol local deploy --scope=demo_ts >"$first_deploy_log" 2>&1; then
+if POSTGRES_URL="$ambient_url" sol local deploy --scope=demo_ts >"$first_deploy_log" 2>&1; then
   cat "$first_deploy_log"
   echo "::error::first deploy unexpectedly accepted pending migrations"
   exit 1
@@ -51,10 +78,19 @@ postgres_uid=$(kubectl get statefulset postgresql -n postgresql -o jsonpath='{.m
 test -n "$cluster_uid"
 test -n "$postgres_uid"
 
+cluster_migrations=$(kubectl exec -n postgresql postgresql-0 -- \
+  env PGPASSWORD=dev psql -h 127.0.0.1 -U postgres -d dev -tAc \
+  'SELECT count(*) FROM sol_pluto_schema_migrations')
+test "$cluster_migrations" = 0
+echo "migration gate: ignored a fully migrated POSTGRES_URL database and refused the unmigrated cluster"
+
 # This must work with infrastructure alone: no successful workload deployment,
 # workload namespace, or class Secret is a prerequisite for local migration.
-sol local migrate
-sol local deploy --scope=demo_ts
+docker rm -f "$ambient_db_container" >/dev/null
+trap - EXIT
+env -u POSTGRES_URL sol local migrate
+# The deployment must also ignore the override after its database is unavailable.
+POSTGRES_URL="$ambient_url" sol local deploy --scope=demo_ts
 
 test "$cluster_uid" = "$(kubectl get namespace kube-system -o jsonpath='{.metadata.uid}')"
 test "$postgres_uid" = "$(kubectl get statefulset postgresql -n postgresql -o jsonpath='{.metadata.uid}')"

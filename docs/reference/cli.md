@@ -28,7 +28,11 @@ Local deploy establishes infrastructure before checking the workspace's migratio
 state. Pending migrations or checksum drift refuse workload application. Run
 `sol local migrate` after the initial refusal, then retry `sol local deploy`;
 migration needs only the local PostgreSQL service, not a successful workload deploy.
-The retry reuses the local cluster. A dry run does not query migration state.
+The retry reuses the local cluster. `--scope` selects workloads; the migration
+prerequisite remains workspace-wide. The deploy gate always checks the cluster
+PostgreSQL delivered to workloads, ignoring ambient `POSTGRES_URL`. Standalone
+migration commands may use that override; unset it when migrating the cluster.
+A dry run does not query migration state.
 
 ## Exit behaviour
 
