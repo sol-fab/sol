@@ -25,6 +25,7 @@ let target ?(fields = []) provider =
   ; dns_zone_ownership = None
   ; node_failure_headroom_nodes = None
   ; profile = None
+  ; shape = Some Sol_cli_profile.Local
   ; provider_fields = [ Sol_cli_provider.to_string provider, fields ]
   ; secret_authorities = []
   }

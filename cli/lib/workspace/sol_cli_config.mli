@@ -22,6 +22,7 @@ type target =
   ; dns_zone_ownership : string option
   ; node_failure_headroom_nodes : int option
   ; profile : Sol_cli_profile.t option
+  ; shape : Sol_cli_profile.platform_shape option
   ; provider_fields : (string * (string * string) list) list
   ; secret_authorities : (string * (string * secret_authority) list) list
   }
@@ -107,6 +108,12 @@ type declared =
   }
 
 val declared_of_config : t -> declared
+
+(** The platform shape this config deploys with — the single decision every consumer reads.
+    A cloud target must declare it; the local platform has no target, so it is [Local] by
+    construction. A profile that claims production guarantees requires [Durable]. *)
+val platform_shape : t -> (Sol_cli_profile.platform_shape, string) result
+
 val load_declared : root:string -> (declared, error) result
 val parse_target : string -> (target, error) result
 val target_declared : target -> bool

@@ -61,6 +61,7 @@ let aws_target : Sol_cli_config.target =
   ; dns_zone_ownership = Some "sol"
   ; node_failure_headroom_nodes = None
   ; profile = None
+  ; shape = Some Sol_cli_profile.Local
   ; provider_fields =
       [ ( "aws"
         , [ "state_lock_table", "acme-tflock"

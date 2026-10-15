@@ -30,6 +30,7 @@ let target ?(kube_context = Some "prod-us-east-1") ?kubeconfig () : Sol_cli_conf
   ; dns_zone_ownership = None
   ; node_failure_headroom_nodes = None
   ; profile = None
+  ; shape = Some Sol_cli_profile.Local
   ; provider_fields = []
   ; secret_authorities = []
   }
