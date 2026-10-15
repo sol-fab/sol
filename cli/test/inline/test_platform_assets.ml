@@ -279,6 +279,96 @@ let test_installed_runner_is_published_by_digest () =
     | Ok _ -> Windtrap.fail "an empty runner reference was accepted")
 ;;
 
+let setup_digest = "postgres@sha256:" ^ String.make 64 'b'
+
+let with_setup_ref value f =
+  let saved = Sys.getenv_opt A.setup_image_env in
+  Unix.putenv A.setup_image_env value;
+  Fun.protect
+    ~finally:(fun () -> Unix.putenv A.setup_image_env (Option.value saved ~default:""))
+    f
+;;
+
+let installed_setup ~file =
+  with_layout (fun ~root:_ ~bin ~bundle ->
+    Option.iter (write (Filename.concat bundle "setup-image")) file;
+    match A.resolve_from ~sol_home:None ~exe_dir:bin ~release_version:(Some "v1.2.3") with
+    | Error e -> Error (A.error_to_string e)
+    | Ok t -> A.setup_image t)
+;;
+
+(* The setup image follows the runner's rules: a release resolves its own bundled digest, and
+   an explicit variable is refused rather than silently preferred. *)
+let test_installed_setup_image_is_pinned_by_digest () =
+  with_setup_ref "" (fun () ->
+    (match installed_setup ~file:(Some (setup_digest ^ "\n")) with
+     | Ok r -> Windtrap.equal Windtrap.string ~msg:"the bundle's digest" setup_digest r
+     | Error msg -> Windtrap.fail msg);
+    (match installed_setup ~file:(Some "postgres:16\n") with
+     | Error _ -> ()
+     | Ok _ -> Windtrap.fail "a floating tag was accepted as the setup image");
+    (match installed_setup ~file:(Some "") with
+     | Error _ -> ()
+     | Ok _ -> Windtrap.fail "an empty setup reference was accepted");
+    match installed_setup ~file:None with
+    | Error msg ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"a bundle without a setup image says how to fix it"
+        true
+        (Sol_cli_string.contains ~needle:"reinstall the release archive" msg)
+    | Ok _ -> Windtrap.fail "a bundle without a setup image was accepted")
+;;
+
+let test_a_release_refuses_an_explicit_setup_image () =
+  with_layout (fun ~root:_ ~bin ~bundle ->
+    write (Filename.concat bundle "setup-image") (setup_digest ^ "\n");
+    with_setup_ref setup_digest (fun () ->
+      match
+        A.resolve_from ~sol_home:None ~exe_dir:bin ~release_version:(Some "v1.2.3")
+      with
+      | Error e -> Windtrap.fail (A.error_to_string e)
+      | Ok t ->
+        (match A.setup_image t with
+         | Error msg ->
+           Windtrap.equal
+             Windtrap.bool
+             ~msg:"a release uses only its own assets"
+             true
+             (Sol_cli_string.contains ~needle:"uses only its own assets" msg)
+         | Ok _ -> Windtrap.fail "a release accepted an explicit setup image")))
+;;
+
+(* A checkout has nothing to publish, so its guidance names the public image route and a digest
+   lookup — not a Dockerfile of Sol's, which does not exist for this image. *)
+let test_checkout_setup_image_guides_the_public_route () =
+  with_layout (fun ~root ~bin:_ ~bundle:_ ->
+    match A.resolve_from ~sol_home:(Some root) ~exe_dir:root ~release_version:None with
+    | Error e -> Windtrap.fail (A.error_to_string e)
+    | Ok t ->
+      with_setup_ref setup_digest (fun () ->
+        (match A.setup_image t with
+         | Ok r ->
+           Windtrap.equal
+             Windtrap.string
+             ~msg:"a checkout uses the variable"
+             setup_digest
+             r
+         | Error msg -> Windtrap.fail msg);
+        with_setup_ref "" (fun () ->
+          match A.setup_image t with
+          | Ok _ -> Windtrap.fail "a checkout with no reference must refuse"
+          | Error msg ->
+            Windtrap.equal
+              Windtrap.bool
+              ~msg:
+                "the guidance names the public digest route, not a Sol artifact to \
+                 publish"
+              true
+              (Sol_cli_string.contains ~needle:"imagetools inspect" msg
+               && not (Sol_cli_string.contains ~needle:"Dockerfile" msg)))))
+;;
+
 let test_checkout_runner_needs_an_explicit_digest () =
   with_tmpdir (fun dir ->
     fake_checkout dir;
@@ -376,4 +466,16 @@ let%test "runner: a release bundle ignores an explicit reference" =
 
 let%test "precedence: empty VERSION is not a bundle" =
   test_empty_version_is_not_a_bundle ()
+;;
+
+let%test "assets: an installed release pins its own setup image" =
+  test_installed_setup_image_is_pinned_by_digest ()
+;;
+
+let%test "assets: a release refuses an explicit setup image" =
+  test_a_release_refuses_an_explicit_setup_image ()
+;;
+
+let%test "assets: a checkout's setup guidance names the public route" =
+  test_checkout_setup_image_guides_the_public_route ()
 ;;

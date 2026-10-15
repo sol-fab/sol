@@ -33,6 +33,11 @@ the tag's commit, then builds from that revision:
 - the platform bundle;
 - the version-aligned migration-runner image, published once and reused by
   digest on a resume;
+- the pinned public database setup image (`share/sol/<version>/setup-image`),
+  taken from the repository variable `SOL_SETUP_POSTGRES_IMAGE`. The build fails
+  closed when it is unset or is not a digest reference: an installed release
+  refuses an ambient `SOL_SETUP_POSTGRES_IMAGE`, so a release that cannot name
+  the image it tested would otherwise fail a deploy *after* creating a database;
 - `candidate.json`, the candidate identity.
 
 It records the candidate as a **draft** GitHub release with the bundle and

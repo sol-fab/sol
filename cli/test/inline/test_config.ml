@@ -2580,6 +2580,67 @@ let resolve_refuses what resources =
   | Error message -> message
 ;;
 
+let with_setup_image_env value f =
+  let saved = Sys.getenv_opt Sol_cli_platform_assets.setup_image_env in
+  Unix.putenv Sol_cli_platform_assets.setup_image_env (Option.value value ~default:"");
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv Sol_cli_platform_assets.setup_image_env (Option.value saved ~default:""))
+    f
+;;
+
+(* **#1427: an image is required exactly when the deployment provisions its own database.**
+   This is the predicate the preflight and the setup step share, so a target that binds its
+   database externally — delivered by ESO, not by the setup Job — is not made to carry an
+   image it never uses, and a target with no database is not either. *)
+let test_setup_image_needed_only_for_a_provisioned_database () =
+  let preflight resources =
+    Sol_cli_database_setup_run.setup_image_preflight
+      { Sol_cli_config.project = Some "ws"
+      ; target = Result.get_ok (Sol_cli_config.parse_target "prod/aws/us-east-1")
+      ; resources
+      ; services = []
+      }
+  in
+  let digest = "postgres@sha256:" ^ String.make 64 'a' in
+  (match preflight [] with
+   | Ok None -> ()
+   | Ok (Some image) ->
+     Windtrap.fail ("a target with no database required an image: " ^ image)
+   | Error message -> Windtrap.fail ("a target with no database refused: " ^ message));
+  (match
+     preflight [ postgres_resource ~binding:(external_postgres_binding "vault") "app_db" ]
+   with
+   | Ok None -> ()
+   | Ok (Some image) ->
+     Windtrap.fail ("an externally bound database required a setup image: " ^ image)
+   | Error message -> Windtrap.fail ("an externally bound database refused: " ^ message));
+  with_setup_image_env (Some digest) (fun () ->
+    match preflight [ postgres_resource "app_db" ] with
+    | Ok (Some image) ->
+      Windtrap.equal
+        Windtrap.string
+        ~msg:"a provisioned database resolves the image"
+        digest
+        image
+    | Ok None -> Windtrap.fail "a Sol-provisioned database resolved no image"
+    | Error message -> Windtrap.fail message);
+  with_setup_image_env None (fun () ->
+    match preflight [ postgres_resource "app_db" ] with
+    | Ok None -> Windtrap.fail "a Sol-provisioned database refused to require an image"
+    | Ok (Some _) -> Windtrap.fail "a provisioned database resolved an image from nowhere"
+    | Error message ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the refusal names what to configure"
+        true
+        (Sol_cli_string.contains ~needle:Sol_cli_platform_assets.setup_image_env message))
+;;
+
+let%test "1427: a setup image is required only for a provisioned database" =
+  test_setup_image_needed_only_for_a_provisioned_database ()
+;;
+
 let test_more_than_one_database_is_refused () =
   (* A layer may not declare a resource's shape (DEC-047), so build the graph directly. *)
   let two_sol =

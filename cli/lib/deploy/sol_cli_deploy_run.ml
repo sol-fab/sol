@@ -702,15 +702,29 @@ let apply
       ~push_events
       ~report_success
       ~confirm_group_change
+      ?resolve_setup_image
       ?database_setup
       plan
   =
+  (* **Resolve deterministic prerequisites before the gate that creates infrastructure.** A
+     missing or unpinnable setup image used to surface only when the setup step ran, after the
+     substrate gate had already created the database. [resolve_setup_image] is the caller's
+     policy for *which* image a provisioned database needs; the ordering is this function's, so
+     no caller can run the substrate gate first, and the resolved value is what the setup step
+     receives rather than something it looks up again. *)
+  let* setup_image =
+    match resolve_setup_image with
+    | None -> Ok None
+    | Some resolve -> resolve ()
+  in
   let* () =
     run_gate
       ~on_refused:on_substrate_refused
       (substrate_prerequisite ctx ~plan ~live:true)
   in
-  let database_setup = Option.value database_setup ~default:(fun () -> Ok ()) in
+  let database_setup =
+    Option.value database_setup ~default:(fun ~setup_image:_ () -> Ok ())
+  in
   run_lifecycle
     ~cluster:ctx.execution.cluster
     ~workspace:ctx.execution.workspace
@@ -720,7 +734,7 @@ let apply
     ~confirm_group_change
     ~present_plan
     ~gates:(fun _plan -> effective_access ())
-    ~database_setup
+    ~database_setup:(fun () -> database_setup ~setup_image ())
     ~post_setup_gates:(fun plan ->
       run_gate ~on_refused:(fun _ -> ()) (migration_prerequisite ctx ~plan ~live:true))
     ~before_apply:(fun plan -> contract_reconciliation ctx plan)

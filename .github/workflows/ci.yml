@@ -366,8 +366,10 @@ jobs:
         run: |
           cp _build/default/cli/bin/main.exe "$RUNNER_TEMP/sol-dev"
           runner="ghcr.io/example/sol-migration-runner@sha256:$(printf '0%.0s' $(seq 64))"
+          setup="postgres@sha256:$(printf '1%.0s' $(seq 64))"
           archive="$(opam exec -- internal/tooling/scripts/build-release-bundle.sh \
-            --version v0.0.0-ci --runner-image "$runner" --out "$RUNNER_TEMP/release" | tail -1)"
+            --version v0.0.0-ci --runner-image "$runner" --setup-image "$setup" \
+            --out "$RUNNER_TEMP/release" | tail -1)"
           internal/ci/smoke_installed_release.sh "$archive" v0.0.0-ci "$runner" "$RUNNER_TEMP/sol-dev"
 
   golden-path-smoke:

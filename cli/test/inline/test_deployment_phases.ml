@@ -1376,51 +1376,6 @@ let setup_mentions needle text =
   go 0
 ;;
 
-let with_setup_image value f =
-  let name = Sol_cli_database_setup.image_env in
-  let previous = Sol_cli_string.env name in
-  (match value with
-   | Some v -> Unix.putenv name v
-   | None -> Unix.putenv name "");
-  Fun.protect
-    ~finally:(fun () ->
-      Unix.putenv
-        name
-        (match previous with
-         | Some p -> p
-         | None -> ""))
-    f
-;;
-
-let test_database_setup_image_requires_a_digest () =
-  let digest = "postgres@sha256:" ^ String.make 64 'a' in
-  with_setup_image (Some "postgres:16") (fun () ->
-    match Sol_cli_database_setup.setup_image () with
-    | Ok _ -> Windtrap.fail "a floating tag must be refused: this Job runs as the master"
-    | Error message ->
-      Windtrap.equal
-        Windtrap.bool
-        ~msg:"the refusal names the configured variable"
-        true
-        (setup_mentions Sol_cli_database_setup.image_env message));
-  with_setup_image (Some digest) (fun () ->
-    match Sol_cli_database_setup.setup_image () with
-    | Error message -> Windtrap.fail message
-    | Ok resolved ->
-      Windtrap.equal Windtrap.string ~msg:"the digest is used" digest resolved);
-  with_setup_image None (fun () ->
-    match Sol_cli_database_setup.setup_image () with
-    | Ok _ -> Windtrap.fail "an unset image must not resolve"
-    | Error message ->
-      (* Unlike the runner, there is nothing for Sol to publish: the message must name
-         the variable to pin, not an artifact to build. *)
-      Windtrap.equal
-        Windtrap.bool
-        ~msg:"the message names what to set"
-        true
-        (setup_mentions Sol_cli_database_setup.image_env message))
-;;
-
 let test_database_setup_sql_is_idempotent () =
   let sql = Sol_cli_database_setup.sql ~operation:Sol_cli_database_setup.Repair in
   Windtrap.equal
@@ -1493,10 +1448,6 @@ let test_database_setup_sql_is_idempotent () =
       true
       (grant_at < alter_at)
   | _ -> Windtrap.fail "the membership grant or the default-privilege grants are missing"
-;;
-
-let%test "database setup: the image must be a digest reference" =
-  test_database_setup_image_requires_a_digest ()
 ;;
 
 let%test "database setup: the role SQL is idempotent and carries no secret" =

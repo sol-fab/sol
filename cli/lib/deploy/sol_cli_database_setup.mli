@@ -1,14 +1,5 @@
 (** The database setup step's contract — ADR 0007. *)
 
-(** The variable carrying the setup image's digest reference. *)
-val image_env : string
-
-(** The resolved setup image. Requires a digest reference: a tag can move under a Job
-    that runs with the database's administrative credential. Unlike the migration
-    runner, this image is public — the error names the variable to set and how to find
-    a digest, not an artifact to publish. *)
-val setup_image : unit -> (string, string) result
-
 (** The DDL role: it owns the schema's objects. *)
 val ddl_role : string
 

@@ -10,6 +10,10 @@
 #   │                                 builds to this candidate and no other
 #   ├── migration-runner-image        ghcr.io/<owner>/sol-migration-runner@sha256:...
 #   │                                 the same binary, published once
+#   ├── setup-image                   postgres@sha256:...
+#   │                                 the pinned PUBLIC database setup image: a release that
+#   │                                 provisions a database resolves it from its own bundle, so
+#   │                                 a deploy never depends on an ambient variable (#1427)
 #   ├── candidate.json                the candidate identity: revision, bundle
 #   │                                 digest and runner digest
 #   └── SUPPORT_REFS                  this tag's support-refs.txt, containing the
@@ -151,6 +155,20 @@ jobs:
           [[ "$digest" =~ @sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest for the published runner ($digest)"; exit 1; }
           echo "image=$digest" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve the database setup image
+        id: setup
+        env:
+          SETUP_IMAGE: ${{ vars.SOL_SETUP_POSTGRES_IMAGE }}
+        run: |
+          # Public image, so there is nothing to publish -- but it must be *pinned* and shipped
+          # with the release, because an installed release refuses an ambient variable and a
+          # mutable tag under a Job holding the database's administrative credential is not
+          # acceptable. The variable is required: a candidate that cannot name the image it
+          # tests must fail here rather than fail a deploy after it created a database.
+          [[ "$SETUP_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || {
+            echo "::error::repository variable SOL_SETUP_POSTGRES_IMAGE must hold the pinned digest of the public PostgreSQL setup image (postgres@sha256:<64 hex>)"; exit 1; }
+          echo "image=$SETUP_IMAGE" >> "$GITHUB_OUTPUT"
+
       - name: Build the release archive
         id: bundle
         run: |
@@ -158,6 +176,7 @@ jobs:
             --version "$VERSION" \
             --revision "${{ steps.revision.outputs.revision }}" \
             --runner-image "${{ steps.runner.outputs.image }}" \
+            --setup-image "${{ steps.setup.outputs.image }}" \
             --binary "$RUNNER_TEMP/runner/sol" \
             --support-refs support-refs.txt \
             --out "$RUNNER_TEMP/dist" | tail -1)"

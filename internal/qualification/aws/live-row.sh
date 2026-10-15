@@ -43,8 +43,10 @@ ECR_REGISTRY="${ECR_REGISTRY:-$ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com}"
 # The in-cluster database setup step (ADR 0007) needs a digest-pinned image. It is public,
 # so the run pins the same digest the offline lifecycle test uses; a Sol-provisioned target's
 # deploy refuses to reach the consumers without it (issue #1402).
-SOL_SETUP_POSTGRES_IMAGE="${SOL_SETUP_POSTGRES_IMAGE:-postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d}"
-export SOL_SETUP_POSTGRES_IMAGE
+# The setup image comes from the installed release's own bundle (share/sol/<version>/
+# setup-image), which is the only place a release may take it from: an explicit
+# SOL_SETUP_POSTGRES_IMAGE is refused for an installed release, so the harness must not set one
+# (#1427).
 STATE_KEY="$LEDGER_PREFIX/$TARGET/cloud.tfstate"
 WORKSPACE_NAME="${WORKSPACE_NAME:-$(basename "$WORKSPACE")}"
 RETENTION="${RETENTION:-$(sed -n 's/^ *destroy_retention: *//p' "$TARGET_FILE" 2>/dev/null | head -1)}"

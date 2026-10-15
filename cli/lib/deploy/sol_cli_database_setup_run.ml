@@ -135,6 +135,36 @@ let cleanup ~ctx ~namespace ~job_name ~configmap_name ~secret_name =
   | exn -> [ Printf.sprintf "cleanup raised: %s" (Printexc.to_string exn) ]
 ;;
 
+(** **#1427: the setup image is resolved before any infrastructure exists.** [Some] exactly when
+    the target provisions its own database — the predicate [run_database_setup_step] branches
+    on — so a target that binds its database externally, or has none, is not made to carry an
+    image it will never use. It is resolved once and passed down, rather than re-read from the
+    environment at the point of use, so nothing can re-resolve to a different value after the
+    infrastructure gate has already passed. *)
+let setup_image_preflight (config : Sol_cli_config.t) =
+  let open Result.Syntax in
+  let* bindings =
+    Sol_cli_resource_binding.resolve config
+    |> Result.map_error (fun message ->
+      Printf.sprintf
+        "could not resolve resource ownership for the database setup image: %s"
+        message)
+  in
+  match Sol_cli_resource_binding.provisioned_database bindings with
+  | None -> Ok None
+  | Some _ ->
+    let* assets =
+      Sol_cli_platform_assets.resolve ()
+      |> Result.map_error (fun error ->
+        "the platform assets could not be resolved: "
+        ^ Sol_cli_platform_assets.error_to_string error)
+    in
+    Sol_cli_platform_assets.setup_image assets
+    |> Result.map Option.some
+    |> Result.map_error (fun message ->
+      "the database setup image could not be resolved: " ^ message)
+;;
+
 (** The namespaces that must receive the DML credential: one per unit that declares it
     uses the Sol-provisioned `postgres` resource.
 
