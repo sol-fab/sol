@@ -47,6 +47,27 @@ conversation resolution remain authoritative; never bypass them. Resolve failing
 conflicts, review findings, and changed parents while independent or downstream work
 continues.
 
+## Engineering quality and prioritization
+
+Sol's primary engineering objective is a reliable, secure, maintainable lifecycle: provision
+infrastructure, deploy healthy workloads, operate and update them, and destroy all Sol-owned
+resources with independently verified absence on AWS and GCP.
+
+- Prioritize concrete correctness gaps and obstacles to end-to-end qualification.
+- Prefer one authoritative representation of each decision. Avoid independent reconstruction
+  across planning, execution, rollback, and qualification.
+- Keep modules cohesive, responsibilities explicit, and control flow understandable.
+- Favor straightforward implementations over speculative abstractions or unnecessary
+  compatibility machinery.
+- Preserve strong error handling and fail-closed security boundaries.
+- Tests must establish the behavior they claim. A passing test that cannot detect the regression
+  is not evidence.
+- Leave surrounding code simpler when practical, but avoid unrelated refactoring.
+- Do not lower engineering standards to satisfy a qualification harness. Fix the underlying
+  product problem.
+
+A successful qualification run is evidence of correctness, not a substitute for good engineering.
+
 ## Build and validation
 
 Set up the pinned support packages and dependencies as described in the README, then:
