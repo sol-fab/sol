@@ -83,23 +83,32 @@ let plan_workloads (plan : Sol_cli_deployment_plan.t) =
     plan.Sol_cli_deployment_plan.services
 ;;
 
-let migration_prerequisite ctx ~plan ~live =
-  match plan.Sol_cli_deployment_plan.profile with
-  | None -> Ok ()
-  | Some _ ->
-    let dir =
-      Filename.concat ctx.facts.Sol_cli_workspace_model.root Sol_cli_migration.default_dir
-    in
+(* **#1403: migration verification does not depend on the profile.** A profile answers which
+   guarantees a target claims, not what the deploy does, so a profile-less target must still
+   refuse to roll workloads against an unapplied schema. What decides is whether the workspace
+   carries migrations at all — and that is decided before any cluster call, so a target with
+   none performs no migration-specific Kubernetes work of any kind. *)
+let migration_prerequisite ctx ~plan:_ ~live =
+  let dir =
+    Filename.concat ctx.facts.Sol_cli_workspace_model.root Sol_cli_migration.default_dir
+  in
+  (* Whether there is anything to verify is decided **before any migration-specific cluster
+     operation**: a target that carries no migrations returns here, so it reconciles no
+     operator RoleBindings and reads no migration status. Asking the cluster first and
+     discovering "nothing to verify" afterwards would still be cluster work. *)
+  match Sol_cli_migration.required_if_present ~dir with
+  | Ok [] -> Ok ()
+  | Error _ when not live -> Ok ()
+  | _ ->
+    (* Reaching here offline means the directory is inspectable and names migrations, so the
+       only honest answer is that this run did not verify them. *)
     if not live
     then (
-      match Sol_cli_migration.required_if_present ~dir with
-      | Ok [] | Error _ -> Ok ()
-      | Ok _ ->
-        Sol_cli_report.app
-          "Migrations: NOT verified -- a side-effect-free run creates no status Job. The \
-           applied migration set is only checked against the live cluster by a real \
-           deploy (before any workload moves).";
-        Ok ())
+      Sol_cli_report.app
+        "Migrations: NOT verified -- a side-effect-free run creates no status Job. The \
+         applied migration set is only checked against the live cluster by a real deploy \
+         (before any workload moves).";
+      Ok ())
     else (
       (* The lifecycle owner establishes the plan's namespaces and scoped RBAC once,
          in [substrate_prerequisite], before this gate. Migration verification must not
@@ -190,11 +199,11 @@ let migration_prerequisite ctx ~plan ~live =
              (Printf.sprintf
                 "\n\
                  error: cannot verify the required migration state: %s\n\
-                \  A deploy against the production profile fails closed rather than \
-                 assume the schema is compatible. Migrations are workspace-wide -- a \
-                 deploy does not select them -- so `sol migrate apply %s` checks the \
-                 same required set this deploy did (it reports the applied set). Run it, \
-                 then deploy again."
+                \  A deploy fails closed here rather than assume the schema is \
+                 compatible: any target that carries migrations is verified. Migrations \
+                 are workspace-wide -- a deploy does not select them -- so `sol migrate \
+                 apply %s` checks the same required set this deploy did (it reports the \
+                 applied set). Run it, then deploy again."
                 reason
                 ctx.target_name)))
 ;;
