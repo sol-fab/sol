@@ -150,6 +150,15 @@ let drift_of_row (row : status_row) : drift option =
   | _ -> None
 ;;
 
+let applied_status_of_rows rows =
+  { applied =
+      List.filter_map
+        (fun (row : status_row) -> if row.applied then Some row.version else None)
+        rows
+  ; drifted = List.filter_map drift_of_row rows
+  }
+;;
+
 let parse_status_json text =
   let open Result.Syntax in
   let what = "migration status" in
@@ -177,13 +186,7 @@ let parse_status_json text =
     (match Sol_cli_json.field [ "migrations" ] json with
      | `List items ->
        let* rows = Sol_cli_result.map_list parse_row items in
-       Ok
-         { applied =
-             List.filter_map
-               (fun (row : status_row) -> if row.applied then Some row.version else None)
-               rows
-         ; drifted = List.filter_map drift_of_row rows
-         }
+       Ok (applied_status_of_rows rows)
      | _ -> Error "missing \"migrations\" array")
 ;;
 

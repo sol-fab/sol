@@ -38,3 +38,9 @@ val verify
   -> ?ca_configmap:string
   -> unit
   -> verification
+
+(** Shared decision for host-read local status and in-cluster target status. *)
+val verify_status
+  :  required:Sol_cli_migration.prerequisite list
+  -> Sol_cli_migration.applied_status
+  -> verification

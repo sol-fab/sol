@@ -101,7 +101,9 @@ POSTGRES_URL=postgresql://postgres:dev@postgresql.postgresql.svc.cluster.local:5
 SOL_API_KEY=dev-internal-key
 SECRETS
 
-sol local deploy
+sol local deploy    # establishes infrastructure, then refuses pending migrations
+sol local migrate
+sol local deploy    # deploys workloads after migration
 curl localhost:8080/health
 ```
 

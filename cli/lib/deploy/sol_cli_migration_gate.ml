@@ -139,6 +139,16 @@ let read_applied ~ctx ~dir ~table ~namespace ~ddl_creds_name ?ca_configmap () =
   |> Result.map (fun (status : Sol_cli_migration.applied_status) -> status.applied)
 ;;
 
+let verify_status ~required (status : Sol_cli_migration.applied_status) =
+  match required, status.drifted with
+  | [], _ -> No_migrations
+  | _, (_ :: _ as drifted) -> Drifted drifted
+  | _, [] ->
+    (match Sol_cli_migration.unsatisfied ~required ~applied:status.applied with
+     | [] -> Satisfied status.applied
+     | missing -> Unsatisfied missing)
+;;
+
 let verify ~ctx ~workspace ~dir ~namespace ~ddl_creds_name ?ca_configmap () =
   match Sol_cli_migration.required_if_present ~dir with
   | Error e -> Unavailable e
@@ -147,11 +157,5 @@ let verify ~ctx ~workspace ~dir ~namespace ~ddl_creds_name ?ca_configmap () =
     let table = Sol_cli_migration.table_name ~workspace in
     (match read_status ~ctx ~dir ~table ~namespace ~ddl_creds_name ?ca_configmap () with
      | Error e -> Unavailable e
-     | Ok status ->
-       (match status.drifted with
-        | _ :: _ as drifted -> Drifted drifted
-        | [] ->
-          (match Sol_cli_migration.unsatisfied ~required ~applied:status.applied with
-           | [] -> Satisfied status.applied
-           | missing -> Unsatisfied missing)))
+     | Ok status -> verify_status ~required status)
 ;;

@@ -609,10 +609,49 @@ let report_apply_success ~workspace ~facts plan =
   if summary.pending_migrations > 0
   then
     Printf.printf
-      "\n\
-       Note: %d migration file(s) found in db/migrations/ — run 'sol migrate' to apply.\n"
+      "\nMigrations: %d declared file(s) verified before workload application.\n"
       summary.pending_migrations;
   report_surplus_workloads ~workspace plan
+;;
+
+(* Infrastructure is established by [run] before this check. Read through the same
+   connection and tracking table as [sol local migrate], without requiring workload
+   namespaces or their Secrets: the first deployment has not applied either yet. *)
+let migration_prerequisite ~repo_root ~workspace =
+  let dir = Sol_cli_workspace.migrations_dir ~dir:repo_root in
+  let* required = Sol_cli_migration.required_if_present ~dir in
+  match required with
+  | [] -> Ok ()
+  | _ ->
+    let* rows =
+      Cmd_migrate.read_local_status
+        ~ctx:cluster
+        dir
+        (Sol_cli_migration.table_name ~workspace)
+      |> Result.map_error (fun reason ->
+        "cannot verify the required migration state: " ^ reason)
+    in
+    let status =
+      Cmd_migrate.status_rows rows |> Sol_cli_migration.applied_status_of_rows
+    in
+    (match Sol_cli_migration_gate.verify_status ~required status with
+     | No_migrations | Satisfied _ -> Ok ()
+     | Unsatisfied missing ->
+       Error
+         (Printf.sprintf
+            "the required migration set is not applied. Missing: %s\n\
+            \  Local infrastructure is ready; no workloads were applied. Run `sol local \
+             migrate`, then `sol local deploy` again."
+            (String.concat ", " (List.map Sol_cli_migration.to_string missing)))
+     | Drifted drifted ->
+       Error
+         (String.concat "\n" (List.map Sol_cli_migration.drift_message drifted)
+          ^ "\n\
+            \  No workloads were applied. Restore each applied file, or put the change \
+             in a new migration and run `sol local migrate`, then `sol local deploy` \
+             again.")
+     | Unavailable reason ->
+       Error ("cannot verify the required migration state: " ^ reason))
 ;;
 
 let run_apply
@@ -629,6 +668,7 @@ let run_apply
       ~secret_values
   =
   let* () = check_contract ~facts ~services in
+  let* () = migration_prerequisite ~repo_root ~workspace |> Sol_cli_exit.of_msg in
   print_header ~workspace ~sha ~dry_run:false;
   let* plan = build_plan ~requested_scope ~workspace ~sha ~facts ~declared ~services in
   let pf_failed = ref false in

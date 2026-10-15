@@ -43,3 +43,5 @@ val evidence_report
   :  waiting:(string * string option) option
   -> logs:string option
   -> string option
+
+val applied_status_of_rows : status_row list -> applied_status

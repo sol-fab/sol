@@ -143,3 +143,29 @@ let%test "verification gate: a file at the migrations path refuses (BUG-082)" =
 let%test "verification gate: an unreadable migrations dir refuses (BUG-082)" =
   test_verify_refuses_an_unreadable_migrations_dir ()
 ;;
+
+let%test "migration gate: local and cloud status share pending and drift decisions" =
+  let required : Sol_cli_migration.prerequisite list =
+    [ { version = 1; name = "initial" } ]
+  in
+  (match
+     Sol_cli_migration_gate.verify_status ~required { applied = []; drifted = [] }
+   with
+   | Unsatisfied [ { version = 1; _ } ] -> ()
+   | _ -> Windtrap.fail "missing migrations must refuse release");
+  (match
+     Sol_cli_migration_gate.verify_status ~required { applied = [ 1 ]; drifted = [] }
+   with
+   | Satisfied [ 1 ] -> ()
+   | _ -> Windtrap.fail "the same status must permit release after migration");
+  let drift : Sol_cli_migration.drift =
+    { version = 1; name = "initial"; recorded_checksum = "old"; content_checksum = "new" }
+  in
+  match
+    Sol_cli_migration_gate.verify_status
+      ~required
+      { applied = [ 1 ]; drifted = [ drift ] }
+  with
+  | Drifted [ _ ] -> ()
+  | _ -> Windtrap.fail "an applied version must not hide checksum drift"
+;;
