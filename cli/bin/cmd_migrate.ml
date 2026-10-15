@@ -136,12 +136,16 @@ let in_cluster_context ~target_path ~active =
   (* Two resolutions of one config, deliberately: `identity_of_config` answers "which resource
      is this target's database", and this answers the different question "does Sol provision
      it". `resolve` is pure, and collapsing them would mean a second public shape for the
-     identity (which is the duplication #1424 removed). *)
-  let provisions_database =
-    match Sol_cli_resource_binding.resolve config with
-    | Ok bindings ->
-      Option.is_some (Sol_cli_resource_binding.provisioned_database bindings)
-    | Error _ -> false
+     identity (which is the duplication #1424 removed). An unresolvable graph refuses: reading
+     it as "not Sol-provisioned" would skip the CA mount on the migration Job and let it fail
+     as if the database belonged to someone else (#1469). *)
+  let* provisions_database =
+    Sol_cli_resource_binding.provisions_of_config config ~typ:"postgres"
+    |> Result.map_error (fun message ->
+      Printf.sprintf
+        "cannot determine whether this target provisions its database, so the migration \
+         Job cannot decide whether to mount its CA ConfigMap: %s"
+        message)
   in
   let ca_configmap =
     if provisions_database

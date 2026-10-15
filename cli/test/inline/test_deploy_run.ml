@@ -104,7 +104,7 @@ let temp_dir () =
   dir
 ;;
 
-let with_context ?(migrations = []) f =
+let with_context ?(migrations = []) ?(resources = "") f =
   let root = temp_dir () in
   let cwd = Sys.getcwd () in
   Fun.protect
@@ -112,7 +112,7 @@ let with_context ?(migrations = []) f =
     (fun () ->
        Sys.chdir root;
        Out_channel.with_open_text "sol.yml" (fun oc ->
-         output_string oc "project: myapp\n");
+         output_string oc ("project: myapp\n" ^ resources));
        Targets_fixture.write ~target:"dev/aws/us-east-1" "target:\n  cluster_name: c\n";
        if migrations <> []
        then (
@@ -196,6 +196,34 @@ let test_profileless_deploy_without_migrations_is_not_gated () =
       Windtrap.failf "a deploy with no migrations must not be gated: %s" message
     | Error (Sol_cli_deploy_run.Refused message), _ ->
       Windtrap.failf "unexpected refusal: %s" message)
+;;
+
+(** **#1469: an unresolvable binding refuses.** Reading the resolution error as "not
+    Sol-provisioned" would skip the CA mount and let the deploy proceed as if the database
+    belonged to someone else. The graph here declares two PostgreSQL resources, which the
+    binding resolver refuses. *)
+let test_unresolvable_binding_refuses () =
+  with_context
+    ~migrations:[ "001_init.sql" ]
+    ~resources:
+      "resources:\n  app_db:\n    type: postgres\n  other_db:\n    type: postgres\n"
+    (fun ctx ->
+       match gate ctx ~plan:(plan []) ~live:true with
+       | Ok (), _ ->
+         Windtrap.fail
+           "an unresolvable resource binding must not be read as an externally managed \
+            database"
+       | Error (Sol_cli_deploy_run.Refused message), _ ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the refusal is the binding resolution error"
+           true
+           (Sol_cli_string.contains ~needle:"PostgreSQL resources" message)
+       | Error (Sol_cli_deploy_run.Failed message), _ ->
+         Windtrap.failf
+           "an unresolvable binding must refuse before the migration gate, not fail at \
+            it: %s"
+           message)
 ;;
 
 (** **#1403: the migration gate follows the work, not the shape.** A cloud target that declares
@@ -1178,6 +1206,10 @@ let%test "migration gate (#1403): a profile-less deploy with no migrations is no
 
 let%test "migration gate (#1403): an explicit local shape is still checked" =
   test_migration_gate_is_shape_independent ()
+;;
+
+let%test "migration gate (#1469): an unresolvable binding refuses" =
+  test_unresolvable_binding_refuses ()
 ;;
 
 let%test "migration gate (AUDIT-069): offline: not verified" =
