@@ -107,12 +107,18 @@ from pathlib import Path
 import sys
 import tarfile
 
+def sha256(stream):
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: stream.read(1 << 20), b""):
+        digest.update(chunk)
+    return digest.digest()
+
 candidate_path, install = map(Path, sys.argv[1:])
 try:
     candidate = json.loads(candidate_path.read_text())
     archive = candidate_path.parent / candidate["bundle"]
     with archive.open("rb") as stream:
-        actual = hashlib.file_digest(stream, "sha256").hexdigest()
+        actual = sha256(stream).hex()
     if actual != candidate["bundle_sha256"]:
         raise ValueError("candidate bundle_sha256 does not match the archive")
     with tarfile.open(archive) as bundle:
@@ -129,7 +135,7 @@ try:
                 if installed.stat().st_mode & 0o111 != member.mode & 0o111:
                     raise ValueError(f"installed executable permissions differ: {installed}")
                 with bundle.extractfile(member) as source, installed.open("rb") as target:
-                    if hashlib.file_digest(source, "sha256").digest() != hashlib.file_digest(target, "sha256").digest():
+                    if sha256(source) != sha256(target):
                         raise ValueError(f"installed file differs from candidate bundle: {installed}")
             elif member.issym():
                 if not installed.is_symlink() or installed.readlink() != Path(member.linkname):
