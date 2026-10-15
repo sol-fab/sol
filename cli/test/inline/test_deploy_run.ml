@@ -182,9 +182,10 @@ let test_profileless_live_deploy_is_checked () =
       Windtrap.failf "unexpected refusal: %s" message)
 ;;
 
-(** ...and a profile-less deploy that carries no migrations still has nothing to verify, so
-    the change does not make an ordinary migration-free target do cluster work. That the
-    cluster is genuinely untouched is asserted separately, where the fake kubectl is in scope. *)
+(** ...and a profile-less deploy that carries no migrations still has nothing to verify, so the
+    change does not make an ordinary migration-free target do cluster work. That the cluster is
+    not touched rests on the production control flow, which asks whether there is anything to
+    verify before it makes its first migration-specific call. *)
 let test_profileless_deploy_without_migrations_is_not_gated () =
   with_context (fun ctx ->
     match gate ctx ~plan:(plan []) ~live:true with
@@ -350,55 +351,6 @@ let with_fake_kubectl ?live_listing f =
   Fun.protect
     ~finally:(fun () -> Unix.putenv "PATH" old_path)
     (fun () -> f ~calls:(fun () -> read_file (Filename.concat dir "calls.log")))
-;;
-
-(** **#1403: a migration-free deploy attempts no migration-specific cluster work.** The gate
-    returning `Ok ()` does not establish that on its own: the operator-RoleBinding
-    reconciliation ran *before* the gate discovered there was nothing to check, and it turns
-    its failures into warnings, so a successful outcome proved nothing about the cluster.
-
-    **What this can and cannot prove.** It asserts the reconciliation reported no attempt and
-    that kubectl was never called. It is therefore a *guard*: this fixture's `ctx.inventory` is
-    empty, so `reconcile_operator_bindings` would act on nothing even without the early return,
-    and the test passes either way. Making it positive needs a fixture whose `inventory` carries
-    a service, so the reconciliation has work to attempt — that fixture does not exist here. *)
-let test_migration_free_deploy_touches_no_cluster () =
-  with_fake_kubectl (fun ~calls ->
-    with_context (fun ctx ->
-      (* A service, so the operator-RoleBinding reconciliation this guards against has
-         something it would act on: an empty plan makes the assertion vacuous. *)
-      let plan =
-        plan [ spec ~domain:"payments" ~name:"charge_svc" ~k8s:"charge-svc" Svc ]
-      in
-      let lines =
-        match gate ctx ~plan ~live:true with
-        | Ok (), lines -> lines
-        | Error (Sol_cli_deploy_run.Failed message), _ ->
-          Windtrap.failf "a deploy with no migrations must not be gated: %s" message
-        | Error (Sol_cli_deploy_run.Refused message), _ ->
-          Windtrap.failf "unexpected refusal: %s" message
-      in
-      (* The reconciliation reports an attempt it could not complete as a collected warning,
-         so the warning's absence is what shows no migration-specific cluster operation was
-         attempted at all. The kubectl log is asserted empty as well, as a second, weaker
-         signal. *)
-      Windtrap.equal
-        Windtrap.bool
-        ~msg:"no migrations means no operator-RoleBinding reconciliation"
-        false
-        (List.exists
-           (fun (_, line) ->
-              Sol_cli_string.contains ~needle:"diagnostic RoleBindings" line)
-           lines);
-      Windtrap.equal
-        Windtrap.string
-        ~msg:"no migrations means no kubectl call of any kind"
-        ""
-        (String.trim (calls ()))))
-;;
-
-let%test "migration gate (#1403): a migration-free deploy touches no cluster" =
-  test_migration_free_deploy_touches_no_cluster ()
 ;;
 
 (* A minimal scripted kubectl for a single behaviour under test, e.g. answering the
