@@ -48,5 +48,14 @@ val dashboard : t -> string -> string
 val alloy_template : t -> string
 val runner_image_env : string
 val migration_runner_image : t -> (string, string) result
+
+(** The variable that pins the public database setup image on a source checkout. *)
+val setup_image_env : string
+
+(** The database setup image, resolved from the installed release's own bundle like the runner
+    — see {!migration_runner_image} for the rules the two share. On a checkout it falls back
+    to {!setup_image_env}, whose guidance differs because this image is public. *)
+val setup_image : t -> (string, string) result
+
 val is_checkout : string -> bool
 val find_ancestor : (string -> bool) -> string -> string option

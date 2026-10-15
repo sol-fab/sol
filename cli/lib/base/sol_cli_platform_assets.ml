@@ -187,6 +187,8 @@ let dashboard t name =
 let alloy_template t = under t "platform/shared/observability/alloy/logs.alloy.tftpl"
 let runner_image_file t = Filename.concat t.dir "migration-runner-image"
 let runner_image_env = "SOL_MIGRATION_RUNNER_IMAGE"
+let setup_image_file t = Filename.concat t.dir "setup-image"
+let setup_image_env = "SOL_SETUP_POSTGRES_IMAGE"
 
 let is_digest_ref s =
   match String.index_opt s '@' with
@@ -202,52 +204,108 @@ let is_digest_ref s =
   | None -> false
 ;;
 
-let not_a_digest_ref ~what ref_ =
+let not_a_digest_ref ~what ~reason ref_ =
   Printf.sprintf
-    "%s %S is not a digest reference (<image>@sha256:<64 hex>); the migration runner is \
-     pinned by digest, and a tag can move"
+    "%s %S is not a digest reference (<image>@sha256:<64 hex>); %s"
     what
     ref_
+    reason
 ;;
 
-let published_runner_of_bundle ~version t =
-  let path = runner_image_file t in
-  match first_line path with
+let published_image_of_bundle ~what ~version ~file ~reason =
+  match first_line file with
   | None ->
     Error
       (Printf.sprintf
-         "release %s's bundle has no runner reference in %s; reinstall the release \
-          archive so the published migration runner is recorded beside its platform \
-          assets"
+         "release %s's bundle has no %s reference in %s; reinstall the release archive \
+          so the published %s is recorded beside its platform assets"
          version
-         path)
+         what
+         file
+         what)
   | Some ref_ when is_digest_ref ref_ -> Ok ref_
   | Some ref_ ->
-    Error (not_a_digest_ref ~what:(Printf.sprintf "release %s's runner" version) ref_)
+    Error
+      (not_a_digest_ref
+         ~what:(Printf.sprintf "release %s's %s" version what)
+         ~reason
+         ref_)
 ;;
 
-let migration_runner_image t =
-  let explicit = Sol_cli_string.env runner_image_env in
+(** **Where an image reference a release bundles comes from, and what counts as pinnable.**
+    Source selection, override refusal and digest validation are identical for every such
+    image, so they live here once; each accessor supplies its own file, variable and guidance
+    — the runner is Sol-built and must be published from a checkout, while the setup image is
+    public and only needs a digest pinned, so their instructions must not converge.
+
+    [what] names the image in messages, [reason] completes "it is not a digest reference,
+    because…", [on_checkout] is the advice for a source checkout, and [on_installed] the
+    advice for a release when the variable is set. [on_checkout] receives the variable
+    name. *)
+let resolve_image t ~file ~env_var ~what ~checkout_what ~reason ~on_checkout ~on_installed
+  =
+  let explicit = Sol_cli_string.env env_var in
   match t.form, explicit with
   | Checkout, Some ref_ when is_digest_ref ref_ -> Ok ref_
-  | Checkout, Some ref_ -> Error (not_a_digest_ref ~what:runner_image_env ref_)
+  | Checkout, Some ref_ -> Error (not_a_digest_ref ~what:env_var ~reason ref_)
   | Checkout, None ->
     Error
       (Printf.sprintf
-         "no pre-built migration runner is available: this is a Sol source checkout, and \
-          Sol does not build or publish the runner (the deploy identity has no \
-          registry-write authority, ADR 0002). Publish it from Sol's own recipe \
-          (internal/tooling/release/migration-runner.Dockerfile) and set %s to the \
-          pushed digest reference, or run from an installed Sol release, whose bundle \
-          already pins its runner"
-         runner_image_env)
+         "no %s is available: this is a Sol source checkout, and %s"
+         checkout_what
+         (on_checkout env_var))
   | Installed { version }, Some _ ->
     Error
       (Printf.sprintf
-         "%s is set, but this is Sol release %s, whose bundle pins its own migration \
-          runner; a release uses only its own assets. Unset it (the release's runner is \
-          already resolved) to continue"
-         runner_image_env
-         version)
-  | Installed { version }, None -> published_runner_of_bundle ~version t
+         "%s is set, but this is Sol release %s, whose bundle pins its own %s; a release \
+          uses only its own assets. %s"
+         env_var
+         version
+         what
+         on_installed)
+  | Installed { version }, None -> published_image_of_bundle ~what ~version ~file ~reason
+;;
+
+let migration_runner_image t =
+  resolve_image
+    t
+    ~file:(runner_image_file t)
+    ~env_var:runner_image_env
+    ~what:"migration runner"
+    ~checkout_what:"pre-built migration runner"
+    ~reason:"the migration runner is pinned by digest, and a tag can move"
+    ~on_checkout:(fun env_var ->
+      Printf.sprintf
+        "Sol does not build or publish the runner (the deploy identity has no \
+         registry-write authority, ADR 0002). Publish it from Sol's own recipe \
+         (internal/tooling/release/migration-runner.Dockerfile) and set %s to the pushed \
+         digest reference, or run from an installed Sol release, whose bundle already \
+         pins its runner"
+        env_var)
+    ~on_installed:"Unset it (the release's runner is already resolved) to continue"
+;;
+
+(** The database setup image. Like the runner it is resolved from the installed release's own
+    bundle, but unlike the runner it is **public**: there is nothing to publish, only a digest
+    to pin, and the guidance says so rather than telling the operator to publish something that
+    does not belong to Sol. *)
+let setup_image t =
+  resolve_image
+    t
+    ~file:(setup_image_file t)
+    ~env_var:setup_image_env
+    ~what:"database setup image"
+    ~checkout_what:"database setup image"
+    ~reason:
+      "this Job runs with the database's administrative credential, so an image \
+       reference that can move is not acceptable"
+    ~on_checkout:(fun env_var ->
+      Printf.sprintf
+        "there is nothing to publish, only a digest to pin. Set %s to an image pinned by \
+         digest, for example postgres@sha256:<64 hex> - `docker buildx imagetools \
+         inspect postgres:16` prints the current digest (the plain `docker manifest \
+         inspect` form prints the manifest JSON without a digest line), or run from an \
+         installed Sol release, whose bundle already pins its setup image"
+        env_var)
+    ~on_installed:"Unset it (the release's setup image is already resolved) to continue"
 ;;
