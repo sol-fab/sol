@@ -696,6 +696,14 @@ jobs:
         working-directory: examples/pluto/app/demo_ts
         run: npm test
 
+      - name: Node trust of the durable platform CA (#1477)
+        # The durable posture hands Node the platform CA through NODE_EXTRA_CA_CERTS. This is
+        # the job that has Node, so it enforces the mechanism the OCaml unit job only renders:
+        # a real HTTPS request against a private CA fails without the CA and succeeds with it.
+        env:
+          REQUIRE_NODE: "1"
+        run: bash cli/test/test_node_ca_trust.sh
+
       - name: Dependency advisories (AUDIT-068)
         # Fail on high-severity production advisories; ignore development dependencies.
         working-directory: examples/pluto/app/demo_ts
