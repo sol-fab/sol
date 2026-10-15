@@ -65,6 +65,42 @@ def root_addresses(root):
     return found
 
 
+def root_instance_keys(root):
+    """Addresses whose resource block declares count/for_each, with the kind of key.
+
+    A counted or for_each'd resource has an indexed Terraform address. A registry entry
+    that names the bare resource cannot be resolved by `terraform import` (it fails with
+    "Configuration for import target does not exist") and cannot match a state read, so a
+    Direct entry for such a resource must carry the instance key (#1476).
+
+    Scope: this asserts Sol's **current singleton-count model**. Every counted resource in
+    the roots is a zero-or-one enable flag (`count = var.<enable> ? 1 : 0`), so the only
+    valid instance key is `[0]` and the entry can name it statically. Terraform's `count` is
+    not inherently singleton: a resource whose count may exceed one would have instances
+    Sol cannot enumerate from the target alone, and its recovery address would need a
+    per-instance policy (as `for_each` already does, where a Direct entry is refused unless
+    it can name the key). This checker does not model that; if a future root introduces a
+    genuinely multi-instance counted resource, widen the address policy in the registry and
+    this checker together rather than assuming `[0]`."""
+    keys = {}
+    for tf in sorted(root.glob("*.tf")):
+        text = tf.read_text()
+        for match in re.finditer(
+            r'^resource\s+"(?P<type>[a-z0-9_]+)"\s+"(?P<name>[a-z0-9_]+)"\s*\{(?P<body>.*?)^\}',
+            text,
+            re.M | re.S,
+        ):
+            body = match.group("body")
+            if re.search(r"^\s*count\s*=", body, re.M):
+                kind = "count"
+            elif re.search(r"^\s*for_each\s*=", body, re.M):
+                kind = "for_each"
+            else:
+                continue
+            keys[f'{match.group("type")}.{match.group("name")}'] = kind
+    return keys
+
+
 def main(argv):
     root = Path(argv[1]) if len(argv) > 1 else Path(".")
     registry_path = root / "cli/lib/cloud/sol_cli_resource_identity.ml"
@@ -79,6 +115,7 @@ def main(argv):
         )
 
     declared = {}
+    instance_keys = {}
     checked = 0
     for provider in ("gcp", "aws"):
         for tf_root in (
@@ -87,6 +124,7 @@ def main(argv):
         ):
             if tf_root.exists():
                 declared.setdefault(provider, set()).update(root_addresses(tf_root))
+                instance_keys.setdefault(provider, {}).update(root_instance_keys(tf_root))
 
     for provider, addresses in sorted(declared.items()):
         for address in sorted(addresses):
@@ -103,6 +141,25 @@ def main(argv):
                     "ownership rule (FND-0070)"
                 )
                 continue
+            kind = instance_keys.get(provider, {}).get(address)
+            if kind is not None and entry["ownership"] == "direct":
+                key = re.search(r"(\[[^\]]*\])$", entry["address"])
+                if key is None:
+                    problems.append(
+                        f"the registry entry {entry['address']} is Direct and its Terraform "
+                        f"resource declares {kind}, so the address must name an instance: "
+                        "`terraform import` resolves the address against the configuration and a "
+                        "counted or for_each'd resource has no bare address (#1476)"
+                    )
+                elif kind == "count" and key.group(1) != "[0]":
+                    problems.append(
+                        f"the registry entry {entry['address']} is Direct and counted, so its "
+                        f"instance key must be [0], not {key.group(1)}: every counted resource "
+                        "in these roots is a zero-or-one enable flag, so [0] is the only "
+                        "instance and the import address must be the one the state read "
+                        "reports (#1476). This checker models that singleton contract, not "
+                        "arbitrary counted collections"
+                    )
             if entry["ownership"] == "direct":
                 if entry["import_identity"] == "":
                     problems.append(
