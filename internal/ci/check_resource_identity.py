@@ -71,7 +71,17 @@ def root_instance_keys(root):
     A counted or for_each'd resource has an indexed Terraform address. A registry entry
     that names the bare resource cannot be resolved by `terraform import` (it fails with
     "Configuration for import target does not exist") and cannot match a state read, so a
-    Direct entry for such a resource must carry the instance key (#1476)."""
+    Direct entry for such a resource must carry the instance key (#1476).
+
+    Scope: this asserts Sol's **current singleton-count model**. Every counted resource in
+    the roots is a zero-or-one enable flag (`count = var.<enable> ? 1 : 0`), so the only
+    valid instance key is `[0]` and the entry can name it statically. Terraform's `count` is
+    not inherently singleton: a resource whose count may exceed one would have instances
+    Sol cannot enumerate from the target alone, and its recovery address would need a
+    per-instance policy (as `for_each` already does, where a Direct entry is refused unless
+    it can name the key). This checker does not model that; if a future root introduces a
+    genuinely multi-instance counted resource, widen the address policy in the registry and
+    this checker together rather than assuming `[0]`."""
     keys = {}
     for tf in sorted(root.glob("*.tf")):
         text = tf.read_text()
@@ -144,9 +154,11 @@ def main(argv):
                 elif kind == "count" and key.group(1) != "[0]":
                     problems.append(
                         f"the registry entry {entry['address']} is Direct and counted, so its "
-                        f"instance key must be [0], not {key.group(1)}: count is a 0/1 enable "
-                        "flag here and the import address is the one the state read reports "
-                        "(#1476)"
+                        f"instance key must be [0], not {key.group(1)}: every counted resource "
+                        "in these roots is a zero-or-one enable flag, so [0] is the only "
+                        "instance and the import address must be the one the state read "
+                        "reports (#1476). This checker models that singleton contract, not "
+                        "arbitrary counted collections"
                     )
             if entry["ownership"] == "direct":
                 if entry["import_identity"] == "":
