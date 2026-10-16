@@ -22,3 +22,19 @@
  (deps
   intent.json
   (glob_files kubernetes/*.json)))
+
+(test
+ (name test_legacy_ca)
+ (modules test_legacy_ca)
+ (libraries sol_qualification sol_cli_deploy alcotest yojson unix)
+ (deps
+  comparison/kubectl
+  comparison/legacy.py
+  ../../../qualification/aws/live-row.sh
+  ../../../qualification/gcp/live-qual.sh
+  ../../../../examples/pluto/sol.yml)
+ (action
+  (setenv
+   I4_REPO_ROOT
+   %{workspace_root}
+   (run %{test}))))

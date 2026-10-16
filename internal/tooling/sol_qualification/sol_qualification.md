@@ -194,8 +194,9 @@ with AWS/GCP context records. Hostile cases cover the previous `ca.pem`/`ca.crt`
 namespace/consumer mismatch, absent objects, failed commands (#1497), missing and
 redirected mounts, sidecar-only delivery, shadowing, projected key paths, identity
 expiry, malformed/incomplete discovery, foreign receipts, persistence failure and
-safe diagnostics. I4 must still compare against the existing harness fixtures;
-no live predicate has been consolidated or removed in I3.
+safe diagnostics. The [I4 offline comparison](../../qualification/database-ca-comparison.md)
+runs the current Bash predicates against shared hostile scenarios and retains explicit AWS
+adoption gaps. No live predicate has been consolidated or removed.
 
 Schema semantics follow the Kubernetes documentation for
 [ConfigMaps](https://kubernetes.io/docs/concepts/configuration/configmap/) and
@@ -220,6 +221,6 @@ remain unchanged.
 
 Candidate product projection generation/bundling is a separate focused product change before
 any release binding after offline I3/I4. Existing candidates without that projection stay unsupported;
-no source-text parsing or version guessing is provided. AWS/GCP comparison and
-claim-family policy/adoption changes require later reviewed work. No old predicate
-is removed in I1/I2/I3: these increments prepare consolidation and do not claim it.
+no source-text parsing or version guessing is provided. Claim-family policy/adoption changes
+require later reviewed work. No old predicate
+is removed in I1–I4: these increments prepare consolidation and do not claim it.
