@@ -152,6 +152,7 @@ type obligations =
 let run_json (r : run) =
   `Assoc
     [ "origin", `String "MECHANISM"
+    ; "policy", `String "fixture-database/v1"
     ; "attempt", `String r.attempt
     ; "assessment", `String r.assessment
     ; "candidate", `String r.candidate

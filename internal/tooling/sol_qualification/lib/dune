@@ -1,5 +1,8 @@
 (library
  (name sol_qualification)
  (wrapped false)
- (modules qual_domain)
- (libraries yojson digestif))
+ (modules qual_domain qual_evidence qual_lock_raw)
+ (libraries yojson digestif unix)
+ (foreign_stubs
+  (language c)
+  (names qual_lock_stubs)))

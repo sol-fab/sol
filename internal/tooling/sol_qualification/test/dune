@@ -1,7 +1,14 @@
 (test
  (name test_domain)
+ (modules test_domain)
  (libraries sol_qualification alcotest yojson)
  (deps intent.json aws.golden local.golden))
+
+(test
+ (name test_evidence)
+ (modules test_evidence)
+ (libraries sol_qualification alcotest yojson unix)
+ (deps intent.json))
 
 (alias
  (name ci-unit)
