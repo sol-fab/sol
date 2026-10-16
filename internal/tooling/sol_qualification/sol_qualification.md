@@ -138,6 +138,20 @@ untrusted uploads. A future release consumer of remotely supplied evidence would
 need a separately reviewed producer-authentication boundary; I2 adds no signatures
 or remote service.
 
+## Required follow-up qualification coverage
+
+Actual DML authority verification remains a required future qualification obligation
+before database delivery can qualify a release. Absence of an administrative Secret
+reference and a delivered credential's declared DML class do not discharge it.
+
+The shared Kubernetes observer must retain [#1497](https://github.com/sol-fab/sol/issues/1497)
+as an adversarial classification case: Forbidden, timeout and process-launch failures
+are unreadable observations (UNKNOWN), never established absence. A failed provider
+command cannot establish Absent. Absence requires a positively established authoritative
+result for the bound subject; empty output or a failure exit status is insufficient.
+These are acceptance requirements for the future observer, not claims that I1/I2
+implement or qualify that observer. Live harnesses remain unchanged.
+
 ## Out of scope
 
 Candidate product projection generation/bundling is a separate focused product change before
