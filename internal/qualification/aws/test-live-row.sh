@@ -516,20 +516,50 @@ case " $* " in
       [ "$ca_prev" = "deploy" ] && ca_workload="$ca_arg"
       ca_prev="$ca_arg"
     done
+    # The row's target has mixed dependencies: `charge-svc` is the class-credential consumer and
+    # mounts the CA; the Kafka-only units mount nothing and must not be required to. STUB_CA_ALL
+    # models a target whose units all consume the database, STUB_CA_NO_MOUNTS one where none does,
+    # and STUB_CA_UNMOUNTED names one workload that mounts a *different* ConfigMap.
     if [ "${STUB_CA_UNMOUNTED:-}" = "$ca_workload" ]; then
       printf '{"spec":{"template":{"spec":{"volumes":[{"name":"db-ca","configMap":{"name":"other-db-ca"}}]}}}}\n'
-    else
-      printf '{"spec":{"template":{"spec":{"volumes":[{"name":"db-ca","configMap":{"name":"%s-db-ca"}}]}}}}\n' \
-        "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}"
+      exit 0
     fi
+    if [ "${STUB_CA_NO_MOUNTS:-0}" = "1" ] || [ "${STUB_CA_NONE:-}" = "$ca_workload" ]; then
+      printf '{"spec":{"template":{"spec":{"volumes":[]}}}}\n'
+      exit 0
+    fi
+    case "${STUB_CA_ALL:-0}:$ca_workload" in
+      1:*|*:charge-svc)
+        printf '{"spec":{"template":{"spec":{"volumes":[{"name":"db-ca","configMap":{"name":"%s-db-ca"}}]}}}}\n' \
+          "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}"
+        ;;
+      *)
+        printf '{"spec":{"template":{"spec":{"volumes":[]}}}}\n'
+        ;;
+    esac
     exit 0
     ;;
   *" get configmap "*"-db-ca"*)
+    ca_ns=""
+    ca_prev=""
+    for ca_arg in $*; do
+      [ "$ca_prev" = "-n" ] && ca_ns="$ca_arg"
+      ca_prev="$ca_arg"
+    done
     if [ "${STUB_CA_UNREADABLE:-0}" = "1" ]; then
       printf 'Error from server (Forbidden): configmaps is forbidden: User cannot get resource\n' >&2
       exit 1
     fi
-    if [ "${STUB_CA_ABSENT:-0}" = "1" ]; then
+    # pluto-checkout hosts the Kafka-only unit in this row's target, so no CA is written there --
+    # the case that made the every-namespace rule wrong (attempt a38-aws-1). STUB_CA_IN_CHECKOUT
+    # models a target that does deliver one there.
+    if [ "$ca_ns" = "pluto-checkout" ] && [ "${STUB_CA_IN_CHECKOUT:-0}" != "1" ] \
+      && [ "${STUB_CA_ALL:-0}" != "1" ] && [ "${STUB_CA_ABSENT:-0}" != "1" ]; then
+      printf 'Error from server (NotFound): configmaps "%s-db-ca" not found\n' \
+        "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}" >&2
+      exit 1
+    fi
+    if [ "${STUB_CA_ABSENT:-0}" = "1" ] || [ "${STUB_CA_ABSENT_NS:-}" = "$ca_ns" ]; then
       printf 'Error from server (NotFound): configmaps "%s-db-ca" not found\n' \
         "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}" >&2
       exit 1
@@ -1033,19 +1063,43 @@ has "the supplied keys are recorded without their values" \
 has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
   "database_delivery: qualreg-aws-us-east-1-ddl-creds@pluto-comms (migration Job, as the deploy declared it), qualreg-aws-us-east-1-dml-creds@pluto-payments (unit consumer)" \
   "$TMP/ok.logs/prerequisites.txt"
-has "and the database CA is asserted at each consuming namespace (#1481)" \
-  "database_ca: qualreg-aws-us-east-1-db-ca present at every consuming namespace and the declared location, and mounted through the db-ca volume by 5 selected workload(s)" \
+has "and the database CA is asserted where a workload mounts it, plus the declared location (#1481)" \
+  "database_ca: qualreg-aws-us-east-1-db-ca present at the declared location and wherever a selected workload mounts it; mounted by 1 workload(s), including the class-credential consumer pluto-payments/charge-svc" \
   "$TMP/ok.logs/prerequisites.txt"
-has "with the declared ConfigMap read from a consuming namespace" \
+has "with the declared ConfigMap read at the declared location" \
+  "get configmap qualreg-aws-us-east-1-db-ca -n pluto-comms" "$TMP/ok.kubectl"
+has "and read in the namespace whose workload mounts it" \
   "get configmap qualreg-aws-us-east-1-db-ca -n pluto-payments" "$TMP/ok.kubectl"
 has "and with every selected workload's own pod template read" \
   "get deploy orders-svc -n pluto-payments -o json" "$TMP/ok.kubectl"
+has "recording the units that mount no database CA rather than requiring one" \
+  "database_ca_mount: pluto-checkout/checkout-svc mounts no database CA (no database dependency)" \
+  "$TMP/ok.logs/db-ca-mounts.txt"
 
-printf '\nscenario: a database CA the deploy declared but did not write to the consumer is caught (#1481)\n'
+printf '\nscenario: a database CA the deploy declared but did not write is caught (#1481)\n'
 run_row caabsent TRANSPORT=0 STUB_CA_ABSENT=1
-refused caabsent "a CA absent from a consuming namespace fails the app phase"
-has "and names the namespace where it is missing" \
-  "where the workloads read it" "$TMP/caabsent.out"
+refused caabsent "a CA absent from the declared location fails the app phase"
+has "and names the location where it is missing" \
+  "absent from the declared location" "$TMP/caabsent.out"
+
+printf '\nscenario: a CA present at the declared location but absent where the consumer mounts it is caught (#1481)\n'
+run_row caabsentconsumer TRANSPORT=0 STUB_CA_ABSENT_NS=pluto-payments
+refused caabsentconsumer "a CA absent from the mounting consumer's namespace fails the app phase"
+has "and names the workload that would not start" \
+  "pluto-payments/charge-svc mounts CA ConfigMap qualreg-aws-us-east-1-db-ca, and it is absent from pluto-payments" \
+  "$TMP/caabsentconsumer.out"
+
+printf '\nscenario: a class-credential consumer that mounts no CA fails even when another unit does\n'
+run_row canoconsumer TRANSPORT=0 STUB_CA_ALL=1 STUB_CA_NONE=charge-svc
+refused canoconsumer "the consumer's database path must be established"
+has "and says which consumer is not established" \
+  "consumes the database class Secret and does not mount" "$TMP/canoconsumer.out"
+
+printf '\nscenario: a target whose units mount no CA at all cannot pass the assertion\n'
+run_row canomounts TRANSPORT=0 STUB_CA_NO_MOUNTS=1
+refused canomounts "a run where nothing mounts the CA is vacuous"
+has "and says so" \
+  "no selected workload mounts the declared CA" "$TMP/canomounts.out"
 
 printf '\nscenario: an unreadable CA is UNKNOWN, not absence (#1481)\n'
 run_row caunreadable TRANSPORT=0 STUB_CA_UNREADABLE=1
@@ -1054,13 +1108,13 @@ has "and says the presence is UNKNOWN, not that it is absent" \
   "so its presence is UNKNOWN" "$TMP/caunreadable.out"
 lacks "and never calls an unreadable CA absent" "and it is absent from" "$TMP/caunreadable.out"
 
-printf '\nscenario: one workload of several missing the CA mount is caught (#1481)\n'
-# The other selected workloads in the namespace mount the declared CA correctly; only `orders-svc`
-# does not. A check that read the namespace's aggregated text would pass here.
-run_row caunmounted TRANSPORT=0 STUB_CA_UNMOUNTED=orders-svc
-refused caunmounted "a workload missing the mount fails even when its neighbours mount it"
-has "and names the workload that does not mount it" \
-  "pluto-payments/orders-svc does not mount the declared CA" "$TMP/caunmounted.out"
+printf '\nscenario: a workload mounting another database CA is caught (#1481)\n'
+# Every selected workload's own pod template is read: a check that read the namespace's aggregated
+# text, or only the consumer's, would pass here.
+run_row caothermounted TRANSPORT=0 STUB_CA_UNMOUNTED=orders-svc STUB_CA_ALL=1
+refused caothermounted "a workload mounting another ConfigMap fails" 
+has "and names the workload whose db-ca volume is not the declared one" \
+  "mounts a db-ca volume naming another ConfigMap, not" "$TMP/caothermounted.out"
 has "the run identity records the bundle version" \
   "sol_version: $VERSION" "$TMP/ok.logs/sol-identity.txt"
 has "and the bundle's digest-pinned migration runner" \

@@ -1130,29 +1130,37 @@ app_verify_database_delivery() {
 # template mounts it nor that a neighbour does, and a CA written only beside the migration Job
 # leaves a pod in ContainerCreating (#1481). Every read distinguishes a **missing object** from an
 # **unreadable one**: an authorization failure or an API outage is UNKNOWN, never absence.
+#
+# The CA is delivered where a workload mounts it. A unit that declares no database dependency mounts
+# nothing and needs nothing, so the requirement is derived per workload from its own pod template
+# rather than assumed for every selected namespace: attempt a38-aws-1 failed here because
+# pluto-checkout's Kafka-only unit was required to carry a database CA it has no reason to read.
+# Two things keep that from making the check vacuous: at least one selected workload must mount the
+# declared CA, and the unit that consumes the database class credential (the row's transaction
+# path) must be one of them.
 app_verify_database_ca() {
   local declared_ns="$1"
-  local ca namespace mount workload address err mounted=0
+  local ca namespace mount workload address err mounted=0 consumer_workload consumer_mounted=0
   ca="$(app_database_field ca-configmap)"
   if [ -z "$ca" ]; then
     say "the deploy declared no ca-configmap, so the database CA mount cannot be verified"
     return 1
   fi
-  # Where the workloads read it: each consuming namespace, and the location the deploy declared.
-  for namespace in $(app_namespaces) "$declared_ns"; do
-    err="$LOG_DIR/db-ca-$namespace.err"
-    if ! mount="$(kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get configmap "$ca" -n "$namespace" \
-      -o name 2>"$err")"; then
-      if grep -qi 'not found' "$err" 2>/dev/null; then
-        say "the deploy declared CA ConfigMap $ca and it is absent from $namespace, where the workloads read it"
-      else
-        say "could not read CA ConfigMap $ca in $namespace, so its presence is UNKNOWN (see $err)"
-      fi
-      return 1
+  # The declared location is where the deploy put the CA for the database setup Job; the Job mounts
+  # it, and a pod that mounts a missing ConfigMap never starts.
+  err="$LOG_DIR/db-ca-$declared_ns.err"
+  if ! mount="$(kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get configmap "$ca" -n "$declared_ns" \
+    -o name 2>"$err")"; then
+    if grep -qi 'not found' "$err" 2>/dev/null; then
+      say "the deploy declared CA ConfigMap $ca and it is absent from the declared location $declared_ns"
+    else
+      say "could not read CA ConfigMap $ca in $declared_ns, so its presence is UNKNOWN (see $err)"
     fi
-  done
-  # One read per selected workload, from its own pod template. A workload missing the mount fails
-  # even when another workload in the same namespace mounts the CA correctly.
+    return 1
+  fi
+  # One read per selected workload, from its own pod template.
+  consumer_workload="$(k8s_name "$SVC_UNIT")"
+  : >"$LOG_DIR/db-ca-mounts.txt"
   for address in $(app_unit_addresses); do
     namespace="${APP_NS%-*}-${address%%/*}"
     workload="$(k8s_name "${address##*/}")"
@@ -1161,23 +1169,51 @@ app_verify_database_ca() {
       -o json 2>"$err" \
       | jq -r --arg ca "$ca" \
         '[.spec.template.spec.volumes[]? | select(.name == "db-ca") | .configMap.name]
-         | if index($ca) then "yes" else "no" end' 2>>"$err")"; then
+         | if index($ca) then "yes" elif length == 0 then "none" else "other" end' 2>>"$err")"; then
       say "could not read $namespace/$workload, so whether it mounts $ca is UNKNOWN (see $err)"
       return 1
     fi
-    if [ "$mount" != "yes" ]; then
-      say "$namespace/$workload does not mount the declared CA $ca through its db-ca volume"
-      return 1
-    fi
-    mounted=$((mounted + 1))
+    case "$mount" in
+      yes)
+        printf 'database_ca_mount: %s/%s mounts %s\n' "$namespace" "$workload" "$ca" \
+          >>"$LOG_DIR/db-ca-mounts.txt"
+        mounted=$((mounted + 1))
+        if [ "$workload" = "$consumer_workload" ] && [ "$namespace" = "$APP_NS" ]; then
+          consumer_mounted=1
+        fi
+        # A workload that mounts it must find it in its own namespace, or its pod never starts.
+        err="$LOG_DIR/db-ca-$namespace.err"
+        if ! kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get configmap "$ca" -n "$namespace" \
+          -o name >/dev/null 2>"$err"; then
+          if grep -qi 'not found' "$err" 2>/dev/null; then
+            say "$namespace/$workload mounts CA ConfigMap $ca, and it is absent from $namespace"
+          else
+            say "could not read CA ConfigMap $ca in $namespace, so its presence is UNKNOWN (see $err)"
+          fi
+          return 1
+        fi
+        ;;
+      none)
+        printf 'database_ca_mount: %s/%s mounts no database CA (no database dependency)\n' \
+          "$namespace" "$workload" >>"$LOG_DIR/db-ca-mounts.txt"
+        ;;
+      other)
+        say "$namespace/$workload mounts a db-ca volume naming another ConfigMap, not $ca"
+        return 1
+        ;;
+    esac
   done
   if [ "$mounted" = 0 ]; then
-    say "no selected workload was read for the database CA mount, so the assertion would be vacuous"
+    say "no selected workload mounts the declared CA $ca, so the database CA mount would be vacuous"
     return 1
   fi
-  printf 'database_ca: %s present at every consuming namespace and the declared location, and mounted through the db-ca volume by %s selected workload(s)\n' \
-    "$ca" "$mounted" >>"$LOG_DIR/prerequisites.txt"
-  say "$mounted selected workload(s) mount the declared database CA $ca through their db-ca volume"
+  if [ "$consumer_mounted" != 1 ]; then
+    say "$APP_NS/$consumer_workload consumes the database class Secret and does not mount $ca, so the row's database path is not established"
+    return 1
+  fi
+  printf 'database_ca: %s present at the declared location and wherever a selected workload mounts it; mounted by %s workload(s), including the class-credential consumer %s/%s\n' \
+    "$ca" "$mounted" "$APP_NS" "$consumer_workload" >>"$LOG_DIR/prerequisites.txt"
+  say "$mounted selected workload(s) mount the declared database CA $ca, and $APP_NS/$consumer_workload (the class-credential consumer) is one of them"
 }
 
 phase_app() {
