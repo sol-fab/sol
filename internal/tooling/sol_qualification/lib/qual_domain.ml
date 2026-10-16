@@ -102,9 +102,15 @@ type run =
   ; capabilities : string list
   }
 
+type secret_address =
+  { namespace : string
+  ; name : string
+  }
+
 type database =
   { id : string
   ; ca_configmap : string
+  ; administrative_secret : secret_address
   }
 
 type workload =
@@ -274,11 +280,11 @@ let obligations_json o =
     ]
 ;;
 
-type ca_requirement = instance
-type dml_requirement = instance
-type no_master_requirement = instance
-type tls_requirement = instance
-type migration_requirement = instance
+type ca_requirement = Ca_requirement of instance
+type dml_requirement = Dml_requirement of instance
+type no_master_requirement = No_master_requirement of instance
+type tls_requirement = Tls_requirement of instance
+type migration_requirement = Migration_requirement of instance
 
 type request =
   | Ca_delivery of ca_requirement
@@ -289,19 +295,19 @@ type request =
 
 let plan i =
   match i.kind with
-  | Ca -> Ca_delivery i
-  | Dml -> Dml_delivery i
-  | No_master -> No_master_copy i
-  | Tls -> Tls_connectivity i
-  | Migration -> Migration_input i
+  | Ca -> Ca_delivery (Ca_requirement i)
+  | Dml -> Dml_delivery (Dml_requirement i)
+  | No_master -> No_master_copy (No_master_requirement i)
+  | Tls -> Tls_connectivity (Tls_requirement i)
+  | Migration -> Migration_input (Migration_requirement i)
 ;;
 
 let requested = function
-  | Ca_delivery i
-  | Dml_delivery i
-  | No_master_copy i
-  | Tls_connectivity i
-  | Migration_input i -> i
+  | Ca_delivery (Ca_requirement i)
+  | Dml_delivery (Dml_requirement i)
+  | No_master_copy (No_master_requirement i)
+  | Tls_connectivity (Tls_requirement i)
+  | Migration_input (Migration_requirement i) -> i
 ;;
 
 let reconcile_keys ~expected ~actual =
@@ -320,9 +326,22 @@ let reconcile_plan o requests =
       ~expected:(List.map instance_key o.required)
       ~actual:(List.map (fun r -> (requested r).key) requests)
   in
-  if List.for_all (fun r -> same_run o.run (requested r).run) requests
+  let kind = function
+    | Ca_delivery _ -> Ca
+    | Dml_delivery _ -> Dml
+    | No_master_copy _ -> No_master
+    | Tls_connectivity _ -> Tls
+    | Migration_input _ -> Migration
+  in
+  if
+    List.for_all
+      (fun r ->
+         let actual = requested r in
+         kind r = actual.kind
+         && List.exists (fun expected -> expected = actual) o.required)
+      requests
   then Ok ()
-  else error "plan run mismatch"
+  else error "plan requirement semantics mismatch"
 ;;
 
 let check_ownership ~claims ~assignments =
@@ -357,7 +376,7 @@ type dml_facts =
 type unit_secret_facts =
   { namespace : string
   ; workload : string
-  ; keys : string list
+  ; references : secret_address list
   }
 
 type tls_facts =
@@ -431,7 +450,7 @@ let established matches good =
 ;;
 
 let evaluate = function
-  | Ca_checked (i, o) ->
+  | Ca_checked (Ca_requirement i, o) ->
     evaluate_observation i o (fun (f : ca_facts) ->
       established
         (workload_matches i f.namespace f.workload)
@@ -440,7 +459,7 @@ let evaluate = function
          && f.key = i.run.ca_key
          && f.mount_path = i.run.ca_path
          && f.nonempty))
-  | Dml_checked (i, o) ->
+  | Dml_checked (Dml_requirement i, o) ->
     evaluate_observation i o (fun (f : dml_facts) ->
       established
         (workload_matches i f.namespace f.workload)
@@ -448,17 +467,17 @@ let evaluate = function
          && f.credential_class = i.run.dml_class
          && f.key = i.run.credential_key
          && f.nonempty))
-  | No_master_checked (i, o) ->
+  | No_master_checked (No_master_requirement i, o) ->
     evaluate_observation i o (fun (f : unit_secret_facts) ->
       established
         (workload_matches i f.namespace f.workload)
-        (not (List.mem i.run.credential_key f.keys)))
-  | Tls_checked (i, o) ->
+        (not (List.mem i.database.administrative_secret f.references)))
+  | Tls_checked (Tls_requirement i, o) ->
     evaluate_observation i o (fun (f : tls_facts) ->
       established
         (workload_matches i f.namespace f.workload)
         (List.mem "tls" i.run.capabilities && f.verified))
-  | Migration_checked (i, o) ->
+  | Migration_checked (Migration_requirement i, o) ->
     evaluate_observation i o (fun (f : migration_facts) ->
       established (f.database = i.database.id) (f.key = i.run.credential_key && f.nonempty))
 ;;
@@ -469,7 +488,7 @@ let reconcile_outcomes o verdicts =
       ~expected:(List.map instance_key o.required)
       ~actual:(List.map (fun v -> v.instance.key) verdicts)
   in
-  if List.for_all (fun v -> same_run o.run v.instance.run) verdicts
+  if List.for_all (fun v -> List.mem v.instance o.required) verdicts
   then Ok ()
   else error "outcome run mismatch"
 ;;
@@ -552,7 +571,15 @@ module Fixture = struct
       parse_list "databases" (fun j ->
         let* id = str "id" j in
         let* ca_configmap = str "ca_configmap" j in
-        Ok { id; ca_configmap })
+        let* administrative_secret =
+          match field "administrative_secret" j with
+          | Some secret ->
+            let* namespace = str "namespace" secret in
+            let* name = str "name" secret in
+            Ok { namespace; name }
+          | None -> error "missing administrative secret binding"
+        in
+        Ok { id; ca_configmap; administrative_secret })
     in
     let* workloads =
       parse_list "workloads" (fun j ->

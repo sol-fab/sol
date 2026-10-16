@@ -77,10 +77,17 @@ type dml_facts =
   ; nonempty : bool
   }
 
+(** Secret source references, never credential values or field-name heuristics.
+    Unresolved source provenance must be Unreadable, not an empty reference list. *)
+type secret_address =
+  { namespace : string
+  ; name : string
+  }
+
 type unit_secret_facts =
   { namespace : string
   ; workload : string
-  ; keys : string list
+  ; references : secret_address list
   }
 
 type tls_facts =

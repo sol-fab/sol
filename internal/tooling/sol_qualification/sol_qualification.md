@@ -31,9 +31,19 @@ val accept_mechanism : obligations -> request list -> verdict list -> (unit, str
 
 The fixture contract explicitly supplies CA key/path, credential key/class and
 capabilities. Intent supplies complete workloads, dependencies and declared CA
-addresses. No naming rule is reimplemented. The evaluator owns semantic matching;
-coverage only compares keys, multiplicity and binding. There are no subprocesses,
+addresses and prohibited administrative Secret addresses. No naming rule is reimplemented. The evaluator owns semantic matching;
+coverage compares keys and multiplicity, then the full canonical instance
+(kind, subject, workload/database binding and run/contract identity). Distinct
+abstract requirement wrappers prevent interchanging CA/DML/etc payloads. There are no subprocesses,
 filesystem operations, mutable globals or provider dependencies in this module.
+
+The experimental no-master-copy check proves only absence of references to the
+explicitly declared administrative Secret. It does not inspect credential field
+names or prove that arbitrary copied bytes are not administrative credentials.
+Unresolved reference provenance is UNKNOWN. DML delivery checks the declared
+binding class, not actual PostgreSQL privileges; a separate authority/behavioral
+check is required before making any live DML-authority claim. Neither predicate
+is production qualification authority.
 
 ## Example usage
 

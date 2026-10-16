@@ -1,11 +1,50 @@
 {
-  "databases": [{"id":"ledger","ca_configmap":"declared-ledger-ca"}],
+  "databases": [
+    {
+      "id": "ledger",
+      "ca_configmap": "declared-ledger-ca",
+      "administrative_secret": {
+        "namespace": "database-system",
+        "name": "ledger-admin"
+      }
+    }
+  ],
   "workloads": [
-    {"id":"w1","namespace":"apps","name":"w1","database":"ledger"},
-    {"id":"w2","namespace":"apps","name":"w2","database":"ledger"},
-    {"id":"w3","namespace":"apps","name":"w3","database":"ledger"},
-    {"id":"w4","namespace":"apps","name":"w4","database":"ledger"},
-    {"id":"w5","namespace":"apps","name":"w5","database":"ledger"},
-    {"id":"unrelated","namespace":"apps","name":"unrelated","database":null}
+    {
+      "id": "w1",
+      "namespace": "apps",
+      "name": "w1",
+      "database": "ledger"
+    },
+    {
+      "id": "w2",
+      "namespace": "apps",
+      "name": "w2",
+      "database": "ledger"
+    },
+    {
+      "id": "w3",
+      "namespace": "apps",
+      "name": "w3",
+      "database": "ledger"
+    },
+    {
+      "id": "w4",
+      "namespace": "apps",
+      "name": "w4",
+      "database": "ledger"
+    },
+    {
+      "id": "w5",
+      "namespace": "apps",
+      "name": "w5",
+      "database": "ledger"
+    },
+    {
+      "id": "unrelated",
+      "namespace": "apps",
+      "name": "unrelated",
+      "database": null
+    }
   ]
 }

@@ -103,7 +103,11 @@ let verdict run request =
          , observed
              run
              i
-             (Present { namespace = "apps"; workload; keys = [ "KAFKA_PASSWORD" ] }) ))
+             (Present
+                { namespace = "apps"
+                ; workload
+                ; references = [ { namespace = "apps"; name = "ledger-dml" } ]
+                }) ))
   | Tls_connectivity r ->
     evaluate
       (Tls_checked
@@ -202,6 +206,114 @@ let test_planner_mutations () =
     |> get
   in
   rejects (reconcile_plan o (plan (List.hd (instances foreign)) :: List.tl requests))
+;;
+
+let test_request_semantics () =
+  let _, _, expected = setup () in
+  let requests = List.map plan (instances expected) in
+  let run = bind () in
+  let rec change field value = function
+    | `Assoc fields ->
+      `Assoc
+        (List.map
+           (fun (k, v) -> k, if k = field then value else change field value v)
+           fields)
+    | `List xs -> `List (List.map (change field value) xs)
+    | v -> v
+  in
+  let altered_intents =
+    [ change "namespace" (`String "another-namespace") (intent_json ())
+    ; (match intent_json () with
+       | `Assoc fields ->
+         `Assoc
+           (List.map
+              (function
+                | "workloads", `List (w :: ws) ->
+                  "workloads", `List (change "name" (`String "another-workload") w :: ws)
+                | pair -> pair)
+              fields)
+       | _ -> assert false)
+    ; change "ca_configmap" (`String "another-ca") (intent_json ())
+    ; change
+        "administrative_secret"
+        (`Assoc [ "namespace", `String "system"; "name", `String "other-admin" ])
+        (intent_json ())
+    ; (match intent_json () with
+       | `Assoc fields ->
+         `Assoc
+           (( "databases"
+            , `List
+                [ `Assoc
+                    [ "id", `String "other-db"
+                    ; "ca_configmap", `String "declared-ledger-ca"
+                    ; ( "administrative_secret"
+                      , `Assoc
+                          [ "namespace", `String "database-system"
+                          ; "name", `String "ledger-admin"
+                          ] )
+                    ]
+                ] )
+            :: List.remove_assoc
+                 "databases"
+                 (match change "database" (`String "other-db") (`Assoc fields) with
+                  | `Assoc xs -> xs
+                  | _ -> assert false))
+       | _ -> assert false)
+    ]
+  in
+  List.iter
+    (fun json ->
+       let altered =
+         bind_obligations run Aws (select run (Fixture.intent json |> get) |> get) |> get
+       in
+       (* The consumer CA key is unchanged, while its namespace/name/database binding is wrong. *)
+       let forged =
+         List.find
+           (fun i -> instance_key i = instance_key (requested (List.hd requests)))
+           (instances altered)
+       in
+       rejects (reconcile_plan expected (plan forged :: List.tl requests)))
+    altered_intents;
+  let altered_contract = change "ca_key" (`String "other.pem") contract in
+  let foreign = bind ~contract:altered_contract () in
+  let altered =
+    bind_obligations
+      foreign
+      Aws
+      (select foreign (Fixture.intent (intent_json ()) |> get) |> get)
+    |> get
+  in
+  rejects
+    (reconcile_plan expected (plan (List.hd (instances altered)) :: List.tl requests))
+;;
+
+let test_administrative_binding () =
+  let run, _, obligations = setup () in
+  let i, r =
+    List.find_map
+      (fun i ->
+         match plan i with
+         | No_master_copy r -> Some (i, r)
+         | _ -> None)
+      (instances obligations)
+    |> Option.get
+  in
+  let check references =
+    evaluate
+      (No_master_checked
+         (r, observed run i (Present { namespace = "apps"; workload = "w1"; references })))
+  in
+  (* A DML Secret may contain POSTGRES_URL/password; keys are deliberately not facts. *)
+  Alcotest.(check bool)
+    "ordinary DML binding permitted"
+    true
+    ((check [ { namespace = "apps"; name = "ledger-dml" } ]).decision = Pass);
+  (check [ { namespace = "database-system"; name = "ledger-admin" } ]).decision |> is_fail;
+  (evaluate
+     (No_master_checked
+        (r, observed run i (Unreadable "source of copied secret cannot be established"))))
+    .decision
+  |> is_unknown
 ;;
 
 let test_catalog_oracle () =
@@ -342,6 +454,8 @@ let () =
           (fun (name, test) -> Alcotest.test_case name `Quick test)
           [ "reviewed golden universes", test_golden
           ; "planner omissions and duplicates", test_planner_mutations
+          ; "same-key request semantics", test_request_semantics
+          ; "administrative binding identity", test_administrative_binding
           ; "independent catalog and consumer oracle", test_catalog_oracle
           ; "semantic receipt matching", test_receipt_matching
           ; "capability cannot exclude policy", test_capability_cannot_exclude
