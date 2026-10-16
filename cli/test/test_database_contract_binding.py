@@ -258,6 +258,13 @@ services:
         (self.workspace / "app/payments/charge_svc/Dockerfile").unlink()
         self.run_binding(False)
 
+    def test_bundled_producer_exposes_migration_execution_protocol(self):
+        # A launcher must be able to reject a candidate that cannot produce the
+        # private execution channel before it starts any mutation.
+        protocol = json.loads(subprocess.check_output(
+            [str(PRODUCER), "migration-receipt-protocol"], text=True))
+        self.assertEqual(protocol, {"schema": 1, "channel": "migration-execution"})
+
 
 if __name__ == "__main__":
     unittest.main()

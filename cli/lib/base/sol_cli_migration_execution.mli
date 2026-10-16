@@ -22,7 +22,16 @@ type message =
 
 val encode : message -> string
 val decode : string -> (message, string) result
+
+(** [requested ()] is the launcher binding, if one was supplied in the environment,
+    independent of whether the channel is usable. *)
 val requested : unit -> string option
+
+(** Arm the private channel before submission: returns [Ok None] when no launcher
+    asked for capture, [Ok (Some binding)] once the supplied descriptor is validated
+    as a private socket and marked close-on-exec, and [Error] when a binding was
+    supplied but the channel is not usable. *)
+val prepare : unit -> (string option, string) result
 
 (** Bounded private duplex channel; callers retain fd ownership. No logs, Job
     bodies or credentials belong on it. Acknowledgment means capture finished,

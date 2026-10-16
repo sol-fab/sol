@@ -35,6 +35,25 @@ let requested () =
   | _ -> None
 ;;
 
+(* A launcher arms the channel by supplying a private duplex socket as stdin.
+   Mark it close-on-exec here, before the product spawns any helper, so kubectl,
+   credential helpers and other exec'd children cannot inherit the descriptor and
+   consume the acknowledgment. Refuse anything that is not a socket rather than
+   writing protocol bytes to a terminal or a read-only descriptor. *)
+let prepare () =
+  match requested () with
+  | None -> Ok None
+  | Some binding ->
+    (try
+       match (Unix.fstat Unix.stdin).Unix.st_kind with
+       | Unix.S_SOCK ->
+         Unix.set_close_on_exec Unix.stdin;
+         Ok (Some binding)
+       | _ -> Error "execution channel is not a private socket"
+     with
+     | Unix.Unix_error _ | Sys_error _ -> Error "execution channel unavailable")
+;;
+
 let encode = function
   | Unavailable ->
     Yojson.Safe.to_string (`Assoc [ "schema", `Int 1; "kind", `String "Unavailable" ])
@@ -185,9 +204,8 @@ let acknowledge fd = write_line fd "capture-finished"
 
 let notify message =
   protect (fun () ->
-    (* The opt-in launcher supplies a socket as stdin. Helpers receive /dev/null
-     through the existing process owner; CLOEXEC also closes this copy on exec. *)
-    Unix.set_close_on_exec Unix.stdin;
+    (* The opt-in launcher supplies a socket as stdin; [prepare] already marked it
+     close-on-exec, so no helper spawned afterwards can retain the channel. *)
     let* () = send Unix.stdin message in
     let* acknowledgment = read_line ~timeout_s:60. Unix.stdin in
     if acknowledgment = "capture-finished"

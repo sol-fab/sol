@@ -687,6 +687,40 @@ let stalled_channel () =
        | Ok _ -> Alcotest.fail "stalled channel accepted full message")
 ;;
 
+(* A launcher supplies a private duplex socket. A binding with any other kind of
+   descriptor must be refused, not written to, so exercise the guard in a forked
+   child that owns the descriptor as its stdin. *)
+let channel_arming () =
+  let binding = String.make 64 'b' in
+  let classify expected configure =
+    match Unix.fork () with
+    | 0 ->
+      configure ();
+      let actual =
+        match M.prepare () with
+        | Ok None -> "none"
+        | Ok (Some value) -> if value = binding then "armed" else "other"
+        | Error _ -> "refused"
+      in
+      Unix._exit (if actual = expected then 0 else 1)
+    | pid ->
+      let _, status = Unix.waitpid [] pid in
+      check
+        (status = Unix.WEXITED 0)
+        (Printf.sprintf "private channel arming expected %s" expected)
+  in
+  classify "armed" (fun () ->
+    Unix.putenv M.environment binding;
+    let channel, _peer = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+    Unix.dup2 channel Unix.stdin);
+  classify "refused" (fun () ->
+    Unix.putenv M.environment binding;
+    let read_end, write_end = Unix.pipe ~cloexec:true () in
+    Unix.close write_end;
+    Unix.dup2 read_end Unix.stdin);
+  classify "none" (fun () -> Unix.putenv M.environment "not-a-binding")
+;;
+
 let protocol_rejects_malformed () =
   let receipt : M.receipt =
     { binding = String.make 64 'b'
@@ -810,6 +844,7 @@ let () =
           , `Quick
           , product_execution ~capture_failure:true Fun.id )
         ; "stalled receipt peer respects deadline", `Quick, stalled_channel
+        ; "private channel arming guards the descriptor", `Quick, channel_arming
         ; "Forbidden never absence", `Quick, test_auth_failure_classification
         ; "unrelated transport authority", `Quick, test_query_mismatch
         ; ( "wrong identity is never a trusted Present"

@@ -211,28 +211,38 @@ let submit
       ?ca_configmap
       ()
   in
+  let ordinary () = apply_doc ~ctx ~what:(label ^ "job") document in
   let apply =
-    match execution_target, Sol_cli_migration_execution.requested () with
-    | Some target, Some binding ->
-      let before = Sol_cli_kube_identity.observe ~ctx in
-      let result =
-        Sol_cli_fs.with_temp_file
-          ~prefix:"sol-migrate-"
-          ~suffix:".yaml"
-          (Sol_cli_yaml.render [ document ])
-          (fun file -> Sol_cli_kubectl.run ~ctx [ "apply"; "-f"; file; "-o"; "json" ])
-      in
-      (match result with
-       | Ok (Ok output) ->
-         record_submission ~ctx ~target ~binding ~before job output.stdout;
-         Ok ()
-       | Ok (Error error) ->
-         notify_execution Unavailable;
-         Error (Sol_cli_process.error_to_string error)
-       | Error error ->
-         notify_execution Unavailable;
-         Error error)
-    | _ -> apply_doc ~ctx ~what:(label ^ "job") document
+    match execution_target with
+    | None -> ordinary ()
+    | Some target ->
+      (match Sol_cli_migration_execution.prepare () with
+       | Ok (Some binding) ->
+         let before = Sol_cli_kube_identity.observe ~ctx in
+         let result =
+           Sol_cli_fs.with_temp_file
+             ~prefix:"sol-migrate-"
+             ~suffix:".yaml"
+             (Sol_cli_yaml.render [ document ])
+             (fun file -> Sol_cli_kubectl.run ~ctx [ "apply"; "-f"; file; "-o"; "json" ])
+         in
+         (match result with
+          | Ok (Ok output) ->
+            record_submission ~ctx ~target ~binding ~before job output.stdout;
+            Ok ()
+          | Ok (Error error) ->
+            notify_execution Unavailable;
+            Error (Sol_cli_process.error_to_string error)
+          | Error error ->
+            notify_execution Unavailable;
+            Error error)
+       | Ok None -> ordinary ()
+       | Error message ->
+         Sol_cli_report.warn
+           "Migration execution capture is unestablished (%s); continuing normal Job \
+            wait and cleanup."
+           message;
+         ordinary ())
   in
   match apply with
   | Ok () -> Ok job
