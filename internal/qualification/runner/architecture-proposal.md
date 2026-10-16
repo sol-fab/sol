@@ -5,11 +5,12 @@ next design, not APIs implemented by the prototype. No harness migration is part
 of this proposal. The existing campaign entry points remain authoritative until
 their replacements have been reviewed and verified.
 
-The direction has been approved; the interface refinements below remain proposed.
-This iteration makes capture failure an operational result outside qualification
-verdicts, pairs concrete requirements with distinct fact types, reconciles expected
-consumers against recorded observations, and binds product contract identity before
-evaluation. Concrete provider phases stay in place during initial consolidation.
+The direction has been approved; these interfaces remain proposed. The focused
+review resolution assigns receipt matching solely to the evaluator, adds a complete
+obligation universe, separates product declarations from qualification policy, and
+defines durable evidence commit/recovery. The [implementation plan](implementation-plan.md)
+names the mechanisms to remove and the tests required at each cutover. No framework
+implementation or live-harness migration is included in this revision.
 
 ## Findings that determine the boundaries
 
@@ -58,6 +59,40 @@ that catalog, not another manually maintained registry of checks. Existing matri
 stay authoritative until that change is reviewed. Run records stay evidence, and
 GitHub stays the work-state authority.
 
+Authority flows in one direction:
+
+```text
+Candidate product declaration + qualification policy + scenario/expected subjects
+                    -> complete applicable obligations
+                    -> typed requests and recorded outcomes
+```
+
+The product declaration owns names, types, paths, binding semantics and advertised
+capabilities. Qualification policy owns claim IDs, applicability, evidence class,
+subject-expansion/cardinality rules and exclusions. Capability flags are facts for
+evaluating support, not permission to remove obligations. If policy requires TLS
+and the candidate omits TLS support, the TLS instance remains required and blocked
+or falsified according to the policy's explicit rule; it never becomes inapplicable
+just because the candidate says so. An unresolved declaration prevents binding; an
+otherwise resolved declaration lacking a required capability prevents qualification.
+
+Generate the candidate projection deterministically from existing canonical typed
+contract definitions, using stable ordering/encoding and no timestamps or manually
+copied field tables. The schema/codec is defined at that same product owner, with
+one supported interpretation initially. Cross-tests must independently inspect real
+product-rendered ConfigMap keys, Deployment volumes/mounts/credential references and
+runtime connection inputs against the projection, rather than compare two calls to
+the same renderer. Mutating either the projection or the rendered artifact's CA key
+must fail. Projection repeatability and bundle-byte verification are necessary but
+do not prove agreement with the renderer/runtime.
+
+During migration, existing Markdown/TSV matrices remain policy authority and the
+experimental catalog is non-authoritative. A focused policy cutover must review
+all row IDs, scope and expansion rules together, make the catalog authoritative,
+and generate the policy columns of matrix projections in that same change. Historical
+evidence references remain records and do not define policy. Remove superseded
+provider-required-check lists then; do not operate two independent runtime catalogs.
+
 Use a small qualification domain with these concepts:
 
 | Type | Meaning and source |
@@ -66,6 +101,7 @@ Use a small qualification domain with these concepts:
 | `Run.t` | Validated artifact/workspace/harness binding, attempt, specimen, target, scenario and authorization scope; abstract, constructed by one run-binding owner |
 | `Candidate_contract.bound` | Supported product-owned contract bound to the immutable candidate; required to construct a qualification `Run.t` |
 | `Claim.t` | Matrix ID, required evidence class and applicable environment/language scope; no caller-controlled success flag |
+| `Claim_instance.t` | One catalog claim bound to a subject and assessment/phase, with its obligation key and candidate/policy identity; distinguishes five consumers of the same claim |
 | `Intent.t` | Canonical declared application/target intent at the candidate revision, before applying it |
 | `Binding.t` | Declared resource addresses, credential classes, keys and CA mount contract; product-owned names/types, never inferred naming rules |
 | `Consumer.t` | Selected database/resource consumer, language, workload/container identity and its declared binding |
@@ -181,7 +217,7 @@ module Verdict : sig
     | Not_run of Blocker.t
 
   type t = private
-    { claim : Claim.t
+    { claim : Claim_instance.t
     ; decision : decision
     ; evidence : Evidence.nonempty
     }
@@ -190,7 +226,7 @@ end
 module Claim_outcome : sig
   type t = private
     | Verdict_recorded of Verdict.t * Evidence.reference
-    | Unrecorded of Claim.t * Evidence_error.t
+    | Unrecorded of Claim_instance.t * Evidence_error.t
 end
 ```
 
@@ -257,21 +293,20 @@ module Selection : sig
 end
 
 module type CONTRACT = sig
-  type subject
+  type obligation
   type requirement
   type recorded_check
 
-  val requirements :
-    Run.t -> subject -> requirement list
-  val claim : requirement -> Claim.t
+  val plan : obligation -> (requirement, Planning_error.t) result
+  val claim : requirement -> Claim_instance.t
   val evaluate : recorded_check -> Verdict.t
 end
 ```
 
-Each concrete contract fixes `subject` to its required input: database delivery
-uses `Consumer.t Selection.complete`; absence uses the provider scope owner's
-abstract coverage. This avoids pretending those two completeness authorities are
-interchangeable merely because both enumerate requirements.
+The policy binder consumes complete consumer selection or provider-scope coverage
+as appropriate; those authorities are not interchangeable. A contract planner
+translates each already required obligation into one typed request, or an explicit
+planning error. It does not decide which obligations exist.
 `recorded_check` is a closed sum of correctly paired requirement/fact types for
 that contract, demonstrated below; there is no universal optional-field fact record.
 
@@ -302,20 +337,76 @@ addresses or membership, return `incomplete`. Review the missing product declara
 at its owner before migration; do not invent names in the qualification reader or
 build a parallel planner.
 
-`requirements` is the only expansion from complete subject selection into required
-checks. Observers cannot omit a requirement by omitting a resource from their result.
+The policy binder below is the sole expansion from complete subject selection into
+obligations. Observers cannot omit an obligation by omitting a resource from their result.
 A recorded failed selection is an UNKNOWN coverage claim; its dependent delivery
 checks are NOT_RUN with the same evidence. Known consumers may still be observed diagnostically,
 but cannot establish the universal claim.
+
+### Requirement-universe completeness
+
+```ocaml
+module Obligations : sig
+  type complete
+  type instance = Claim_instance.t
+  type key
+  val bind :
+    Qualification_policy.t -> Run.t -> Consumer.t Selection.complete ->
+    (complete, Applicability_error.t) result
+  val instances : complete -> instance list
+  val key : instance -> key
+  val reconcile_plan : complete -> Planned_request.t list ->
+    (Plan_coverage.t, Coverage_error.t) result
+  val reconcile_outcomes : complete -> Claim_outcome.t list ->
+    (Outcome_coverage.t, Coverage_error.t) result
+end
+```
+
+`complete` is constructed by interpreting the one catalog's explicit expansion
+rules over candidate-bound intent and scenario. It includes required instance keys
+and recorded applicability decisions, with a reason for every exclusion. A key
+contains claim ID, scenario/scope, subject or database identity, and assessment/phase;
+the manifest also binds policy, candidate contract and complete-selection identities.
+Shared migration input is per database, not multiplied accidentally per consumer.
+Unknown applicability is an explicit blocker, not an exclusion. An empty universe
+does not establish a scenario requiring a database exercise.
+
+For a representative policy requiring CA, DML, no-master-copy and TLS for each of
+five consumers, the authoritative obligation set has 20 distinct keys. The typed
+planner cannot redefine that count: it receives individual instances and materializes
+requests. The runner reconciles actual planned keys against the bound obligation set
+before execution, and outcome keys against the same set before finalization. Missing,
+duplicate, unexpected or wrong-subject keys make coverage unacceptable, even if all
+returned decisions say PASS. Missing planned work receives recorded NOT_RUN with a
+planning-coverage blocker, or an unrecorded outcome if persistence fails. There is
+no loop whose acceptance condition is merely "all generated requests passed".
+
+`reconcile_plan` compares keys/multiplicity; it does not repeat catalog applicability
+rules or evaluate observations. The evaluator alone decides whether a receipt proves
+a specific instance. The final acceptance gate requires both plan/outcome coverage
+and every required recorded PASS, plus valid final evidence.
+
+Two independent test boundaries protect this:
+
+- Planner mutation: bind the unchanged five-consumer catalog, then delete one CA,
+  DML or TLS request (or every TLS request). Each mutation must fail exact-key
+  coverage before any successful subset can qualify. Also mutate duplicate and
+  unexpected keys and omission of a failed/unreadable outcome after execution.
+- Catalog mutation: remove a required rule or weaken its applicability. Reviewed,
+  hand-authored golden instance manifests for representative AWS/GCP/local scenarios
+  must disagree and fail. The golden oracle is not generated by the catalog or
+  planner, and is never loaded as a second runtime catalog. Legitimate policy changes
+  update it under review with an explanation, rather than silently reblessing output.
 
 ### Expected selection and observation reconciliation
 
 Keep three separate values: the complete expected consumer set from canonical
 intent, independently observed Kubernetes identities, and an accounting entry for
 each expected requirement. A complete expected set says nothing about successful
-deployment or observation. The reconciliation owner joins on run, bound contract
-and declared subject identity, checks duplicate/mismatched receipts, and accounts
-for every expected member. It never substitutes the observed set for the expected
+deployment or observation. The reconciliation owner accounts for every expected
+instance key and detects missing, duplicate or unexpected outcomes. The evaluator
+alone matches each observation's provenance/subject/binding to its requirement;
+reconciliation does not repeat that semantic check. It never substitutes the observed set for the expected
 set or removes members after failed reads.
 
 | Account for an expected workload | Meaning | Recorded result |
@@ -369,6 +460,17 @@ fact is a separate capture operation. A qualification verdict needs the recorded
 identity evidence. Already authorized cleanup can use a validated handle even when
 recording fails; an evidence error neither invents identity nor authorizes escalation.
 
+Each observation references its actual execution identity/endpoint proof, not just
+the run's initial check. The initial policy is one stable credential/endpoint context
+per observation batch, valid until the earlier of known credential expiry or five
+minutes after verification. Invalidate it on credential, role, helper, kubeconfig
+or endpoint changes and on authentication failure. A read extending beyond that
+window needs fresh proof or remains UNKNOWN. Record the provider-observed principal
+where available; a requested role name is not proof of execution identity. If an
+adapter cannot establish a stable context, it must not assume one. This is a scoped
+freshness rule and revalidation at use, not a new credential watcher or STS call for
+every trivial command. The evaluator owns whether that proof meets the claim's rule.
+
 `Command.t` owns argv, working directory, finite timeout, nonsecret environment,
 secret inputs by opaque handles/stdin, allowed capture projection and an explicit
 interactive/noninteractive mode. Secret values must not be printable argv fields.
@@ -406,8 +508,7 @@ module Database_delivery_contract : sig
     | Tls_checked of Tls_requirement.t * Database_tls_facts.t Observation.t
     | No_master_checked of No_master_requirement.t * Unit_secret_facts.t Observation.t
 
-  val requirements :
-    Run.t -> Consumer.t Selection.complete -> requirement list
+  val plan : Database_obligation.t -> (requirement, Planning_error.t) result
   val evaluate : recorded_check -> Verdict.t
 end
 
@@ -425,23 +526,29 @@ module type DATABASE_DELIVERY = sig
 end
 ```
 
-Each `*_requirement.t` is a distinct abstract payload constructed by the one
-requirement planner. It exposes the appropriate consumer or database binding,
-expected values, requirement ID and bound contract identity to its observer. The
-planner expands canonical selection once and deduplicates shared migration inputs.
+Each `*_requirement.t` is a distinct abstract payload constructed by the typed
+planner from its catalog instance. It exposes the appropriate consumer/database
+binding, expected values, requirement ID and bound contract identity to its observer.
+The catalog owns subject expansion and deduplication; planning only materializes it.
 `recorded_check` pairs each payload with its specific recorded fact type: a DML
 observation cannot inhabit `Ca_checked`, and a TLS observation cannot inhabit
 `Migration_checked`. There is no `evaluate requirement generic_facts` entry point.
 All dispatch/evaluation matches are exhaustive, with no wildcard that would silently
 accept a new requirement. Ordinary variants suffice; no GADT is proposed.
 
-Types distinguish fact kinds, not individual runtime consumers. The recording
-boundary and evaluator must also compare requirement ID, consumer/database address,
-run/specimen and contract identity on the receipt. A well-typed CA observation for
-another consumer still cannot satisfy this requirement. Reconciliation detects
-missing, duplicate or cross-subject receipts before aggregation. A whole wrong
-identity response is UNKNOWN; a valid scoped response containing a wrong expected
-binding value is a recorded counterexample and FAIL.
+Types distinguish fact kinds, not individual runtime consumers. **The evaluator
+alone owns receipt-to-requirement matching**: requirement/subject, run/specimen,
+candidate contract, assessment and expected binding, including relevant identity
+and observation-time freshness policy. A well-typed CA receipt for another consumer
+is unusable evidence for this requirement and produces UNKNOWN, never PASS. A valid
+matching receipt showing a wrong declared key/reference is a counterexample and FAIL.
+
+The recorder checks bytes, hashes, capture completeness and the truthfully recorded
+provenance envelope; it does not compare that envelope with a requirement or decide
+whether a ConfigMap key/mount is correct. The coordinator dispatches typed requests,
+persists outcomes and returns them; it does not implement receipt matching. Coverage
+reconciliation compares required instance keys and multiplicity, not the semantic
+suitability of their observations. These are distinct questions, each decided once.
 
 The capability observes; the contract evaluates. The signatures of their facts
 must record what was actually read: resource identity and namespace, key presence,
@@ -478,8 +585,8 @@ module Gcp_delivery = Kubernetes_database_delivery (Gcp_read_context)
 module Aws_check = Check_database_delivery (Aws_delivery)
 module Gcp_check = Check_database_delivery (Gcp_delivery)
 
-(* Both Check_database_delivery instances obtain requirements from the one
-   Database_delivery_contract and call its same evaluate function. Only the
+(* Both Check_database_delivery instances consume the same catalog's obligations,
+   use the common typed planner and call the same evaluate function. Only the
    observation context and provider-backed setup facts differ. *)
 ```
 
@@ -515,6 +622,8 @@ module type EVIDENCE = sig
     (Evidence.reference, Evidence_error.t) result
   val finalize : recorder -> Required_evidence.t ->
     (Evidence.manifest, Evidence_error.t) result
+  val verify_manifest : Attempt.t -> Evidence.manifest_reference ->
+    (Evidence.verified_manifest, Evidence_error.t) result
 end
 ```
 
@@ -550,6 +659,78 @@ Use the existing attempt directory and continuation binding; do not add a second
 workflow database or local project-status file. Each phase invocation has distinct
 capture members within the bound attempt, so continuation does not overwrite prior
 evidence or silently make a new specimen reuse an old attempt.
+
+### Evidence commit, finalization and continuation
+
+The recorder targets a local POSIX filesystem supporting atomic publication and
+successful file/directory `fsync`. Unsupported or failed durability operations
+are capture errors; do not silently downgrade to buffered-only evidence. Storage
+hardware honoring acknowledged synchronization is a trust assumption, not something
+OCaml types or hashes can prove. This is a small immutable file store, not a database
+or an event-sourcing framework.
+
+| Boundary | Required operation before acknowledging it |
+|---|---|
+| Streaming/staging diagnostics | Private temporary files; no qualification reference is issued and no per-line `fsync` is required |
+| Committed evidence member | Finish the safe payload and provenance envelope, flush, hash exact bytes with SHA-256, `fsync` the file, atomically publish without replacement, then `fsync` the containing directory |
+| Recorded observation/verdict | Commit all its referenced dependencies first, then its own immutable envelope through that same member protocol; return a receipt only after success |
+| Final qualification manifest | Verify complete obligation/outcome coverage and every transitive reference, commit the manifest with the same protocol, then return its digest as the final seal |
+| Consumption of PASS | Load the explicitly named sealed manifest, recheck its identity, hashes, sizes, schemas, dependency closure and required coverage; a cached boolean or filename is insufficient |
+
+Use exclusive temporary creation on the same filesystem and modes 0700/0600.
+Publish members at `members/<sha256>` with an atomic no-replace operation, for
+example a hard link from the synced temporary file followed by directory sync.
+A plain overwriting rename is insufficient. If the hash path already exists,
+verify the existing regular file's exact bytes/length/hash before reusing it;
+never overwrite it. Sync newly created parent directories as well. Clean up the
+temporary name after publication; leftover temporaries remain non-authoritative.
+Any failed write, flush, sync or publication returns `Evidence_error`; neither a
+partial member nor an ambiguous acknowledgement becomes a receipt.
+
+The hashed envelope binds payload, source execution/identity/endpoint, capture time,
+candidate contract, policy and attempt/assessment provenance. References name hash,
+size and member kind, and readers validate those fields and dependency closure.
+Content addressing does not prove that a provider response is true or that evidence
+satisfies a requirement: observation independence and pure evaluation still own
+those questions. Corruption after a receipt was issued is detected again before
+finalization and whenever the sealed manifest is consumed.
+
+Finalization is an immutable snapshot, not an overwritable `report.json`. It lists
+the chosen assessment, complete obligation set, applicability decisions, all outcome
+references, history/supersession references and evidence-integrity results. A file
+that happens to contain PASS is never authoritative without a verified seal. A crash
+before the final file and its directory are synced yields no acknowledged final seal;
+on recovery, a fully published manifest may be accepted only after full verification,
+never because it sorts last. Recovery re-syncs verified files/directories before
+reissuing a durable seal; file presence cannot prove a prior sync completed.
+The existing release-verdict path must consume a verified
+manifest reference before this recorder is allowed to support release promotion;
+do not introduce a second release policy or bypass the existing qualification gates.
+
+Continuation follows the existing attempt/candidate/specimen binding and uses one
+OS advisory writer lock per attempt; the lock is not persistent workflow state and
+is released on process exit. It inspects committed members and manifests, validates
+every referenced byte and reports incomplete/corrupt dependencies. Unpublished
+temporaries and unreferenced members may be retained for diagnosis but cannot silently
+be promoted into observations or PASS. A partial manifest is not a valid run result.
+Missing/corrupt members produce evidence failure, not a fallback to an older green
+manifest or regeneration from a log that resembles the expected output.
+
+New invocations append new assessment/member IDs without altering earlier references.
+Within an assessment there must be exactly one selected outcome for each obligation;
+duplicate/conflicting decisions fail coverage rather than use "last write wins".
+Reassessment is explicit: a new ID, fresh observations where policy requires them,
+a reason, and references to all superseded results. Earlier failures remain visible;
+a later PASS never diagnoses or deletes them. No automatic retry-to-green policy
+is introduced. The final manifest identifies the assessment being evaluated and
+the verifier checks its phase/generation and freshness rules, so pre-destroy or
+earlier-specimen observations cannot satisfy post-destroy/current obligations.
+
+Failure of this store stops new qualification mutations, not already authorized
+teardown or independent inventory. Those operations use validated ownership/identity
+and safe diagnostic fallback; unpersisted results remain operational outcomes and
+cannot establish a release verdict. No new work-state journal or reconciliation
+daemon is needed to recover the immutable evidence that actually reached disk.
 
 ### Lifecycle, supervision and absence
 
@@ -666,10 +847,12 @@ specimen. The same Kubernetes observer and evaluator run in either case.
 2. **Expected consumers.** Selection enumerates C's target intent and returns five
    consumers with complete in-memory coverage. Persist that coverage and the validated
    observation identity. Kubernetes has not yet established the presence of any of them.
-3. **Typed requirement.** The single planner emits `Ca_delivery ca_req` for consumer
+3. **Typed requirement.** The bound policy first expands the complete obligation set;
+   the planner materializes `Ca_delivery ca_req` for consumer
    `payments/charge-svc`, including its declared ConfigMap, CA key, volume/mount
    expectations and run/contract/subject IDs. This payload is a `Ca_requirement.t`,
-   not a DML or TLS request. Other consumers remain independent required entries.
+   not a DML or TLS request. Plan coverage must match every required instance;
+   other consumers and TLS/DML obligations cannot disappear from that universe.
 4. **Kubernetes observation.** The common observer uses the validated kubeconfig to
    read the expected workload and ConfigMap independently. It projects identities,
    nonempty `ca.pem` presence and the required volume/container references, then decodes
@@ -723,6 +906,9 @@ deploy internals.
 ```mermaid
 flowchart TD
   Runner[Scenario runner and supervisor] --> Selection[Authoritative selection]
+  Runner --> Obligations[Complete obligation and outcome coverage]
+  Obligations --> Policy[Qualification catalog]
+  Obligations --> Selection
   Selection --> Intent[Canonical declared intent and binding types]
   Intent --> Binding[Candidate-bound product contract]
   Runner --> Reconciliation[Expected requirements and observed receipt accounting]
@@ -750,6 +936,8 @@ into a growing compatibility framework: review support for the candidate explici
 
 | Proposed restriction | Mistake made harder | Runtime obligation |
 |---|---|---|
+| Complete catalog-bound obligation set | Passing a planner-generated subset that omitted TLS/CA/DML | Exact-key/multiplicity reconciliation and independent catalog golden mutation tests |
+| Synced immutable members and verified final seal | Partial/corrupt files or crash-interrupted manifests establish PASS | File/directory durability, dependency hash verification, explicit assessment and conflict handling |
 | Abstract complete selection and separate reconciliation | Shrinking the expected universe to the successfully observed subset | Verify canonical membership, then account for every expected member's actual read or blocker |
 | Typed requirement/check variants | Satisfying CA delivery with DML or TLS facts | Match the receipt's individual subject, requirement and bound contract identity |
 | Pending versus recorded observation; operational capture error | Inventing evidence to return UNKNOWN/NOT_RUN | Commit dependencies before issuing receipts, propagate storage errors and preserve cleanup authority |
@@ -761,38 +949,12 @@ into a growing compatibility framework: review support for the candidate explici
 | Cleanup scope established before mutation | Timeout suppresses cleanup; durable resources deleted accidentally | Establish ownership/authorization and independently verify absence |
 | Private verdict/observation constructors | Provider adapter returns its own PASS | Review constructor owners and mutations; unsafe casts or wrong decoders remain possible |
 
-## Migration sequence and review gates
+## Implementation sequence
 
-1. Review these refinements: capture-failure outcomes, closed typed checks,
-   expected/observed reconciliation, candidate contract identity and the worked
-   paths. Keep #1487 draft. No additional executor, DML adapter or lifecycle
-   implementation precedes this review.
-2. After that review, establish the needed product-owned declaration surface and
-   pure contract inputs in focused changes. Fix the prototype's wrong CA key with a test grounded in that
-   authority. Refuse incomplete addresses or membership instead of adding naming rules.
-3. Implement the shared domain, selection and database requirements. Specify exact
-   facts and evidence per requirement, including UNKNOWN/NOT_RUN. Instantiate the
-   same evaluator with AWS and GCP observation contexts in offline fixtures; mutate
-   every consumer, declared key, identity, missing read and evidence requirement.
-4. Consolidate execution and evidence behind their owners, preserving timeout output,
-   secrecy and current candidate binding. Migrate existing shared helpers or retain
-   them as the single implementation during transition. Do not keep two validators.
-5. Replace AWS database assertion ownership, then GCP, after old/new fixture comparison.
-   Retain hostile coverage and document intentional strengthening or corrected old
-   semantics. A temporary comparison is a migration tool, not a permanent second oracle.
-6. Move common phase accounting and handled-failure supervision into the runner.
-   Keep provider actions explicit; preserve independent absence adapters. Mutation
-   tests must cover partial deploy, capture failure, interrupted commands, wrong
-   identity, destroy failure, unreadable inventory, retained resources and continuation.
-7. Bring local and OCaml/TypeScript row accounting under the same evidence/verdict
-   model without forcing cloud-only capabilities or equal scenario sets. Preserve
-   the single local-cluster ownership boundary and language-specific adapters.
-8. Only after those reviews and offline checks, schedule explicitly authorized live
-   qualification of the released candidate. Reuse the qualification rules and release
-   verdict path. Remove replaced shell mechanisms as each owner takes over; retain
-   mechanisms that still own genuinely distinct provider responsibilities.
-
-This sequence targets removal of duplicated decisions and mechanisms, rather than
-minimizing interface count or translating Bash line for line. It adds no release
-path, scheduler, provider reconciler, background watcher, general retry engine or
-repository workflow state.
+The [implementation plan](implementation-plan.md) is the single sequence of code
+changes, removal points and acceptance gates. Start with candidate-bound inputs,
+shared domain/obligation coverage, durable evidence and the CA slice; retain concrete
+provider phases. The active campaign is isolated from this work. Release-policy
+cutover, AWS assertion replacement and GCP/full database adoption require the
+specified comparison and mutation evidence, not merely passing prototype tests.
+No implementation or production-readiness claim is made by this design revision.
