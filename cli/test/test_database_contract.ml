@@ -222,6 +222,78 @@ let delivery_matches expected doc =
        expected_containers
 ;;
 
+(* Compare the entire multiset, not a lookup that tolerates extra projected subjects.
+   Container membership comes from actual rendered credential inputs, not the projection. *)
+let check_complete_plan (config : Sol_cli_config.t) plan workloads =
+  let columns =
+    [ "subject"
+    ; "resource"
+    ; "namespace"
+    ; "name"
+    ; "declared_uses"
+    ; "database"
+    ; "consuming_containers"
+    ]
+  in
+  let summarize workload =
+    `List (List.map (fun key -> field key workload) columns) |> Yojson.Safe.to_string
+  in
+  let actual =
+    List.map
+      (fun (spec : P.service_spec) ->
+         let doc = rendered ~plan spec in
+         let database =
+           match spec.db_uses_target with
+           | None -> `Null
+           | Some _ ->
+             let resource =
+               List.find
+                 (fun (r : Sol_cli_config.resource) ->
+                    r.typ = Some "postgres" && List.mem r.name spec.uses)
+                 config.Sol_cli_config.resources
+             in
+             `String resource.name
+         in
+         let containers =
+           field "containers" (pod doc)
+           |> list
+           |> List.filter (fun container ->
+             field "env" container
+             |> list
+             |> List.exists (fun env ->
+               field "name" env = `String R.postgres_url_key
+               && J.field [ "valueFrom"; "secretKeyRef" ] env <> `Null))
+           |> List.map (field "name")
+         in
+         `Assoc
+           [ "subject", `String (spec.domain ^ "/" ^ spec.source_name)
+           ; "resource", `String (String.lowercase_ascii (str (field "kind" doc)))
+           ; "namespace", J.field [ "metadata"; "namespace" ] doc
+           ; "name", J.field [ "metadata"; "name" ] doc
+           ; "declared_uses", `List (List.map (fun s -> `String s) spec.uses)
+           ; "database", database
+           ; "consuming_containers", `List containers
+           ])
+      plan.P.services
+  in
+  let summaries values = List.map summarize values |> List.sort String.compare in
+  let matches values = summaries values = summaries actual in
+  check
+    "complete projected identities/bindings/containers equal deployment plan"
+    (matches workloads);
+  check
+    "whole-plan comparison rejects omitted subject"
+    (not (matches (List.tl workloads)));
+  check
+    "whole-plan comparison rejects duplicate subject"
+    (not (matches (List.hd workloads :: workloads)));
+  List.iter
+    (fun key ->
+       let mutated = set key (`String "wrong") (List.hd workloads) :: List.tl workloads in
+       check ("whole-plan comparison detects " ^ key) (not (matches mutated)))
+    columns
+;;
+
 let test_definition () =
   let d = definition () in
   let expected =
@@ -268,6 +340,7 @@ let test_render provider () =
             || field "database" w = J.field [ "database"; "resource" ] projection)
          workloads);
     let plan = independently_plan config facts in
+    check_complete_plan config plan workloads;
     List.iter
       (fun spec ->
          let expected =
@@ -488,6 +561,10 @@ let test_selection () =
        check
          "target omission is authoritative"
          (List.length (field "workloads" projected |> list) = 3);
+       check_complete_plan
+         config
+         (independently_plan config facts)
+         (field "workloads" projected |> list);
        Unix.unlink (Filename.concat root "app/payments/charge_svc/Dockerfile");
        let facts = Sol_cli_workspace_model.load ~root |> get in
        check
@@ -518,6 +595,10 @@ let test_external () =
     in
     let config = { config with resources } in
     let declaration = project "aws" config facts in
+    check_complete_plan
+      config
+      (independently_plan config facts)
+      (field "workloads" declaration |> list);
     let database = field "database" declaration in
     check
       "external ownership is a fact, not policy exemption"

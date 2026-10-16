@@ -79,6 +79,14 @@ assets. Output records the existing candidate identity and both declarations; it
 produce a release verdict. No old Bash declaration parser is a fallback. Existing candidates
 without these members, including alpha.37, remain unsupported by this new entry point.
 
+Subprocess stdout/stderr are captured rather than inherited or replayed. Ordinary subprocess
+failure diagnostics contain only a fixed stage and exit status, timeout or spawn errno;
+they never include command arguments or subprocess-controlled text. An operator may explicitly
+supply `--raw-diagnostics /private/new-file` to preserve unmodified output in an exclusively
+created mode-0600 file. That file may contain secrets, is never an evidence member, and must
+remain outside the qualification evidence directory. Existing files are never overwritten.
+No raw diagnostic file is created by default.
+
 The trust boundary remains the reviewed local producer and trusted candidate record. Content
 addressing and archive equality detect corruption/substitution; they do not authenticate an
 untrusted publisher or attest that arbitrary `--binary`/`--contract-binary` build inputs were

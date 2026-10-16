@@ -6,6 +6,7 @@ this tool can invoke its internal producer. This additional check requires the
 new files to be archive members (an unrecorded extra executable is insufficient).
 """
 import argparse
+from contextlib import ExitStack
 import hashlib
 import json
 import os
@@ -19,13 +20,13 @@ def unique_object(pairs):
     result = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError("duplicate JSON field: " + key)
+            raise ValueError("duplicate JSON field")
         result[key] = value
     return result
 
 
 def unsupported_number(value):
-    raise ValueError("unsupported declaration number: " + value)
+    raise ValueError("unsupported declaration number")
 
 
 def load(text):
@@ -45,13 +46,40 @@ def declaration(document):
     return value
 
 
-def bind(candidate_path, install, target, workspace):
+class StageFailure(Exception):
+    """Only fixed stage names and numeric statuses may reach ordinary diagnostics."""
+
+
+def run_stage(stage, argv, diagnostics, **kwargs):
+    try:
+        result = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True,
+                                text=True, encoding="utf-8", errors="replace", timeout=30,
+                                **kwargs)
+    except subprocess.TimeoutExpired as error:
+        if diagnostics is not None:
+            # TimeoutExpired carries bytes even when text=True.
+            for label, data in (("stdout", error.stdout), ("stderr", error.stderr)):
+                print(stage + " " + label + ":", file=diagnostics)
+                if data:
+                    diagnostics.write(data.decode("utf-8", errors="replace"))
+        raise StageFailure(stage + " timed out") from None
+    except OSError as error:
+        raise StageFailure(stage + " could not start (errno " + str(error.errno) + ")") from None
+    if diagnostics is not None:
+        print(stage + " stdout:\n" + result.stdout, file=diagnostics)
+        print(stage + " stderr:\n" + result.stderr, file=diagnostics)
+    if result.returncode:
+        raise StageFailure(stage + " exited with status " + str(result.returncode))
+    return result
+
+
+def bind(candidate_path, install, target, workspace, diagnostics=None):
     candidate = load(candidate_path.read_text())
     # Consume the established candidate/installed-bytes verification owner unchanged.
     owner = Path(__file__).with_name("sol-under-test.sh")
-    subprocess.run(["/bin/bash", "-c", 'source "$1"; SOL_INSTALL="$2"; SOL_CANDIDATE="$3"; sol_under_test_resolve',
-                    "database-contract-binding", str(owner), str(install), str(candidate_path)],
-                   check=True, stdin=subprocess.DEVNULL)
+    run_stage("candidate verification",
+              ["/bin/bash", "-c", 'source "$1"; SOL_INSTALL="$2"; SOL_CANDIDATE="$3"; sol_under_test_resolve',
+               "database-contract-binding", str(owner), str(install), str(candidate_path)], diagnostics)
     version = candidate["version"]
     prefix = "sol-" + version + "/"
     definition_rel = "share/sol/" + version + "/database-contract.json"
@@ -67,9 +95,9 @@ def bind(candidate_path, install, target, workspace):
         raise ValueError("declaration is from another product revision")
     producer_env = dict(os.environ)
     producer_env.pop("SOL_HOME", None)
-    result = subprocess.run([str(install / producer_rel), "specimen", str(install / definition_rel), target],
-                            cwd=workspace, env=producer_env, timeout=30, check=True, stdin=subprocess.DEVNULL,
-                            capture_output=True, text=True)
+    result = run_stage("producer",
+                       [str(install / producer_rel), "specimen", str(install / definition_rel), target],
+                       diagnostics, cwd=workspace, env=producer_env)
     projection = load(result.stdout)
     value = declaration(projection)
     # Structural completeness only; applicability and truth belong to qualification.
@@ -92,17 +120,21 @@ def main():
     parser.add_argument("--install", required=True, type=Path)
     parser.add_argument("--workspace", required=True, type=Path)
     parser.add_argument("--target", required=True)
+    parser.add_argument("--raw-diagnostics", type=Path,
+                        help="opt-in sensitive subprocess output to a NEW private operator file; never evidence")
     args = parser.parse_args()
     try:
-        print(json.dumps(bind(args.candidate.resolve(), args.install.resolve(), args.target,
-                              args.workspace.resolve()), sort_keys=True, separators=(",", ":")))
-    except subprocess.TimeoutExpired:
-        print("database contract: producer timed out", file=sys.stderr)
-        return 2
-    except subprocess.CalledProcessError as error:
-        if error.stderr:
-            print(error.stderr, file=sys.stderr)
-        print("database contract: candidate verification or producer failed", file=sys.stderr)
+        with ExitStack() as stack:
+            diagnostics = None
+            if args.raw_diagnostics is not None:
+                diagnostics = stack.enter_context(open(
+                    args.raw_diagnostics, "x", encoding="utf-8",
+                    opener=lambda path, flags: os.open(path, flags, 0o600)))
+            print(json.dumps(bind(args.candidate.resolve(), args.install.resolve(), args.target,
+                                  args.workspace.resolve(), diagnostics),
+                             sort_keys=True, separators=(",", ":")))
+    except StageFailure as error:
+        print("database contract: " + str(error), file=sys.stderr)
         return 2
     except (OSError, ValueError, KeyError, tarfile.TarError) as error:
         print("database contract: " + str(error), file=sys.stderr)

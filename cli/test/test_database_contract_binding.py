@@ -96,20 +96,52 @@ services:
             "bundle": archive.name, "bundle_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
             "runner_image": self.runner}))
 
-    def run_binding(self, expected):
+    def run_binding(self, expected, diagnostics=None):
         env = dict(os.environ)
         env["PATH"] = str(self.private_bin)
         # An ambient SOL_HOME must not replace the verified candidate's asset scope.
         env["PROVIDER_MARKER"] = str(self.root / "provider-called")
         env["SOL_HOME"] = str(self.root / "wrong-assets")
-        result = subprocess.run([sys.executable, str(BINDER), "--candidate", str(self.candidate),
-            "--install", str(self.install), "--workspace", str(self.workspace), "--target", TARGET],
+        args = [sys.executable, str(BINDER), "--candidate", str(self.candidate),
+            "--install", str(self.install), "--workspace", str(self.workspace), "--target", TARGET]
+        if diagnostics is not None:
+            args += ["--raw-diagnostics", str(diagnostics)]
+        result = subprocess.run(args,
             env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
         self.assertFalse((self.root / "provider-called").exists(), "projection attempted provider execution")
         self.assertEqual(result.returncode == 0, expected, result.stdout + result.stderr)
         if expected:
             return json.loads(result.stdout)
         self.assertIn("database contract:", result.stderr)
+        return result
+
+    def test_subprocess_diagnostics_are_operator_only(self):
+        secret = "DISTINCTIVE-CREDENTIAL-DO-NOT-CAPTURE"
+        producer = self.install / "bin/sol-database-contract"
+        producer.write_text("#!/bin/sh\nprintf '%s\\n' '" + secret + "'\nprintf '%s\\n' '" + secret + "' >&2\nexit 31\n")
+        self.archive()
+        result = self.run_binding(False)
+        self.assertNotIn(secret, result.stdout + result.stderr)
+        self.assertIn("producer exited with status 31", result.stderr)
+        self.assertLess(len(result.stdout + result.stderr), 200)
+        raw = self.root / "operator-only.log"
+        result = self.run_binding(False, diagnostics=raw)
+        self.assertNotIn(secret, result.stdout + result.stderr)
+        self.assertIn(secret, raw.read_text())
+        self.assertEqual(raw.stat().st_mode & 0o777, 0o600)
+        before = raw.read_bytes()
+        self.run_binding(False, diagnostics=raw)
+        self.assertEqual(raw.read_bytes(), before, "raw diagnostics must never overwrite a file")
+
+    def test_verifier_output_is_not_inherited(self):
+        secret = "VERIFIER-CREDENTIAL-DO-NOT-CAPTURE"
+        # The legacy verifier includes unexpected --version stdout in its failure.
+        (self.install / "bin/sol").write_text("#!/bin/sh\nprintf '%s\\n' '" + secret + "'\n")
+        self.archive()
+        result = self.run_binding(False)
+        self.assertNotIn(secret, result.stdout + result.stderr)
+        self.assertIn("candidate verification exited with status 2", result.stderr)
+        self.assertLess(len(result.stdout + result.stderr), 200)
 
     def mutate_definition(self, fn):
         document = json.loads(self.definition.read_text())
