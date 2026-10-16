@@ -8,6 +8,7 @@ let load path =
 ;;
 
 let run = function
+  | [ _; "migration-receipt-protocol" ] -> Ok Sol_cli_migration_execution.protocol
   | [ _; "definition"; revision ] ->
     let* definition = C.definition ~revision in
     Ok (C.definition_json definition)
@@ -22,7 +23,9 @@ let run = function
     let* projection = C.project ~definition ~requested_target:target ~config ~facts in
     Ok (C.projection_json projection)
   | _ ->
-    Error "usage: sol-database-contract definition REVISION | specimen DEFINITION TARGET"
+    Error
+      "usage: sol-database-contract definition REVISION | specimen DEFINITION TARGET | \
+       migration-receipt-protocol"
 ;;
 
 let () =

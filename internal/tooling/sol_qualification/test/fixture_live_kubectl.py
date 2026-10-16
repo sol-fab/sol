@@ -2,6 +2,7 @@
 """Process fixture for the actual kubectl invocation boundary; no provider calls."""
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import time
@@ -17,8 +18,40 @@ state["calls"].append(args)
 key = args[0]
 state[key] = state.get(key, 0) + 1
 state_path.write_text(json.dumps(state))
-phase = "after_" if state[key] > (2 if key == "get" else 1) else ""
-if args[:2] == ["config", "view"]:
+if args[0] == "apply":
+    document = Path(args[2]).read_text()
+    kind = re.search(r"^kind: (\w+)$", document, re.M).group(1)
+    name = re.search(r"^  name: ([^\n]+)$", document, re.M).group(1)
+    namespace = re.search(r"^  namespace: ([^\n]+)$", document, re.M).group(1)
+    if kind == "Job" and world.get("apply_error"):
+        print("Forbidden DISTINCTIVE_PROCESS_SECRET", file=sys.stderr)
+        sys.exit(1)
+    if kind == "Job" and args[-2:] == ["-o", "json"]:
+        value = json.loads(Path(world["jobs"]).read_text())
+        value["metadata"].update({"name": name, "namespace": namespace})
+        if world.get("missing_uid"):
+            del value["metadata"]["uid"]
+        if world.get("wrong_submission_namespace"):
+            value["metadata"]["namespace"] = "another-namespace"
+        Path(world["submitted_job"]).write_text(json.dumps(value))
+    else:
+        print(kind + "/" + name + " configured")
+        sys.exit(0)
+elif args[0] == "create":
+    print("created")
+    sys.exit(0)
+elif args[0] == "logs":
+    print("migration fixture completed")
+    sys.exit(0)
+elif args[0] == "delete":
+    if args[1] == "job" and world.get("submitted_job"):
+        Path(world["submitted_job"]).unlink(missing_ok=True)
+    print("deleted")
+    sys.exit(0)
+elif args[:2] == ["get", "job"]:
+    print("1")
+    sys.exit(0)
+elif args[:2] == ["config", "view"]:
     value = world.get("after_config", world["config"]) if state["config"] > 1 else world["config"]
 elif args[:2] == ["auth", "whoami"]:
     if state["auth"] > 1 and world.get("expired"):
@@ -43,7 +76,10 @@ else:
         sys.exit(0)
     resource = args[1]
     names = {"deployments.apps": "deployments", "configmaps": "configmaps", "jobs.batch": "jobs"}
-    value = json.loads(Path(world[names[resource]]).read_text())
+    source = world[names[resource]]
+    if resource == "jobs.batch" and world.get("submitted_job") and Path(world["submitted_job"]).exists():
+        source = world["submitted_job"]
+    value = json.loads(Path(source).read_text())
     if resource == "jobs.batch" and value.get("kind") == "Job":
         value = {"apiVersion": "batch/v1", "kind": "JobList",
                  "metadata": {"resourceVersion": "24"}, "items": [value]}

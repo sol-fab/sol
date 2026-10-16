@@ -157,7 +157,8 @@ let in_cluster_context ~target_path ~active =
     , services
     , database
     , Sol_cli_database_setup_render.ddl_creds_name target
-    , ca_configmap )
+    , ca_configmap
+    , config.target.name )
 ;;
 
 let print_pending_files ~dir applied files =
@@ -174,7 +175,7 @@ let print_pending_files ~dir applied files =
    never connects from the operator's machine, so it needs no credential in the operator's
    environment — the Job reads the target's DDL class Secret. *)
 let run_dry_run_in_cluster ~ctx ~dir ~table ~target_path ~active =
-  let* _workspace, _services, database, ddl_creds_name, ca_configmap =
+  let* _workspace, _services, database, ddl_creds_name, ca_configmap, _target =
     in_cluster_context ~target_path ~active
   in
   let namespace = Sol_cli_database_setup_render.database_namespace database in
@@ -194,7 +195,7 @@ let run_dry_run_in_cluster ~ctx ~dir ~table ~target_path ~active =
 ;;
 
 let run_apply_in_cluster ~ctx ~dir ~table ~target_path ~active =
-  let* workspace, services, database, ddl_creds_name, ca_configmap =
+  let* workspace, services, database, ddl_creds_name, ca_configmap, target =
     in_cluster_context ~target_path ~active
   in
   let namespace = Sol_cli_database_setup_render.database_namespace database in
@@ -218,6 +219,7 @@ let run_apply_in_cluster ~ctx ~dir ~table ~target_path ~active =
         ~ctx
         ~namespace
         ~name_prefix:"sol-migrate"
+        ~execution_target:target
         ~label:""
         ~image
         ~args:[ "migrate"; "apply"; "--dir"; "/migrations"; "--table"; table ]
