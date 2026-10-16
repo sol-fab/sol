@@ -301,7 +301,7 @@ module Target_plan = struct
   let to_deployment_plan t = t.deployment_plan
 end
 
-let plan ?(evaluation = Sol_cli_profile_preflight.All) (input : Planning_input.t) =
+let declaration_plan (input : Planning_input.t) =
   let open Planning_input in
   let { workspace
       ; registry
@@ -410,13 +410,22 @@ let plan ?(evaluation = Sol_cli_profile_preflight.All) (input : Planning_input.t
       |> refused
     | _ -> Ok plan
   in
+  Ok plan
+;;
+
+let plan ?(evaluation = Sol_cli_profile_preflight.All) (input : Planning_input.t) =
+  let* plan = declaration_plan input in
   let apply_mode =
-    match emit_to with
+    match input.emit_to with
     | Some _ -> Sol_cli_release.Gitops
     | None -> Sol_cli_release.Direct
   in
   let* () =
-    Sol_cli_profile_preflight.check ~evaluation ~target:config.target ~apply_mode plan
+    Sol_cli_profile_preflight.check
+      ~evaluation
+      ~target:input.config.target
+      ~apply_mode
+      plan
     |> Result.map_error (fun (profile, findings) -> Preflight (profile, findings))
   in
   Ok plan

@@ -128,9 +128,10 @@ jobs:
 
       - name: Release build
         run: |
-          SOL_RELEASE_VERSION="$VERSION" opam exec -- dune build cli/bin/main.exe
+          SOL_RELEASE_VERSION="$VERSION" opam exec -- dune build cli/bin/main.exe cli/bin/database_contract_projection.exe
           mkdir -p "$RUNNER_TEMP/runner"
           cp _build/default/cli/bin/main.exe "$RUNNER_TEMP/runner/sol"
+          cp _build/default/cli/bin/database_contract_projection.exe "$RUNNER_TEMP/sol-database-contract"
           got="$("$RUNNER_TEMP/runner/sol" --version)"
           [ "$got" = "$VERSION" ] || { echo "::error::built binary reports $got, not $VERSION"; exit 1; }
 
@@ -178,6 +179,7 @@ jobs:
             --runner-image "${{ steps.runner.outputs.image }}" \
             --setup-image "${{ steps.setup.outputs.image }}" \
             --binary "$RUNNER_TEMP/runner/sol" \
+            --contract-binary "$RUNNER_TEMP/sol-database-contract" \
             --support-refs support-refs.txt \
             --out "$RUNNER_TEMP/dist" | tail -1)"
           echo "archive=$archive" >> "$GITHUB_OUTPUT"

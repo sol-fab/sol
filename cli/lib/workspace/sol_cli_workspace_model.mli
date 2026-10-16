@@ -43,6 +43,9 @@ val declaration_issues
   -> Sol_cli_config.service list
   -> declaration_issue list
 
+(** Pure scan view reused by target-specific declaration checks. *)
+val scan_of : t -> Sol_cli_manifest.workspace_scan
+
 val declaration_issues_of : t -> declaration_issue list
 val load : root:string -> (t, string) result
 val load_cwd : unit -> (t, string) result

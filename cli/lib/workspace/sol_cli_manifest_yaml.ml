@@ -597,7 +597,7 @@ let pod_template
   in
   let container =
     Y.map
-      ([ "name", Y.string name
+      ([ "name", Y.string (workload_container_name name)
        ; "image", Y.string image
        ; "imagePullPolicy", Y.string "Always"
        ; "securityContext", container_security
@@ -1054,7 +1054,7 @@ let cronjob_doc (workload : Scheduled_workload_spec.t) =
   in
   let container =
     Y.map
-      ([ "name", Y.string name
+      ([ "name", Y.string (workload_container_name name)
        ; "image", Y.string image
        ; "imagePullPolicy", Y.string "Always"
        ; "securityContext", container_security
@@ -1159,7 +1159,7 @@ let migration_job_doc
   in
   let container =
     Y.map
-      [ "name", Y.string "migrate"
+      [ "name", Y.string migration_container_name
       ; "image", Y.string image
       ; "args", Y.list (List.map Y.quoted args)
       ; ( "envFrom"

@@ -8,4 +8,5 @@
   sol_cli_cloud
   unix
   yojson
-  base64))
+  base64
+  digestif))

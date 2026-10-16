@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../../.." && pwd)"
-version="" runner="" setup_image="" out="" binary="" support_refs="" revision=""
+version="" runner="" setup_image="" out="" binary="" support_refs="" revision="" contract_binary=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) version="$2"; shift 2 ;;
@@ -12,6 +12,7 @@ while [ $# -gt 0 ]; do
     --binary) binary="$2"; shift 2 ;;
     --support-refs) support_refs="$2"; shift 2 ;;
     --revision) revision="$2"; shift 2 ;;
+    --contract-binary) contract_binary="$2"; shift 2 ;;
     *) echo "build-release-bundle: unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -60,12 +61,21 @@ if [ -n "$(git -C "$root" status --porcelain --untracked-files=no)" ]; then
   exit 1
 fi
 
+# The internal producer is built from the same clean revision as the release assets.
+# Its output declares product semantics, never qualification policy or a verdict.
+if [ -z "$contract_binary" ]; then
+  (cd "$root" && SOL_RELEASE_VERSION="$version" dune build cli/bin/database_contract_projection.exe)
+  contract_binary="$root/_build/default/cli/bin/database_contract_projection.exe"
+fi
+
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 prefix="$stage/sol-$version"
 share="$prefix/share/sol/$version"
 mkdir -p "$prefix/bin" "$share"
 install -m 0755 "$binary" "$prefix/bin/sol"
+install -m 0755 "$contract_binary" "$prefix/bin/sol-database-contract"
+"$contract_binary" definition "$revision" >"$share/database-contract.json"
 printf '%s\n' "$version" >"$share/VERSION"
 printf '%s\n' "$revision" >"$share/REVISION"
 printf '%s\n' "$runner" >"$share/migration-runner-image"
