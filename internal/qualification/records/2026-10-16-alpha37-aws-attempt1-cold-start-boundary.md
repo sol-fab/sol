@@ -152,3 +152,18 @@ behaviour; only the diagnostic is wrong.
   rest of the matrix.
 - That the AWS cold-start lifecycle completes: it reached the artifact gate but the phase's own
   assertion could not be satisfied by the apparatus.
+
+## Follow-up filed from this record's review
+
+- **#1491 — product.** Establish declared-namespace existence authoritatively before the workload
+  release: positively absent namespaces make it not applicable; a namespace that exists keeps the
+  existing checks; an unestablishable existence keeps the refusal. Implementation: #1493 (draft,
+  with the observation identity left for maintainer judgement). This is the normal
+  failure-recovery path for users, not only a qualification concern.
+- **#1492 — qualification harness.** Replace the unobservable cold-start Deployment listing with a
+  sound namespace-absence assertion over the complete candidate-bound namespace set, under an
+  explicitly validated observation identity. Implementation: #1495.
+- **#1496 — the `app-image-refs.txt` diagnostic** (finding F3), separate.
+
+The parent **#1488** keeps the common cause: a security model that grants the deploy identity
+authority only where it has deployed, and consumers that need to observe an undeployed target.
