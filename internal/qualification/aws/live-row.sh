@@ -15,6 +15,11 @@ AWS_REGION="${AWS_REGION:-us-east-1}"
 CLUSTER="${CLUSTER:?Set CLUSTER to this the run EKS cluster name}"
 DEPLOY_ROLE_ARN="${DEPLOY_ROLE_ARN:?Set DEPLOY_ROLE_ARN to the deploy role the target declares}"
 CLUSTER_ACCESS_ROLE_ARN="${CLUSTER_ACCESS_ROLE_ARN:?Set CLUSTER_ACCESS_ROLE_ARN to the cluster-access role the target declares}"
+# The publisher is a *separate* principal (SEC-011 / ADR 0002): Sol's deploy identity holds
+# no registry-write authority, so publication is never the operator's ambient credential.
+# Optional here so the read-only phases (`verify`) and teardown work without a publisher
+# session; `app_push_images` refuses to publish until one is named.
+PUBLISHER_ROLE_ARN="${PUBLISHER_ROLE_ARN:-}"
 OPERATOR_ROLE_ARN="${OPERATOR_ROLE_ARN:-}"
 QUALIFIER_ROLE="${QUALIFIER_ROLE:-}"
 TRANSPORT="${TRANSPORT:-1}"
@@ -116,6 +121,10 @@ required
   SOL_CANDIDATE     the candidate document this run qualifies (the draft's candidate.json);
                     the run verifies the prefix is that candidate before it provisions
   QUALIFIER_ROLE    the qualification-only transport role; required unless TRANSPORT=0
+  PUBLISHER_ROLE_ARN  the scoped image-publishing identity. The phases that publish refuse
+                    without it: publication is the publisher's own assumed session, never the
+                    operator's ambient credentials (SEC-011 / ADR 0002). The read-only phases
+                    (prepare, verify) and destroy do not need it.
 optional (defaults shown)
   ROW=qualreg                    the stable logical row label
   TARGET=qualreg-<attempt>/aws/us-east-1   CONTINUE_ATTEMPT=0
@@ -137,13 +146,15 @@ optional (defaults shown)
 phases
   prepare    build the application images bound to the candidate; touches no provider state
   cloud      the cold deploy (inline installation, cluster and platform; refuse at the
-             artifact gate), then publish the built images into the repositories Sol
-             created, the read-only whole-target plan, the deploy identity's kubeconfig,
-             node evidence, and state capture
+             artifact gate), then publish the built images through the publisher identity into
+             the repositories Sol created, the read-only whole-target plan, the deploy
+             identity's kubeconfig, node evidence, and state capture
   transport  establish and verify the qualification-only transport (INFRA-060 / DEC-039)
   app        Sol's work: runtime secrets, migrate apply, deploy with the published digests,
              the transaction
-  destroy    supported teardown, then the independent inventory
+  destroy    supported teardown against *this attempt's* kubeconfig (or none when the cluster
+             is absent, so a stale same-named context is never used), then the independent
+             inventory
   verify     the independent inventory only; invokes no teardown
 
 The independent inventory (absence.py, read-only) decides teardown from provider reads alone: every
@@ -678,27 +689,120 @@ app_build_images() {
   done
 }
 
+# The publisher's own assumed-role session (SEC-011, ADR 0002). Publication is a separate
+# authority from substrate mutation and from deployment, so the operator's ambient
+# AdministratorAccess is never what publishes: the run demonstrates that the scoped publisher
+# identity is sufficient, and it fails closed rather than fall back when no publisher is named
+# or its session cannot be assumed.
+#
+# The assumed session lives only in this shell (`PUBLISHER_ACCESS_KEY_ID` and its two
+# companions). It is never exported, never written into the evidence bundle and never
+# recorded; `publisher-identity.txt` records only the role and the identity the session
+# actually answered with.
+publisher_session() {
+  local json
+  if [ -z "$PUBLISHER_ROLE_ARN" ]; then
+    say "REFUSING: no publisher identity is named (PUBLISHER_ROLE_ARN). Publication is the"
+    say "publisher's own scoped authority, so this run does not publish with the operator's"
+    say "ambient credentials (SEC-011, ADR 0002); nothing was published."
+    return 1
+  fi
+  if ! json="$(aws sts assume-role \
+      --role-arn "$PUBLISHER_ROLE_ARN" \
+      --role-session-name "sol-qualification-publisher" \
+      --duration-seconds 3600 \
+      --output json 2>"$LOG_DIR/publisher-assume.err")"; then
+    say "could not assume the publisher identity $PUBLISHER_ROLE_ARN, so nothing is published"
+    say "  (see $LOG_DIR/publisher-assume.err)"
+    return 1
+  fi
+  PUBLISHER_ACCESS_KEY_ID="$(printf '%s' "$json" | jq -r '.Credentials.AccessKeyId // empty')"
+  PUBLISHER_SECRET_ACCESS_KEY="$(printf '%s' "$json" | jq -r '.Credentials.SecretAccessKey // empty')"
+  PUBLISHER_SESSION_TOKEN="$(printf '%s' "$json" | jq -r '.Credentials.SessionToken // empty')"
+  if [ -z "$PUBLISHER_ACCESS_KEY_ID" ] \
+    || [ -z "$PUBLISHER_SECRET_ACCESS_KEY" ] \
+    || [ -z "$PUBLISHER_SESSION_TOKEN" ]; then
+    say "sts:AssumeRole for $PUBLISHER_ROLE_ARN returned no usable session, so nothing is published"
+    return 1
+  fi
+  return 0
+}
+
+publisher_clear_session() {
+  unset PUBLISHER_ACCESS_KEY_ID PUBLISHER_SECRET_ACCESS_KEY PUBLISHER_SESSION_TOKEN
+}
+
+# Run a command as the publisher session. `-u AWS_PROFILE` is what makes it the publisher and
+# not whatever the operator's profile holds: the assumed environment credentials then resolve
+# through the CLI's own chain, ahead of any profile.
+publisher_run() {
+  local name="$1"
+  shift
+  run "$name" env -u AWS_PROFILE \
+    "AWS_ACCESS_KEY_ID=$PUBLISHER_ACCESS_KEY_ID" \
+    "AWS_SECRET_ACCESS_KEY=$PUBLISHER_SECRET_ACCESS_KEY" \
+    "AWS_SESSION_TOKEN=$PUBLISHER_SESSION_TOKEN" \
+    "$@"
+}
+
+# What the publishing session actually authenticates as, read back rather than assumed: the
+# evidence has to show the publisher principal published, not the operator's. A session that
+# answers as anything else stops the phase before a push.
+publisher_record_identity() {
+  local arn
+  if ! arn="$(env -u AWS_PROFILE \
+      "AWS_ACCESS_KEY_ID=$PUBLISHER_ACCESS_KEY_ID" \
+      "AWS_SECRET_ACCESS_KEY=$PUBLISHER_SECRET_ACCESS_KEY" \
+      "AWS_SESSION_TOKEN=$PUBLISHER_SESSION_TOKEN" \
+      aws sts get-caller-identity --query Arn --output text 2>"$LOG_DIR/publisher-identity.err")" \
+    || [ -z "$arn" ]; then
+    say "the publisher session could not answer sts get-caller-identity, so nothing is published"
+    say "  (see $LOG_DIR/publisher-identity.err)"
+    return 1
+  fi
+  case "$arn" in
+    *"assumed-role/"*"/sol-qualification-publisher") : ;;
+    *)
+      say "the publishing session answers as $arn, which is not the publisher identity"
+      say "$PUBLISHER_ROLE_ARN on its own session; nothing is published"
+      return 1
+      ;;
+  esac
+  {
+    printf 'publisher_role_arn: %s\n' "$PUBLISHER_ROLE_ARN"
+    printf 'publisher_session_identity: %s\n' "$arn"
+    printf 'publisher_session_name: sol-qualification-publisher\n'
+    printf 'publisher_session_values: never recorded\n'
+  } >"$LOG_DIR/publisher-identity.txt"
+  say "publishing as $arn"
+}
+
 # Publish the built images into the repositories Sol's deploy created, and record the immutable
 # digest each push resolved to; those digests are what every later deploy names.
 app_push_images() {
   local unit ref digest
   : >"$LOG_DIR/app-image-refs.txt"
+  rm -f "$LOG_DIR/publisher-identity.txt"
   if [ ! -s "$LOG_DIR/app-built-tags.txt" ]; then
     say "no built images to publish for $TARGET; run live-row.sh prepare first"
     return 0
   fi
-  run ecr-login bash -c \
-    "aws ecr get-login-password --region '$AWS_REGION' | docker login --username AWS --password-stdin '$ECR_REGISTRY'" || return 1
+  publisher_session || return 1
+  publisher_record_identity || { publisher_clear_session; return 1; }
+  publisher_run ecr-login bash -c \
+    "aws ecr get-login-password --region '$AWS_REGION' | docker login --username AWS --password-stdin '$ECR_REGISTRY'" \
+    || { publisher_clear_session; return 1; }
   while IFS= read -r line; do
     unit="${line%%=*}"
     ref="${line#*=}"
     [ -n "$unit" ] || continue
     [ -n "$ref" ] || continue
-    run "app-push-$unit" docker push "$ref" || return 1
-    if ! digest="$(image_digest "$ref")"; then return 1; fi
+    publisher_run "app-push-$unit" docker push "$ref" || { publisher_clear_session; return 1; }
+    if ! digest="$(image_digest "$ref")"; then publisher_clear_session; return 1; fi
     printf '%s=%s\n' "$unit" "$digest" >>"$LOG_DIR/app-image-refs.txt"
     say "  $unit -> $digest"
   done <"$LOG_DIR/app-built-tags.txt"
+  publisher_clear_session
 }
 
 # The digests this run pins, as `sol deploy --image-ref` arguments. A profiled target's preflight
@@ -1047,11 +1151,92 @@ phase_app() {
   say "the service read the worker's effect back out of PostgreSQL through the qualification transport"
 }
 
+# The Kubernetes destination teardown runs against, selected explicitly instead of inherited
+# from whatever the calling shell happens to hold.
+#
+# `sol destroy` releases the target's workloads before it drops the substrate, and that release
+# runs in whatever cluster the ambient `KUBECONFIG` names. A fresh session has none of this
+# attempt's contexts, and an operator's default kubeconfig can carry *another* cluster's context
+# under this cluster's name from an earlier window -- so a destroy that trusts the ambient
+# environment can silently skip the release, or aim it at the wrong cluster (#1443 is the same
+# shape one level down: state that outlives the session must not be read as the current run's).
+#
+# This decides what it can, and records which of the three it was:
+#
+#   attempted   the declared cluster is readable and the attempt's kubeconfig addresses its
+#               current endpoint, so the release runs against this target's cluster;
+#   skipped     the provider positively answers that the cluster does not exist, so there is
+#               nothing to release from, and no context another cluster could answer is handed
+#               to Sol;
+#   blocked     the cluster could not be read, or could not be reached with a credential that
+#               addresses it -- UNKNOWN, never recorded as a skipped release.
+#
+# Every branch still runs the destroy and the independent inventory: the release is a
+# precondition of destruction, not the absence verdict, which stays `absence.py`'s.
+destroy_kube_destination() {
+  local file="$LOG_DIR/destroy-kubeconfig.txt"
+  local describe_err="$LOG_DIR/destroy-cluster-describe.err"
+  : >"$file"
+  if aws eks describe-cluster --name "$CLUSTER" --region "$AWS_REGION" \
+    >"$LOG_DIR/destroy-cluster-describe.json" 2>"$describe_err"; then
+    :
+  elif grep -q 'ResourceNotFoundException' "$describe_err" 2>/dev/null; then
+    # No cluster by this name. Give Sol a config that resolves no context at all, so neither a
+    # stale file in this attempt's directory nor the operator's default kubeconfig can aim the
+    # release at a different, live cluster; Sol then reports the release as not applicable.
+    : >"$LOG_DIR/kubeconfig-none.yaml"
+    export KUBECONFIG="$LOG_DIR/kubeconfig-none.yaml"
+    printf 'destroy_cluster: ABSENT (describe-cluster answered ResourceNotFoundException)\n' >>"$file"
+    printf 'destroy_kubeconfig: %s (empty: no context resolves)\n' "$LOG_DIR/kubeconfig-none.yaml" >>"$file"
+    printf 'destroy_release_cleanup: skipped (the cluster is genuinely absent, so there is nothing to release from)\n' >>"$file"
+    say "teardown: the cluster $CLUSTER is absent, so the workload release is skipped -- nothing to release from"
+    return 0
+  else
+    : >"$LOG_DIR/kubeconfig-none.yaml"
+    export KUBECONFIG="$LOG_DIR/kubeconfig-none.yaml"
+    printf 'destroy_cluster: UNKNOWN (describe-cluster did not answer; see %s)\n' "$describe_err" >>"$file"
+    printf 'destroy_release_cleanup: blocked (the cluster could not be read) -- UNKNOWN, not skipped\n' >>"$file"
+    say "teardown: could not read whether $CLUSTER exists, so whether the workloads were released is UNKNOWN"
+    say "  the destroy still runs and the independent inventory still decides absence"
+    return 0
+  fi
+  # The cluster exists. Rebuild the attempt's own kubeconfig when this session does not have
+  # one, or has one that addresses a replaced cluster of the same name.
+  if [ ! -f "$DEPLOY_KUBECONFIG" ] || ! verify_kubeconfig_endpoint "$DEPLOY_KUBECONFIG" >/dev/null 2>&1
+  then
+    if ! KUBECONFIG="$DEPLOY_KUBECONFIG" aws eks update-kubeconfig --region "$AWS_REGION" \
+      --name "$CLUSTER" --alias "$CLUSTER-deploy" --role-arn "$DEPLOY_ROLE_ARN" \
+      >"$LOG_DIR/destroy-kubeconfig-refresh.log" 2>&1 \
+      || ! verify_kubeconfig_endpoint "$DEPLOY_KUBECONFIG" >/dev/null 2>&1; then
+      : >"$LOG_DIR/kubeconfig-none.yaml"
+      export KUBECONFIG="$LOG_DIR/kubeconfig-none.yaml"
+      printf 'destroy_cluster: PRESENT\n' >>"$file"
+      printf 'destroy_kubeconfig: %s (could not be established; see destroy-kubeconfig-refresh.log)\n' "$DEPLOY_KUBECONFIG" >>"$file"
+      printf 'destroy_release_cleanup: blocked (the cluster exists but no credential available here addresses it) -- UNKNOWN, not skipped\n' >>"$file"
+      say "teardown: could not establish a kubeconfig that addresses $CLUSTER, so whether the workloads were released is UNKNOWN"
+      return 0
+    fi
+  fi
+  export KUBECONFIG="$DEPLOY_KUBECONFIG"
+  printf 'destroy_cluster: PRESENT\n' >>"$file"
+  printf 'destroy_kubeconfig: %s (verified against the cluster current endpoint)\n' "$DEPLOY_KUBECONFIG" >>"$file"
+  if timeout 60 kubectl --kubeconfig "$DEPLOY_KUBECONFIG" --context "$CLUSTER-deploy" \
+    auth can-i get namespaces >/dev/null 2>&1; then
+    printf 'destroy_release_cleanup: attempted (Kubernetes answered at the cluster endpoint, so Sol releases the workloads before the substrate)\n' >>"$file"
+    say "teardown: releasing the workloads through this attempt's kubeconfig $DEPLOY_KUBECONFIG"
+  else
+    printf 'destroy_release_cleanup: blocked (the cluster exists and the kubeconfig addresses it, but Kubernetes did not answer) -- UNKNOWN, not skipped\n' >>"$file"
+    say "teardown: Kubernetes did not answer through this attempt's kubeconfig, so whether the workloads were released is UNKNOWN"
+  fi
+  return 0
+}
+
 phase_destroy() {
   # Checked *before* TEARDOWN_ATTEMPTED: a destroy that cannot start must not record that a
   # teardown was attempted, or an inventory that was never taken reads as a failed teardown.
   require_credentials || return 1
   TEARDOWN_ATTEMPTED=1
+  destroy_kube_destination
   capture_state
   local destroy_rc=0 verdict_rc=0
   run cloud-destroy bash -c "cd '$WORKSPACE' && exec '$SOL' destroy '$TARGET' --apply --var-file '$TFVARS'" || destroy_rc=$?

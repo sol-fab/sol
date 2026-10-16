@@ -56,7 +56,10 @@ if [ "${1:-}" = "--version" ]; then
   printf '%s\n' "${STUB_SOL_VERSION:-v0.1.0-alpha.7}"
   exit 0
 fi
-printf 'sol %s [runner=%s] [home=%s]\n' "$*" "${SOL_MIGRATION_RUNNER_IMAGE:-unset}" "${SOL_HOME:-unset}" >>"$SOL_LOG"
+# `kubeconfig=` records the destination Sol inherited: teardown must select this attempt's own
+# kubeconfig rather than whatever the calling shell exported.
+printf 'sol %s [runner=%s] [home=%s] [kubeconfig=%s]\n' \
+  "$*" "${SOL_MIGRATION_RUNNER_IMAGE:-unset}" "${SOL_HOME:-unset}" "${KUBECONFIG:-unset}" >>"$SOL_LOG"
 # A cold target has no reachable release to inherit workload images from; the real `sol plan`
 # refuses, and the harness records the skip and continues (issue #1408).
 if [ "${1:-}" = "plan" ]; then
@@ -237,6 +240,13 @@ candidate_document "$INSTALL" "v0.1.0-alpha.6" "$CANDIDATE_REVISION" "$RUNNER" \
   "$TMP/candidate-other-version.json"
 
 ECR="123456789012.dkr.ecr.us-east-1.amazonaws.com"
+# The publisher identity the row assumes, and the marker the stub answers its assumed session
+# with. Exported because the stubs are separate processes.
+PUBLISHER_ROLE_ARN="arn:aws:iam::123456789012:role/sol-qual5-publisher"
+PUBLISHER_ACCESS_KEY_STUB="AKIAPUBLISHERSTUB0000000"
+export PUBLISHER_ROLE_ARN PUBLISHER_ACCESS_KEY_STUB
+PUBLISHER_ROLE_STUB_ARN="$PUBLISHER_ROLE_ARN"
+export PUBLISHER_ROLE_STUB_ARN
 
 cat >"$TMP/bin/aws" <<'STUB'
 #!/usr/bin/env bash
@@ -263,9 +273,47 @@ if [ "${STUB_INVENTORY_UNREADABLE:-0}" = "1" ] && class_read "$1" "$2"; then
   exit 255
 fi
 case "$1 $2" in
+  # The publisher's own assumed session (SEC-011). Only the publisher ARN the run names is
+  # assumable: anything else is refused, so a run that published through some other identity
+  # would fail here rather than silently publish as the operator.
+  "sts assume-role")
+    if [ "${STUB_ASSUME_REFUSED:-0}" = "1" ]; then
+      printf 'An error occurred (AccessDenied) when calling the AssumeRole operation: User is not authorized to perform: sts:AssumeRole on resource\n' >&2
+      exit 255
+    fi
+    case " $* " in
+      *" --role-arn $PUBLISHER_ROLE_STUB_ARN "*)
+        printf '{"Credentials":{"AccessKeyId":"%s","SecretAccessKey":"stub-secret","SessionToken":"stub-token","Expiration":"2030-01-01T00:00:00Z"}}\n' \
+          "$PUBLISHER_ACCESS_KEY_STUB"
+        ;;
+      *)
+        printf 'An error occurred (AccessDenied) when calling the AssumeRole operation: User is not authorized to perform: sts:AssumeRole on this resource\n' >&2
+        exit 255
+        ;;
+    esac
+    ;;
   "sts get-caller-identity")
     case " $* " in
-      *"--output json"*) printf '{"Account":"123456789012","Arn":"arn:aws:iam::123456789012:user/qualifier"}\n' ;;
+      *"--query Arn"*)
+        case "${AWS_ACCESS_KEY_ID:-}" in
+          "$PUBLISHER_ACCESS_KEY_STUB")
+            if [ "${STUB_PUBLISHER_IMPERSONATES:-}" = "1" ]; then
+              printf '%s\n' "arn:aws:sts::123456789012:assumed-role/sol-qual5-operator/elsewhere"
+            else
+              printf '%s\n' "arn:aws:sts::123456789012:assumed-role/sol-qual5-publisher/sol-qualification-publisher"
+            fi
+            ;;
+          *) printf '%s\n' "arn:aws:iam::123456789012:user/qualifier" ;;
+        esac
+        ;;
+      *"--output json"*)
+        case "${AWS_ACCESS_KEY_ID:-}" in
+          "$PUBLISHER_ACCESS_KEY_STUB")
+            printf '{"Account":"123456789012","Arn":"arn:aws:sts::123456789012:assumed-role/sol-qual5-publisher/sol-qualification-publisher"}\n'
+            ;;
+          *) printf '{"Account":"123456789012","Arn":"arn:aws:iam::123456789012:user/qualifier"}\n' ;;
+        esac
+        ;;
       *) printf '123456789012\n' ;;
     esac
     ;;
@@ -414,6 +462,17 @@ case "$1 $2" in
     printf '{"HostedZones":[{"Name":"qual-aws.sol-fab.dev.","Id":"/hostedzone/Z123"}]}\n'
     ;;
   "eks describe-cluster")
+    # The destroy phase reads the cluster's existence to decide whether the workload release
+    # applies, so the stub models all three answers: present, positively absent, unreadable.
+    if [ "${STUB_CLUSTER_ABSENT:-0}" = "1" ]; then
+      printf 'An error occurred (ResourceNotFoundException) when calling the DescribeCluster operation: No cluster found for name: %s\n' \
+        "${STUB_CLUSTER_ABSENT_NAME:-test-cluster}" >&2
+      exit 255
+    fi
+    if [ "${STUB_CLUSTER_UNREADABLE:-0}" = "1" ]; then
+      printf 'Unable to locate credentials. You can configure credentials by running "aws login".\n' >&2
+      exit 255
+    fi
     case " $* " in
       *" cluster.endpoint "*) printf '%s\n' "${STUB_CLUSTER_ENDPOINT:-https://10.0.0.1}" ;;
     esac
@@ -620,7 +679,11 @@ chmod +x "$TMP/bin/curl"
 
 cat >"$TMP/bin/docker" <<'STUB'
 #!/usr/bin/env bash
-printf 'docker %s\n' "$*" >>"$DOCKER_LOG"
+# The trailing fields record which AWS identity the invocation ran under: publication must be
+# the publisher's own assumed session, so the regression reads it back instead of trusting the
+# phase's narration.
+printf 'docker %s [aws_access_key_id=%s] [aws_profile=%s]\n' \
+  "$*" "${AWS_ACCESS_KEY_ID:-unset}" "${AWS_PROFILE:-unset}" >>"$DOCKER_LOG"
 case " $* " in
   *" inspect "*)
     ref="${!#}"
@@ -726,6 +789,7 @@ run_row() {
     WORKSPACE="$WORKSPACE" TARGET=qualreg/aws/us-east-1 ECR_REGISTRY="$ECR" \
     CLUSTER=test-cluster DEPLOY_ROLE_ARN=arn:aws:iam::1:role/deploy \
     CLUSTER_ACCESS_ROLE_ARN=arn:aws:iam::1:role/access \
+    PUBLISHER_ROLE_ARN="$PUBLISHER_ROLE_ARN" \
     STUB_APP_REFUSALS=1 STUB_APP_MARKER_DIR="$STUB_APP_MARKER_DIR" \
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" PHASE_TIMEOUT=60 "$@" \
     "$ROOT/internal/qualification/aws/live-row.sh" app >"$TMP/$name.out" 2>&1
@@ -774,6 +838,7 @@ run_phase() {
     WORKSPACE="$WORKSPACE" TARGET=qualreg/aws/us-east-1 ECR_REGISTRY="$ECR" \
     CLUSTER=test-cluster DEPLOY_ROLE_ARN=arn:aws:iam::1:role/deploy \
     CLUSTER_ACCESS_ROLE_ARN=arn:aws:iam::1:role/access \
+    PUBLISHER_ROLE_ARN="$PUBLISHER_ROLE_ARN" \
     OPERATOR_ROLE_ARN=arn:aws:iam::1:role/operator QUALIFIER_ROLE=qualifier \
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" PHASE_TIMEOUT=60 "$@" \
     "$ROOT/internal/qualification/aws/live-row.sh" "$phase" >"$TMP/$name.out" 2>&1
@@ -803,6 +868,7 @@ run_phase_closed_stdout() {
     WORKSPACE="$WORKSPACE" TARGET=qualreg/aws/us-east-1 ECR_REGISTRY="$ECR" \
     CLUSTER=test-cluster DEPLOY_ROLE_ARN=arn:aws:iam::1:role/deploy \
     CLUSTER_ACCESS_ROLE_ARN=arn:aws:iam::1:role/access \
+    PUBLISHER_ROLE_ARN="$PUBLISHER_ROLE_ARN" \
     OPERATOR_ROLE_ARN=arn:aws:iam::1:role/operator QUALIFIER_ROLE=qualifier \
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" PHASE_TIMEOUT=60 "$@" \
     "$ROOT/internal/qualification/aws/live-row.sh" "$phase" 2>"$TMP/$name.err" | true
@@ -836,6 +902,7 @@ run_phase_sigterm() {
     WORKSPACE="$WORKSPACE" TARGET=qualreg/aws/us-east-1 ECR_REGISTRY="$ECR" \
     CLUSTER=test-cluster DEPLOY_ROLE_ARN=arn:aws:iam::1:role/deploy \
     CLUSTER_ACCESS_ROLE_ARN=arn:aws:iam::1:role/access \
+    PUBLISHER_ROLE_ARN="$PUBLISHER_ROLE_ARN" \
     OPERATOR_ROLE_ARN=arn:aws:iam::1:role/operator QUALIFIER_ROLE=qualifier \
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" PHASE_TIMEOUT=60 "$@" \
     "$ROOT/internal/qualification/aws/live-row.sh" "$phase" >"$TMP/$name.out" 2>&1 &
@@ -1123,6 +1190,69 @@ has "and it asserts from the cluster that no workload moved before the publish" 
 has "and that no release was recorded" \
   "get configmap -n pluto-payments" "$TMP/cloudrun.kubectl"
 
+printf '\nscenario: publication runs as the publisher identity, never the operator (SEC-011)\n'
+KEEP_LOG_DIR=1 run_phase pubrun prepare
+KEEP_LOG_DIR=1 run_phase pubrun cloud
+is "exit 0" "$(cat "$TMP/pubrun.rc")" "0"
+has "the run assumes the publisher role the operator names, on its own session" \
+  "aws sts assume-role --role-arn $PUBLISHER_ROLE_ARN --role-session-name sol-qualification-publisher" \
+  "$TMP/pubrun.aws"
+has "and reads the session's identity back before it publishes" \
+  "publisher_session_identity: arn:aws:sts::123456789012:assumed-role/sol-qual5-publisher/sol-qualification-publisher" \
+  "$TMP/pubrun.logs/publisher-identity.txt"
+has "recording the publisher role the run was given" \
+  "publisher_role_arn: $PUBLISHER_ROLE_ARN" "$TMP/pubrun.logs/publisher-identity.txt"
+lacks "and never the session's own values" "stub-secret" "$TMP/pubrun.logs/publisher-identity.txt"
+has "ECR authentication runs under the publisher session with no operator profile in play" \
+  "docker login --username AWS --password-stdin $ECR [aws_access_key_id=$PUBLISHER_ACCESS_KEY_STUB] [aws_profile=unset]" \
+  "$TMP/pubrun.docker"
+pushes="$(grep -c 'docker push .*pluto/' "$TMP/pubrun.docker")"
+assumed="$(grep -c "docker push .*pluto/.* \[aws_access_key_id=$PUBLISHER_ACCESS_KEY_STUB\] \[aws_profile=unset\]" \
+  "$TMP/pubrun.docker")"
+if [ "$pushes" -ge 1 ] && [ "$pushes" = "$assumed" ]; then
+  ok "and every published image is pushed under that session"
+else
+  no "and every published image is pushed under that session" \
+    "each of the $pushes push line(s) carries the publisher session and no AWS_PROFILE" \
+    "$(tr '\n' '|' <"$TMP/pubrun.docker" | cut -c1-200)"
+fi
+has "the digests the later deploys pin are still recorded" \
+  "charge_svc=$ECR/pluto/charge-svc@sha256:" "$TMP/pubrun.logs/app-image-refs.txt"
+
+printf '\nscenario: publication refuses rather than fall back to the operator credentials\n'
+KEEP_LOG_DIR=1 run_phase nopublisher prepare PUBLISHER_ROLE_ARN=
+KEEP_LOG_DIR=1 run_phase nopublisher cloud PUBLISHER_ROLE_ARN=
+refused nopublisher "a run that names no publisher identity does not publish"
+has "and says which input it needs" "PUBLISHER_ROLE_ARN" "$TMP/nopublisher.out"
+if [ ! -s "$TMP/nopublisher.docker" ]; then
+  ok "and logs no registry authentication or push at all"
+else
+  no "and logs no registry authentication or push at all" "an empty docker log" \
+    "$(tr '\n' '|' <"$TMP/nopublisher.docker" | cut -c1-200)"
+fi
+if [ ! -s "$TMP/nopublisher.logs/app-image-refs.txt" ]; then
+  ok "and records no published artifact"
+else
+  no "and records no published artifact" "an empty app-image-refs.txt" \
+    "$(tr '\n' '|' <"$TMP/nopublisher.logs/app-image-refs.txt" | cut -c1-200)"
+fi
+
+printf '\nscenario: a publisher session that cannot be assumed stops the phase before any push\n'
+KEEP_LOG_DIR=1 run_phase assumerefused prepare
+KEEP_LOG_DIR=1 run_phase assumerefused cloud STUB_ASSUME_REFUSED=1
+refused assumerefused "an unassumable publisher identity fails the phase"
+has "and names the identity it could not assume" "$PUBLISHER_ROLE_ARN" "$TMP/assumerefused.out"
+lacks "and pushes nothing" "push" "$TMP/assumerefused.docker"
+
+printf '\nscenario: a session that answers as another identity stops the phase before any push\n'
+KEEP_LOG_DIR=1 run_phase impersonated prepare
+KEEP_LOG_DIR=1 run_phase impersonated cloud STUB_PUBLISHER_IMPERSONATES=1
+refused impersonated "a publishing session that is not the publisher fails the phase"
+has "and names what it answered as" "assumed-role/sol-qual5-operator/elsewhere" "$TMP/impersonated.out"
+lacks "and pushes nothing" "push" "$TMP/impersonated.docker"
+lacks "and records no publisher identity" "publisher_session_identity" \
+  "$TMP/impersonated.logs/publisher-identity.txt"
+
 printf '\nscenario: a cold deploy that moved a workload before publishing is caught (#1473)\n'
 KEEP_LOG_DIR=1 run_phase coldworkload prepare
 KEEP_LOG_DIR=1 run_phase coldworkload cloud STUB_COLD_WORKLOAD=1
@@ -1211,6 +1341,84 @@ is "exit 0" "$(cat "$TMP/destroyrun.rc")" "0"
 has "the destroy carries the same var file, so teardown renders the applied shape" \
   "destroy qualreg/aws/us-east-1 --apply --var-file $ROOT/internal/qualification/aws/qual-aws-row.tfvars" \
   "$TMP/destroyrun.sol"
+has "and the release is attempted against the cluster it provisioned" \
+  "destroy_release_cleanup: attempted" "$TMP/destroyrun.logs/destroy-kubeconfig.txt"
+
+# The identity `prepare`/`cloud` write, so a destroy scenario can start from the state a
+# continued session actually has.
+seed_attempt() {
+  local name="$1"
+  mkdir -p "$TMP/$name.logs"
+  {
+    printf 'attempt=%s\n' "$ATTEMPT"
+    printf 'row=%s\n' qualreg
+    printf 'target=%s\n' qualreg/aws/us-east-1
+    printf 'state_key=%s\n' sol/qualreg/aws/us-east-1/cloud.tfstate
+  } >"$TMP/$name.logs/attempt.txt"
+}
+
+printf '\nscenario: teardown selects this attempt'"'"'s kubeconfig, not the calling shell'"'"'s state\n'
+seed_attempt destroydest
+printf 'apiVersion: v1\nclusters:\n- cluster:\n    server: %s\n  name: c\n' \
+  "${STUB_CLUSTER_ENDPOINT:-https://10.0.0.1}" >"$TMP/destroydest.logs/kubeconfig-deploy.yaml"
+printf 'apiVersion: v1\nclusters:\n- cluster:\n    server: https://192.0.2.9\n  name: other\n' \
+  >"$TMP/someone-elses-cluster.yaml"
+export KUBECONFIG="$TMP/someone-elses-cluster.yaml"
+KEEP_LOG_DIR=1 run_phase destroydest destroy
+unset KUBECONFIG
+is "exit 0" "$(cat "$TMP/destroydest.rc")" "0"
+has "the release runs against this attempt's own kubeconfig" \
+  "[kubeconfig=$TMP/destroydest.logs/kubeconfig-deploy.yaml]" "$TMP/destroydest.sol"
+lacks "and never the caller's" "[kubeconfig=$TMP/someone-elses-cluster.yaml]" "$TMP/destroydest.sol"
+has "with the cluster present and the kubeconfig verified against its current endpoint" \
+  "destroy_cluster: PRESENT" "$TMP/destroydest.logs/destroy-kubeconfig.txt"
+has "and the release recorded as attempted" \
+  "destroy_release_cleanup: attempted" "$TMP/destroydest.logs/destroy-kubeconfig.txt"
+
+printf '\nscenario: an absent cluster skips the release and hands Sol no context at all\n'
+seed_attempt destroydone
+printf 'apiVersion: v1\nclusters:\n- cluster:\n    server: https://192.0.2.9\n  name: c\n' \
+  >"$TMP/destroydone.logs/kubeconfig-deploy.yaml"
+export KUBECONFIG="$TMP/someone-elses-cluster.yaml"
+KEEP_LOG_DIR=1 run_phase destroydone destroy STUB_CLUSTER_ABSENT=1
+unset KUBECONFIG
+is "exit 0" "$(cat "$TMP/destroydone.rc")" "0"
+has "the record says the cluster is positively absent" \
+  "destroy_cluster: ABSENT" "$TMP/destroydone.logs/destroy-kubeconfig.txt"
+has "and that the release was skipped, not blocked" \
+  "destroy_release_cleanup: skipped" "$TMP/destroydone.logs/destroy-kubeconfig.txt"
+has "so Sol is handed a config in which no context resolves" \
+  "[kubeconfig=$TMP/destroydone.logs/kubeconfig-none.yaml]" "$TMP/destroydone.sol"
+lacks "never a stale kubeconfig this attempt still holds" \
+  "[kubeconfig=$TMP/destroydone.logs/kubeconfig-deploy.yaml]" "$TMP/destroydone.sol"
+lacks "and never the caller's" "someone-elses" "$TMP/destroydone.sol"
+has "and the destroy still runs" "destroy qualreg/aws/us-east-1 --apply" "$TMP/destroydone.sol"
+
+printf '\nscenario: a cluster that cannot be read is UNKNOWN, never a skipped release\n'
+seed_attempt destroyunknown
+KEEP_LOG_DIR=1 run_phase destroyunknown destroy STUB_CLUSTER_UNREADABLE=1
+is "exit 0" "$(cat "$TMP/destroyunknown.rc")" "0"
+has "the record says the cluster read is UNKNOWN" \
+  "destroy_cluster: UNKNOWN" "$TMP/destroyunknown.logs/destroy-kubeconfig.txt"
+has "and that the release is blocked, not skipped" \
+  "destroy_release_cleanup: blocked" "$TMP/destroyunknown.logs/destroy-kubeconfig.txt"
+lacks "so it is never recorded as a skipped release" "destroy_release_cleanup: skipped" \
+  "$TMP/destroyunknown.logs/destroy-kubeconfig.txt"
+has "and Sol still runs the destroy" "destroy qualreg/aws/us-east-1 --apply" "$TMP/destroyunknown.sol"
+has "whose verdict the independent inventory still decides" \
+  "independent inventory (read-only)" "$TMP/destroyunknown.out"
+
+printf '\nscenario: a kubeconfig that addresses a replaced cluster is rebuilt before the release\n'
+seed_attempt destroyregen
+printf 'apiVersion: v1\nclusters:\n- cluster:\n    server: https://9.9.9.9\n  name: c\n' \
+  >"$TMP/destroyregen.logs/kubeconfig-deploy.yaml"
+KEEP_LOG_DIR=1 run_phase destroyregen destroy
+is "exit 0" "$(cat "$TMP/destroyregen.rc")" "0"
+has "the attempt's kubeconfig is re-established at the cluster's current endpoint" \
+  "aws eks update-kubeconfig --region us-east-1 --name test-cluster --alias test-cluster-deploy" \
+  "$TMP/destroyregen.aws"
+has "and the release is recorded as attempted" \
+  "destroy_release_cleanup: attempted" "$TMP/destroyregen.logs/destroy-kubeconfig.txt"
 
 printf '\nscenario: the prepare and cloud phases publish exactly the selected units\n'
 KEEP_LOG_DIR=1 run_phase alphaunits prepare APP_UNITS="orders_svc fulfilment_worker"
