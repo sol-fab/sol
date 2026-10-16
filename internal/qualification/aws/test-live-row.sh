@@ -516,15 +516,15 @@ case " $* " in
       [ "$ca_prev" = "deploy" ] && ca_workload="$ca_arg"
       ca_prev="$ca_arg"
     done
-    # The row's target has mixed dependencies: `charge-svc` is the class-credential consumer and
-    # mounts the CA; the Kafka-only units mount nothing and must not be required to. STUB_CA_ALL
-    # models a target whose units all consume the database, STUB_CA_NO_MOUNTS one where none does,
-    # and STUB_CA_UNMOUNTED names one workload that mounts a *different* ConfigMap.
+    # The row's target has mixed dependencies: `charge-svc` mounts the CA; the Kafka-only units
+    # mount nothing and must not be required to. STUB_CA_ALL models a target whose units all
+    # consume the database, STUB_CA_NO_MOUNTS one where none does, and STUB_CA_UNMOUNTED names one
+    # workload that mounts a *different* ConfigMap.
     if [ "${STUB_CA_UNMOUNTED:-}" = "$ca_workload" ]; then
       printf '{"spec":{"template":{"spec":{"volumes":[{"name":"db-ca","configMap":{"name":"other-db-ca"}}]}}}}\n'
       exit 0
     fi
-    if [ "${STUB_CA_NO_MOUNTS:-0}" = "1" ] || [ "${STUB_CA_NONE:-}" = "$ca_workload" ]; then
+    if [ "${STUB_CA_NO_MOUNTS:-0}" = "1" ]; then
       printf '{"spec":{"template":{"spec":{"volumes":[]}}}}\n'
       exit 0
     fi
@@ -1064,7 +1064,7 @@ has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
   "database_delivery: qualreg-aws-us-east-1-ddl-creds@pluto-comms (migration Job, as the deploy declared it), qualreg-aws-us-east-1-dml-creds@pluto-payments (unit consumer)" \
   "$TMP/ok.logs/prerequisites.txt"
 has "and the database CA is asserted where a workload mounts it, plus the declared location (#1481)" \
-  "database_ca: qualreg-aws-us-east-1-db-ca present at the declared location and wherever a selected workload mounts it; mounted by 1 workload(s), including the class-credential consumer pluto-payments/charge-svc" \
+  "database_ca: qualreg-aws-us-east-1-db-ca present at the declared location and wherever a selected workload mounts it; mounted by 1 workload(s)" \
   "$TMP/ok.logs/prerequisites.txt"
 has "with the declared ConfigMap read at the declared location" \
   "get configmap qualreg-aws-us-east-1-db-ca -n pluto-comms" "$TMP/ok.kubectl"
@@ -1088,12 +1088,6 @@ refused caabsentconsumer "a CA absent from the mounting consumer's namespace fai
 has "and names the workload that would not start" \
   "pluto-payments/charge-svc mounts CA ConfigMap qualreg-aws-us-east-1-db-ca, and it is absent from pluto-payments" \
   "$TMP/caabsentconsumer.out"
-
-printf '\nscenario: a class-credential consumer that mounts no CA fails even when another unit does\n'
-run_row canoconsumer TRANSPORT=0 STUB_CA_ALL=1 STUB_CA_NONE=charge-svc
-refused canoconsumer "the consumer's database path must be established"
-has "and says which consumer is not established" \
-  "consumes the database class Secret and does not mount" "$TMP/canoconsumer.out"
 
 printf '\nscenario: a target whose units mount no CA at all cannot pass the assertion\n'
 run_row canomounts TRANSPORT=0 STUB_CA_NO_MOUNTS=1

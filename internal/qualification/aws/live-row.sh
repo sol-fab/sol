@@ -1135,12 +1135,13 @@ app_verify_database_delivery() {
 # nothing and needs nothing, so the requirement is derived per workload from its own pod template
 # rather than assumed for every selected namespace: attempt a38-aws-1 failed here because
 # pluto-checkout's Kafka-only unit was required to carry a database CA it has no reason to read.
-# Two things keep that from making the check vacuous: at least one selected workload must mount the
-# declared CA, and the unit that consumes the database class credential (the row's transaction
-# path) must be one of them.
+# Which unit *consumes* the database is not decided here -- the class-credential delivery check
+# locates the consumer by the class Secret it reads, and the row's transaction proves that path --
+# so this check asserts the coherence that matters: the declared location carries the CA, a
+# workload that mounts it finds it, and the assertion is never vacuous.
 app_verify_database_ca() {
   local declared_ns="$1"
-  local ca namespace mount workload address err mounted=0 consumer_workload consumer_mounted=0
+  local ca namespace mount workload address err mounted=0
   ca="$(app_database_field ca-configmap)"
   if [ -z "$ca" ]; then
     say "the deploy declared no ca-configmap, so the database CA mount cannot be verified"
@@ -1159,7 +1160,6 @@ app_verify_database_ca() {
     return 1
   fi
   # One read per selected workload, from its own pod template.
-  consumer_workload="$(k8s_name "$SVC_UNIT")"
   : >"$LOG_DIR/db-ca-mounts.txt"
   for address in $(app_unit_addresses); do
     namespace="${APP_NS%-*}-${address%%/*}"
@@ -1178,9 +1178,6 @@ app_verify_database_ca() {
         printf 'database_ca_mount: %s/%s mounts %s\n' "$namespace" "$workload" "$ca" \
           >>"$LOG_DIR/db-ca-mounts.txt"
         mounted=$((mounted + 1))
-        if [ "$workload" = "$consumer_workload" ] && [ "$namespace" = "$APP_NS" ]; then
-          consumer_mounted=1
-        fi
         # A workload that mounts it must find it in its own namespace, or its pod never starts.
         err="$LOG_DIR/db-ca-$namespace.err"
         if ! kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get configmap "$ca" -n "$namespace" \
@@ -1207,13 +1204,9 @@ app_verify_database_ca() {
     say "no selected workload mounts the declared CA $ca, so the database CA mount would be vacuous"
     return 1
   fi
-  if [ "$consumer_mounted" != 1 ]; then
-    say "$APP_NS/$consumer_workload consumes the database class Secret and does not mount $ca, so the row's database path is not established"
-    return 1
-  fi
-  printf 'database_ca: %s present at the declared location and wherever a selected workload mounts it; mounted by %s workload(s), including the class-credential consumer %s/%s\n' \
-    "$ca" "$mounted" "$APP_NS" "$consumer_workload" >>"$LOG_DIR/prerequisites.txt"
-  say "$mounted selected workload(s) mount the declared database CA $ca, and $APP_NS/$consumer_workload (the class-credential consumer) is one of them"
+  printf 'database_ca: %s present at the declared location and wherever a selected workload mounts it; mounted by %s workload(s)\n' \
+    "$ca" "$mounted" >>"$LOG_DIR/prerequisites.txt"
+  say "$mounted selected workload(s) mount the declared database CA $ca, and every unit that mounts it finds it"
 }
 
 phase_app() {
