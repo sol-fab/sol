@@ -1,0 +1,15 @@
+(executable
+ (name main)
+ (modules main command contract database_ca)
+ (libraries unix yojson))
+
+(rule
+ (alias runtest)
+ (deps main.exe test_runner.py)
+ (action
+  (run python3 %{dep:test_runner.py} %{dep:main.exe})))
+
+(alias
+ (name ci-unit)
+ (deps
+  (alias runtest)))
