@@ -22,7 +22,7 @@ that is in fact empty.
 | Migration runner | `ghcr.io/sol-fab/sol-migration-runner@sha256:13d40186dd13e28490b8a1aefbf43f53816a6edc19f54b25be4bc67b740da22b` |
 | Harness revision | `e731323262c7367bf7e6fb25ea8b93d625327142` (squash merge of #1485 on `main`; reviewed head `73e400db`, merged content identical) |
 | Harness corrections | #1485: publisher-session publication (SEC-011) and explicit teardown destination |
-| Account / region | `876701109436` / `us-east-1`, SSO `AdministratorAccess` operator session |
+| Account / region | `123456789012` (the repository's documented placeholder; the real id is not tracked) / `us-east-1`, SSO `AdministratorAccess` operator session |
 | Target / cluster | `qual-a37-aws/aws/us-east-1` / `sol-qual-aws-a37` |
 | Attempt / state key | `a37-aws-1` / `sol/qual-a37-aws/aws/us-east-1/cloud.tfstate` |
 | Workspace | `/home/logan/Code/sol-cloud/sol-a37-harness/examples/pluto` (candidate revision materialized by `candidate-binding.sh`; 11 framework pins at `d15e0bfb`) |
@@ -83,7 +83,7 @@ anything other than "not found" as UNKNOWN. It received:
 
 ```
 Error from server (Forbidden): deployments.apps is forbidden: User
-"arn:aws:sts::876701109436:assumed-role/sol-qual5-deploy/EKSGetTokenAuth" cannot list resource
+"arn:aws:sts::123456789012:assumed-role/sol-qual5-deploy/EKSGetTokenAuth" cannot list resource
 "deployments" in API group "apps" in the namespace "pluto-payments"
 ```
 
