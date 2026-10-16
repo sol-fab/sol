@@ -69,6 +69,9 @@ For the proposed signatures, these are shared domain modules, not unintroduced
 dependencies on production deploy code. Their definitions must remain small and
 specific to qualification. Abstract types have one constructor-owning module;
 declaring a type abstract in a signature alone does not establish a trustworthy owner.
+Constructor-owning components can be nested within one implementation module to
+restrict access. These logical signatures do not require one file per interface
+or public builder functions that would let observation adapters forge verdicts.
 
 Provenance records the attempt/specimen, candidate and installed bundle identity,
 application revision and framework binding, harness revision, target/provider/location,
@@ -154,11 +157,16 @@ module type CONTRACT = sig
   type facts
 
   val requirements :
-    Run.t -> subject Selection.complete -> requirement list
+    Run.t -> subject -> requirement list
   val claim : requirement -> Claim.t
   val evaluate : requirement -> facts Observation.t -> Verdict.t
 end
 ```
+
+Each concrete contract fixes `subject` to its required input: database delivery
+uses `Consumer.t Selection.complete`; absence uses the provider scope owner's
+abstract coverage. This avoids pretending those two completeness authorities are
+interchangeable merely because both enumerate requirements.
 
 `Selection` alone constructs `complete`: callers cannot wrap arbitrary lists in
 `Complete`. It enumerates canonical target membership, applies the declared resource
