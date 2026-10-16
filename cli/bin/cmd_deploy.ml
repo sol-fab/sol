@@ -776,7 +776,7 @@ let run_database_setup_step
      | Some delivery ->
        let* () = establish () in
        Sol_cli_database_setup_run.run_external_credentials ~ctx delivery)
-  | Some (_provisioned : Sol_cli_resource_binding.t) ->
+  | Some (provisioned : Sol_cli_resource_binding.t) ->
     let* () = establish () in
     let provider =
       planning.Sol_cli_deploy_selection.Target_plan_input.config.target.provider
@@ -884,10 +884,13 @@ let run_database_setup_step
     let ddl_url = Sol_cli_database_setup_url.ddl ~password:ddl_password master_url in
     let dml_url = Sol_cli_database_setup_url.dml ~password:dml_password master_url in
     let declared = Sol_cli_config.declared_of_config planning.config in
+    (* The consumers of *this binding*. `database` above is the name-safe identity used for the
+       namespace and the object names; the routing predicate compares the resource key the units
+       declared, so the binding — not the sanitized identity — is what it must be asked (#1481). *)
     let dml_namespaces =
       Sol_cli_database_setup_run.dml_namespaces
         ~declared:(Some declared)
-        ~resource:database.resource
+        ~binding:provisioned
         plan
     in
     let ddl_secret =

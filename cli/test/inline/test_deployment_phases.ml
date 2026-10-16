@@ -1376,6 +1376,43 @@ let setup_mentions needle text =
   go 0
 ;;
 
+(* The documents in the fake kubectl's `.manifests` log, split at each document's own
+   `apiVersion:`. Two facts that must hold of **one** object (a ConfigMap's name and the
+   namespace it is written into) are not established by finding them anywhere in the log: an
+   unrelated document could satisfy half of the claim. [`setup_same_document`] asks for both in
+   the same slice. *)
+let setup_documents text =
+  let marker = "apiVersion:" in
+  let mlen = String.length marker in
+  let total = String.length text in
+  let starts =
+    let rec go from acc =
+      match String.index_from_opt text from 'a' with
+      | None -> List.rev acc
+      | Some at ->
+        if
+          at + mlen <= total
+          && String.equal (String.sub text at mlen) marker
+          && (at = 0 || Char.equal text.[at - 1] '\n')
+        then go (at + 1) (at :: acc)
+        else go (at + 1) acc
+    in
+    go 0 []
+  in
+  let rec slice = function
+    | [] -> []
+    | [ p ] -> [ String.sub text p (total - p) ]
+    | p :: (next :: _ as rest) -> String.sub text p (next - p) :: slice rest
+  in
+  slice starts
+;;
+
+let setup_same_document ~a ~b text =
+  List.exists
+    (fun document -> setup_mentions a document && setup_mentions b document)
+    (setup_documents text)
+;;
+
 let test_database_setup_sql_is_idempotent () =
   let sql = Sol_cli_database_setup.sql ~operation:Sol_cli_database_setup.Repair in
   Windtrap.equal
@@ -1847,12 +1884,13 @@ let run_database_setup
       ?(operation = Sol_cli_database_setup.Bootstrap)
       ?(ddl_password = "ddl-pw")
       ?(dml_password = "dml-pw")
+      ?(ca_namespaces = [ "myapp-payments" ])
       ()
   =
   Sol_cli_database_setup_run.run
     ~ctx:Sol_cli_kube_destination.local_context
     ~namespace:"myapp-payments"
-    ~ca_namespaces:[ "myapp-payments" ]
+    ~ca_namespaces
     ~target:"payments"
     ~master_url:"postgresql://postgres:masterpw@db.internal:5432/app"
     ~operation
@@ -1923,6 +1961,45 @@ let test_database_setup_bootstrap_orders_by_verification () =
         ~msg:"the Secret is created owned, with no owner patch"
         true
         (setup_mentions "ownerReferences" manifests && not (setup_mentions "patch" calls)))
+;;
+
+(* #1481: the delivery writes one CA ConfigMap per namespace the selection names, before the Job
+   that verifies the server against it, and writes no database material into a namespace the
+   selection did not name. The selection itself — *which* namespaces — is covered by the
+   deployment-plan test; this is the writer's half: every named namespace gets the trust anchor,
+   so a consumer does not hang in `ContainerCreating` waiting for a ConfigMap that was only ever
+   written beside the migration Job. *)
+let test_database_setup_writes_the_ca_into_every_named_namespace () =
+  setup_fake_kubectl ~fail_verb:"zzz-never" (fun ~log ->
+    match run_database_setup ~ca_namespaces:[ "myapp-payments"; "myapp-comms" ] () with
+    | Error message -> Windtrap.fail message
+    | Ok () ->
+      let manifests = read_file (log ^ ".manifests") in
+      let ca = Sol_cli_database_setup_render.ca_configmap_name "payments" in
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the consumer's own ConfigMap document names the CA and its namespace"
+        true
+        (setup_same_document ~a:("name: " ^ ca) ~b:"namespace: myapp-comms" manifests);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"and the migration namespace has its own document for the same anchor"
+        true
+        (setup_same_document ~a:("name: " ^ ca) ~b:"namespace: myapp-payments" manifests);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the CA is written before the Job that verifies the server against it"
+        true
+        (setup_index ca manifests < setup_index "kind: Job" manifests);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"a namespace the selection did not name gets no database material"
+        false
+        (setup_mentions "namespace: myapp-search" manifests))
+;;
+
+let%test "database setup run: the CA is written into every consuming namespace" =
+  test_database_setup_writes_the_ca_into_every_named_namespace ()
 ;;
 
 (* Where the passwords come from: the authority, not a fresh generation. *)
