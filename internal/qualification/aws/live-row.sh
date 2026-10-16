@@ -887,12 +887,70 @@ app_verify_database_delivery() {
     say "$consumer still carries POSTGRES_URL; the unit is not reading the class Secret"
     return 1
   fi
+  # The CA is a **mount**, read from the workload's own namespace, not a value routed like the
+  # class Secret. Verified per selected workload, from its own pod template (#1481).
+  app_verify_database_ca "$declared_ns" || return 1
   {
     printf 'database_delivery: %s@%s (migration Job, as the deploy declared it), %s@%s (unit consumer)\n' \
       "$ddl_name" "$declared_ns" "$name-dml-creds" "$dml"
     printf 'database_delivery_assertion: the consumer unit Secret carries no POSTGRES_URL\n'
   } >>"$LOG_DIR/prerequisites.txt"
   say "the deploy delivered the database as $name-ddl-creds / $name-dml-creds; the consumer's unit Secret carries no master copy"
+}
+
+# The database CA is a mount, so its verification is per workload and reads the pod template — not
+# the rendered object's text: a name appearing somewhere in an object proves neither that the pod
+# template mounts it nor that a neighbour does, and a CA written only beside the migration Job
+# leaves a pod in ContainerCreating (#1481). Every read distinguishes a **missing object** from an
+# **unreadable one**: an authorization failure or an API outage is UNKNOWN, never absence.
+app_verify_database_ca() {
+  local declared_ns="$1"
+  local ca namespace mount workload address err mounted=0
+  ca="$(app_database_field ca-configmap)"
+  if [ -z "$ca" ]; then
+    say "the deploy declared no ca-configmap, so the database CA mount cannot be verified"
+    return 1
+  fi
+  # Where the workloads read it: each consuming namespace, and the location the deploy declared.
+  for namespace in $(app_namespaces) "$declared_ns"; do
+    err="$LOG_DIR/db-ca-$namespace.err"
+    if ! mount="$(kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get configmap "$ca" -n "$namespace" \
+      -o name 2>"$err")"; then
+      if grep -qi 'not found' "$err" 2>/dev/null; then
+        say "the deploy declared CA ConfigMap $ca and it is absent from $namespace, where the workloads read it"
+      else
+        say "could not read CA ConfigMap $ca in $namespace, so its presence is UNKNOWN (see $err)"
+      fi
+      return 1
+    fi
+  done
+  # One read per selected workload, from its own pod template. A workload missing the mount fails
+  # even when another workload in the same namespace mounts the CA correctly.
+  for address in $(app_unit_addresses); do
+    namespace="${APP_NS%-*}-${address%%/*}"
+    workload="$(k8s_name "${address##*/}")"
+    err="$LOG_DIR/db-ca-volume-$workload.err"
+    if ! mount="$(kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get deploy "$workload" -n "$namespace" \
+      -o json 2>"$err" \
+      | jq -r --arg ca "$ca" \
+        '[.spec.template.spec.volumes[]? | select(.name == "db-ca") | .configMap.name]
+         | if index($ca) then "yes" else "no" end' 2>>"$err")"; then
+      say "could not read $namespace/$workload, so whether it mounts $ca is UNKNOWN (see $err)"
+      return 1
+    fi
+    if [ "$mount" != "yes" ]; then
+      say "$namespace/$workload does not mount the declared CA $ca through its db-ca volume"
+      return 1
+    fi
+    mounted=$((mounted + 1))
+  done
+  if [ "$mounted" = 0 ]; then
+    say "no selected workload was read for the database CA mount, so the assertion would be vacuous"
+    return 1
+  fi
+  printf 'database_ca: %s present at every consuming namespace and the declared location, and mounted through the db-ca volume by %s selected workload(s)\n' \
+    "$ca" "$mounted" >>"$LOG_DIR/prerequisites.txt"
+  say "$mounted selected workload(s) mount the declared database CA $ca through their db-ca volume"
 }
 
 phase_app() {

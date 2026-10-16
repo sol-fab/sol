@@ -446,6 +446,37 @@ case " $* " in
     printf 'secret/redpanda-users created\n'
     exit 0
     ;;
+  # The database CA mount (#1481): the app phase reads the declared ConfigMap at each consuming
+  # namespace, then reads **each** selected workload's pod template for its `db-ca` volume.
+  # `STUB_CA_UNMOUNTED` names one workload that mounts a different ConfigMap, so the "one of
+  # several" case is modelled rather than the all-or-nothing one.
+  *" get deploy "*" -o json "*)
+    ca_workload=""
+    ca_prev=""
+    for ca_arg in $*; do
+      [ "$ca_prev" = "deploy" ] && ca_workload="$ca_arg"
+      ca_prev="$ca_arg"
+    done
+    if [ "${STUB_CA_UNMOUNTED:-}" = "$ca_workload" ]; then
+      printf '{"spec":{"template":{"spec":{"volumes":[{"name":"db-ca","configMap":{"name":"other-db-ca"}}]}}}}\n'
+    else
+      printf '{"spec":{"template":{"spec":{"volumes":[{"name":"db-ca","configMap":{"name":"%s-db-ca"}}]}}}}\n' \
+        "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}"
+    fi
+    exit 0
+    ;;
+  *" get configmap "*"-db-ca"*)
+    if [ "${STUB_CA_UNREADABLE:-0}" = "1" ]; then
+      printf 'Error from server (Forbidden): configmaps is forbidden: User cannot get resource\n' >&2
+      exit 1
+    fi
+    if [ "${STUB_CA_ABSENT:-0}" = "1" ]; then
+      printf 'Error from server (NotFound): configmaps "%s-db-ca" not found\n' \
+        "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}" >&2
+      exit 1
+    fi
+    exit 0
+    ;;
   # The cold-start boundary (#1473): the phase reads the cluster for a workload that moved or a
   # release that was recorded before the immutable artifacts existed. The default is "nothing
   # there" (the deploy refused before it established the workload namespaces); each flag models
@@ -899,6 +930,34 @@ has "the supplied keys are recorded without their values" \
 has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
   "database_delivery: qualreg-aws-us-east-1-ddl-creds@pluto-comms (migration Job, as the deploy declared it), qualreg-aws-us-east-1-dml-creds@pluto-payments (unit consumer)" \
   "$TMP/ok.logs/prerequisites.txt"
+has "and the database CA is asserted at each consuming namespace (#1481)" \
+  "database_ca: qualreg-aws-us-east-1-db-ca present at every consuming namespace and the declared location, and mounted through the db-ca volume by 5 selected workload(s)" \
+  "$TMP/ok.logs/prerequisites.txt"
+has "with the declared ConfigMap read from a consuming namespace" \
+  "get configmap qualreg-aws-us-east-1-db-ca -n pluto-payments" "$TMP/ok.kubectl"
+has "and with every selected workload's own pod template read" \
+  "get deploy orders-svc -n pluto-payments -o json" "$TMP/ok.kubectl"
+
+printf '\nscenario: a database CA the deploy declared but did not write to the consumer is caught (#1481)\n'
+run_row caabsent TRANSPORT=0 STUB_CA_ABSENT=1
+refused caabsent "a CA absent from a consuming namespace fails the app phase"
+has "and names the namespace where it is missing" \
+  "where the workloads read it" "$TMP/caabsent.out"
+
+printf '\nscenario: an unreadable CA is UNKNOWN, not absence (#1481)\n'
+run_row caunreadable TRANSPORT=0 STUB_CA_UNREADABLE=1
+refused caunreadable "an unreadable CA fails the phase rather than passing it"
+has "and says the presence is UNKNOWN, not that it is absent" \
+  "so its presence is UNKNOWN" "$TMP/caunreadable.out"
+lacks "and never calls an unreadable CA absent" "and it is absent from" "$TMP/caunreadable.out"
+
+printf '\nscenario: one workload of several missing the CA mount is caught (#1481)\n'
+# The other selected workloads in the namespace mount the declared CA correctly; only `orders-svc`
+# does not. A check that read the namespace's aggregated text would pass here.
+run_row caunmounted TRANSPORT=0 STUB_CA_UNMOUNTED=orders-svc
+refused caunmounted "a workload missing the mount fails even when its neighbours mount it"
+has "and names the workload that does not mount it" \
+  "pluto-payments/orders-svc does not mount the declared CA" "$TMP/caunmounted.out"
 has "the run identity records the bundle version" \
   "sol_version: $VERSION" "$TMP/ok.logs/sol-identity.txt"
 has "and the bundle's digest-pinned migration runner" \
