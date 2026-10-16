@@ -5,6 +5,12 @@ next design, not APIs implemented by the prototype. No harness migration is part
 of this proposal. The existing campaign entry points remain authoritative until
 their replacements have been reviewed and verified.
 
+The direction has been approved; the interface refinements below remain proposed.
+This iteration makes capture failure an operational result outside qualification
+verdicts, pairs concrete requirements with distinct fact types, reconciles expected
+consumers against recorded observations, and binds product contract identity before
+evaluation. Concrete provider phases stay in place during initial consolidation.
+
 ## Findings that determine the boundaries
 
 | Existing owner | Mechanism or decision to consolidate | Boundary to preserve |
@@ -56,13 +62,16 @@ Use a small qualification domain with these concepts:
 
 | Type | Meaning and source |
 |---|---|
+| `Attempt.t` | Existing attempt/candidate/harness binding before the full run contract is resolved; permits preflight capture, not qualification evaluation or mutation |
 | `Run.t` | Validated artifact/workspace/harness binding, attempt, specimen, target, scenario and authorization scope; abstract, constructed by one run-binding owner |
+| `Candidate_contract.bound` | Supported product-owned contract bound to the immutable candidate; required to construct a qualification `Run.t` |
 | `Claim.t` | Matrix ID, required evidence class and applicable environment/language scope; no caller-controlled success flag |
 | `Intent.t` | Canonical declared application/target intent at the candidate revision, before applying it |
 | `Binding.t` | Declared resource addresses, credential classes, keys and CA mount contract; product-owned names/types, never inferred naming rules |
 | `Consumer.t` | Selected database/resource consumer, language, workload/container identity and its declared binding |
 | `Evidence.reference` | Reference to an immutable evidence member within this run, carrying provenance and capture status |
-| `Evidence.nonempty` | One reference plus zero or more additional references; every verdict must cite evidence |
+| `Evidence.nonempty` | One reference plus zero or more additional references; every recorded observation and qualification verdict must cite persisted evidence |
+| `Evidence_error.t` | Capture/persistence stage and safe underlying diagnostics; constructible without evidence references |
 | `Issue.t` | Original execution/provider diagnostic with concise qualification context and safe redaction |
 
 For the proposed signatures, these are shared domain modules, not unintroduced
@@ -82,6 +91,62 @@ Fixtures are MECHANISM, regardless of whether an adapter labels its payload "liv
 Only the run-binding owner establishes origin and scope, and the evaluator checks
 them against the claim. Evidence recording does not choose or promote claim scope.
 
+### Candidate contract identity
+
+```ocaml
+module Candidate_contract : sig
+  type identity = private
+    { schema : Contract_schema.t
+    ; candidate_revision : Revision.t
+    ; bundle_sha256 : Sha256.t
+    ; declaration_sha256 : Sha256.t
+    }
+  type bound
+
+  val bind :
+    Verified_candidate.t -> Candidate_declaration.t ->
+    (bound, Contract_binding_error.t) result
+  val identity : bound -> identity
+  val bindings : bound -> Binding.catalog
+end
+```
+
+Use the existing `sol-under-test.sh` verification of candidate revision, installed
+bytes and `bundle_sha256`, and `candidate-binding.sh` for materialized application
+intent. Add one product-owned machine-readable contract projection to the candidate
+bundle through a separately reviewed product change. It declares schema, product
+keys/paths, binding semantics and supported capabilities; it is generated from the
+canonical contract owner, not maintained as a second set of constants. Concrete
+target addresses subsequently declared by the candidate must be decoded under this
+same contract and bound to this run. The projection is a proposed prerequisite:
+today's candidate document does not already contain it or a `contract_version`.
+
+`bind` checks the declaration came from the exact verified bundle, checks its stated
+revision, validates its schema and contents, and records its digest in the contract
+identity. Candidate version text alone is insufficient. A newer harness uses the
+older candidate's declared values, such as its CA key, through a supported decoder;
+it never imports today's product constant as that candidate's authority. Importing
+pure product types remains useful for implementing the decoder, but does not choose
+the candidate's values or certify support for its semantics.
+
+Initially support one explicit schema/semantic contract. Missing, malformed,
+mismatched or unsupported declarations return `Contract_binding_error`, before
+selection or new mutation. Do not parse old OCaml source text, execute a source
+checkout to guess its contract, infer from a version string or fall back to the
+harness's current bindings. An existing older candidate without this authoritative
+projection is unresolvable under this proposal and must be refused until a separately
+reviewed declaration mechanism exists; this does not retrofit the active campaign.
+No version registry, adapter chain or general compatibility framework is proposed.
+
+Every requirement and observation carries this bound identity alongside run/specimen
+and subject identity; reconciliation and evaluation reject mismatches. Selection
+also uses the matching candidate's intent, not the harness checkout's example list.
+Record the harness/requirement-policy revision separately: the candidate declaration
+describes product behavior; it cannot weaken the matrix's required claims. An absent
+required capability blocks qualification explicitly, rather than removing its checks.
+If contract binding fails, record that preflight blocker if possible and mark the
+scenario NOT_RUN; if recording also fails, return an unrecorded operational failure.
+
 ## Proposed interfaces
 
 These signatures establish responsibilities rather than a plugin API. Supporting
@@ -93,12 +158,19 @@ document is deliberately not a new library or a set of executable `.mli` files.
 ```ocaml
 module Observation : sig
   type 'a state = Present of 'a | Absent | Unknown of Issue.t
+  type 'a pending
   type 'a t = private
     { state : 'a state
     ; evidence : Evidence.nonempty
     }
-  (* Construction belongs to the observation boundary: decode + identity/scope
-     validation + persisted evidence. Providers cannot return a bare bool. *)
+  (* pending contains decoded facts, subject/contract identity and diagnostics,
+     with no invented references. Only a successful recorder commit creates t. *)
+end
+
+module Captured : sig
+  type 'a t =
+    | Recorded of 'a Observation.t
+    | Capture_failed of Evidence_error.t
 end
 
 module Verdict : sig
@@ -114,6 +186,12 @@ module Verdict : sig
     ; evidence : Evidence.nonempty
     }
 end
+
+module Claim_outcome : sig
+  type t = private
+    | Verdict_recorded of Verdict.t * Evidence.reference
+    | Unrecorded of Claim.t * Evidence_error.t
+end
 ```
 
 The contract evaluator constructs evaluated verdicts. The runner's accounting
@@ -123,8 +201,32 @@ it fails a required-presence claim and passes a required-absence claim. An
 unreadable object is UNKNOWN, never proof of either. Missing expected evidence
 also prevents PASS, even when an action completed successfully.
 
+An observation can be decoded in memory and still fail to persist. The recorder
+returns `Capture_failed`, not `Recorded (Unknown ...)` with a nonexistent reference.
+`Evidence_error.t` contains the failed stage (open/reserve/write/flush/finalize) and
+safe diagnostics, including the original observation error when available. It
+requires no evidence. A reference is issued only after its member and required
+provenance have been successfully committed; a partial file is not a valid receipt.
+
+`Claim_outcome.Verdict_recorded` is constructed only after the verdict record also
+commits, with its reference separate from the decision's supporting evidence. There
+is no circular requirement for a verdict to cite its own file. If that write fails
+after evaluation, use `Unrecorded`; do not pretend the
+decision was persisted. A blocked requirement receives NOT_RUN only when its blocker
+is persisted. If persisting the blocker fails, its outcome is likewise `Unrecorded`.
+These operational outcomes are not a fifth qualification verdict and cannot be
+used as evidence by another claim. They prevent successful qualification and a
+conformant final manifest, even if other claims have recorded PASS verdicts.
+
+Recorder failure does not revoke already established cleanup authority or suppress
+supported teardown. Stop new qualification mutations, attempt authorized cleanup
+and independent inventory, and retain whatever diagnostics remain possible. If the
+store stays unavailable, report capture failure through the process result and safe
+stderr; never label that fallback a recorded UNKNOWN, NOT_RUN or absence verdict.
+
 Keep every leaf verdict. A run is acceptable only if every required applicable
-claim is PASS at the right evidence class/scope and evidence finalization succeeds.
+claim has a recorded PASS at the right evidence class/scope, there are no unrecorded
+outcomes, and evidence finalization succeeds.
 FAIL and UNKNOWN can coexist in one run; do not flatten them into a summary that
 loses the unknown reads. NOT_RUN is never an exemption from a required claim.
 Inapplicable claims have an explicit catalog scope decision, not a fabricated PASS.
@@ -136,30 +238,33 @@ Inapplicable claims have an explicit catalog scope decision, not a fabricated PA
 | UNKNOWN | Kubernetes returns Forbidden or the projection cannot be decoded | Requested/observed identity, execution outcome and original safe diagnostic or malformed-response capture |
 | NOT_RUN | DML observation was never dispatched because selection or identity was unresolved | Persisted prerequisite/selection failure or explicit unsupported-capability decision, with a link to the blocked requirement; no invented observation |
 
+If any row's required evidence cannot be persisted, it produces an operational
+`Unrecorded` outcome instead of the table's qualification verdict.
+
 ### Selection and requirements
 
 ```ocaml
 module Selection : sig
   type 'a complete
-  type incomplete = { issue : Issue.t; evidence : Evidence.nonempty }
+  type incomplete = { issue : Issue.t }
 
   val database_consumers :
     Run.t -> Intent.t ->
     (Consumer.t complete, incomplete) result
 
   val members : 'a complete -> 'a list
-  val coverage : 'a complete -> Evidence.nonempty
+  val coverage : 'a complete -> Coverage.t
 end
 
 module type CONTRACT = sig
   type subject
   type requirement
-  type facts
+  type recorded_check
 
   val requirements :
     Run.t -> subject -> requirement list
   val claim : requirement -> Claim.t
-  val evaluate : requirement -> facts Observation.t -> Verdict.t
+  val evaluate : recorded_check -> Verdict.t
 end
 ```
 
@@ -167,6 +272,8 @@ Each concrete contract fixes `subject` to its required input: database delivery
 uses `Consumer.t Selection.complete`; absence uses the provider scope owner's
 abstract coverage. This avoids pretending those two completeness authorities are
 interchangeable merely because both enumerate requirements.
+`recorded_check` is a closed sum of correctly paired requirement/fact types for
+that contract, demonstrated below; there is no universal optional-field fact record.
 
 `Selection` alone constructs `complete`: callers cannot wrap arbitrary lists in
 `Complete`. It enumerates canonical target membership, applies the declared resource
@@ -174,6 +281,13 @@ dependency relation, resolves the declared workload addresses, and records inclu
 and excluded members with reasons and source revision. It cannot certify completeness
 from running pods, a provider's returned subset, or an operator's `--consumer` list.
 No selected object is allowed to disappear merely because observing it failed.
+
+Selection validity and evidence persistence are separate properties. `Coverage.t`
+is the in-memory account of canonical membership, exclusions and source identity;
+the recorder must persist it before a universal verdict can cite selection evidence.
+An `incomplete` value can exist even if the recorder is broken. The runner attempts
+to record that blocker and produces UNKNOWN coverage plus dependent NOT_RUN only
+on successful persistence; otherwise it produces unrecorded operational outcomes.
 
 An intentionally partial diagnostic run can use a separate explicit subset input;
 it cannot call the universal qualification evaluator. Empty complete selection
@@ -190,9 +304,41 @@ build a parallel planner.
 
 `requirements` is the only expansion from complete subject selection into required
 checks. Observers cannot omit a requirement by omitting a resource from their result.
-A failed selection is an UNKNOWN coverage claim; its dependent delivery checks are
-NOT_RUN with the same evidence. Known consumers may still be observed diagnostically,
+A recorded failed selection is an UNKNOWN coverage claim; its dependent delivery
+checks are NOT_RUN with the same evidence. Known consumers may still be observed diagnostically,
 but cannot establish the universal claim.
+
+### Expected selection and observation reconciliation
+
+Keep three separate values: the complete expected consumer set from canonical
+intent, independently observed Kubernetes identities, and an accounting entry for
+each expected requirement. A complete expected set says nothing about successful
+deployment or observation. The reconciliation owner joins on run, bound contract
+and declared subject identity, checks duplicate/mismatched receipts, and accounts
+for every expected member. It never substitutes the observed set for the expected
+set or removes members after failed reads.
+
+| Account for an expected workload | Meaning | Recorded result |
+|---|---|---|
+| Valid independently read object | Workload exists; evaluate its typed delivery facts | PASS or FAIL according to the actual facts |
+| Successful authoritative read positively returns no object | Required deployment is missing | FAIL for required presence; dependent reads needing that object are NOT_RUN |
+| Forbidden, timeout, malformed or incomplete listing | Existence/delivery is unreadable | UNKNOWN for the attempted requirement; blocked dependents are NOT_RUN |
+| Requirement was not dispatched because a prerequisite failed | No workload observation was made | NOT_RUN citing the persisted blocker |
+| Read or blocker cannot be persisted | Operational accounting only | `Unrecorded`; no qualification verdict |
+
+For example, five expected consumers and four successful Kubernetes reads do not
+yield complete delivery. The fifth must be positively absent (FAIL), unreadable
+(UNKNOWN), blocked (NOT_RUN), or unrecorded (capture failure). If list pagination
+is incomplete, the unmatched member is UNKNOWN, never inferred absent. Prefer
+explicit reads of expected addresses when those establish authoritative absence;
+the type system alone cannot prove listing completeness. A reconciled account can
+be exhaustive even when every member failed: exhaustive accounting is not PASS.
+
+Unexpected observed workloads are retained as diagnostics or evaluated by a separate
+explicit no-extra-workloads requirement if the contract has one. They do not repair
+a missing expected workload or establish cleanup ownership. Reconciliation emits
+its own coverage evidence; if that cannot be persisted, the universal result remains
+unrecorded regardless of the successful leaf reads.
 
 ### Execution and identity
 
@@ -200,13 +346,12 @@ but cannot establish the universal claim.
 module Identity : sig
   type t
   val establish :
-    Run.t -> Role.t -> (t, Issue.t * Evidence.nonempty) result
-  val evidence : t -> Evidence.nonempty
+    Run.t -> Role.t -> (t, Issue.t) result
 end
 
 module type EXECUTOR = sig
   val execute :
-    Evidence.capture -> Identity.t -> Command.t -> Execution.t
+    Identity.t -> Command.t -> Execution.pending
 end
 ```
 
@@ -219,14 +364,24 @@ Requested identity and observed caller identity remain separate evidence.
 Authentication expiry, server-side authorization and endpoint changes still require
 runtime checks and produce UNKNOWN on failure.
 
+Identity validation first produces an in-memory handle or issue; recording that
+fact is a separate capture operation. A qualification verdict needs the recorded
+identity evidence. Already authorized cleanup can use a validated handle even when
+recording fails; an evidence error neither invents identity nor authorizes escalation.
+
 `Command.t` owns argv, working directory, finite timeout, nonsecret environment,
 secret inputs by opaque handles/stdin, allowed capture projection and an explicit
 interactive/noninteractive mode. Secret values must not be printable argv fields.
 The alpha.37 driver's useful property is loading a password outside argv; its
 store path and parsing are operator configuration, not a runner contract.
 
-`Execution.t` distinguishes completed exit status, timeout, signal and spawn failure,
-and retains partial stdout/stderr references and timings. The executor owns process
+`Execution.pending` distinguishes completed exit status, timeout, signal and spawn
+failure, retaining partial safe diagnostics, timings and any staging output. It is
+an operational result, not an evidence reference. The recorder commits execution
+captures and returns real references; capture failure can coexist with a completed
+process. Normal qualification work requires its recorder/preflight gates; supported
+cleanup must still execute with safe diagnostic fallback if capture reservation or
+commit fails. Both paths use the same process mechanism. The executor owns process
 handling, not expected refusal, retries, provider error reinterpretation, claim
 success or cleanup policy. Use existing process facilities or GNU timeout for
 mechanics; do not introduce another supervisor/retry system. The current CLI helper's
@@ -236,29 +391,71 @@ that helper rather than a reason to duplicate all command semantics permanently.
 ### Database observation capability and the common contract
 
 ```ocaml
-module type DATABASE_DELIVERY = sig
-  val ca :
-    Run.t -> Consumer.t -> Database_ca_facts.t Observation.t
-  val dml :
-    Run.t -> Consumer.t -> Database_dml_facts.t Observation.t
-  val migration_input :
-    Run.t -> Binding.t -> Database_ddl_facts.t Observation.t
-end
-
 module Database_delivery_contract : sig
-  type requirement
+  type requirement =
+    | Ca_delivery of Ca_requirement.t
+    | Dml_delivery of Dml_requirement.t
+    | Migration_input of Migration_requirement.t
+    | Tls_connectivity of Tls_requirement.t
+    | No_master_copy of No_master_requirement.t
+
+  type recorded_check =
+    | Ca_checked of Ca_requirement.t * Database_ca_facts.t Observation.t
+    | Dml_checked of Dml_requirement.t * Database_dml_facts.t Observation.t
+    | Migration_checked of Migration_requirement.t * Database_ddl_facts.t Observation.t
+    | Tls_checked of Tls_requirement.t * Database_tls_facts.t Observation.t
+    | No_master_checked of No_master_requirement.t * Unit_secret_facts.t Observation.t
+
   val requirements :
     Run.t -> Consumer.t Selection.complete -> requirement list
-  val evaluate :
-    requirement -> Database_delivery_facts.t Observation.t -> Verdict.t
+  val evaluate : recorded_check -> Verdict.t
+end
+
+module type DATABASE_DELIVERY = sig
+  val ca :
+    Run.t -> Ca_requirement.t -> Database_ca_facts.t Observation.pending
+  val dml :
+    Run.t -> Dml_requirement.t -> Database_dml_facts.t Observation.pending
+  val migration_input :
+    Run.t -> Migration_requirement.t -> Database_ddl_facts.t Observation.pending
+  val tls :
+    Run.t -> Tls_requirement.t -> Database_tls_facts.t Observation.pending
+  val unit_secret :
+    Run.t -> No_master_requirement.t -> Unit_secret_facts.t Observation.pending
 end
 ```
+
+Each `*_requirement.t` is a distinct abstract payload constructed by the one
+requirement planner. It exposes the appropriate consumer or database binding,
+expected values, requirement ID and bound contract identity to its observer. The
+planner expands canonical selection once and deduplicates shared migration inputs.
+`recorded_check` pairs each payload with its specific recorded fact type: a DML
+observation cannot inhabit `Ca_checked`, and a TLS observation cannot inhabit
+`Migration_checked`. There is no `evaluate requirement generic_facts` entry point.
+All dispatch/evaluation matches are exhaustive, with no wildcard that would silently
+accept a new requirement. Ordinary variants suffice; no GADT is proposed.
+
+Types distinguish fact kinds, not individual runtime consumers. The recording
+boundary and evaluator must also compare requirement ID, consumer/database address,
+run/specimen and contract identity on the receipt. A well-typed CA observation for
+another consumer still cannot satisfy this requirement. Reconciliation detects
+missing, duplicate or cross-subject receipts before aggregation. A whole wrong
+identity response is UNKNOWN; a valid scoped response containing a wrong expected
+binding value is a recorded counterexample and FAIL.
 
 The capability observes; the contract evaluates. The signatures of their facts
 must record what was actually read: resource identity and namespace, key presence,
 credential class reference, pod volume and container mount/key references, and the
 source/execution evidence. No caller-provided `delivered = true` field stands in
 for those facts. Credential values stay out of retained facts and diagnostics.
+
+| Requirement/fact pair | Actual observation content |
+|---|---|
+| CA / `Database_ca_facts` | Workload/ConfigMap identities, declared CA key and nonempty-key projection, volume source and container mount references |
+| DML / `Database_dml_facts` | Consumer credential reference/class, actual Secret identity and nonempty declared-key projection; no password value |
+| Migration / `Database_ddl_facts` | Database/migration Job identity, DDL reference and delivered input key |
+| TLS / `Database_tls_facts` | Bound consumer probe, endpoint, verified connection outcome and safe diagnostics; not a ConfigMap boolean |
+| No master copy / `Unit_secret_facts` | Authoritative projection of the relevant unit Secret's prohibited-key presence; a denied read stays unreadable |
 
 Requirements distinguish CA delivery, DML delivery, DDL migration input, no master
 credential copy and application/TLS behavior. Object/key presence and correct
@@ -288,8 +485,11 @@ module Gcp_check = Check_database_delivery (Gcp_delivery)
 
 `Kubernetes_database_delivery` owns common Kubernetes reads/decoding once. The
 context modules supply validated identities and endpoints, not different assertions.
-`Check_database_delivery` dispatches the closed requirement variants to `ca`, `dml`
-or `migration_input`, persists observations and invokes the pure evaluator. It
+`Check_database_delivery` dispatches each closed requirement to its matching observer,
+records the returned pending observation, and evaluates only `Captured.Recorded`
+with the corresponding `*_checked` constructor. `Capture_failed` bypasses evaluation
+and produces an unrecorded operational outcome. The check coordinator also commits
+the computed verdict before returning `Verdict_recorded`. It
 does not own selection. Local can instantiate this capability only for declarations
 its scenario actually supports; local plaintext/application behavior does not imply
 support for the cloud CA/credential-class scenario.
@@ -299,27 +499,43 @@ support for the cloud CA/credential-class scenario.
 ```ocaml
 module type EVIDENCE = sig
   type recorder
-  val open_run : Run.t -> (recorder, Issue.t) result
+  val open_attempt : Attempt.t -> (recorder, Evidence_error.t) result
+  val preflight : recorder -> Preflight.event ->
+    (Evidence.reference, Evidence_error.t) result
+  val bind_run : recorder -> Run.t ->
+    (Evidence.reference, Evidence_error.t) result
   val reserve_capture : recorder -> Capture_spec.t ->
-    (Evidence.capture, Issue.t) result
-  val execution : recorder -> Execution.t ->
-    (Evidence.reference, Issue.t) result
-  val observation : recorder -> Recorded_observation.t ->
-    (Evidence.reference, Issue.t) result
+    (Evidence.capture, Evidence_error.t) result
+  val execution : recorder -> Execution.pending ->
+    (Evidence.reference, Evidence_error.t) result
+  val observation : recorder -> 'a Observation.pending -> 'a Captured.t
   val verdict : recorder -> Verdict.t ->
-    (Evidence.reference, Issue.t) result
+    (Evidence.reference, Evidence_error.t) result
   val checkpoint : recorder -> Checkpoint.t ->
-    (Evidence.reference, Issue.t) result
+    (Evidence.reference, Evidence_error.t) result
   val finalize : recorder -> Required_evidence.t ->
-    (Evidence.manifest, Issue.t) result
+    (Evidence.manifest, Evidence_error.t) result
 end
 ```
+
+Open evidence under the existing attempt binding before resolving the candidate
+contract, so unsupported-contract failures can be captured without manufacturing
+a `Run.t`. Before `bind_run` succeeds, only preflight/operational records are
+permitted: no observation receipt or qualification PASS can claim full run provenance.
+If opening the attempt itself fails, return an operational `Evidence_error` without
+any reference. Do not require a successfully recorded open-failure event to return it.
+`Preflight.event` is a closed set of attempt/candidate/contract binding results,
+not a general event log or a second work-state store.
 
 This is one evidence owner, including capture reservation, safe projection/redaction,
 file ownership, immutable references, provenance and manifest integrity. The scenario
 and requirement catalog declare required evidence; the recorder verifies it exists
 and belongs to the right run. It does not decide whether a provider fact satisfies
-a product invariant. Record capture failure as data and continue independent captures;
+a product invariant. A pending observation includes its closed safe capture
+projection and source execution/provenance, so `observation` commits those dependencies
+before issuing its typed receipt. It does not accept a provider-supplied reference
+to a nonexistent file. No additional observer/codec plugin registry is required.
+Account for capture failure operationally and continue independent captures when feasible;
 do not confuse "capture accounted for every read" with "every read succeeded".
 
 `checkpoint` preserves the pre-teardown evidence prefix without making the bundle
@@ -338,45 +554,44 @@ evidence or silently make a new specimen reuse an old attempt.
 ### Lifecycle, supervision and absence
 
 ```ocaml
-module type LIFECYCLE_ACTIONS = sig
-  val prepare : Run.t -> Step.outcome
-  val deploy : Run.t -> Step.outcome
-  val exercise : Run.t -> Step.outcome
-  val destroy : Run.t -> Owned_scope.t -> Step.outcome
-end
-
 module type ABSENCE_SCOPE = sig
   type resource_class
   type coverage
   val required_classes :
-    Run.t -> Owned_scope.t ->
-    (coverage, Issue.t * Evidence.nonempty) result
+    Owned_scope.t -> (coverage, Issue.t) result
   val classes : coverage -> resource_class list
-  val coverage_evidence : coverage -> Evidence.nonempty
+  val coverage : coverage -> Coverage.t
 end
 
 module type ABSENCE_OBSERVER = sig
   type resource_class
   val observe :
-    Run.t -> resource_class -> Resource_inventory.t Observation.t
-end
-
-module Supervisor : sig
-  val run : Bound_scenario.t -> Run.t -> Run_report.t
+    Owned_scope.t -> Identity.t -> resource_class ->
+    Resource_inventory.t Observation.pending
 end
 ```
 
-The scenario binder checks required capabilities before mutation. Unsupported required
-capabilities yield explicit NOT_RUN decisions and an unacceptable run; the adapters
-cannot implement a missing capability as a successful no-op. `Bound_scenario.t`
-binds the chosen action and observation implementations and evidence recorder to a
-reviewed Sol scenario. No dynamic plugin registry or arbitrary workflow DAG is needed.
+Defer a universal lifecycle module signature. AWS/GCP/local retain concrete phase
+functions and their existing order while execution, evidence, contract evaluation
+and handled-failure accounting consolidate. The shared supervisor is a small
+integration boundary around those concrete operations: capture/checkpoint, invoke
+already authorized teardown, independently inventory, and finalize. A process or
+capture failure must reach that boundary even if a phase cannot return a normal
+recorded result. Do not require every phase to implement a new generalized API.
 
-The runner owns ordered phases for that scenario, requirement accounting, explicit
-operator pauses and transition into capture/cleanup. Provider action adapters own the
-commands within each phase; they do not own verdict aggregation or finalization.
-This keeps AWS publisher context, GCP setup/delegation and local provisioning distinct
-without giving each adapter its own failure supervisor.
+The scenario binder checks required capabilities before mutation. Unsupported required
+capabilities yield explicit recorded NOT_RUN decisions or unrecorded capture errors
+and an unacceptable run; the adapters cannot implement a missing capability as a
+successful no-op. The bound scenario connects concrete phases, observation capabilities
+and the recorder for a reviewed Sol scenario. No dynamic plugin registry or arbitrary
+workflow DAG is needed.
+
+The existing concrete scenario retains phase order and operator pauses initially.
+The shared integration boundary owns requirement accounting and handled-failure
+transition into capture/cleanup. Concrete phases own their commands, not separate
+verdict aggregation or finalization mechanisms. Extract common ordering later only
+where consolidation demonstrates a need; preserve AWS publisher context, GCP
+setup/delegation and local provisioning without a new lifecycle API hierarchy.
 
 `Owned_scope.t` is validated from the declared target and operator authorization,
 not discovered by a naming guess after failure. It distinguishes disposable target
@@ -394,6 +609,12 @@ type cannot prove its implementation did not forget a resource class.
 The scenario binder pairs `ABSENCE_SCOPE` and `ABSENCE_OBSERVER` with the same
 `resource_class` type. The observer cannot choose the required set or certify its
 own returned subset as complete.
+Independent inventory needs the validated attempt/target scope and identity, not
+the database contract or a writable evidence store. This also permits existing
+authorized destroy/verify recovery when qualification contract binding cannot be
+resolved. If ownership or authority itself cannot be established, do not construct
+the scope or destroy by guesswork. Recovery diagnostics alone cannot repair a
+missing qualification run binding or establish the complete scenario's PASS.
 
 Supervision is a small fixed sequence:
 
@@ -432,6 +653,67 @@ no in-process type or finalizer guarantees cleanup after SIGKILL, host failure o
 revoked credentials. Existing bound-attempt destroy/verify continuation remains the
 recovery path, and unresolved absence remains UNKNOWN/FAIL as appropriate.
 
+## Worked CA path
+
+This is a proposed execution trace, not evidence from a real candidate or a new
+implementation. Use a supported candidate C, a newer harness H, and an AWS or GCP
+specimen. The same Kubernetes observer and evaluator run in either case.
+
+1. **Run binding.** Existing candidate verification establishes C's bundle digest
+   and revision. Open the bound attempt, resolve C's product contract projection,
+   and bind its schema/revision/declaration digest into `Run.t`. Record H separately.
+   In this example C declares the CA key `ca.pem`; H supplies no substitute key.
+2. **Expected consumers.** Selection enumerates C's target intent and returns five
+   consumers with complete in-memory coverage. Persist that coverage and the validated
+   observation identity. Kubernetes has not yet established the presence of any of them.
+3. **Typed requirement.** The single planner emits `Ca_delivery ca_req` for consumer
+   `payments/charge-svc`, including its declared ConfigMap, CA key, volume/mount
+   expectations and run/contract/subject IDs. This payload is a `Ca_requirement.t`,
+   not a DML or TLS request. Other consumers remain independent required entries.
+4. **Kubernetes observation.** The common observer uses the validated kubeconfig to
+   read the expected workload and ConfigMap independently. It projects identities,
+   nonempty `ca.pem` presence and the required volume/container references, then decodes
+   `Database_ca_facts.t Observation.pending`. Command success alone does not establish
+   the claim; no CA or credential contents are retained.
+5. **Evidence recording.** The recorder commits those projected reads, command
+   outcomes, identity, C's contract identity and selection links. Only then does it
+   return `Captured.Recorded observation`. Any missing dependency or failed commit
+   instead returns `Capture_failed`.
+6. **Verdict.** The coordinator constructs `Ca_checked (ca_req, observation)`. The
+   evaluator checks the receipt's scope and CA facts and returns PASS with supporting
+   evidence. The coordinator persists that decision before returning
+   `Verdict_recorded (verdict, decision_ref)`. Reconciliation still requires an account
+   for the other four expected consumers and all other required checks.
+
+The CA branch of the coordinator has this shape; all other branches use their own
+payload/fact pair. Constructor ownership remains with the coordinator/recorder:
+
+```ocaml
+let check_ca recorder run ca_req =
+  let pending = Observer.ca run ca_req in
+  match Recorder.observation recorder pending with
+  | Capture_failed error ->
+      Unrecorded (Ca_requirement.claim ca_req, error)
+  | Recorded observation ->
+      let decision = Contract.evaluate (Ca_checked (ca_req, observation)) in
+      match Recorder.verdict recorder decision with
+      | Ok decision_ref -> Verdict_recorded (decision, decision_ref)
+      | Error error -> Unrecorded (Ca_requirement.claim ca_req, error)
+```
+
+| Variation at steps 4–6 | Result and evidence | Supervision consequence |
+|---|---|---|
+| Kubernetes returns Forbidden; recording succeeds | Pending state is `Unknown` with the original safe diagnostic. Recording returns a real receipt; CA evaluation and decision recording produce UNKNOWN. A TLS check blocked by that read is recorded NOT_RUN with the blocker receipt. | Capture other independent requirements and follow the concrete scenario's authorized cleanup path; UNKNOWN cannot satisfy delivery. |
+| Kubernetes returns Forbidden; evidence becomes unwritable | Pending state contains Forbidden, but recording returns `Capture_failed` with both observation and I/O diagnostics. No `Observation.t`, UNKNOWN verdict, NOT_RUN receipt or decision reference is fabricated. | Stop new work and attempt already authorized teardown/inventory using validated identity and safe diagnostic fallback. Persist later diagnostics if possible; continued or recovered storage cannot retroactively establish the missing observation. |
+| Reads are recorded, but verdict persistence fails | An evaluated decision exists in memory with supporting evidence; the coordinator returns `Unrecorded`, not `Verdict_recorded`. | Cleanup still proceeds; required finalization cannot produce a conformant successful qualification result. |
+| Only four of five expected workloads exist | The fifth explicit read positively reports absence and is recorded; its presence requirement is FAIL and checks needing that workload are NOT_RUN. | Coverage of expected selection remains complete. Deployment/delivery failed; the set is never reduced to four. |
+| C's contract schema is unsupported or its declaration is unresolvable | No qualification `Run.t` is created. Record a preflight refusal and scenario NOT_RUN if possible, otherwise return an unrecorded operational error. | No new mutation is dispatched. Existing authorized cleanup for a bound continuing attempt remains a distinct recovery obligation. |
+
+If persistence remains unavailable through cleanup, even a successful destroy and
+apparently empty inventory do not become an evidence-backed absence verdict or a
+successful qualification bundle. Report the operational outcomes and unresolved
+evidence explicitly; never claim that execution repaired the lost proof.
+
 ## Dependency direction
 
 Arrows mean "depends on/calls". All interfaces share the small domain types above;
@@ -442,6 +724,8 @@ deploy internals.
 flowchart TD
   Runner[Scenario runner and supervisor] --> Selection[Authoritative selection]
   Selection --> Intent[Canonical declared intent and binding types]
+  Intent --> Binding[Candidate-bound product contract]
+  Runner --> Reconciliation[Expected requirements and observed receipt accounting]
   Runner --> Scope[Provider inventory scope and required classes]
   Runner --> Actions[Provider or local lifecycle actions]
   Actions --> Executor[Shared executor and validated identity]
@@ -466,7 +750,10 @@ into a growing compatibility framework: review support for the candidate explici
 
 | Proposed restriction | Mistake made harder | Runtime obligation |
 |---|---|---|
-| Abstract complete selection, constructed once | Omitting a failed consumer from a universal check | Verify canonical membership, exclusions, scope and declaration revision |
+| Abstract complete selection and separate reconciliation | Shrinking the expected universe to the successfully observed subset | Verify canonical membership, then account for every expected member's actual read or blocker |
+| Typed requirement/check variants | Satisfying CA delivery with DML or TLS facts | Match the receipt's individual subject, requirement and bound contract identity |
+| Pending versus recorded observation; operational capture error | Inventing evidence to return UNKNOWN/NOT_RUN | Commit dependencies before issuing receipts, propagate storage errors and preserve cleanup authority |
+| Explicit candidate contract identity | Newer harness silently uses today's key for an older release | Bind declaration/schema/digest to the verified candidate; refuse unsupported or unresolvable contracts |
 | Declared binding keys and addresses | Reader guesses `ca.crt` or reconstructs a Secret name | Independently read the actual declared key/resource; test against the product contract |
 | Observation separates absence from unknown | Authorization failure becomes absence | Validate identity, response schema, complete listing and authoritative not-found |
 | Identity handle required for execution | Command silently inherits operator context | Verify principal/endpoint and handle auth expiry; opaque types cannot prove server authorization |
@@ -476,11 +763,12 @@ into a growing compatibility framework: review support for the candidate explici
 
 ## Migration sequence and review gates
 
-1. Review this ownership model, full database requirement scope, completeness source,
-   identity/capture policy and specimen-retention semantics. Keep #1487 draft. No
-   additional executor, DML adapter or lifecycle implementation precedes this review.
-2. Establish the needed product-owned declaration surface and pure contract inputs
-   in focused changes. Fix the prototype's wrong CA key with a test grounded in that
+1. Review these refinements: capture-failure outcomes, closed typed checks,
+   expected/observed reconciliation, candidate contract identity and the worked
+   paths. Keep #1487 draft. No additional executor, DML adapter or lifecycle
+   implementation precedes this review.
+2. After that review, establish the needed product-owned declaration surface and
+   pure contract inputs in focused changes. Fix the prototype's wrong CA key with a test grounded in that
    authority. Refuse incomplete addresses or membership instead of adding naming rules.
 3. Implement the shared domain, selection and database requirements. Specify exact
    facts and evidence per requirement, including UNKNOWN/NOT_RUN. Instantiate the

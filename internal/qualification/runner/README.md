@@ -5,9 +5,12 @@ can make the cloud harnesses easier to maintain. It implements one representativ
 contract: database CA ConfigMap delivery and Deployment volume references. The live
 AWS/GCP entry points continue to own their existing phases and assertions.
 
-The next deliverable is the [qualification ownership proposal](architecture-proposal.md),
-for review before extending this implementation or migrating a harness. PR #1487
-remains draft.
+The [qualification ownership proposal](architecture-proposal.md) has been refined
+for review before extending this implementation or migrating a harness. It now
+distinguishes capture failures from recorded verdicts, pairs typed database requirements
+with their facts, reconciles expected consumers against observations, and binds the
+candidate's own product contract. A worked CA path covers successful recording,
+unreadable Kubernetes and failed persistence. PR #1487 remains draft.
 
 **Known contract mismatch:** this prototype checks `ca.crt`, but Sol's database
 contract declares `ca.pem`. Its offline fixtures repeated the wrong premise.
