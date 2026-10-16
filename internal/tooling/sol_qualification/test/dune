@@ -1,0 +1,9 @@
+(test
+ (name test_domain)
+ (libraries sol_qualification alcotest yojson)
+ (deps intent.json aws.golden local.golden))
+
+(alias
+ (name ci-unit)
+ (deps
+  (alias_rec runtest)))

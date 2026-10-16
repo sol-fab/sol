@@ -182,4 +182,5 @@
   ptime
   windtrap
   (mirage-crypto-pk :with-test)
+  (alcotest :with-test)
   (mirage-crypto-rng :with-test)))

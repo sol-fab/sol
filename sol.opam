@@ -35,6 +35,7 @@ depends: [
   "windtrap" {>= "0.1.0"}
   "ppx_windtrap" {>= "0.1.0"}
   "mirage-crypto-pk" {with-test}
+  "alcotest" {with-test}
   "mirage-crypto-rng" {with-test}
   "odoc" {with-doc}
 ]

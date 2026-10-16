@@ -227,6 +227,10 @@ the [Tutorial](docs/guides/TUTORIAL.md), [Factory Pipeline](docs/architecture/de
 
 ## Status
 
+| Internal tooling | Status |
+|---|---|
+| [Qualification core](internal/tooling/sol_qualification/sol_qualification.md) | Implementation in progress; offline mechanism fixtures only |
+
 Sol is under active development and not yet production-stable. HTTP services, Kafka workers, scheduled functions, PostgreSQL, observability, local development, and Kubernetes deployment are implemented and dogfooded end-to-end. Cloud infrastructure provisioning and the AWS integration layer are further along than most other pieces but still experimental.
 
 Current product behavior and status are described in [The Sol developer experience](docs/DEVELOPER_EXPERIENCE.md); future work is tracked in GitHub Issues.
