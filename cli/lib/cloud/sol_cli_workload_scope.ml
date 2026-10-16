@@ -51,7 +51,6 @@ type namespace_probe =
   | Namespace_exists
   | Namespace_absent
   | Namespace_unreachable of string
-  | Namespace_unobservable of string
   | Namespace_unestablished of string
 
 type release_failure =
@@ -200,9 +199,11 @@ type read_result =
    and a workload cannot exist without its namespace -- rather than an inference from a
    namespaced read that could not be authorized.
 
-   The namespaced reads still run per namespace and still fail closed: once a namespace exists
-   its workloads may exist too, and an identity that may not read them has established
-   nothing. *)
+   One observation decides one namespace, and it is classified once. A view that could not be
+   established is not evidence of absence, so it refuses: it does not fall back to the weaker
+   namespaced read that this observation exists to replace. The namespaced reads still run per
+   namespace and still fail closed: once a namespace exists its workloads may exist too, and an
+   identity that may not read them has established nothing. *)
 let read_workloads ~run ~namespace_probe ~namespaces ~workspace
   : (read_result, read_error) result
   =
@@ -219,21 +220,7 @@ let read_workloads ~run ~namespace_probe ~namespaces ~workspace
            ; operation = "establishing whether the namespace exists"
            ; reason
            })
-    | Namespace_exists | Namespace_unobservable _ ->
-      (* An unobservable view is not evidence of absence, and it is not evidence that a
-         workload is running either. Fall back to the namespaced read, which reaches the same
-         conclusion it reached before a view was asked for: it establishes "nothing of this
-         workspace is running" where the identity may read, and refuses where it may not. The
-         degradation is reported, because the weaker observation is what decided. *)
-      (match namespace_probe namespace with
-       | Namespace_unobservable reason ->
-         Sol_cli_report.warn
-           "%s: the namespace view could not be established (%s), so this release falls \
-            back to the namespaced read, which cannot prove that a namespace does not \
-            exist"
-           namespace
-           reason
-       | _ -> ());
+    | Namespace_exists ->
       let rec read_kind ~contacted found = function
         | [] -> Ok (contacted, List.concat (List.rev found))
         | kind :: rest ->

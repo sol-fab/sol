@@ -1450,51 +1450,123 @@ let test_an_unestablishable_namespace_existence_is_unestablished () =
     (List.length reads)
 ;;
 
-let test_an_unobservable_view_falls_back_to_the_namespaced_read () =
-  let release, reads, _, reported =
-    release_with
-      ~namespace_probe:(fun _ ->
-        Sol_cli_workload_scope.Namespace_unobservable
-          "could not establish ephemeral cluster access")
-      [ "pluto-payments" ]
+(* One observation decides one namespace, and it decides once: the probe is counted and the
+   namespaced reads are counted, so a re-ask or a fallback to a weaker read would show up here.
+   Presence and absence stay different facts throughout: an inspected namespace is a scope with
+   whatever it holds, and only a namespace that does not exist is absence. *)
+let observations ?(replies = []) probe namespaces =
+  let probes = ref []
+  and reads = ref [] in
+  let cluster = cluster_answering ~replies () in
+  let read =
+    Sol_cli_workload_scope.read_workloads
+      ~run:(fun args ->
+        reads := !reads @ [ args ];
+        run_cluster cluster args)
+      ~namespace_probe:(fun namespace ->
+        probes := !probes @ [ namespace ];
+        probe namespace)
+      ~namespaces
+      ~workspace:"pluto"
   in
-  Windtrap.equal
-    Windtrap.bool
-    ~msg:"a view that cannot be established does not strand a target whose reads work"
-    true
-    (match release with
-     | Sol_cli_workload_scope.Workloads_released -> true
-     | _ -> false);
-  Windtrap.equal
-    Windtrap.int
-    ~msg:"the namespaced read is what decided, as it did before a view was asked for"
-    4
-    (List.length reads);
-  Windtrap.equal
-    Windtrap.bool
-    ~msg:"and the weaker observation is reported rather than assumed away"
-    true
-    (contains
-       (String.concat "\n" (List.map snd reported))
-       "the namespace view could not be established")
+  read, !probes, !reads
 ;;
 
-let test_an_unobservable_view_never_reads_an_unreadable_read_as_absence () =
-  let release, _, _, _ =
-    release_with
-      ~namespace_probe:(fun _ ->
-        Sol_cli_workload_scope.Namespace_unobservable "no cluster access")
+let test_one_observation_decides_one_namespace () =
+  let read, probes, reads =
+    observations
+      (fun _ -> Sol_cli_workload_scope.Namespace_exists)
+      [ "pluto-payments"; "pluto-comms" ]
+  in
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"each declared namespace is observed exactly once, in order"
+    [ "pluto-payments"; "pluto-comms" ]
+    probes;
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"and an existing namespace is inspected, once per kind"
+    8
+    (List.length reads);
+  (match read with
+   | Ok { Sol_cli_workload_scope.scopes = [ _; _ ]; namespaces_absent = [] } -> ()
+   | _ ->
+     Windtrap.fail "two namespaces that exist are two inspected scopes, never absence");
+  let _, probes, _ =
+    observations (fun _ -> Sol_cli_workload_scope.Namespace_absent) [ "pluto-comms" ]
+  in
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"an absent namespace is observed once, and decides that namespace alone"
+    [ "pluto-comms" ]
+    probes
+;;
+
+let test_a_view_that_cannot_be_established_refuses_rather_than_falling_back () =
+  let read, probes, reads =
+    observations
       ~replies:[ "deployment", Error refused_read ]
+      (fun _ ->
+         Sol_cli_workload_scope.Namespace_unestablished
+           "the lifecycle identity's namespace view could not be established (no cluster \
+            access)")
       [ "pluto-payments" ]
   in
-  match release with
-  | Sol_cli_workload_scope.Workloads_unestablished
-      { namespace = "pluto-payments"; kind = Some "deployment"; _ } -> ()
-  | Sol_cli_workload_scope.Workloads_released ->
+  (match read with
+   | Error
+       (Sol_cli_workload_scope.Read_unestablished { kind = None; operation; reason; _ })
+     ->
+     Windtrap.equal
+       Windtrap.bool
+       ~msg:"the failure names the existence observation"
+       true
+       (contains operation "namespace");
+     Windtrap.equal
+       Windtrap.bool
+       ~msg:"and it carries the view's own words"
+       true
+       (contains reason "could not be established")
+   | Error _ ->
+     Windtrap.fail "a view that cannot be established is an unestablished existence read"
+   | Ok _ -> Windtrap.fail "a view that cannot be established is never absence");
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"and no weaker namespaced read is attempted behind it"
+    0
+    (List.length reads);
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"which leaves the one observation as what decided"
+    [ "pluto-payments" ]
+    probes
+;;
+
+let test_absence_and_a_successful_inspection_are_different_facts () =
+  let read, _, _ =
+    observations (fun _ -> Sol_cli_workload_scope.Namespace_exists) [ "pluto-payments" ]
+  in
+  (match read with
+   | Ok
+       { Sol_cli_workload_scope.scopes =
+           [ { Sol_cli_workload_scope.namespace = "pluto-payments"; workloads = [] } ]
+       ; namespaces_absent = []
+       } -> ()
+   | Ok _ ->
+     Windtrap.fail
+       "a namespace that was inspected is a scope, never absence, even when it holds \
+        nothing"
+   | Error _ -> Windtrap.fail "an existing namespace is not a failed read");
+  let read, _, _ =
+    observations (fun _ -> Sol_cli_workload_scope.Namespace_absent) [ "pluto-payments" ]
+  in
+  match read with
+  | Ok { Sol_cli_workload_scope.scopes = []; namespaces_absent = [ "pluto-payments" ] } ->
+    ()
+  | Ok _ ->
     Windtrap.fail
-      "the fallback must not turn a namespace it cannot read into a namespace that is \
-       empty"
-  | _ -> Windtrap.fail "a refused read behind an unobservable view is still unestablished"
+      "a namespace that does not exist is absence, and is never reported as an inspected \
+       scope"
+  | Error _ -> Windtrap.fail "a namespace that does not exist is not a failed read"
 ;;
 
 let test_an_unreachable_cluster_probe_is_the_carve_out () =
@@ -3290,12 +3362,18 @@ let%test "verification: an existence read that cannot be established keeps the r
   test_an_unestablishable_namespace_existence_is_unestablished ()
 ;;
 
-let%test "verification: an unobservable view falls back to the namespaced read" =
-  test_an_unobservable_view_falls_back_to_the_namespaced_read ()
+let%test "verification: one observation decides one namespace" =
+  test_one_observation_decides_one_namespace ()
 ;;
 
-let%test "verification: an unobservable view never reads an unreadable read as absence" =
-  test_an_unobservable_view_never_reads_an_unreadable_read_as_absence ()
+let%test
+    "verification: a view that cannot be established refuses rather than falling back"
+  =
+  test_a_view_that_cannot_be_established_refuses_rather_than_falling_back ()
+;;
+
+let%test "verification: absence and a successful inspection are different facts" =
+  test_absence_and_a_successful_inspection_are_different_facts ()
 ;;
 
 let%test "verification: an unreachable cluster keeps the documented carve-out" =

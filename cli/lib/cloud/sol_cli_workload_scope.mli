@@ -63,13 +63,10 @@ type namespace_probe =
   | Namespace_exists
   | Namespace_absent
   | Namespace_unreachable of string
-  (** The identity that establishes existence could not be shown to have a usable view at all.
-      Not evidence of absence: the release falls back to the namespaced read, which can still
-      establish that nothing of this workspace is running where it may read, and refuses where
-      it may not. Reported as a degradation. *)
-  | Namespace_unobservable of string
-  (** The existence read ran and answered something that is neither presence nor absence:
-      refused, timed out, undecodable. Absence is never inferred from it. *)
+  (** The existence observation answered something that is neither presence nor absence: the
+      view could not be established, the read was refused, it timed out, or it was
+      undecodable. Absence is never inferred from it, and it is not replaced by a weaker
+      read -- the release refuses and `--accept-unreleased` stays the operator's override. *)
   | Namespace_unestablished of string
 
 type read_result =

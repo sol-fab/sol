@@ -1075,15 +1075,24 @@ let destroy_deps
         Sol_cli_kubectl.run ~ctx args
         |> Result.map (fun (listing : Sol_cli_process.output) -> listing.stdout)
       in
-      (* Namespace existence is established under the cluster-access identity -- the lifecycle
-         authority that already manages the platform (DEC-034) -- and never under the deploy
-         identity, whose namespaced authority begins only where it has deployed. Before an
-         absence is trusted, the view must be shown to see namespaces at all: a view that were
-         filtered (an identity scoped to particular namespaces) would answer NotFound for a
-         namespace that exists, and a look-up that cannot be trusted must never become a
-         deletion decision. An authority that cannot be shown is unestablished, which keeps
-         the refusal. Every read is bounded, so a hung kubectl is unestablished and never
-         absence (sol-fab/sol#1491). *)
+      (* Namespace existence is established with the provider's **lifecycle identity**, which is
+         what `Sol_cli_cluster.with_access` supplies: on AWS the cluster-access role -- the
+         authority the qualification campaign showed holds a cluster-wide namespace read -- and
+         on GCP the provisioner service account, because that is the identity the provider's
+         destroy path already uses for the platform. It is never the deploy identity, whose
+         namespaced authority begins only where it has deployed.
+
+         What that identity can actually see is verified, not assumed (sol-fab/sol#1491):
+         `kubectl auth can-i get namespaces` is the authorizer's own answer about the RBAC
+         grant, which a successful read does not give -- an identity can read a namespace it
+         happened to be granted without holding a cluster-wide view -- and a namespace that
+         must exist must then be readable, which shows the read works at all. What these two
+         checks still cannot rule out is an authorizer that filters namespace reads *by name*
+         rather than by RBAC: standard Kubernetes evaluates RBAC first and returns NotFound for
+         a namespace that is not there, which is what the absence conclusion rests on, but the
+         residual assumption is stated here rather than left implied. Anything that cannot be
+         shown is unestablished, never absence. Every read is bounded, so a hung kubectl is
+         unestablished too. *)
       let namespace_view_authority = ref None in
       let authority_probe (cluster : Sol_cli_cluster.t) =
         match !namespace_view_authority with
@@ -1091,16 +1100,34 @@ let destroy_deps
         | None ->
           let answer =
             cluster.with_access (fun ~env ->
-              match
-                Sol_cli_process.run
-                  (Sol_cli_process.cmd
-                     ~env
-                     ~timeout_s:60.
-                     ("kubectl" :: namespace_exists_args ~namespace:"kube-system"))
-              with
-              | Ok _ -> Ok ()
-              | Error error -> Error (Sol_cli_process.error_to_string error))
+              let run args =
+                Sol_cli_process.run (Sol_cli_process.cmd ~env ~timeout_s:60. args)
+              in
+              match run [ "kubectl"; "auth"; "can-i"; "get"; "namespaces" ] with
+              | Error error -> Error (Sol_cli_process.error_to_string error)
+              | Ok (answer : Sol_cli_process.output) ->
+                let answered = String.trim answer.stdout in
+                if not (String.equal answered "yes")
+                then
+                  Error
+                    (Printf.sprintf
+                       "the authorizer answered %S to \"can-i get namespaces\", so a \
+                        namespace it does not name cannot be read as absent"
+                       answered)
+                else (
+                  match
+                    run ("kubectl" :: namespace_exists_args ~namespace:"kube-system")
+                  with
+                  | Ok _ -> Ok ()
+                  | Error error -> Error (Sol_cli_process.error_to_string error)))
           in
+          (match answer with
+           | Ok () ->
+             Sol_cli_report.app
+               "  the namespace view is established with the lifecycle identity (the \
+                authorizer grants can-i get namespaces, and a namespace that must exist \
+                is readable)"
+           | Error _ -> ());
           namespace_view_authority := Some answer;
           answer
       in
@@ -1113,10 +1140,10 @@ let destroy_deps
         | Some cluster ->
           (match authority_probe cluster with
            | Error message ->
-             Namespace_unobservable
+             Namespace_unestablished
                (Printf.sprintf
-                  "the cluster-access identity's view of namespaces could not be \
-                   established (%s)"
+                  "the lifecycle identity's namespace view could not be established \
+                   (%s), so whether the namespace exists is unknown"
                   message)
            | Ok () ->
              (match
