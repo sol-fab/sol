@@ -1185,6 +1185,8 @@ has "and the preview names the published digest and the row's var file" \
   "plan qualreg/aws/us-east-1 --var-file $ROOT/internal/qualification/aws/qual-aws-row.tfvars --image-ref checkout_svc=$ECR/pluto/checkout-svc@sha256:" \
   "$TMP/cloudrun.sol"
 lacks "the removed partial cloud apply is never invoked" "cloud apply" "$TMP/cloudrun.sol"
+lacks "and an unpublished artifact set prints no missing-file diagnostic" \
+  "No such file or directory" "$TMP/cloudrun.out"
 has "and it asserts from the cluster that no workload moved before the publish" \
   "get deploy -n pluto-payments" "$TMP/cloudrun.kubectl"
 has "and that no release was recorded" \
