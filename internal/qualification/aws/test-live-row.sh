@@ -536,17 +536,49 @@ case " $* " in
     fi
     exit 0
     ;;
-  # The cold-start boundary (#1473): the phase reads the cluster for a workload that moved or a
-  # release that was recorded before the immutable artifacts existed. The default is "nothing
-  # there" (the deploy refused before it established the workload namespaces); each flag models
-  # the failure the assertion must catch.
-  *" get deploy -n "*)
-    if [ "${STUB_COLD_WORKLOAD:-0}" = "1" ]; then printf 'deployment.apps/charge-svc\n'; fi
-    exit 0
-    ;;
-  *" get configmap -n "*" sol.dev/type=release "*)
-    if [ "${STUB_COLD_RELEASE:-0}" = "1" ]; then printf 'configmap/sol-release-current-pluto\n'; fi
-    exit 0
+  # The cold-start boundary is established from namespace absence (#1488 review, #1492): the
+  # observation identity's view is validated first, then each declared namespace is read. The
+  # default is "every declared namespace is absent" (the deploy refused before it established
+  # the workload namespaces); each flag models one answer the assertion must not read as a pass.
+  *" get namespace "*)
+    ns=""
+    prev=""
+    for a in $*; do
+      [ "$prev" = "namespace" ] && ns="$a"
+      prev="$a"
+    done
+    case "$ns" in
+      kube-system)
+        if [ "${STUB_NS_VIEW_UNREADABLE:-0}" = "1" ]; then
+          printf 'Error from server (Forbidden): namespaces "kube-system" is forbidden: User cannot get resource\n' >&2
+          exit 1
+        fi
+        printf 'namespace/kube-system\n'
+        exit 0
+        ;;
+      sol-nonexistent-namespace-probe-*)
+        if [ "${STUB_NS_VIEW_FILTERED:-0}" = "1" ]; then
+          printf 'Error from server (Forbidden): namespaces "%s" is forbidden: User cannot get resource\n' "$ns" >&2
+        else
+          printf 'Error from server (NotFound): namespaces "%s" not found\n' "$ns" >&2
+        fi
+        exit 1
+        ;;
+    esac
+    if [ "${STUB_COLD_NAMESPACE_PRESENT:-}" = "$ns" ]; then
+      printf 'namespace/%s\n' "$ns"
+      exit 0
+    fi
+    if [ "${STUB_COLD_NAMESPACE_FORBIDDEN:-}" = "$ns" ]; then
+      printf 'Error from server (Forbidden): namespaces "%s" is forbidden: User cannot get resource\n' "$ns" >&2
+      exit 1
+    fi
+    if [ "${STUB_COLD_NAMESPACE_TIMEOUT:-}" = "$ns" ]; then
+      printf 'Unable to connect to the server: dial tcp 10.0.0.1:443: i/o timeout\n' >&2
+      exit 1
+    fi
+    printf 'Error from server (NotFound): namespaces "%s" not found\n' "$ns" >&2
+    exit 1
     ;;
   *" get secret redpanda-users "*)
     printf '%s' 'sol-workloads:testpass:SCRAM-SHA-256' | base64
@@ -718,10 +750,14 @@ stub_prepare() {
     printf 'state_key=%s\n' "sol/qualreg/aws/us-east-1/cloud.tfstate"
   } >"$LOG_DIR/attempt.txt"
   : >"$LOG_DIR/app-built-tags.txt"
-  for unit in checkout_svc charge_svc notify_worker orders_svc fulfilment_worker; do
-    printf '%s=%s/pluto/%s:%s\n' \
-      "$unit" "$ECR" "$(printf '%s' "$unit" | tr '_' '-')" "$APP_TAG" >>"$LOG_DIR/app-built-tags.txt"
-  done
+  # STUB_NO_BUILT_TAGS models a `prepare` that materialized the candidate-bound contract but
+  # produced no image, so the cloud phase has digests to publish only if it is absent.
+  if [ "${STUB_NO_BUILT_TAGS:-0}" != 1 ]; then
+    for unit in checkout_svc charge_svc notify_worker orders_svc fulfilment_worker; do
+      printf '%s=%s/pluto/%s:%s\n' \
+        "$unit" "$ECR" "$(printf '%s' "$unit" | tr '_' '-')" "$APP_TAG" >>"$LOG_DIR/app-built-tags.txt"
+    done
+  fi
 }
 
 stub_published_refs() {
@@ -1187,10 +1223,19 @@ has "and the preview names the published digest and the row's var file" \
 lacks "the removed partial cloud apply is never invoked" "cloud apply" "$TMP/cloudrun.sol"
 lacks "and an unpublished artifact set prints no missing-file diagnostic" \
   "No such file or directory" "$TMP/cloudrun.out"
-has "and it asserts from the cluster that no workload moved before the publish" \
-  "get deploy -n pluto-payments" "$TMP/cloudrun.kubectl"
-has "and that no release was recorded" \
-  "get configmap -n pluto-payments" "$TMP/cloudrun.kubectl"
+has "and it establishes the boundary from the cluster over every declared namespace" \
+  "get namespace pluto-comms" "$TMP/cloudrun.kubectl"
+has "including the domain of a unit that is neither the app nor the worker namespace" \
+  "get namespace pluto-checkout" "$TMP/cloudrun.kubectl"
+has "reading namespaces rather than a namespaced workload listing, which this identity cannot make" \
+  "boundary_namespaces: pluto-checkout pluto-comms pluto-payments" \
+  "$TMP/cloudrun.logs/cold-start-namespaces.txt"
+if grep -q '" get deploy -n "' "$TMP/cloudrun.kubectl"; then
+  no "and the unobservable deployment listing shape is gone from the phase" \
+    "no namespaced deployment listing" "$(tr '\n' '|' <"$TMP/cloudrun.kubectl" | cut -c1-200)"
+else
+  ok "and the unobservable deployment listing shape is gone from the phase"
+fi
 
 printf '\nscenario: publication runs as the publisher identity, never the operator (SEC-011)\n'
 KEEP_LOG_DIR=1 run_phase pubrun prepare
@@ -1255,19 +1300,77 @@ lacks "and pushes nothing" "push" "$TMP/impersonated.docker"
 lacks "and records no publisher identity" "publisher_session_identity" \
   "$TMP/impersonated.logs/publisher-identity.txt"
 
-printf '\nscenario: a cold deploy that moved a workload before publishing is caught (#1473)\n'
+printf '\nscenario: a cold deploy that left a declared namespace behind is caught (#1473, #1492)\n'
 KEEP_LOG_DIR=1 run_phase coldworkload prepare
-KEEP_LOG_DIR=1 run_phase coldworkload cloud STUB_COLD_WORKLOAD=1
-refused coldworkload "a workload that moved before its artifacts were published fails the phase"
-has "and names what moved" \
-  "the cold deploy moved a workload before its immutable artifacts were published" "$TMP/coldworkload.out"
+KEEP_LOG_DIR=1 run_phase coldworkload cloud STUB_COLD_NAMESPACE_PRESENT=pluto-payments
+refused coldworkload "a namespace that exists before its artifacts were published fails the phase"
+has "and names it as a namespace the deploy created, not as a workload it moved" \
+  "the cold deploy created a declared namespace before its immutable artifacts were published" \
+  "$TMP/coldworkload.out"
+has "recording it as PRESENT rather than absent" \
+  "cold-start-namespace: pluto-payments PRESENT" "$TMP/coldworkload.logs/cold-start-namespaces.txt"
+has "and the boundary is UNKNOWN, never a pass" \
+  "so the boundary is UNKNOWN, never a pass" "$TMP/coldworkload.out"
 
-printf '\nscenario: a cold deploy that recorded a release before publishing is caught (#1473)\n'
+printf '\nscenario: a namespace holding a recorded release is caught the same way (#1473, #1492)\n'
 KEEP_LOG_DIR=1 run_phase coldrelease prepare
-KEEP_LOG_DIR=1 run_phase coldrelease cloud STUB_COLD_RELEASE=1
-refused coldrelease "a release recorded before its artifacts were published fails the phase"
-has "and names the release" \
-  "the cold deploy recorded a release before its immutable artifacts were published" "$TMP/coldrelease.out"
+KEEP_LOG_DIR=1 run_phase coldrelease cloud STUB_COLD_NAMESPACE_PRESENT=pluto-comms
+refused coldrelease "a namespace that exists before its artifacts were published fails the phase"
+has "recording the namespace the release would live in" \
+  "cold-start-namespace: pluto-comms PRESENT" "$TMP/coldrelease.logs/cold-start-namespaces.txt"
+
+printf '\nscenario: a namespace that cannot be read is UNKNOWN, never absence (#1492)\n'
+KEEP_LOG_DIR=1 run_phase coldforbidden prepare
+KEEP_LOG_DIR=1 run_phase coldforbidden cloud STUB_COLD_NAMESPACE_FORBIDDEN=pluto-comms
+refused coldforbidden "a refused namespace read fails the phase"
+has "recording the namespace as UNKNOWN" \
+  "cold-start-namespace: pluto-comms UNKNOWN" "$TMP/coldforbidden.logs/cold-start-namespaces.txt"
+lacks "and never as absence" \
+  "cold-start-namespace: pluto-comms ABSENT" "$TMP/coldforbidden.logs/cold-start-namespaces.txt"
+
+printf '\nscenario: a namespace read that timed out is UNKNOWN, never absence (#1492)\n'
+KEEP_LOG_DIR=1 run_phase coldtimeout prepare
+KEEP_LOG_DIR=1 run_phase coldtimeout cloud STUB_COLD_NAMESPACE_TIMEOUT=pluto-payments
+refused coldtimeout "a timed-out namespace read fails the phase"
+has "recording the timeout as UNKNOWN" \
+  "cold-start-namespace: pluto-payments UNKNOWN" "$TMP/coldtimeout.logs/cold-start-namespaces.txt"
+
+printf '\nscenario: an observation identity whose view cannot be established is not an absence (#1492)\n'
+KEEP_LOG_DIR=1 run_phase coldnoview prepare
+KEEP_LOG_DIR=1 run_phase coldnoview cloud STUB_NS_VIEW_UNREADABLE=1
+refused coldnoview "a namespace view that cannot be established fails the phase"
+has "and says which view could not be established" \
+  "namespace view could not be established" "$TMP/coldnoview.out"
+lacks "reading no declared namespace behind an unproven view" \
+  "cold-start-namespace: pluto-payments ABSENT" "$TMP/coldnoview.logs/cold-start-namespaces.txt"
+
+printf '\nscenario: a filtered namespace view cannot produce a false absence (#1492)\n'
+KEEP_LOG_DIR=1 run_phase coldfiltered prepare
+KEEP_LOG_DIR=1 run_phase coldfiltered cloud STUB_NS_VIEW_FILTERED=1
+refused coldfiltered "a view that answers Forbidden for an absent name is not a boundary"
+has "and says the view is filtered, so an existing namespace could answer the same way" \
+  "the namespace view is" "$TMP/coldfiltered.out"
+lacks "reading no declared namespace behind a filtered view" \
+  "cold-start-namespace: pluto-payments ABSENT" "$TMP/coldfiltered.logs/cold-start-namespaces.txt"
+
+printf '\nscenario: a selection that omits a consumer refuses rather than passing vacuously (#1492)\n'
+# `prepare` runs with the row's own unit set, so the candidate-bound contract exists and the
+# cloud phase's selection validation is what refuses: this is about the assertion's selection,
+# not about a missing contract.
+KEEP_LOG_DIR=1 run_phase coldselection prepare
+KEEP_LOG_DIR=1 run_phase coldselection cloud APP_UNITS="orders_svc missing_svc"
+refused coldselection "a namespace set that omits a selected consumer fails the phase"
+has "and says which selection could not be covered" \
+  "resolve to a candidate-bound directory" "$TMP/coldselection.out"
+lacks "and reads no namespace behind an unvalidated selection" \
+  "cold-start-namespace: pluto-payments ABSENT" "$TMP/coldselection.logs/cold-start-namespaces.txt"
+
+printf '\nscenario: a credential that addresses another cluster never reads the boundary (#1492)\n'
+KEEP_LOG_DIR=1 run_phase coldwrongcluster prepare
+KEEP_LOG_DIR=1 run_phase coldwrongcluster cloud STUB_KUBECONFIG_STALE=1
+refused coldwrongcluster "a kubeconfig for a replaced cluster fails the phase"
+lacks "and no declared namespace is read through it" \
+  "get namespace pluto-payments" "$TMP/coldwrongcluster.kubectl"
 
 printf '\nscenario: the run owns no registry of its own, so the cleanup phase is gone\n'
 run_phase cleanuprun cleanup
@@ -1279,8 +1382,19 @@ SKIP_PREPARE=1 run_phase noprep cloud
 refused noprep "a run with no built images cannot preview the target"
 has "the cold deploy still refuses at the artifact gate" \
   "Deployment incomplete." "$TMP/noprep.logs/cloud-apply.log"
+has "and the phase says why it cannot go on: it has no candidate-bound contract to assert against" \
+  "no candidate-bound build context" "$TMP/noprep.out"
+
+printf '\nscenario: a run with a contract but nothing built still refuses before the preview\n'
+KEEP_LOG_DIR=1 run_phase nodigests prepare
+# `stub_prepare` runs in this shell for the cloud phase, so the flag that models a contract with
+# no built image has to be in this shell's environment too.
+export STUB_NO_BUILT_TAGS=1
+KEEP_LOG_DIR=1 run_phase nodigests cloud STUB_NO_BUILT_TAGS=1
+unset STUB_NO_BUILT_TAGS
+refused nodigests "a run with no built images cannot preview the target"
 has "and the phase says why it cannot go on" \
-  "the run published no image digests" "$TMP/noprep.out"
+  "the run published no image digests" "$TMP/nodigests.out"
 
 printf '\nscenario: prepare builds the run images and touches no provider state\n'
 KEEP_LOG_DIR=1 run_phase prep prepare

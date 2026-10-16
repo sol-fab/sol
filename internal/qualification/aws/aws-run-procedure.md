@@ -186,9 +186,18 @@ incomplete.`, before any workload moves (issue #1473). The phase succeeds on the
 environment (`The environment for <target> is reconciled.`) **and** that refusal, not on the
 deploy's exit code. When the deploy stops at the pre-platform `redpanda-users` credential, create
 the Secret with the run's generated or operator-supplied `sol-workloads` SCRAM credential, record
-the supplied input, and re-run the same deploy to resume. Before publishing, read the cluster to
-establish the cold-start boundary itself: no Deployment in `pluto-payments`/`pluto-comms` and no
-`sol.dev/type=release` ConfigMap — an unreadable namespace is UNKNOWN, never absence. Then publish
+the supplied input, and re-run the same deploy to resume. Before publishing, establish the
+cold-start boundary from the cluster as **namespace absence**, over the complete set of namespaces
+the target's selected units declare (derived from the candidate-bound build context, never from a
+fixed pair of names): a namespaced workload or release cannot exist without its namespace, so
+every declared namespace must read positively absent. The read runs under the cluster-access
+identity and its view is validated first — a namespace that must exist must be readable, and a
+name that cannot exist must answer `NotFound` rather than `Forbidden`, because a filtered view
+would answer `NotFound` for a namespace that exists. A namespace that exists, a read that fails or
+times out, an unproven view, or a selection that does not cover every selected unit is UNKNOWN,
+never a pass; a namespace set that omits a consumer refuses the phase rather than passing
+vacuously. This establishes the absence of namespaced workloads and releases, not of
+cluster-scoped objects, which the target's roots own. Then publish
 the images `prepare` built into the repositories Sol created **as the publisher identity**: the
 harness assumes `PUBLISHER_ROLE_ARN` on its own session, records the identity that session answers
 with in `publisher-identity.txt`, and refuses to publish at all when the ARN is absent or the
@@ -196,7 +205,7 @@ session cannot be assumed. `docker inspect` each image for its digest,
 and preview the whole target with `sol plan <target> --var-file <tfvars> --image-ref
 <unit>=<repo>@sha256:<digest>`; build the deploy/access/operator kubeconfigs; capture nodes and the
 cluster root state. Evidence: `cloud-apply.log`, `cloud-apply-resume.log`,
-`platform-credential.log`, `cold-start-*.err`, `cloud-plan.log`, `publisher-identity.txt`,
+`platform-credential.log`, `cold-start-namespaces.txt`, `cold-start-namespaces-*.err`, `cloud-plan.log`, `publisher-identity.txt`,
 `ecr-sol-repositories-before.txt`, `ecr-sol-repositories-after.txt`, `prerequisites.txt`,
 `k8s-nodes.txt`, `state/cloud.tfstate`, and the verbatim `lifecycle phase:` line per invocation.
 Rows: I1, I2, I4, A, F1, F2.

@@ -62,11 +62,26 @@ export ECR_REGISTRY
 mkdir -p "$LOG_DIR"
 SAY_LOG="$LOG_DIR/harness.log"
 
+# The candidate-bound application contract `candidate-binding.sh` materializes in `prepare`. The
+# cold-start boundary derives the target's declared namespaces from it, so the assertion and the
+# images it guards come from the same, candidate-bound tree.
+APP_BUILD_CONTEXT="$LOG_DIR/app-build-context"
+
 say() {
   local line
   printf -v line '[%(%H:%M:%S)T] %s' -1 "$*"
   printf '%s\n' "$line" >>"$SAY_LOG" 2>/dev/null || true
   printf '%s\n' "$line" 2>/dev/null || true
+}
+
+# A refusal from inside a function whose stdout is captured (a command substitution) must not be
+# written to stdout: the message would be captured as the function's value and never reach the
+# operator. `refuse` logs like `say` and writes to stderr.
+refuse() {
+  local line
+  printf -v line '[%(%H:%M:%S)T] %s' -1 "$*"
+  printf '%s\n' "$line" >>"$SAY_LOG" 2>/dev/null || true
+  printf '%s\n' "$line" >&2 || true
 }
 
 CLOUD_APPLIED=0
@@ -146,9 +161,10 @@ optional (defaults shown)
 phases
   prepare    build the application images bound to the candidate; touches no provider state
   cloud      the cold deploy (inline installation, cluster and platform; refuse at the
-             artifact gate), then publish the built images through the publisher identity into
-             the repositories Sol created, the read-only whole-target plan, the deploy
-             identity's kubeconfig, node evidence, and state capture
+             artifact gate), then the cold-start boundary as declared-namespace absence, then
+             publish the built images through the publisher identity into the repositories Sol
+             created, the read-only whole-target plan, the deploy identity's kubeconfig, node
+             evidence, and state capture
   transport  establish and verify the qualification-only transport (INFRA-060 / DEC-039)
   app        Sol's work: runtime secrets, migrate apply, deploy with the published digests,
              the transaction
@@ -232,39 +248,138 @@ pending_artifacts_refused() {
   grep -qF 'Deployment incomplete.' "$LOG_DIR"/cloud-apply*.log 2>/dev/null
 }
 
-# The other half of that contract, read from the cluster rather than inferred from the log:
-# reconciliation is not a workload rollout and not a recorded release. A namespace that does not
-# exist yet is not a moved workload; a read that fails for any other reason is UNKNOWN, never
-# absence.
-cold_start_moved_nothing() {
-  local ns out err
-  for ns in $APP_NS $WORKER_NS; do
-    err="$LOG_DIR/cold-start-$ns.err"
-    if ! out="$(kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get deploy -n "$ns" -o name 2>"$err")"; then
-      if grep -q 'not found' "$err" 2>/dev/null; then
-        continue
+# The namespaces the target's **selected** units declare, taken from the candidate-bound
+# application contract -- the build context candidate-binding.sh materialized from the candidate
+# revision -- and never from the working tree or from a fixed pair of names. The boundary
+# assertion below is only as good as its selection: a set that omits a unit's namespace, or that
+# silently selected nothing, would pass vacuously (#1488 review, #1492).
+candidate_unit_dirs() {
+  local unit dir
+  for unit in $APP_UNITS; do
+    for dir in "$APP_BUILD_CONTEXT"/app/*/"$unit"; do
+      if [ -f "$dir/Dockerfile" ]; then
+        printf '%s\n' "${dir#"$APP_BUILD_CONTEXT"/app/}"
+        break
       fi
-      say "could not read the deployments in $ns, so whether a workload moved is UNKNOWN (see $err)"
-      return 1
-    fi
-    if [ -n "$out" ]; then
-      say "the cold deploy moved a workload before its immutable artifacts were published: $out"
-      return 1
-    fi
-    if ! out="$(kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get configmap -n "$ns" \
-      -l sol.dev/type=release -o name 2>"$err")"; then
-      if grep -q 'not found' "$err" 2>/dev/null; then
-        continue
-      fi
-      say "could not read the release ConfigMaps in $ns, so whether a release was recorded is UNKNOWN (see $err)"
-      return 1
-    fi
-    if [ -n "$out" ]; then
-      say "the cold deploy recorded a release before its immutable artifacts were published: $out"
+    done
+  done
+}
+
+# Fails closed when the selection cannot be shown to cover every selected unit and the
+# namespaces this row is configured to exercise.
+cold_start_namespaces() {
+  local prefix="${APP_NS%-*}" address unit expected=0 found=0 names
+  if [ ! -d "$APP_BUILD_CONTEXT" ]; then
+    refuse "REFUSING: no candidate-bound build context at $APP_BUILD_CONTEXT, so the namespaces the"
+    refuse "target's selected units declare cannot be derived from the candidate's own contract"
+    return 1
+  fi
+  for unit in $APP_UNITS; do expected=$((expected + 1)); done
+  names="$(candidate_unit_dirs | while IFS= read -r address; do
+    printf '%s-%s\n' "$prefix" "${address%%/*}"
+  done | sort -u)"
+  found="$(candidate_unit_dirs | grep -c .)"
+  if [ "$found" != "$expected" ]; then
+    refuse "REFUSING: $found of $expected selected units resolve to a candidate-bound directory, so"
+    refuse "the declared namespace set would omit a consumer (APP_UNITS='$APP_UNITS')"
+    return 1
+  fi
+  if [ -z "$names" ]; then
+    refuse "REFUSING: the selected units declare no namespace, so the boundary assertion would look"
+    refuse "nowhere and pass vacuously"
+    return 1
+  fi
+  for unit in "$APP_NS" "$WORKER_NS"; do
+    if ! printf '%s\n' "$names" | grep -qxF "$unit"; then
+      refuse "REFUSING: the derived namespace set ($(printf '%s' "$names" | tr '\n' ' ')) does not cover"
+      refuse "$unit, which this row is configured to exercise; the assertion would not be looking"
+      refuse "where the row claims"
       return 1
     fi
   done
-  say "the cold deploy provisioned the target and moved no workload and recorded no release"
+  printf '%s\n' "$names"
+}
+
+# The cold-start boundary, established from the cluster rather than inferred from the deploy log.
+#
+# The claim is "this deploy moved no workload and recorded no release". A namespaced workload or
+# release cannot exist without its namespace, so the boundary is established by showing every
+# namespace the target's selected units declare to be **positively absent**. Reading it this way
+# is what makes the claim observable at this point in the lifecycle: an identity with no grant in
+# the namespace is answered Forbidden for a namespaced read (RBAC is evaluated before namespace
+# existence), which is exactly what the deploy identity is before it has deployed, so a list of
+# Deployments is unreadable here and could never establish the claim (#1488).
+#
+# The observation runs under the cluster-access identity, and its view is validated before any
+# absence is trusted: a namespace that must exist must be readable, and a name that cannot exist
+# must answer NotFound rather than Forbidden. A view that answered NotFound because it is
+# filtered could otherwise turn an unreadable look-up into a false boundary, and this observation
+# gates a decision about a live target -- so it fails closed.
+#
+# What it establishes: no namespaced workload (Deployment/CronJob/Job/Rollout) and no
+# `sol.dev/type=release` ConfigMap can exist in the declared namespaces. It does not establish
+# anything about cluster-scoped objects, which the target's roots own and Sol's teardown removes;
+# and a namespace that does exist makes the boundary UNKNOWN here rather than passing, because
+# what it might contain cannot be read with the identities this row holds.
+cold_start_boundary() {
+  local names ns out err file="$LOG_DIR/cold-start-namespaces.txt"
+  local probe="sol-nonexistent-namespace-probe-$ATTEMPT"
+  local present=0 unknown=0
+  names="$(cold_start_namespaces)" || return 1
+  if ! timeout 60 kubectl --kubeconfig "$ACCESS_KUBECONFIG" get namespace kube-system -o name \
+    >/dev/null 2>"$LOG_DIR/cold-start-namespaces-authority.err"; then
+    say "UNKNOWN: the cluster-access identity's namespace view could not be established, so"
+    say "whether a workload moved cannot be read (see cold-start-namespaces-authority.err)"
+    return 1
+  fi
+  if timeout 60 kubectl --kubeconfig "$ACCESS_KUBECONFIG" get namespace "$probe" -o name \
+    >/dev/null 2>"$LOG_DIR/cold-start-namespaces-absent-probe.err"; then
+    say "UNKNOWN: the observation identity answered that $probe exists, so its namespace view"
+    say "cannot establish absence"
+    return 1
+  fi
+  if ! grep -q 'NotFound' "$LOG_DIR/cold-start-namespaces-absent-probe.err" 2>/dev/null; then
+    say "UNKNOWN: a name that cannot exist did not answer NotFound, so the namespace view is"
+    say "filtered -- a namespace that does exist would answer the same way, and absence cannot be"
+    say "read from it (see cold-start-namespaces-absent-probe.err)"
+    return 1
+  fi
+  {
+    printf 'boundary_namespaces: %s\n' "$(printf '%s' "$names" | tr '\n' ' ')"
+    printf 'boundary_identity: cluster-access (%s), view validated against kube-system and an absent name\n' \
+      "$ACCESS_KUBECONFIG"
+  } >"$file"
+  while IFS= read -r ns; do
+    [ -n "$ns" ] || continue
+    err="$LOG_DIR/cold-start-namespace-$ns.err"
+    if out="$(timeout 60 kubectl --kubeconfig "$ACCESS_KUBECONFIG" get namespace "$ns" -o name 2>"$err")"; then
+      printf 'cold-start-namespace: %s PRESENT (it may hold a workload or a recorded release)\n' \
+        "$ns" >>"$file"
+      present=$((present + 1))
+    elif grep -q 'NotFound' "$err" 2>/dev/null; then
+      printf 'cold-start-namespace: %s ABSENT\n' "$ns" >>"$file"
+    else
+      printf 'cold-start-namespace: %s UNKNOWN (%s)\n' \
+        "$ns" "$(head -n 1 "$err" 2>/dev/null)" >>"$file"
+      unknown=$((unknown + 1))
+    fi
+  done <<EOF
+$names
+EOF
+  if [ "$unknown" != 0 ]; then
+    say "$unknown declared namespace(s) could not be read, so whether a workload moved is UNKNOWN"
+    say "  (see $file)"
+    return 1
+  fi
+  if [ "$present" != 0 ]; then
+    say "the cold deploy created a declared namespace before its immutable artifacts were published:"
+    say "  $(grep ' PRESENT' "$file" | sed 's/^cold-start-namespace: //' | tr '\n' ' ')"
+    say "whether it holds a workload or a recorded release cannot be established with the"
+    say "identities this row holds at this point, so the boundary is UNKNOWN, never a pass"
+    return 1
+  fi
+  say "the cold deploy moved no workload and recorded no release: every declared namespace"
+  say "  ($(printf '%s' "$names" | tr '\n' ' ')) is positively absent"
 }
 
 # `sol deploy` prints this once the durable installation and the environment are
@@ -627,9 +742,10 @@ phase_cloud() {
   fi
   # Infrastructure reconciled is not the same as workloads moved. Before this run publishes the
   # immutable artifacts, establish from the cluster that the cold deploy moved no workload and
-  # recorded no release -- the distinction #1473 makes and a successful cold-start row must show.
+  # recorded no release -- the distinction #1473 makes and a successful cold-start row must show,
+  # over the complete declared namespace set derived from the candidate-bound contract.
   ensure_contexts || return 1
-  cold_start_moved_nothing || return 1
+  cold_start_boundary || return 1
   # Publish the images `prepare` built into the repositories the deploy just created, then preview
   # the whole target with the digests those pushes resolved to. `sol plan` is the read-only
   # whole-target preview; `sol deploy` is the only command that reconciles the substrate.
@@ -666,7 +782,7 @@ phase_cloud() {
 app_build_images() {
   local unit dir ref
   : >"$LOG_DIR/app-built-tags.txt"
-  local context="$LOG_DIR/app-build-context" pins
+  local context="$APP_BUILD_CONTEXT" pins
   if ! pins="$(sol_candidate_bind_context "$WORKSPACE" "$SOL_REVISION" "$context")"; then
     say "refusing to build the application: it cannot be bound to candidate $SOL_REVISION"
     return 1
