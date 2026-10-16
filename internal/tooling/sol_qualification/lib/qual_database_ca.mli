@@ -1,6 +1,6 @@
 (** Shared CA observation/evaluation for AWS/GCP contexts. Callers bind expected
-    contracts and inject offline readers; no live transport, policy transfer or
-    release-qualification authority is installed. *)
+    contracts and inject readers; the separate read-only transport does not transfer
+    policy or install release-qualification authority. *)
 type recorded = private
   { verdict : Qual_domain.verdict
   ; receipt : Qual_evidence.reference

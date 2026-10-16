@@ -74,3 +74,12 @@
    %{dep:../../../../cli/test/test_database_contract_binding.py}
    %{workspace_root}
    %{dep:candidate-obligations.golden})))
+
+(test
+ (name test_live_kubernetes)
+ (modules test_live_kubernetes)
+ (libraries sol_qualification alcotest yojson unix)
+ (deps
+  intent.json
+  fixture_live_kubectl.py
+  (glob_files kubernetes/*.json)))

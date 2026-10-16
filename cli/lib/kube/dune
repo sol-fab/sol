@@ -1,4 +1,4 @@
 (library
  (name sol_cli_kube)
  (wrapped false)
- (libraries sol_cli_base unix yojson ptime))
+ (libraries sol_cli_base unix yojson digestif ptime))

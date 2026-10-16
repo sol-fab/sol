@@ -6,6 +6,7 @@
   qual_domain
   qual_evidence
   qual_kubernetes
+  qual_kubernetes_live
   qual_database_ca
   qual_candidate_obligations
   qual_lock_raw)
