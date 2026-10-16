@@ -165,8 +165,8 @@ let setup_image_preflight (config : Sol_cli_config.t) =
       "the database setup image could not be resolved: " ^ message)
 ;;
 
-(** The namespaces that must receive the DML credential: one per unit that declares it
-    uses the Sol-provisioned `postgres` resource.
+(** The namespaces that must receive the DML credential: one per unit that declares it uses
+    the resource this binding names.
 
     This is the declared signal, not the resolved one. The writer runs before the units are
     rendered and before the class Secrets it writes exist, so an enumeration derived from
@@ -177,8 +177,21 @@ let setup_image_preflight (config : Sol_cli_config.t) =
     postgres resource is not handed a Sol-written credential: the external database is
     responsible for its own roles, and only the Sol-provisioned one's consumers get the DML
     credential. That ownership resolution already exists
-    ([Sol_cli_resource_binding.provisions]); this asks it once and passes the name. *)
-let dml_namespaces ~declared ~resource (plan : Sol_cli_deployment_plan.t) =
+    ([Sol_cli_resource_binding.provisions]); this asks it once and passes the binding.
+
+    **The argument is the binding, not a name string.** The predicate compares the resource
+    key the units declared (`uses: [app_db]`), so the value compared must be the resource's
+    own name ([binding.resource]) and never a Kubernetes-name projection of it. The
+    sanitized [database_identity.resource] answers a different question — `app-db` never
+    equals `app_db` — and silently empties every delivery list built from it, which is
+    exactly how the database CA and DML credential reached no consumer namespace (#1481).
+    Taking the binding keeps that mistake unrepresentable at the call sites. *)
+let dml_namespaces
+      ~declared
+      ~(binding : Sol_cli_resource_binding.t)
+      (plan : Sol_cli_deployment_plan.t)
+  =
+  let resource = binding.Sol_cli_resource_binding.resource in
   plan.Sol_cli_deployment_plan.services
   |> List.filter (fun (spec : Sol_cli_deployment_plan.service_spec) ->
     Sol_cli_deployment_plan.service_uses_resource declared spec.source_name resource)

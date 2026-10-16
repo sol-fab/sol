@@ -392,7 +392,7 @@ let plan ?(evaluation = Sol_cli_profile_preflight.All) (input : Planning_input.t
       let dml_namespaces =
         Sol_cli_database_setup_run.dml_namespaces
           ~declared:(Some declared)
-          ~resource:database.Sol_cli_resource_binding.resource
+          ~binding:database
           plan
       in
       let database_identity =

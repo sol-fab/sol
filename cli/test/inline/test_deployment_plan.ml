@@ -2517,3 +2517,112 @@ let test_target_database_selects_one_external_and_refuses_two () =
 let%test "2b: the target database is the provisioned one, else exactly one external" =
   test_target_database_selects_one_external_and_refuses_two ()
 ;;
+
+(* #1481: the delivery namespaces are selected by the **binding's** resource name — the key the
+   declared `uses` edges name. A resource key may contain an underscore, whose Kubernetes-name
+   projection (`app-db`) never equals the declared key (`app_db`). Asking the delivery with the
+   sanitized identity therefore selects no consumer at all, so the database CA ConfigMap and the
+   DML class Secret reached no workload namespace and every db-consuming pod sat in
+   `ContainerCreating`. This test establishes the selector the delivery path depends on: every
+   consumer namespace is selected, and a unit that consumes a different resource is not. *)
+let test_database_delivery_selects_every_consumer_and_no_nonconsumer () =
+  let tmp = Filename.temp_dir "sol_test_db_delivery_ns" "" in
+  with_cwd tmp (fun () ->
+    let orders = worker_unit ~domain:"payments" ~name:"orders_svc" in
+    let fulfils = worker_unit ~domain:"comms" ~name:"fulfilment_worker" in
+    let indexer = worker_unit ~domain:"search" ~name:"indexer" in
+    let units = [ orders; fulfils; indexer ] in
+    List.iter
+      (fun (s : Sol_cli_manifest.service) ->
+         mkdirs s.dir;
+         write_file (Filename.concat s.dir "sol.toml") "")
+      units;
+    let service name uses =
+      { Sol_cli_config.name
+      ; typ = None
+      ; path = None
+      ; uses
+      ; scale_min = None
+      ; scale_max = None
+      ; language = None
+      ; omit = false
+      }
+    in
+    let declared =
+      Sol_cli_config.declared_of_config
+        { Sol_cli_config.project = Some "ws"
+        ; target = Result.get_ok (Sol_cli_config.parse_target "prod/aws/us-east-1")
+        ; resources =
+            [ { Sol_cli_config.name = "app_db"
+              ; typ = Some "postgres"
+              ; partition_key = None
+              ; sort_key = None
+              ; indexes = []
+              ; size = None
+              ; omit = false
+              ; binding = None
+              }
+            ]
+        ; services =
+            [ service "orders_svc" [ "app_db" ]
+            ; service "fulfilment_worker" [ "app_db" ]
+            ; service "indexer" [ "events" ]
+            ]
+        }
+    in
+    let plan =
+      match
+        Sol_cli_deployment_plan.of_services_result
+          ~platform_shape:Sol_cli_profile.Local
+          ~workspace:"myworkspace"
+          ~env:deploy_env
+          ~facts:(facts ())
+          ~declared
+          ~target:"prod-aws-us-east-1"
+          ~target_database:"app_db"
+          ~provisioned_database:"app_db"
+          units
+      with
+      | Error err -> Windtrap.fail (Sol_cli_deployment_plan.plan_error_to_string err)
+      | Ok plan -> plan
+    in
+    let binding : Sol_cli_resource_binding.t =
+      { resource = "app_db"
+      ; typ = "postgres"
+      ; ownership = Sol_cli_config.Ownership_sol
+      ; store = None
+      ; keys = []
+      ; connection = []
+      ; credentials = []
+      }
+    in
+    let ns domain = namespace_string ~workspace:"myworkspace" ~domain in
+    let selected =
+      Sol_cli_database_setup_run.dml_namespaces ~declared:(Some declared) ~binding plan
+    in
+    Windtrap.equal
+      (Windtrap.list Windtrap.string)
+      ~msg:"every declared consumer of the binding's resource is selected"
+      [ ns "comms"; ns "payments" ]
+      selected;
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:
+        "and a unit that consumes a different resource is not handed the database \
+         material"
+      false
+      (List.mem (ns "search") selected);
+    Windtrap.equal
+      Windtrap.string
+      ~msg:
+        "the sanitized identity is not the declared key, which is why it cannot be the \
+         argument"
+      "app-db"
+      (Sol_cli_kubernetes_name.sanitize_name binding.resource))
+;;
+
+let%test
+    "2b/#1481: the delivery selects the binding's consumers, never the sanitized identity"
+  =
+  test_database_delivery_selects_every_consumer_and_no_nonconsumer ()
+;;
