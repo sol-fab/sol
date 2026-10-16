@@ -102,6 +102,10 @@ module Target_plan : sig
   val to_deployment_plan : t -> Sol_cli_deployment_plan.t
 end
 
+(** Canonical declaration planning only. Does not establish profile prerequisites or
+    grant deployment authority. {!plan} retains preflight for execution callers. *)
+val declaration_plan : Planning_input.t -> (Sol_cli_deployment_plan.t, plan_error) result
+
 val plan
   :  ?evaluation:Sol_cli_profile_preflight.evaluation
   -> Planning_input.t

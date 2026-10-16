@@ -205,3 +205,24 @@
  (name ci-lifecycle)
  (deps
   (alias_rec runtest-lifecycle)))
+
+(test
+ (name test_database_contract)
+ (modules test_database_contract)
+ (libraries sol_cli sol_cli_test_support windtrap yojson yaml unix str))
+
+(rule
+ (alias runtest)
+ (deps
+  test_database_contract_binding.py
+  ../bin/database_contract_projection.exe
+  ../../internal/qualification/database-contract-binding.py
+  ../../internal/qualification/sol-under-test.sh
+  ../../internal/tooling/scripts/build-release-bundle.sh)
+ (action
+  (run
+   python3
+   %{dep:test_database_contract_binding.py}
+   %{dep:../bin/database_contract_projection.exe}
+   %{dep:../../internal/qualification/database-contract-binding.py}
+   %{dep:../../internal/tooling/scripts/build-release-bundle.sh})))

@@ -42,3 +42,8 @@
   cmd_grants
   cmd_uninstall
   cmd_assets))
+
+(executable
+ (name database_contract_projection)
+ (modules database_contract_projection)
+ (libraries sol_cli_deploy yojson))

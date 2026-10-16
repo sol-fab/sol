@@ -38,6 +38,9 @@ the tag's commit, then builds from that revision:
   closed when it is unset or is not a digest reference: an installed release
   refuses an ambient `SOL_SETUP_POSTGRES_IMAGE`, so a release that cannot name
   the image it tested would otherwise fail a deploy *after* creating a database;
+- the product database declaration and its internal producer (see
+  [declaration preparation](../../qualification/database-contract-projection.md)); these
+  declare product facts and do not grant release-qualification authority;
 - `candidate.json`, the candidate identity.
 
 It records the candidate as a **draft** GitHub release with the bundle and

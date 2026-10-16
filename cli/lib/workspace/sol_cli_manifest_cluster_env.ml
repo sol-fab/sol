@@ -31,6 +31,13 @@ let kafka_ca_volume = "kafka-ca"
 let db_ca_mount_path = "/etc/sol/db-ca"
 let db_ca_file_name = "ca.pem"
 let db_ca_file = db_ca_mount_path ^ "/" ^ db_ca_file_name
+
+(* Container identities belong to the writer, including its declaration projection. *)
+let workload_container_name name = name
+let migration_container_name = "migrate"
+
+(* The volume name links two fields inside a pod template; delivery is the source,
+   consuming container and file location. It is not an application-facing identifier. *)
 let db_ca_volume = "db-ca"
 let kafka_ca_secret_key = "KAFKA_SSL_CA_CERT"
 let kafka_sasl_password_key = "KAFKA_SASL_PASSWORD"
