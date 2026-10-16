@@ -116,9 +116,10 @@ is changed by offline implementation or this documentation.
 1. Bind a suitable immutable candidate and specimen through the existing verifier;
    there is no fallback for candidates without the projection. Retain assessment,
    target, bundle/definition/specimen digests and independently established identity.
-2. Review actual Kubernetes transport/authentication and migration execution-receipt
-   authority. Current reads and Job execution receipts are injected offline fixtures.
-   This authority review is the next boundary before replacing a live assertion.
+2. Bind the authenticated Kubernetes transport to the eventual live command and
+   establish actual migration execution-receipt authority. The read-only transport
+   is implemented below; execution locators remain injected offline fixtures.
+   Neither is adopted by a live harness or a release-verdict path yet.
 3. Run the shared application and migration CA checks against the supported complete
    declared set. Refuse unsupported CronJob/Rollout consumers or implement and compare
    their schemas in a separate offline increment; never prune them from the universe.
@@ -142,3 +143,33 @@ own setup Job UID; that is not the migration execution identity and must not be
 substituted. The next authority review should address the migration submitter's
 actual execution handle and independent observation while that ephemeral Job exists,
 without changing cleanup merely to accommodate qualification.
+
+### Authenticated observation prerequisite
+
+`Qual_kubernetes_live` supplies the existing observer with read-only Deployment,
+Job and ConfigMap queries through `Sol_cli_kubectl`; it does not install a live
+qualification command or change a harness. The caller must independently pin the
+expected Kubernetes-authenticated username, HTTPS API endpoint and server-returned
+`kube-system` namespace UID. A kubeconfig context or cluster alias is insufficient.
+Each resource read is bracketed by fresh SelfSubjectReview and cluster-identity
+reads. Credentials are neither acquired nor cached here. A failed identity check,
+changed authority, expired credentials, subprocess failure or incomplete result
+cannot establish absence or PASS. Existing provider RBAC is unchanged; missing
+read permissions leave the claim unestablished.
+
+This assumes trusted local kubectl, configuration and credential helpers, and a
+trusted TLS endpoint. The sanitized selected-configuration digest detects changes
+in that configuration; it does not hash referenced credential/helper/certificate
+files. Bracketing is not cryptographic per-response authentication against a
+malicious local helper that switches identity and switches back. Raw subprocess
+errors are available only through an explicit operator callback, never ordinary
+evidence capture; durable evidence uses the existing safe projections and I2
+recorder. No raw Kubernetes object, credential or provider diagnostic is persisted.
+
+Actual migration execution-receipt production remains the next prerequisite.
+Transport tests use explicitly fixture-bound execution locators and cannot qualify
+a release. The eventual adoption (#1510) must bind both application and migration
+observations to the verified candidate, assessment and independently established
+cluster, preserve explicit non-applicability for nonconsumers, and delete the old
+AWS predicate in the reviewed cutover. Runtime TLS and DML authority remain distinct,
+required future obligations. No consolidation is claimed by adding this transport.

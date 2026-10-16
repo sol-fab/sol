@@ -1,6 +1,6 @@
 (** Qualification domain for offline MECHANISM validation. Freshly verified
     candidate declarations can supply expectations; no release-verdict authority
-    or live observation transport exists here. *)
+    is introduced here. *)
 type kube_target =
   { principal : string
   ; cluster : string
