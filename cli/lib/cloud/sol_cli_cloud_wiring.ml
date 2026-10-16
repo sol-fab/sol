@@ -1075,8 +1075,73 @@ let destroy_deps
         Sol_cli_kubectl.run ~ctx args
         |> Result.map (fun (listing : Sol_cli_process.output) -> listing.stdout)
       in
+      (* Namespace existence is established under the cluster-access identity -- the lifecycle
+         authority that already manages the platform (DEC-034) -- and never under the deploy
+         identity, whose namespaced authority begins only where it has deployed. Before an
+         absence is trusted, the view must be shown to see namespaces at all: a view that were
+         filtered (an identity scoped to particular namespaces) would answer NotFound for a
+         namespace that exists, and a look-up that cannot be trusted must never become a
+         deletion decision. An authority that cannot be shown is unestablished, which keeps
+         the refusal. Every read is bounded, so a hung kubectl is unestablished and never
+         absence (sol-fab/sol#1491). *)
+      let namespace_view_authority = ref None in
+      let authority_probe (cluster : Sol_cli_cluster.t) =
+        match !namespace_view_authority with
+        | Some answer -> answer
+        | None ->
+          let answer =
+            cluster.with_access (fun ~env ->
+              match
+                Sol_cli_process.run
+                  (Sol_cli_process.cmd
+                     ~env
+                     ~timeout_s:60.
+                     (namespace_exists_args ~namespace:"kube-system"))
+              with
+              | Ok _ -> Ok ()
+              | Error error -> Error (Sol_cli_process.error_to_string error))
+          in
+          namespace_view_authority := Some answer;
+          answer
+      in
+      let namespace_probe namespace =
+        match !cluster_ref with
+        | None ->
+          Namespace_unestablished
+            "the cluster this target provisioned is not recorded, so whether its \
+             namespaces exist cannot be established"
+        | Some cluster ->
+          (match authority_probe cluster with
+           | Error message ->
+             Namespace_unestablished
+               (Printf.sprintf
+                  "the cluster-access identity's view of namespaces could not be \
+                   established (%s), so absence cannot be trusted"
+                  message)
+           | Ok () ->
+             (match
+                cluster.with_access (fun ~env ->
+                  match
+                    Sol_cli_process.run
+                      (Sol_cli_process.cmd
+                         ~env
+                         ~timeout_s:60.
+                         (namespace_exists_args ~namespace))
+                  with
+                  | Ok _ -> Ok Namespace_exists
+                  | Error error ->
+                    let reason = Sol_cli_process.error_to_string error in
+                    (match Sol_cli_kubectl.classify error with
+                     | Sol_cli_kubectl.Not_found -> Ok Namespace_absent
+                     | Sol_cli_kubectl.Unreachable -> Ok (Namespace_unreachable reason)
+                     | _ -> Ok (Namespace_unestablished reason)))
+              with
+              | Ok probe -> probe
+              | Error message -> Namespace_unestablished message))
+      in
       release_workloads
         ~run
+        ~namespace_probe
         ~delete:(fun ~namespace ~names ->
           Sol_cli_kubectl.run ~ctx (delete_args ~namespace ~names ~timeout_seconds:300)
           |> Result.map ignore)
