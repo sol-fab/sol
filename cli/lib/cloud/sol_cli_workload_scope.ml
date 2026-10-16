@@ -51,6 +51,7 @@ type namespace_probe =
   | Namespace_exists
   | Namespace_absent
   | Namespace_unreachable of string
+  | Namespace_unobservable of string
   | Namespace_unestablished of string
 
 type release_failure =
@@ -218,7 +219,21 @@ let read_workloads ~run ~namespace_probe ~namespaces ~workspace
            ; operation = "establishing whether the namespace exists"
            ; reason
            })
-    | Namespace_exists ->
+    | Namespace_exists | Namespace_unobservable _ ->
+      (* An unobservable view is not evidence of absence, and it is not evidence that a
+         workload is running either. Fall back to the namespaced read, which reaches the same
+         conclusion it reached before a view was asked for: it establishes "nothing of this
+         workspace is running" where the identity may read, and refuses where it may not. The
+         degradation is reported, because the weaker observation is what decided. *)
+      (match namespace_probe namespace with
+       | Namespace_unobservable reason ->
+         Sol_cli_report.warn
+           "%s: the namespace view could not be established (%s), so this release falls \
+            back to the namespaced read, which cannot prove that a namespace does not \
+            exist"
+           namespace
+           reason
+       | _ -> ());
       let rec read_kind ~contacted found = function
         | [] -> Ok (contacted, List.concat (List.rev found))
         | kind :: rest ->

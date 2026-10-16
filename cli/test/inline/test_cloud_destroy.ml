@@ -1303,16 +1303,18 @@ let test_a_namespace_that_does_not_exist_holds_no_workload () =
 
 let release_with
       ?(namespace_probe = fun _ -> Sol_cli_workload_scope.Namespace_exists)
+      ?(replies = [])
       namespaces
   =
   let reads = ref [] in
   let deletes = ref [] in
-  let release =
+  let cluster = cluster_answering ~replies () in
+  let release, reported =
     Sol_cli_report.collect (fun () ->
       Sol_cli_workload_scope.release_workloads
         ~run:(fun args ->
           reads := !reads @ [ args ];
-          Ok {|{"items":[]}|})
+          run_cluster cluster args)
         ~namespace_probe
         ~delete:(fun ~namespace ~names ->
           deletes := !deletes @ [ namespace, names ];
@@ -1321,9 +1323,8 @@ let release_with
         ~evidence:[]
         ~namespaces
         ~workspace:"pluto")
-    |> fst
   in
-  release, !reads, !deletes
+  release, !reads, !deletes, reported
 ;;
 
 let is_not_releasable = function
@@ -1334,7 +1335,7 @@ let is_not_releasable = function
 let contains haystack needle = Sol_cli_string.contains ~needle haystack
 
 let test_every_declared_namespace_absent_is_not_applicable () =
-  let release, reads, deletes =
+  let release, reads, deletes, _ =
     release_with
       ~namespace_probe:(fun _ -> Sol_cli_workload_scope.Namespace_absent)
       [ "pluto-payments"; "pluto-comms" ]
@@ -1359,7 +1360,7 @@ let test_every_declared_namespace_absent_is_not_applicable () =
 ;;
 
 let test_a_target_with_no_declared_namespace_is_not_applicable () =
-  let release, reads, _ = release_with [] in
+  let release, reads, _, _ = release_with [] in
   Windtrap.equal
     Windtrap.bool
     ~msg:"a target that declares no application namespace has no workload to release from"
@@ -1373,7 +1374,7 @@ let test_an_absent_namespace_does_not_hide_a_present_one () =
     | "pluto-comms" -> Sol_cli_workload_scope.Namespace_absent
     | _ -> Sol_cli_workload_scope.Namespace_exists
   in
-  let release, reads, _ =
+  let release, reads, _, _ =
     release_with ~namespace_probe:probe [ "pluto-payments"; "pluto-comms" ]
   in
   Windtrap.equal
@@ -1396,7 +1397,7 @@ let test_an_absent_namespace_does_not_hide_a_present_one () =
 ;;
 
 let test_a_partial_deployment_is_released_not_read_as_absent () =
-  let release, reads, _ = release_with [ "pluto-payments" ] in
+  let release, reads, _, _ = release_with [ "pluto-payments" ] in
   Windtrap.equal
     Windtrap.bool
     ~msg:
@@ -1414,7 +1415,7 @@ let test_a_partial_deployment_is_released_not_read_as_absent () =
 ;;
 
 let test_an_unestablishable_namespace_existence_is_unestablished () =
-  let release, reads, _ =
+  let release, reads, _, _ =
     release_with
       ~namespace_probe:(fun _ ->
         Sol_cli_workload_scope.Namespace_unestablished
@@ -1449,8 +1450,55 @@ let test_an_unestablishable_namespace_existence_is_unestablished () =
     (List.length reads)
 ;;
 
+let test_an_unobservable_view_falls_back_to_the_namespaced_read () =
+  let release, reads, _, reported =
+    release_with
+      ~namespace_probe:(fun _ ->
+        Sol_cli_workload_scope.Namespace_unobservable
+          "could not establish ephemeral cluster access")
+      [ "pluto-payments" ]
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"a view that cannot be established does not strand a target whose reads work"
+    true
+    (match release with
+     | Sol_cli_workload_scope.Workloads_released -> true
+     | _ -> false);
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"the namespaced read is what decided, as it did before a view was asked for"
+    4
+    (List.length reads);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"and the weaker observation is reported rather than assumed away"
+    true
+    (contains
+       (String.concat "\n" (List.map snd reported))
+       "the namespace view could not be established")
+;;
+
+let test_an_unobservable_view_never_reads_an_unreadable_read_as_absence () =
+  let release, _, _, _ =
+    release_with
+      ~namespace_probe:(fun _ ->
+        Sol_cli_workload_scope.Namespace_unobservable "no cluster access")
+      ~replies:[ "deployment", Error refused_read ]
+      [ "pluto-payments" ]
+  in
+  match release with
+  | Sol_cli_workload_scope.Workloads_unestablished
+      { namespace = "pluto-payments"; kind = Some "deployment"; _ } -> ()
+  | Sol_cli_workload_scope.Workloads_released ->
+    Windtrap.fail
+      "the fallback must not turn a namespace it cannot read into a namespace that is \
+       empty"
+  | _ -> Windtrap.fail "a refused read behind an unobservable view is still unestablished"
+;;
+
 let test_an_unreachable_cluster_probe_is_the_carve_out () =
-  let release, _, _ =
+  let release, _, _, _ =
     release_with
       ~namespace_probe:(fun _ ->
         Sol_cli_workload_scope.Namespace_unreachable
@@ -1476,7 +1524,7 @@ let test_an_absent_namespace_never_masks_an_unreadable_one () =
     | "pluto-comms" -> Sol_cli_workload_scope.Namespace_absent
     | _ -> Sol_cli_workload_scope.Namespace_unestablished "Error from server (Forbidden)"
   in
-  let release, _, _ =
+  let release, _, _, _ =
     release_with ~namespace_probe:probe [ "pluto-payments"; "pluto-comms" ]
   in
   match release with
@@ -3240,6 +3288,14 @@ let%test
 
 let%test "verification: an existence read that cannot be established keeps the refusal" =
   test_an_unestablishable_namespace_existence_is_unestablished ()
+;;
+
+let%test "verification: an unobservable view falls back to the namespaced read" =
+  test_an_unobservable_view_falls_back_to_the_namespaced_read ()
+;;
+
+let%test "verification: an unobservable view never reads an unreadable read as absence" =
+  test_an_unobservable_view_never_reads_an_unreadable_read_as_absence ()
 ;;
 
 let%test "verification: an unreachable cluster keeps the documented carve-out" =

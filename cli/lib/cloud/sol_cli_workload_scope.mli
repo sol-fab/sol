@@ -63,6 +63,13 @@ type namespace_probe =
   | Namespace_exists
   | Namespace_absent
   | Namespace_unreachable of string
+  (** The identity that establishes existence could not be shown to have a usable view at all.
+      Not evidence of absence: the release falls back to the namespaced read, which can still
+      establish that nothing of this workspace is running where it may read, and refuses where
+      it may not. Reported as a degradation. *)
+  | Namespace_unobservable of string
+  (** The existence read ran and answered something that is neither presence nor absence:
+      refused, timed out, undecodable. Absence is never inferred from it. *)
   | Namespace_unestablished of string
 
 type read_result =

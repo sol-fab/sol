@@ -1096,7 +1096,7 @@ let destroy_deps
                   (Sol_cli_process.cmd
                      ~env
                      ~timeout_s:60.
-                     (namespace_exists_args ~namespace:"kube-system"))
+                     ("kubectl" :: namespace_exists_args ~namespace:"kube-system"))
               with
               | Ok _ -> Ok ()
               | Error error -> Error (Sol_cli_process.error_to_string error))
@@ -1113,10 +1113,10 @@ let destroy_deps
         | Some cluster ->
           (match authority_probe cluster with
            | Error message ->
-             Namespace_unestablished
+             Namespace_unobservable
                (Printf.sprintf
                   "the cluster-access identity's view of namespaces could not be \
-                   established (%s), so absence cannot be trusted"
+                   established (%s)"
                   message)
            | Ok () ->
              (match
@@ -1126,7 +1126,7 @@ let destroy_deps
                       (Sol_cli_process.cmd
                          ~env
                          ~timeout_s:60.
-                         (namespace_exists_args ~namespace))
+                         ("kubectl" :: namespace_exists_args ~namespace))
                   with
                   | Ok _ -> Ok Namespace_exists
                   | Error error ->
