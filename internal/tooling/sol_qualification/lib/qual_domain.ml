@@ -15,7 +15,9 @@ type owner =
   | Typed_family of string
 
 let sha256 text = Digestif.SHA256.(to_hex (digest_string text))
-let ( let* ) = Result.bind
+
+open Result.Syntax
+
 let error text = Error text
 let nonempty s = String.trim s <> ""
 let unique xs = List.length xs = List.length (List.sort_uniq String.compare xs)
