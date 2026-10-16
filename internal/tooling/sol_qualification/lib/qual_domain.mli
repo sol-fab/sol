@@ -1,7 +1,72 @@
 (** Offline qualification domain. No released-candidate binding or release verdict
     API exists here. Fixture evidence is always MECHANISM evidence. *)
-type run
+type kube_target =
+  { principal : string
+  ; cluster : string
+  ; endpoint : string
+  }
 
+type read_context =
+  { target : kube_target
+  ; verified_at : int
+  ; started_at : int
+  ; finished_at : int
+  ; expires_at : int option
+  }
+
+type 'a state =
+  | Present of 'a
+  | Absent
+  | Unreadable of string
+
+type 'a kube_read =
+  { requirement : string
+  ; subject : string
+  ; context : read_context
+  ; state : 'a state
+  }
+
+type ca_volume =
+  { volume_name : string
+  ; source_configmap : string option
+  ; items : (string * string) list option
+  }
+
+type ca_mount =
+  { volume_name : string
+  ; path : string
+  ; sub_path : string option
+  ; sub_path_expr : string option
+  }
+
+type ca_container =
+  { container_name : string
+  ; mounts : ca_mount list
+  }
+
+type deployment =
+  { namespace : string
+  ; name : string
+  ; uid : string
+  ; resource_version : string
+  ; volumes : ca_volume list
+  ; containers : ca_container list
+  }
+
+type ca_configmap =
+  { namespace : string
+  ; name : string
+  ; uid : string
+  ; resource_version : string
+  ; entries : (string * bool) list
+  }
+
+type ca_facts =
+  { deployment : deployment kube_read
+  ; configmap : ca_configmap kube_read
+  }
+
+type run
 type intent
 type selection
 type obligations
@@ -51,6 +116,22 @@ type request =
   | Tls_connectivity of tls_requirement
   | Migration_input of migration_requirement
 
+type ca_binding = private
+  { instance : instance
+  ; run : run
+  ; subject : string
+  ; namespace : string
+  ; workload : string
+  ; consuming_containers : string list
+  ; configmap : string
+  ; ca_key : string
+  ; ca_path : string
+  ; target : kube_target
+  }
+
+val ca_binding : ca_requirement -> ca_binding
+val kube_target_json : kube_target -> Yojson.Safe.t
+val canonical_path : absolute:bool -> string -> bool
 val plan : instance -> request
 val requested : request -> instance
 val reconcile_plan : obligations -> request list -> (unit, string) result
@@ -60,15 +141,6 @@ val check_ownership
   :  claims:string list
   -> assignments:(string * owner) list
   -> (unit, string) result
-
-type ca_facts =
-  { namespace : string
-  ; workload : string
-  ; configmap : string
-  ; key : string
-  ; mount_path : string
-  ; nonempty : bool
-  }
 
 type dml_facts =
   { namespace : string
@@ -102,11 +174,6 @@ type migration_facts =
   ; key : string
   ; nonempty : bool
   }
-
-type 'a state =
-  | Present of 'a
-  | Absent
-  | Unreadable of string
 
 type 'a observation
 
@@ -149,6 +216,7 @@ module Fixture : sig
     -> assessment:string
     -> candidate_revision:string
     -> specimen:string
+    -> kubernetes:kube_target
     -> contract:Yojson.Safe.t
     -> (run, string) result
 

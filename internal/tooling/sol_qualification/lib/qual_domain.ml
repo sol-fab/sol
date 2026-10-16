@@ -88,6 +88,72 @@ let hex n s =
        s
 ;;
 
+type kube_target =
+  { principal : string
+  ; cluster : string
+  ; endpoint : string
+  }
+
+type read_context =
+  { target : kube_target
+  ; verified_at : int
+  ; started_at : int
+  ; finished_at : int
+  ; expires_at : int option
+  }
+
+type 'a state =
+  | Present of 'a
+  | Absent
+  | Unreadable of string
+
+type 'a kube_read =
+  { requirement : string
+  ; subject : string
+  ; context : read_context
+  ; state : 'a state
+  }
+
+type ca_volume =
+  { volume_name : string
+  ; source_configmap : string option
+  ; items : (string * string) list option
+  }
+
+type ca_mount =
+  { volume_name : string
+  ; path : string
+  ; sub_path : string option
+  ; sub_path_expr : string option
+  }
+
+type ca_container =
+  { container_name : string
+  ; mounts : ca_mount list
+  }
+
+type deployment =
+  { namespace : string
+  ; name : string
+  ; uid : string
+  ; resource_version : string
+  ; volumes : ca_volume list
+  ; containers : ca_container list
+  }
+
+type ca_configmap =
+  { namespace : string
+  ; name : string
+  ; uid : string
+  ; resource_version : string
+  ; entries : (string * bool) list
+  }
+
+type ca_facts =
+  { deployment : deployment kube_read
+  ; configmap : ca_configmap kube_read
+  }
+
 type run =
   { attempt : string
   ; assessment : string
@@ -100,6 +166,7 @@ type run =
   ; credential_key : string
   ; dml_class : string
   ; capabilities : string list
+  ; kubernetes : kube_target
   }
 
 type secret_address =
@@ -118,6 +185,7 @@ type workload =
   ; namespace : string
   ; name : string
   ; database : string option
+  ; consuming_containers : string list
   }
 
 type intent =
@@ -149,6 +217,14 @@ type obligations =
   ; selection_digest : string
   }
 
+let kube_target_json (t : kube_target) =
+  `Assoc
+    [ "principal", `String t.principal
+    ; "cluster", `String t.cluster
+    ; "endpoint", `String t.endpoint
+    ]
+;;
+
 let run_json (r : run) =
   `Assoc
     [ "origin", `String "MECHANISM"
@@ -158,6 +234,7 @@ let run_json (r : run) =
     ; "candidate", `String r.candidate
     ; "specimen", `String r.specimen
     ; "contract", `String r.contract_digest
+    ; "kubernetes", kube_target_json r.kubernetes
     ; ( "provider"
       , `String
           (match r.scenario with
@@ -294,6 +371,8 @@ let instance_identity (i : instance) =
                    [ "id", `String w.id
                    ; "namespace", `String w.namespace
                    ; "name", `String w.name
+                   ; ( "consuming_containers"
+                     , `List (List.map (fun s -> `String s) w.consuming_containers) )
                    ; ( "database"
                      , match w.database with
                        | None -> `Null
@@ -329,6 +408,37 @@ type request =
   | No_master_copy of no_master_requirement
   | Tls_connectivity of tls_requirement
   | Migration_input of migration_requirement
+
+type ca_binding =
+  { instance : instance
+  ; run : run
+  ; subject : string
+  ; namespace : string
+  ; workload : string
+  ; consuming_containers : string list
+  ; configmap : string
+  ; ca_key : string
+  ; ca_path : string
+  ; target : kube_target
+  }
+
+let ca_binding (Ca_requirement i) =
+  (* Only the catalog can construct a CA requirement, always for a consumer. *)
+  match i.workload with
+  | None -> invalid_arg "CA requirement has no workload"
+  | Some w ->
+    { instance = i
+    ; run = i.run
+    ; subject = i.subject
+    ; namespace = w.namespace
+    ; workload = w.name
+    ; consuming_containers = w.consuming_containers
+    ; configmap = i.database.ca_configmap
+    ; ca_key = i.run.ca_key
+    ; ca_path = i.run.ca_path
+    ; target = i.run.kubernetes
+    }
+;;
 
 let plan i =
   match i.kind with
@@ -393,15 +503,6 @@ let check_ownership ~claims ~assignments =
   else error "empty policy owner"
 ;;
 
-type ca_facts =
-  { namespace : string
-  ; workload : string
-  ; configmap : string
-  ; key : string
-  ; mount_path : string
-  ; nonempty : bool
-  }
-
 type dml_facts =
   { namespace : string
   ; workload : string
@@ -427,11 +528,6 @@ type migration_facts =
   ; key : string
   ; nonempty : bool
   }
-
-type 'a state =
-  | Present of 'a
-  | Absent
-  | Unreadable of string
 
 type 'a observation =
   { run : run
@@ -486,16 +582,142 @@ let established matches good =
   else Fail "declared delivery invariant falsified"
 ;;
 
+let canonical_path ~absolute path =
+  let pieces = String.split_on_char '/' path in
+  let parts =
+    if absolute
+    then (
+      match pieces with
+      | "" :: rest -> rest
+      | _ -> [])
+    else pieces
+  in
+  parts <> []
+  && List.for_all (fun p -> p <> "" && p <> "." && p <> "..") parts
+  && ((not absolute) || String.starts_with ~prefix:"/" path)
+  && (absolute || not (String.starts_with ~prefix:"/" path))
+;;
+
+let context_matches target (c : read_context) =
+  c.target = target
+  && c.verified_at >= 0
+  && c.started_at >= c.verified_at
+  && c.finished_at >= c.started_at
+  && c.finished_at - c.verified_at <= 300
+  &&
+  match c.expires_at with
+  | None -> true
+  | Some expires -> c.finished_at <= expires
+;;
+
+let contains_path parent path =
+  parent = path || parent = "/" || String.starts_with ~prefix:(parent ^ "/") path
+;;
+
+let delivered_path (mount : ca_mount) relative =
+  let join parent child = if parent = "/" then "/" ^ child else parent ^ "/" ^ child in
+  match mount.sub_path with
+  | None -> Some (join mount.path relative)
+  | Some sub when sub = relative -> Some mount.path
+  | Some sub when String.starts_with ~prefix:(sub ^ "/") relative ->
+    Some
+      (join
+         mount.path
+         (String.sub
+            relative
+            (String.length sub + 1)
+            (String.length relative - String.length sub - 1)))
+  | Some _ -> None
+;;
+
+let evaluate_ca (i : instance) (f : ca_facts) =
+  let reads_match =
+    f.deployment.requirement = instance_identity i
+    && f.configmap.requirement = instance_identity i
+    && f.deployment.subject = i.subject
+    && f.configmap.subject = i.subject
+    && context_matches i.run.kubernetes f.deployment.context
+    && context_matches i.run.kubernetes f.configmap.context
+  in
+  if not reads_match
+  then Unknown "CA read requirement/identity/cluster/freshness mismatch"
+  else (
+    match f.deployment.state, f.configmap.state with
+    | Unreadable message, _ | _, Unreadable message -> Unknown message
+    | Absent, _ | _, Absent -> Fail "required Kubernetes object positively absent"
+    | Present deployment, Present configmap ->
+      if
+        (not (workload_matches i deployment.namespace deployment.name))
+        || configmap.namespace <> deployment.namespace
+        || configmap.name <> i.database.ca_configmap
+      then Unknown "CA object identity mismatch"
+      else if
+        (not (List.mem "ca" i.run.capabilities))
+        || not (List.mem (i.run.ca_key, true) configmap.entries)
+      then Fail "candidate-declared CA key missing or empty"
+      else (
+        match i.workload with
+        | None -> Unknown "CA requirement has no declared consumer"
+        | Some workload ->
+          let check_container name =
+            match
+              List.find_opt (fun c -> c.container_name = name) deployment.containers
+            with
+            | None -> Fail "declared consuming container missing"
+            | Some container ->
+              let covering =
+                List.filter
+                  (fun (m : ca_mount) -> contains_path m.path i.run.ca_path)
+                  container.mounts
+              in
+              let covering =
+                List.sort
+                  (fun (a : ca_mount) b ->
+                     Int.compare (String.length b.path) (String.length a.path))
+                  covering
+              in
+              (match covering with
+               | [] -> Fail "consuming container does not mount the declared CA location"
+               | mount :: _ when mount.sub_path_expr <> None ->
+                 Unknown "dynamic subPathExpr cannot establish CA location"
+               | mount :: _ ->
+                 (match
+                    List.find_opt
+                      (fun (v : ca_volume) -> v.volume_name = mount.volume_name)
+                      deployment.volumes
+                  with
+                  | None -> Fail "CA mount references missing volume"
+                  | Some v when v.source_configmap <> Some i.database.ca_configmap ->
+                    Fail "CA mount references another volume source"
+                  | Some v ->
+                    let path =
+                      match v.items with
+                      | None -> Some i.run.ca_key
+                      | Some items -> List.assoc_opt i.run.ca_key items
+                    in
+                    (match path with
+                     | Some relative
+                       when delivered_path mount relative = Some i.run.ca_path -> Pass
+                     | _ ->
+                       Fail "CA key projection or mount redirects the declared CA file")))
+          in
+          let results = List.map check_container workload.consuming_containers in
+          (match
+             List.find_opt
+               (function
+                 | Unknown _ -> true
+                 | _ -> false)
+               results
+           with
+           | Some unknown -> unknown
+           | None ->
+             (match List.find_opt (( <> ) Pass) results with
+              | Some failure -> failure
+              | None -> Pass))))
+;;
+
 let evaluate = function
-  | Ca_checked (Ca_requirement i, o) ->
-    evaluate_observation i o (fun (f : ca_facts) ->
-      established
-        (workload_matches i f.namespace f.workload)
-        (List.mem "ca" i.run.capabilities
-         && f.configmap = i.database.ca_configmap
-         && f.key = i.run.ca_key
-         && f.mount_path = i.run.ca_path
-         && f.nonempty))
+  | Ca_checked (Ca_requirement i, o) -> evaluate_observation i o (evaluate_ca i)
   | Dml_checked (Dml_requirement i, o) ->
     evaluate_observation i o (fun (f : dml_facts) ->
       established
@@ -557,7 +779,15 @@ let verdict_json v =
 ;;
 
 module Fixture = struct
-  let bind ~scenario ~attempt ~assessment ~candidate_revision ~specimen ~contract =
+  let bind
+        ~scenario
+        ~attempt
+        ~assessment
+        ~candidate_revision
+        ~specimen
+        ~kubernetes
+        ~contract
+    =
     let* canonical = canonical_json contract in
     let* ca_key = str "ca_key" contract in
     let* ca_path = str "ca_path" contract in
@@ -570,6 +800,14 @@ module Fixture = struct
     in
     if field "schema" contract <> Some (`Int 1)
     then error "unsupported fixture contract schema"
+    else if
+      (not (canonical_path ~absolute:true ca_path))
+      || String.contains ca_key '/'
+      || not
+           (List.for_all
+              nonempty
+              [ kubernetes.principal; kubernetes.cluster; kubernetes.endpoint ])
+    then error "invalid fixture CA path or Kubernetes target"
     else if
       (not (hex 40 candidate_revision))
       || not (List.for_all nonempty [ attempt; assessment; specimen ])
@@ -587,6 +825,7 @@ module Fixture = struct
         ; credential_key
         ; dml_class
         ; capabilities
+        ; kubernetes
         }
   ;;
 
@@ -630,7 +869,16 @@ module Fixture = struct
           | Some (`String s) when nonempty s -> Ok (Some s)
           | _ -> error "database must be explicit string or null"
         in
-        Ok { id; namespace; name; database })
+        let* consuming_containers =
+          match field "consuming_containers" j with
+          | Some value -> strings value
+          | None -> error "missing explicit consuming containers"
+        in
+        if
+          (not (unique consuming_containers))
+          || (database <> None && consuming_containers = [])
+        then error "incomplete or duplicate consuming container selection"
+        else Ok { id; namespace; name; database; consuming_containers })
     in
     if
       (not (unique (List.map (fun (d : database) -> d.id) databases)))

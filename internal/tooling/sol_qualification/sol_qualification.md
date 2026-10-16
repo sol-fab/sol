@@ -30,8 +30,10 @@ val accept_mechanism : obligations -> request list -> verdict list -> (unit, str
 ```
 
 The fixture contract explicitly supplies CA key/path, credential key/class and
-capabilities. Intent supplies complete workloads, dependencies and declared CA
-addresses and prohibited administrative Secret addresses. No naming rule is reimplemented. The evaluator owns semantic matching;
+capabilities. Fixture run binding also requires a Kubernetes principal, cluster and
+endpoint, separately from product intent. Intent supplies complete workloads, explicit
+consuming-container membership, dependencies, declared CA addresses and prohibited
+administrative Secret addresses. No naming rule is reimplemented. The evaluator owns semantic matching;
 coverage compares keys and multiplicity, then the full canonical instance
 (kind, subject, workload/database binding and run/contract identity). Distinct
 abstract requirement wrappers prevent interchanging CA/DML/etc payloads. There are no subprocesses,
@@ -138,24 +140,86 @@ untrusted uploads. A future release consumer of remotely supplied evidence would
 need a separately reviewed producer-authentication boundary; I2 adds no signatures
 or remote service.
 
+## I3: independent Kubernetes CA observation
+
+`Qual_kubernetes` independently decodes `apps/v1` Deployment and `v1` ConfigMap
+schemas and native typed lists. `Qual_database_ca.observe_all` derives every CA
+request from complete obligations, captures the two reads per expected consumer,
+reads the verified stored projections back, calls the domain's pure CA evaluator,
+and records each verdict. Capture failures remain explicit per-consumer outcomes;
+they cannot become recorded PASS. No renderer, product lifecycle or Bash assertion
+is called. AWS and GCP use the same implementation with different fixture read contexts.
+
+The current boundaries are [qual_kubernetes.mli](lib/qual_kubernetes.mli) and
+[qual_database_ca.mli](lib/qual_database_ca.mli). The injected reader must perform the
+structured exact namespaced query (or a native list restricted by `metadata.name`),
+using its actual context. Fixture readers supply command outcomes and observed
+principal/cluster/endpoint/timing. There is no installed CLI, production transport,
+provider identity authenticator or live cloud read in I3; authenticating those
+contexts remains a prerequisite before live adoption, not something fixture tags prove.
+
+The evaluator checks each read's bound requirement/subject, target principal, cluster,
+endpoint, temporal ordering, credential expiry and the five-minute identity freshness
+window. It then checks actual workload/ConfigMap namespaces and names, nonempty
+candidate-declared key, volume-to-ConfigMap linkage and every explicitly declared
+consuming container. It resolves direct ConfigMap item paths, directory/file subPaths
+and the most-specific covering mount, so a sidecar-only or shadowed CA does not pass.
+It never derives container names, ConfigMap names or key/path conventions.
+
+Nonzero exits (including NotFound), timeout, signal and spawn failure are UNKNOWN.
+Empty/malformed output, duplicate fields, wrong object schemas and incomplete lists
+are UNKNOWN. Positive absence requires a successful native exact-list result with
+resource version, no continuation/remaining items and zero objects. It yields FAIL
+for required CA presence. If one peer is absent and the other unreadable, the compound
+claim stays UNKNOWN; both read records are preserved. A successful empty result never
+establishes CA delivery. Wrong identity/context cannot establish the bound claim.
+
+The recorder sees only the safe projection: CA key presence/nonempty flags,
+object UID/resource version, relevant volume/container/mount fields and read context
+or diagnostics. Certificate bytes, raw stdout, unrelated annotations and environment
+values are not written. Provider error codes/diagnostics survive with I2 redaction.
+Evaluation uses that persisted projection, including any redaction, rather than
+unrecorded raw responses. Receipt substitution, wrong resource roles and post-capture
+corruption remain detectable at the typed-evaluation or evidence boundary.
+
+I3 deliberately supports direct ConfigMap volumes and textual `data`; projected
+volumes and binary ConfigMap data are UNKNOWN. Dynamic `subPathExpr` cannot establish
+the CA path. This observes declared Deployment pod-template delivery, not running Pod
+filesystem contents, rollout health, certificate validity or TLS behavior. Those are
+separate observations/obligations. Non-CA requirements remain in the catalog: a CA-only
+set cannot seal a full successful database qualification manifest.
+
+Offline fixtures use real API shapes independently authored from the test intent,
+with AWS/GCP context records. Hostile cases cover the previous `ca.pem`/`ca.crt` defect,
+namespace/consumer mismatch, absent objects, failed commands (#1497), missing and
+redirected mounts, sidecar-only delivery, shadowing, projected key paths, identity
+expiry, malformed/incomplete discovery, foreign receipts, persistence failure and
+safe diagnostics. I4 must still compare against the existing harness fixtures;
+no live predicate has been consolidated or removed in I3.
+
+Schema semantics follow the Kubernetes documentation for
+[ConfigMaps](https://kubernetes.io/docs/concepts/configuration/configmap/) and
+[ConfigMap volume mounts and key paths](https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/).
+
 ## Required follow-up qualification coverage
 
 Actual DML authority verification remains a required future qualification obligation
 before database delivery can qualify a release. Absence of an administrative Secret
 reference and a delivered credential's declared DML class do not discharge it.
 
-The shared Kubernetes observer must retain [#1497](https://github.com/sol-fab/sol/issues/1497)
+The shared Kubernetes observer retains [#1497](https://github.com/sol-fab/sol/issues/1497)
 as an adversarial classification case: Forbidden, timeout and process-launch failures
 are unreadable observations (UNKNOWN), never established absence. A failed provider
 command cannot establish Absent. Absence requires a positively established authoritative
 result for the bound subject; empty output or a failure exit status is insufficient.
-These are acceptance requirements for the future observer, not claims that I1/I2
-implement or qualify that observer. Live harnesses remain unchanged.
+I3 establishes these cases only with offline mechanism fixtures. Live provider
+transport and observation identity must be reviewed before adoption; live harnesses
+remain unchanged.
 
 ## Out of scope
 
 Candidate product projection generation/bundling is a separate focused product change before
-release binding in I3. Existing candidates without that projection stay unsupported;
+any release binding after offline I3/I4. Existing candidates without that projection stay unsupported;
 no source-text parsing or version guessing is provided. AWS/GCP comparison and
 claim-family policy/adoption changes require later reviewed work. No old predicate
-is removed in I1/I2: these increments prepare consolidation and do not claim it.
+is removed in I1/I2/I3: these increments prepare consolidation and do not claim it.

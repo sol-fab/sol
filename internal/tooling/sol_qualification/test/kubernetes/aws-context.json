@@ -1,0 +1,11 @@
+{
+  "target": {
+    "principal": "aws:qual-reader",
+    "cluster": "aws-fixture",
+    "endpoint": "https://aws.invalid"
+  },
+  "verified_at": 100,
+  "started_at": 101,
+  "finished_at": 102,
+  "expires_at": 400
+}

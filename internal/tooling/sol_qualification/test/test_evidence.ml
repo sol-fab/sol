@@ -16,6 +16,70 @@ let rejects = function
   | Ok _ -> Alcotest.fail "unsafe result accepted"
 ;;
 
+let kubernetes : Qual_domain.kube_target =
+  { principal = "fixture-reader"
+  ; cluster = "fixture-cluster"
+  ; endpoint = "https://fixture.invalid"
+  }
+;;
+
+(* Synthetic facts for domain/recorder mechanics, not observer agreement fixtures. *)
+let synthetic_ca run instance workload : Qual_domain.ca_facts =
+  let open Qual_domain in
+  let context =
+    { target = kubernetes
+    ; verified_at = 0
+    ; started_at = 1
+    ; finished_at = 2
+    ; expires_at = Some 300
+    }
+  in
+  let wrap state =
+    { requirement = instance_identity instance
+    ; subject =
+        (match String.split_on_char '/' (instance_key instance) |> List.rev with
+         | x :: _ -> x
+         | [] -> assert false)
+    ; context
+    ; state = Present state
+    }
+  in
+  ignore run;
+  { deployment =
+      wrap
+        { namespace = "apps"
+        ; name = workload
+        ; uid = "deployment-uid"
+        ; resource_version = "1"
+        ; volumes =
+            [ { volume_name = "ca-volume"
+              ; source_configmap = Some "declared-ledger-ca"
+              ; items = None
+              }
+            ]
+        ; containers =
+            [ { container_name = "app"
+              ; mounts =
+                  [ { volume_name = "ca-volume"
+                    ; path = "/etc/sol/db-ca"
+                    ; sub_path = None
+                    ; sub_path_expr = None
+                    }
+                  ]
+              }
+            ]
+        }
+  ; configmap =
+      wrap
+        { namespace = "apps"
+        ; name = "declared-ledger-ca"
+        ; uid = "configmap-uid"
+        ; resource_version = "2"
+        ; entries = [ "ca.pem", true ]
+        }
+  }
+;;
+
 let contract =
   `Assoc
     [ "schema", `Int 1
@@ -34,6 +98,7 @@ let run
       ()
   =
   D.Fixture.bind
+    ~kubernetes
     ~scenario:D.Aws
     ~attempt:"fixture-attempt"
     ~assessment
@@ -93,19 +158,7 @@ let decide run request evidence =
     |> domain
   in
   match request with
-  | D.Ca_delivery r ->
-    D.evaluate
-      (D.Ca_checked
-         ( r
-         , obs
-             D.
-               { namespace = "apps"
-               ; workload
-               ; configmap = "declared-ledger-ca"
-               ; key = "ca.pem"
-               ; mount_path = "/etc/sol/db-ca/ca.pem"
-               ; nonempty = true
-               } ))
+  | D.Ca_delivery r -> D.evaluate (D.Ca_checked (r, obs (synthetic_ca run i workload)))
   | D.Dml_delivery r ->
     D.evaluate
       (D.Dml_checked
@@ -189,6 +242,7 @@ let test_restart () =
          ~directory
          ~run:
            (D.Fixture.bind
+              ~kubernetes
               ~scenario:D.Aws
               ~attempt:"fixture-attempt"
               ~assessment:"foreign"
@@ -250,6 +304,7 @@ let test_manifest () =
     Alcotest.(check bool) "verified mechanism pass" true summary.passed;
     let foreign =
       D.Fixture.bind
+        ~kubernetes
         ~scenario:D.Aws
         ~attempt:"fixture-attempt"
         ~assessment:"a2"

@@ -12,6 +12,70 @@ let rejects = function
 
 let reference = sha256 "explicit offline fixture evidence"
 
+let kubernetes : Qual_domain.kube_target =
+  { principal = "fixture-reader"
+  ; cluster = "fixture-cluster"
+  ; endpoint = "https://fixture.invalid"
+  }
+;;
+
+(* Synthetic facts for domain/recorder mechanics, not observer agreement fixtures. *)
+let synthetic_ca run instance workload : Qual_domain.ca_facts =
+  let open Qual_domain in
+  let context =
+    { target = kubernetes
+    ; verified_at = 0
+    ; started_at = 1
+    ; finished_at = 2
+    ; expires_at = Some 300
+    }
+  in
+  let wrap state =
+    { requirement = instance_identity instance
+    ; subject =
+        (match String.split_on_char '/' (instance_key instance) |> List.rev with
+         | x :: _ -> x
+         | [] -> assert false)
+    ; context
+    ; state = Present state
+    }
+  in
+  ignore run;
+  { deployment =
+      wrap
+        { namespace = "apps"
+        ; name = workload
+        ; uid = "deployment-uid"
+        ; resource_version = "1"
+        ; volumes =
+            [ { volume_name = "ca-volume"
+              ; source_configmap = Some "declared-ledger-ca"
+              ; items = None
+              }
+            ]
+        ; containers =
+            [ { container_name = "app"
+              ; mounts =
+                  [ { volume_name = "ca-volume"
+                    ; path = "/etc/sol/db-ca"
+                    ; sub_path = None
+                    ; sub_path_expr = None
+                    }
+                  ]
+              }
+            ]
+        }
+  ; configmap =
+      wrap
+        { namespace = "apps"
+        ; name = "declared-ledger-ca"
+        ; uid = "configmap-uid"
+        ; resource_version = "2"
+        ; entries = [ "ca.pem", true ]
+        }
+  }
+;;
+
 let contract =
   `Assoc
     [ "schema", `Int 1
@@ -32,6 +96,7 @@ let bind
       ()
   =
   Fixture.bind
+    ~kubernetes
     ~scenario
     ~attempt:"fixture-1"
     ~assessment
@@ -68,20 +133,7 @@ let verdict run request =
   let workload = subject i in
   match request with
   | Ca_delivery r ->
-    evaluate
-      (Ca_checked
-         ( r
-         , observed
-             run
-             i
-             (Present
-                { namespace = "apps"
-                ; workload
-                ; configmap = "declared-ledger-ca"
-                ; key = "ca.pem"
-                ; mount_path = "/etc/sol/db-ca/ca.pem"
-                ; nonempty = true
-                }) ))
+    evaluate (Ca_checked (r, observed run i (Present (synthetic_ca run i workload))))
   | Dml_delivery r ->
     evaluate
       (Dml_checked
@@ -130,16 +182,6 @@ let ca_request o =
        | _ -> None)
     (instances o)
   |> Option.get
-;;
-
-let ca_facts : ca_facts =
-  { namespace = "apps"
-  ; workload = "w1"
-  ; configmap = "declared-ledger-ca"
-  ; key = "ca.pem"
-  ; mount_path = "/etc/sol/db-ca/ca.pem"
-  ; nonempty = true
-  }
 ;;
 
 let is_unknown = function
@@ -216,7 +258,11 @@ let test_request_semantics () =
     | `Assoc fields ->
       `Assoc
         (List.map
-           (fun (k, v) -> k, if k = field then value else change field value v)
+           (fun (k, v) ->
+              ( k
+              , if k = field
+                then if field = "database" && v = `Null then `Null else value
+                else change field value v ))
            fields)
     | `List xs -> `List (List.map (change field value) xs)
     | v -> v
@@ -351,6 +397,7 @@ let test_catalog_oracle () =
 let test_receipt_matching () =
   let run, _, o = setup () in
   let i, r = ca_request o in
+  let ca_facts = synthetic_ca run i "w1" in
   List.iter
     (fun foreign ->
        let observation = observed foreign i (Present ca_facts) in
@@ -364,16 +411,77 @@ let test_receipt_matching () =
     Fixture.observe run ~subject:"w2" ~evidence:[ reference ] (Present ca_facts) |> get
   in
   (evaluate (Ca_checked (r, wrong))).decision |> is_unknown;
-  let wrong = observed run i (Present { ca_facts with namespace = "other" }) in
+  let wrong =
+    observed
+      run
+      i
+      (Present
+         { ca_facts with
+           deployment =
+             { ca_facts.deployment with
+               state =
+                 Present
+                   { (match ca_facts.deployment.state with
+                      | Present d -> d
+                      | _ -> assert false)
+                     with
+                     namespace = "other"
+                   }
+             }
+         })
+  in
   (evaluate (Ca_checked (r, wrong))).decision |> is_unknown;
   List.iter
     (fun facts ->
        (evaluate (Ca_checked (r, observed run i (Present facts)))).decision |> is_fail)
-    [ { ca_facts with key = "ca.crt" }
-    ; { ca_facts with nonempty = false }
-    ; { ca_facts with configmap = "other" }
-    ; { ca_facts with mount_path = "/elsewhere" }
-    ];
+    (let configmap =
+       match ca_facts.configmap.state with
+       | Present c -> c
+       | _ -> assert false
+     in
+     let deployment =
+       match ca_facts.deployment.state with
+       | Present d -> d
+       | _ -> assert false
+     in
+     [ { ca_facts with
+         configmap =
+           { ca_facts.configmap with
+             state = Present { configmap with entries = [ "ca.crt", true ] }
+           }
+       }
+     ; { ca_facts with
+         configmap =
+           { ca_facts.configmap with
+             state = Present { configmap with entries = [ "ca.pem", false ] }
+           }
+       }
+     ; { ca_facts with
+         deployment =
+           { ca_facts.deployment with
+             state =
+               Present
+                 { deployment with
+                   volumes =
+                     [ { volume_name = "ca-volume"
+                       ; source_configmap = Some "other"
+                       ; items = None
+                       }
+                     ]
+                 }
+           }
+       }
+     ; { ca_facts with
+         deployment =
+           { ca_facts.deployment with
+             state =
+               Present
+                 { deployment with
+                   containers = [ { container_name = "app"; mounts = [] } ]
+                 }
+           }
+       }
+     ]);
   (evaluate (Ca_checked (r, observed run i Absent))).decision |> is_fail;
   (evaluate (Ca_checked (r, observed run i (Unreadable "Forbidden")))).decision
   |> is_unknown;

@@ -14,37 +14,53 @@
       "id": "w1",
       "namespace": "apps",
       "name": "w1",
-      "database": "ledger"
+      "database": "ledger",
+      "consuming_containers": [
+        "app"
+      ]
     },
     {
       "id": "w2",
       "namespace": "apps",
       "name": "w2",
-      "database": "ledger"
+      "database": "ledger",
+      "consuming_containers": [
+        "app"
+      ]
     },
     {
       "id": "w3",
       "namespace": "apps",
       "name": "w3",
-      "database": "ledger"
+      "database": "ledger",
+      "consuming_containers": [
+        "app"
+      ]
     },
     {
       "id": "w4",
       "namespace": "apps",
       "name": "w4",
-      "database": "ledger"
+      "database": "ledger",
+      "consuming_containers": [
+        "app"
+      ]
     },
     {
       "id": "w5",
       "namespace": "apps",
       "name": "w5",
-      "database": "ledger"
+      "database": "ledger",
+      "consuming_containers": [
+        "app"
+      ]
     },
     {
       "id": "unrelated",
       "namespace": "apps",
       "name": "unrelated",
-      "database": null
+      "database": null,
+      "consuming_containers": []
     }
   ]
 }

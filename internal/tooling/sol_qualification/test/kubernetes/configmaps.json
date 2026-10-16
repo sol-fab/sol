@@ -1,0 +1,23 @@
+{
+  "apiVersion": "v1",
+  "kind": "ConfigMapList",
+  "metadata": {
+    "resourceVersion": "201",
+    "continue": ""
+  },
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": {
+        "name": "declared-ledger-ca",
+        "namespace": "apps",
+        "uid": "configmap-ledger",
+        "resourceVersion": "99"
+      },
+      "data": {
+        "ca.pem": "CERTIFICATE_FIXTURE_BYTES_NEVER_CAPTURED"
+      }
+    }
+  ]
+}

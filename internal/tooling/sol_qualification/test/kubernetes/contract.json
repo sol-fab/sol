@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "ca_key": "ca.pem",
+  "ca_path": "/etc/sol/db-ca/ca.pem",
+  "credential_key": "POSTGRES_URL",
+  "dml_class": "dml",
+  "capabilities": [
+    "ca",
+    "dml",
+    "tls"
+  ]
+}
