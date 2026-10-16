@@ -46,3 +46,31 @@
  (deps
   intent.json
   (glob_files kubernetes/*.json)))
+
+(executable
+ (name candidate_boundary)
+ (modules candidate_boundary)
+ (libraries sol_qualification yojson unix))
+
+(rule
+ (alias runtest)
+ (deps
+  test_candidate_boundary.py
+  candidate_boundary.exe
+  ../../../../cli/test/test_database_contract_binding.py
+  ../../../../cli/bin/database_contract_projection.exe
+  ../../../qualification/database-contract-binding.py
+  ../../../qualification/sol-under-test.sh
+  ../../scripts/build-release-bundle.sh
+  candidate-obligations.golden)
+ (action
+  (run
+   python3
+   %{dep:test_candidate_boundary.py}
+   %{dep:candidate_boundary.exe}
+   %{dep:../../../../cli/bin/database_contract_projection.exe}
+   %{dep:../../../qualification/database-contract-binding.py}
+   %{dep:../../scripts/build-release-bundle.sh}
+   %{dep:../../../../cli/test/test_database_contract_binding.py}
+   %{workspace_root}
+   %{dep:candidate-obligations.golden})))

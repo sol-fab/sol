@@ -497,6 +497,8 @@ let commit t kind dependencies payload =
   result
 ;;
 
+let run (t : t) = t.run
+
 let close t =
   if not t.closed
   then (
