@@ -76,6 +76,39 @@ let synthetic_ca run instance workload : Qual_domain.ca_facts =
   }
 ;;
 
+(* Mechanism-only happy facts; hostile Job fixtures exercise the real decoder separately. *)
+let synthetic_migration run instance =
+  let open Qual_domain in
+  let ca = synthetic_ca run instance "execution-job" in
+  let template =
+    match ca.deployment.state with
+    | Present x -> x
+    | _ -> assert false
+  in
+  let namespace = "database-system" in
+  let job =
+    { template with
+      namespace
+    ; containers =
+        List.map (fun c -> { c with container_name = "migrate" }) template.containers
+    }
+  in
+  let configmap =
+    match ca.configmap.state with
+    | Present x -> x
+    | _ -> assert false
+  in
+  { execution =
+      { requirement = instance_identity instance
+      ; subject = "ledger"
+      ; context = { ca.deployment.context with started_at = 0; finished_at = 0 }
+      ; state = Present { namespace; name = job.name; uid = job.uid }
+      }
+  ; job = { ca.deployment with state = Present job }
+  ; configmap = { ca.configmap with state = Present { configmap with namespace } }
+  }
+;;
+
 let contract =
   `Assoc
     [ "schema", `Int 1
@@ -164,6 +197,9 @@ let verdict run request =
     evaluate
       (Tls_checked
          (r, observed run i (Present { namespace = "apps"; workload; verified = true })))
+  | Migration_ca_delivery r ->
+    evaluate
+      (Migration_ca_checked (r, observed run i (Present (synthetic_migration run i))))
   | Migration_input r ->
     evaluate
       (Migration_checked
@@ -233,7 +269,7 @@ let test_planner_mutations () =
            requests
        in
        rejects (reconcile_plan o mutated))
-    [ Ca; Dml; No_master; Tls; Migration ];
+    [ Ca; Dml; No_master; Tls; Migration; Migration_ca ];
   rejects
     (reconcile_plan
        o
@@ -279,6 +315,8 @@ let test_request_semantics () =
                 | pair -> pair)
               fields)
        | _ -> assert false)
+    ; change "container" (`String "another-container") (intent_json ())
+    ; change "configmap" (`String "another-migration-ca") (intent_json ())
     ; change "ca_configmap" (`String "another-ca") (intent_json ())
     ; change
         "administrative_secret"
@@ -292,6 +330,12 @@ let test_request_semantics () =
                 [ `Assoc
                     [ "id", `String "other-db"
                     ; "ca_configmap", `String "declared-ledger-ca"
+                    ; ( "migration"
+                      , `Assoc
+                          [ "namespace", `String "database-system"
+                          ; "container", `String "migrate"
+                          ; "configmap", `String "declared-ledger-ca"
+                          ] )
                     ; ( "administrative_secret"
                       , `Assoc
                           [ "namespace", `String "database-system"
@@ -320,6 +364,32 @@ let test_request_semantics () =
        in
        rejects (reconcile_plan expected (plan forged :: List.tl requests)))
     altered_intents;
+  (* Migration-context changes must also reject its own same-key typed request. *)
+  List.iter
+    (fun field ->
+       let altered_intent =
+         change field (`String "another-migration-value") (intent_json ())
+       in
+       let altered =
+         bind_obligations
+           run
+           Aws
+           (select run (Fixture.intent altered_intent |> get) |> get)
+         |> get
+       in
+       let migration =
+         List.find (fun i -> instance_kind i = Migration_ca) (instances altered)
+       in
+       let mutated =
+         List.map
+           (fun request ->
+              if instance_kind (requested request) = Migration_ca
+              then plan migration
+              else request)
+           requests
+       in
+       rejects (reconcile_plan expected mutated))
+    [ "namespace"; "container"; "configmap" ];
   let altered_contract = change "ca_key" (`String "other.pem") contract in
   let foreign = bind ~contract:altered_contract () in
   let altered =

@@ -38,3 +38,11 @@
    I4_REPO_ROOT
    %{workspace_root}
    (run %{test}))))
+
+(test
+ (name test_migration_ca)
+ (modules test_migration_ca)
+ (libraries sol_qualification alcotest yojson unix)
+ (deps
+  intent.json
+  (glob_files kubernetes/*.json)))

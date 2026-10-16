@@ -19,3 +19,4 @@ aws/a1/database/tls/w3
 aws/a1/database/tls/w4
 aws/a1/database/tls/w5
 aws/a1/database/migration/ledger
+aws/a1/database/migration-ca/ledger

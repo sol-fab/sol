@@ -1,6 +1,7 @@
 (** Independent, offline Kubernetes read boundary. No Sol renderer or executor. *)
 type resource =
   | Deployment
+  | Job
   | Configmap
 
 type query = private
@@ -31,10 +32,17 @@ type reply =
   }
 
 type observation =
-  | Deployment_read of Qual_domain.deployment Qual_domain.kube_read
+  | Deployment_read of Qual_domain.pod_template Qual_domain.kube_read
+  | Job_read of Qual_domain.pod_template Qual_domain.kube_read
   | Configmap_read of Qual_domain.ca_configmap Qual_domain.kube_read
 
 val queries : Qual_domain.ca_requirement -> query * query
+
+val migration_queries
+  :  Qual_domain.migration_ca_requirement
+  -> Qual_domain.job_identity
+  -> query * query
+
 val classify : query -> reply -> observation
 
 (** Safe projections omit certificate values, arbitrary env/annotations and raw

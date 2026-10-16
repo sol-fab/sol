@@ -80,6 +80,39 @@ let synthetic_ca run instance workload : Qual_domain.ca_facts =
   }
 ;;
 
+(* Mechanism-only happy facts; hostile Job fixtures exercise the real decoder separately. *)
+let synthetic_migration run instance =
+  let open Qual_domain in
+  let ca = synthetic_ca run instance "execution-job" in
+  let template =
+    match ca.deployment.state with
+    | Present x -> x
+    | _ -> assert false
+  in
+  let namespace = "database-system" in
+  let job =
+    { template with
+      namespace
+    ; containers =
+        List.map (fun c -> { c with container_name = "migrate" }) template.containers
+    }
+  in
+  let configmap =
+    match ca.configmap.state with
+    | Present x -> x
+    | _ -> assert false
+  in
+  { execution =
+      { requirement = instance_identity instance
+      ; subject = "ledger"
+      ; context = { ca.deployment.context with started_at = 0; finished_at = 0 }
+      ; state = Present { namespace; name = job.name; uid = job.uid }
+      }
+  ; job = { ca.deployment with state = Present job }
+  ; configmap = { ca.configmap with state = Present { configmap with namespace } }
+  }
+;;
+
 let contract =
   `Assoc
     [ "schema", `Int 1
@@ -177,6 +210,8 @@ let decide run request evidence =
   | D.Tls_connectivity r ->
     D.evaluate
       (D.Tls_checked (r, obs D.{ namespace = "apps"; workload; verified = true }))
+  | D.Migration_ca_delivery r ->
+    D.evaluate (D.Migration_ca_checked (r, obs (synthetic_migration run i)))
   | D.Migration_input r ->
     D.evaluate
       (D.Migration_checked
@@ -197,7 +232,11 @@ let record_all ?selected t run =
            E.capture
              t
              ~subject:(subject (D.requested request))
-             ~payload:(`String "explicit synthetic fixture")
+             ~payload:
+               (`Assoc
+                   [ "fixture", `String "explicit synthetic fixture"
+                   ; "request", `String (D.instance_identity (D.requested request))
+                   ])
            |> get
          in
          E.record_verdict t (decide run request evidence) ~observations:[ evidence ]

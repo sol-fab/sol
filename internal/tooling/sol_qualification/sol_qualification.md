@@ -14,7 +14,7 @@ references are fixture inputs, not proof of durable filesystem capture.
 consumer selection, a closed experimental database policy, typed requests/facts,
 pure evaluation, exact coverage and claim-owner validation. `test/` contains
 Alcotest adversarial tests, canonical intent, and hand-authored AWS/local golden
-instance manifests. The policy has four per-consumer checks and one per database;
+instance manifests. The fixture policy (`fixture-database/v2`) has four per-consumer checks and two per database;
 local plaintext TLS exclusion is explicit and never driven by candidate flags.
 
 ## API and configuration
@@ -224,3 +224,35 @@ any release binding after offline I3/I4. Existing candidates without that projec
 no source-text parsing or version guessing is provided. Claim-family policy/adoption changes
 require later reviewed work. No old predicate
 is removed in I1–I4: these increments prepare consolidation and do not claim it.
+
+## Offline migration CA observation
+
+`Migration_ca` is a separate database execution-context obligation; it is neither
+an application consumer nor the existing migration credential-input check. Complete
+fixture intent must declare the migration namespace, consuming container and CA
+ConfigMap explicitly. No workload namespace or Job name is reconstructed. Independent
+AWS/local golden manifests and planner omission tests include this obligation.
+Candidate capabilities cannot exclude it. This experimental catalog remains MECHANISM-only;
+it does not transfer any existing matrix or live release policy.
+
+The observer accepts a persisted execution receipt carrying the requirement identity,
+actual Job namespace/name/UID and observation identity/timing. Its fixture-only receipt
+producer is explicit. The exact Job and ConfigMap reads must follow the receipt and
+match the run, candidate/specimen, cluster/endpoint/principal and freshness policy.
+A recreated same-name Job is UNKNOWN. A missing execution receipt cannot infer a Job.
+Successful, complete, exact native lists can establish absence; failed commands,
+Forbidden, timeouts, spawn errors, malformed schemas and incomplete lists cannot.
+
+Job and Deployment decoding share pod-template, volume and mount parsing, while
+keeping distinct resource types. The pure CA delivery predicate is shared; migrations
+supply their own consuming container and namespace. The three durable dependencies
+(execution receipt, Job projection, ConfigMap projection) are verified before evaluation
+and retained by the verdict. Capture failure never manufactures a verdict. A Job template
+does not prove that a running Pod mounted the file or used TLS.
+
+This closes the **offline mechanism** gap found by I4: healthy application CA delivery
+cannot cover a missing migration CA. The original I4 comparison still exercises the
+application-only I3 entry point; its historical migration discrepancy remains accurate
+for that entry point. No live assertion is replaced here. A reviewed adapter from real
+product execution receipts, installed-candidate/specimen authority, other workload kinds,
+DML privilege verification and TLS behavior remain prerequisites for live adoption.

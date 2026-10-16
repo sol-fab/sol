@@ -2,6 +2,7 @@ open Qual_domain
 
 type resource =
   | Deployment
+  | Job
   | Configmap
 
 type query =
@@ -29,7 +30,8 @@ type reply =
   }
 
 type observation =
-  | Deployment_read of deployment kube_read
+  | Deployment_read of pod_template kube_read
+  | Job_read of pod_template kube_read
   | Configmap_read of ca_configmap kube_read
 
 let queries requirement =
@@ -44,6 +46,20 @@ let queries requirement =
     }
   in
   make Deployment b.workload, make Configmap b.configmap
+;;
+
+let migration_queries requirement (execution : job_identity) =
+  let b = migration_ca_binding requirement in
+  let make resource name =
+    { resource
+    ; namespace = b.namespace
+    ; name
+    ; requirement = instance_identity b.instance
+    ; subject = b.subject
+    ; target = b.target
+    }
+  in
+  make Job execution.name, make Configmap b.configmap
 ;;
 
 exception Invalid of string
@@ -87,11 +103,6 @@ let optional_list key json =
   match optional key json with
   | None -> []
   | Some xs -> list xs
-;;
-
-let integer = function
-  | `Int n -> n
-  | _ -> invalid "expected integer"
 ;;
 
 let unique xs = List.length xs = List.length (List.sort_uniq compare xs)
@@ -183,20 +194,21 @@ let container json =
   { container_name; mounts }
 ;;
 
-let deployment_with decode_volume json : deployment =
-  if string "apiVersion" json <> "apps/v1" || string "kind" json <> "Deployment"
-  then invalid "expected apps/v1 Deployment";
+let template_with ~api_version ~kind decode_volume json : pod_template =
+  if string "apiVersion" json <> api_version || string "kind" json <> kind
+  then invalid ("expected " ^ api_version ^ " " ^ kind);
   let namespace, name, uid, resource_version = metadata json in
   let spec = required "spec" (required "template" (required "spec" json)) in
   let volumes = List.map decode_volume (optional_list "volumes" spec) in
   let containers = List.map container (list (required "containers" spec)) in
-  if containers = [] then invalid "Deployment has no containers";
+  if containers = [] then invalid (kind ^ " has no containers");
   check_unique "volume name" (List.map (fun (v : ca_volume) -> v.volume_name) volumes);
   check_unique "container name" (List.map (fun c -> c.container_name) containers);
   { namespace; name; uid; resource_version; volumes; containers }
 ;;
 
-let deployment = deployment_with volume
+let deployment = template_with ~api_version:"apps/v1" ~kind:"Deployment" volume
+let job = template_with ~api_version:"batch/v1" ~kind:"Job" volume
 
 let stored_volume json : ca_volume =
   let volume_name = string "name" json in
@@ -217,7 +229,11 @@ let stored_volume json : ca_volume =
   { volume_name; source_configmap; items }
 ;;
 
-let stored_deployment = deployment_with stored_volume
+let stored_deployment =
+  template_with ~api_version:"apps/v1" ~kind:"Deployment" stored_volume
+;;
+
+let stored_job = template_with ~api_version:"batch/v1" ~kind:"Job" stored_volume
 
 let configmap json : ca_configmap =
   if string "apiVersion" json <> "v1" || string "kind" json <> "ConfigMap"
@@ -243,6 +259,7 @@ let native_read resource decode json =
   let expected_list, version =
     match resource with
     | Deployment -> "DeploymentList", "apps/v1"
+    | Job -> "JobList", "batch/v1"
     | Configmap -> "ConfigMapList", "v1"
   in
   if optional_text "kind" json <> Some expected_list
@@ -292,6 +309,7 @@ let classify query reply =
   in
   match query.resource with
   | Deployment -> Deployment_read (wrap (state Deployment deployment reply.result))
+  | Job -> Job_read (wrap (state Job job reply.result))
   | Configmap -> Configmap_read (wrap (state Configmap configmap reply.result))
 ;;
 
@@ -311,7 +329,7 @@ let metadata_json namespace name uid version =
     ]
 ;;
 
-let deployment_json (d : deployment) =
+let template_json ~api_version ~kind (d : pod_template) =
   let volume (v : ca_volume) =
     `Assoc
       [ "name", `String v.volume_name
@@ -336,8 +354,8 @@ let deployment_json (d : deployment) =
       ]
   in
   `Assoc
-    [ "apiVersion", `String "apps/v1"
-    ; "kind", `String "Deployment"
+    [ "apiVersion", `String api_version
+    ; "kind", `String kind
     ; "metadata", metadata_json d.namespace d.name d.uid d.resource_version
     ; ( "spec"
       , `Assoc
@@ -388,30 +406,6 @@ let stored_configmap json : ca_configmap =
   { namespace; name; uid; resource_version; entries }
 ;;
 
-let context_json (c : read_context) =
-  `Assoc
-    [ "target", kube_target_json c.target
-    ; "verified_at", `Int c.verified_at
-    ; "started_at", `Int c.started_at
-    ; "finished_at", `Int c.finished_at
-    ; "expires_at", option_json (fun n -> `Int n) c.expires_at
-    ]
-;;
-
-let context json =
-  let target = required "target" json in
-  { target =
-      { principal = string "principal" target
-      ; cluster = string "cluster" target
-      ; endpoint = string "endpoint" target
-      }
-  ; verified_at = integer (required "verified_at" json)
-  ; started_at = integer (required "started_at" json)
-  ; finished_at = integer (required "finished_at" json)
-  ; expires_at = Option.map integer (optional "expires_at" json)
-  }
-;;
-
 let encode observation =
   let encode resource encode read =
     let state =
@@ -425,12 +419,14 @@ let encode observation =
       [ "schema", `Int 1
       ; "resource", `String resource
       ; "requirement", `String read.requirement
-      ; "context", context_json read.context
+      ; "context", read_context_json read.context
       ; "observation", state
       ]
   in
   match observation with
-  | Deployment_read read -> encode "Deployment" deployment_json read
+  | Deployment_read read ->
+    encode "Deployment" (template_json ~api_version:"apps/v1" ~kind:"Deployment") read
+  | Job_read read -> encode "Job" (template_json ~api_version:"batch/v1" ~kind:"Job") read
   | Configmap_read read -> encode "ConfigMap" configmap_json read
 ;;
 
@@ -440,7 +436,11 @@ let decode (captured : Qual_evidence.captured) =
        if required "schema" json <> `Int 1
        then invalid "unsupported Kubernetes projection schema";
        let requirement = string "requirement" json in
-       let context = context (required "context" json) in
+       let context =
+         match read_context_of_json (required "context" json) with
+         | Ok c -> c
+         | Error e -> invalid e
+       in
        let state decode =
          let observation = required "observation" json in
          match string "status" observation with
@@ -452,6 +452,7 @@ let decode (captured : Qual_evidence.captured) =
        let wrap state = { requirement; subject = captured.subject; context; state } in
        match string "resource" json with
        | "Deployment" -> Deployment_read (wrap (state stored_deployment))
+       | "Job" -> Job_read (wrap (state stored_job))
        | "ConfigMap" -> Configmap_read (wrap (state stored_configmap))
        | _ -> invalid "unknown Kubernetes projection resource")
     captured.payload

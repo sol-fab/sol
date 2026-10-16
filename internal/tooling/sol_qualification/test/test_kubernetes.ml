@@ -109,6 +109,7 @@ let baseline provider (q : K.query) =
     provider
     (json
        (match q.resource with
+        | K.Job -> Alcotest.fail "application observer unexpectedly requested Job"
         | K.Deployment -> "deployments.json"
         | K.Configmap -> "configmaps.json"))
     q
@@ -251,6 +252,7 @@ let test_namespaces_and_objects () =
     from_fixture
       "aws"
       (match q.resource with
+       | K.Job -> Alcotest.fail "application observer unexpectedly requested Job"
        | K.Deployment -> deployments
        | K.Configmap -> configmaps)
       q
@@ -450,6 +452,7 @@ let test_failures () =
   run_read (mutate K.Configmap incomplete (baseline "aws")) (fun _ _ _ _ -> all "FAIL");
   let mixed q =
     match q.K.resource with
+    | K.Job -> Alcotest.fail "application observer unexpectedly requested Job"
     | K.Deployment -> modify_stdout incomplete (baseline "aws" q)
     | K.Configmap ->
       { (baseline "aws" q) with
@@ -649,6 +652,7 @@ let test_error_secrecy () =
   let secret = "REGISTERED_AUTHENTICATION_FAILURE_SECRET" in
   let read q =
     match q.K.resource with
+    | K.Job -> Alcotest.fail "application observer unexpectedly requested Job"
     | K.Deployment -> baseline "aws" q
     | K.Configmap ->
       { (baseline "aws" q) with
