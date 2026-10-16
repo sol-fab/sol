@@ -3,10 +3,11 @@
 ## Overview
 
 I1 implements the pure shared domain and obligation accounting proposed in draft
-PR #1487. It supports explicitly bound offline fixtures only. It cannot bind an
-installed release, qualify alpha.37, emit release verdicts, or change live policy.
-Fixture observations and results are always MECHANISM evidence. Their digest
-references are fixture inputs, not proof of durable filesystem capture.
+PR #1487. It supports offline mechanism validation, including freshly verified candidate
+declarations. It cannot qualify alpha.37, emit release verdicts, or change live policy.
+Observations and results are always MECHANISM evidence. Synthetic references
+accepted by the `Fixture` APIs alone do not prove persistence; the recorder-backed
+candidate/observer tests separately exercise verified durable filesystem receipts.
 
 ## Package structure
 
@@ -256,3 +257,51 @@ application-only I3 entry point; its historical migration discrepancy remains ac
 for that entry point. No live assertion is replaced here. A reviewed adapter from real
 product execution receipts, installed-candidate/specimen authority, other workload kinds,
 DML privilege verification and TLS behavior remain prerequisites for live adoption.
+
+## Verified candidate declarations, offline only
+
+`Qual_candidate.verify` invokes the existing `database-contract-binding.py` owner
+against an installed bundle and workspace. Its abstract result has no constructor
+from saved JSON. The assessment supplies pinned revision, bundle SHA-256,
+definition/specimen digests and requested/resolved target; all must match the fresh
+verification result. Self-consistent rehashing cannot replace those pins. The
+repository executing that verifier and the expected assessment binding are trusted
+local inputs, not authenticated evidence from an untrusted host.
+
+`Sol_cli_database_contract_data` is the product-owned schema codec shared with the
+producer. It decodes names and bindings without importing today's renderer constants.
+`Qual_domain.bind_candidate` adapts those typed values and preserves the complete
+workload inventory, including nonconsumers. `Qual_candidate_obligations.prepare`
+selects consumers and expands the same qualification-owned experimental catalog.
+The run and every requirement retain candidate revision, bundle/definition/specimen
+digests, requested/resolved target, assessment and Kubernetes principal/cluster/endpoint.
+The scenario must match the target provider using Sol's existing target parser;
+cloud candidates cannot select the Local policy's plaintext TLS exclusion.
+A candidate-bound run cannot select another intent. No declaration changes claim
+applicability or exempts DML/TLS/migration checks.
+
+The current observer supports Deployment consumers with Sol-managed CA delivery.
+External/no-CA databases, other consuming resource kinds, incomplete declarations,
+multiple administrative references and nonuniform consumer CA names are explicitly
+unsupported, rather than shortened selections or successful exclusions. Nonconsumer
+CronJobs/Rollouts remain in the inventory without becoming database consumers.
+Credentials and migration input addresses remain bound transitively through the
+specimen digest; their exact-reference observation is not implemented here.
+Actual PostgreSQL DML authority verification remains a required future obligation;
+a Secret reference/class check cannot establish it. Actual TLS observation is also
+unimplemented. Candidate-bound runs therefore cannot complete all database claims.
+
+Before observations, declare `prepared.required_captures` through the existing
+recorder's `start_assessment`. `capture_binding` checks the recorder's exact run;
+its capture ID binds the complete assessment provenance. Interrupted persistence
+cannot issue a receipt, and restart must retain the same required slot before
+recapture. Existing I2 immutable graph/manifest verification remains authoritative;
+there is no second recorder or persistent work-state mechanism.
+
+The installed-candidate tests use the real verifier and producer. The independent
+`candidate-obligations.golden` enumerates all ten AWS obligations for two consumers
+and one migration context; the expected inventory also includes a nonconsumer.
+Tests cover wrong digests/targets, forged/rehashed declarations, schema mismatch,
+omitted or duplicated members, altered container/database/CA identities, required
+capture failure/restart, cross-assessment and identity substitution, and CA evidence
+that cannot complete the remaining obligations. All results remain MECHANISM-only.

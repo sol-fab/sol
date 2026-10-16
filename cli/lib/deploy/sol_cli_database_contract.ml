@@ -12,34 +12,10 @@ let option fn = function
   | Some value -> fn value
 ;;
 
-(* Closed JSON grammar: no floats, duplicate keys, or serializer-dependent extensions. *)
-let rec canonical = function
-  | `Assoc values ->
-    let keys = List.map fst values in
-    if List.length keys <> List.length (List.sort_uniq compare keys)
-    then Error "duplicate declaration field"
-    else
-      let* values =
-        Sol_cli_result.map_list
-          (fun (k, v) ->
-             let* v = canonical v in
-             Ok (k, v))
-          values
-      in
-      Ok (`Assoc (List.sort (fun (a, _) (b, _) -> String.compare a b) values))
-  | `List values ->
-    let* values = Sol_cli_result.map_list canonical values in
-    Ok (`List values)
-  | (`String _ | `Int _ | `Bool _ | `Null) as value -> Ok value
-  | _ -> Error "unsupported declaration JSON value"
-;;
+module Data = Sol_cli_database_contract_data
 
-let hash value = Digestif.SHA256.(to_hex (digest_string (Yojson.Safe.to_string value)))
-
-let seal payload =
-  let* payload = canonical payload in
-  Ok (fields [ "digest", string (hash payload); "declaration", payload ])
-;;
+let canonical = Data.canonical
+let seal = Data.seal
 
 type definition =
   { revision : string
@@ -253,5 +229,6 @@ let project ~definition ~requested_target ~config ~(facts : Sol_cli_workspace_mo
          ; "workloads", `List workloads
          ])
   in
+  let* _ = Data.read_specimen document in
   Ok (Projection document)
 ;;

@@ -1,4 +1,4 @@
-(** Durable MECHANISM evidence only. No production candidate or release path. *)
+(** Durable MECHANISM evidence only. No release-qualification authority. *)
 type t
 
 type reference = private
@@ -49,6 +49,7 @@ val open_store
   -> unit
   -> (t, error) result
 
+val run : t -> Qual_domain.run
 val close : t -> unit
 val assessments : t -> (reference list, error) result
 

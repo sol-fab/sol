@@ -23,33 +23,8 @@ let error text = Error text
 let nonempty s = String.trim s <> ""
 let unique xs = List.length xs = List.length (List.sort_uniq String.compare xs)
 
-let rec normalize = function
-  | `Assoc fields ->
-    if not (unique (List.map fst fields))
-    then error "duplicate JSON field"
-    else (
-      let rec loop = function
-        | [] -> Ok []
-        | (k, v) :: rest ->
-          let* v = normalize v in
-          let* rest = loop rest in
-          Ok ((k, v) :: rest)
-      in
-      let* fields = loop fields in
-      Ok (`Assoc (List.sort (fun (a, _) (b, _) -> String.compare a b) fields)))
-  | `List xs ->
-    let rec loop = function
-      | [] -> Ok []
-      | x :: xs ->
-        let* x = normalize x in
-        let* xs = loop xs in
-        Ok (x :: xs)
-    in
-    let* xs = loop xs in
-    Ok (`List xs)
-  | (`Null | `Bool _ | `String _ | `Int _) as v -> Ok v
-  | _ -> error "unsupported canonical JSON value"
-;;
+(* One canonical wire grammar, shared with the product declaration owner. *)
+let normalize = Sol_cli_database_contract_data.canonical
 
 let canonical_json json =
   let* json = normalize json in
@@ -180,6 +155,7 @@ type run =
   ; dml_class : string
   ; capabilities : string list
   ; kubernetes : kube_target
+  ; candidate_binding : Yojson.Safe.t option
   }
 
 type secret_address =
@@ -201,7 +177,8 @@ type database =
   }
 
 type workload =
-  { id : string
+  { resource : string
+  ; id : string
   ; namespace : string
   ; name : string
   ; database : string option
@@ -249,6 +226,10 @@ let run_json (r : run) =
   `Assoc
     [ "origin", `String "MECHANISM"
     ; "policy", `String "fixture-database/v2"
+    ; ( "candidate_binding"
+      , match r.candidate_binding with
+        | None -> `Null
+        | Some b -> b )
     ; "attempt", `String r.attempt
     ; "assessment", `String r.assessment
     ; "candidate", `String r.candidate
@@ -314,6 +295,12 @@ let consumers (s : selection) = List.map (fun (w : workload) -> w.id) s.selected
 let exclusions (s : selection) = s.excluded
 
 let select run intent =
+  let* () =
+    match run.candidate_binding with
+    | Some _ when run.specimen <> intent.intent_digest ->
+      error "intent belongs to another candidate specimen"
+    | _ -> Ok ()
+  in
   let selected, excluded =
     List.partition (fun (w : workload) -> w.database <> None) intent.workloads
   in
@@ -446,6 +433,7 @@ let instance_identity (i : instance) =
                | Some w ->
                  `Assoc
                    [ "id", `String w.id
+                   ; "resource", `String w.resource
                    ; "namespace", `String w.namespace
                    ; "name", `String w.name
                    ; ( "consuming_containers"
@@ -988,6 +976,7 @@ module Fixture = struct
         ; dml_class
         ; capabilities
         ; kubernetes
+        ; candidate_binding = None
         }
   ;;
 
@@ -1049,7 +1038,15 @@ module Fixture = struct
           (not (unique consuming_containers))
           || (database <> None && consuming_containers = [])
         then error "incomplete or duplicate consuming container selection"
-        else Ok { id; namespace; name; database; consuming_containers })
+        else
+          Ok
+            { resource = "deployment"
+            ; id
+            ; namespace
+            ; name
+            ; database
+            ; consuming_containers
+            })
     in
     if
       (not (unique (List.map (fun (d : database) -> d.id) databases)))
@@ -1082,3 +1079,184 @@ module Fixture = struct
     else Ok { instance; decision = Not_run reason; evidence }
   ;;
 end
+
+(* Adapt typed product declarations, never their naming rules. The deliberately
+   narrow supported subset is checked before selection so unsupported promises
+   cannot disappear from the qualification-owned obligation universe. *)
+let bind_candidate ~scenario ~attempt ~assessment ~kubernetes verified =
+  let module C = Sol_cli_database_contract_data in
+  let* () =
+    match scenario, Qual_candidate.provider verified with
+    | Aws, Sol_cli_provider.Aws | Gcp, Sol_cli_provider.Gcp -> Ok ()
+    | _ -> error "qualification scenario differs from the candidate target provider"
+  in
+  let d = Qual_candidate.definition verified in
+  let s = Qual_candidate.specimen verified in
+  let* () =
+    if
+      (not
+         (List.for_all
+            nonempty
+            [ attempt
+            ; assessment
+            ; kubernetes.principal
+            ; kubernetes.cluster
+            ; kubernetes.endpoint
+            ]))
+      || (not (canonical_path ~absolute:true d.ca_file))
+      || String.contains d.ca_key '/'
+    then error "invalid candidate assessment or CA binding"
+    else if d.volume_identity <> "internal_linkage"
+    then error "unsupported CA volume identity contract"
+    else Ok ()
+  in
+  let* db =
+    match s.database with
+    | Some db -> Ok db
+    | None -> error "required database declaration is missing"
+  in
+  let* administrative_secret =
+    match db.ownership, db.credential_authority, db.administrative_references with
+    | "sol", Some _, [ a ] -> Ok { namespace = a.namespace; name = a.name }
+    | _ ->
+      error
+        "unsupported database authority; required database claims remain unestablished"
+  in
+  let m = db.migration in
+  let* migration_ca =
+    match m.ca with
+    | Some ca -> Ok ca
+    | None -> error "required migration CA declaration is missing"
+  in
+  let matches_ca (ca : C.ca) = ca.key = d.ca_key && ca.file = d.ca_file in
+  let* () =
+    if
+      m.context <> "database_migration"
+      || m.resource <> "Job"
+      || m.job_identity <> "requires_execution_receipt"
+      || m.container <> d.migration_container
+      || m.credential.namespace <> m.namespace
+      || migration_ca.configmap.namespace <> m.namespace
+      || not (matches_ca migration_ca)
+    then error "unsupported or inconsistent migration execution declaration"
+    else Ok ()
+  in
+  let* () =
+    if
+      s.workloads = []
+      || (not (unique (List.map (fun (w : C.workload) -> w.subject) s.workloads)))
+      || not
+           (unique
+              (List.map (fun (w : C.workload) -> w.namespace ^ "/" ^ w.name) s.workloads))
+    then error "missing or duplicate workload identities"
+    else Ok ()
+  in
+  let consumers = List.filter (fun (w : C.workload) -> w.database <> None) s.workloads in
+  let* ca_configmap =
+    match consumers with
+    | { ca = Some ca; _ } :: _ -> Ok ca.configmap.name
+    | _ -> error "required consumer CA declarations are missing"
+  in
+  let* workloads =
+    Sol_cli_result.map_list
+      (fun (w : C.workload) ->
+         let* () =
+           if not (unique w.declared_uses && unique w.consuming_containers)
+           then error "duplicate dependency or container identity"
+           else (
+             match w.database, w.ca, w.credential with
+             | None, None, None
+               when w.consuming_containers = []
+                    && not (List.mem db.resource w.declared_uses) -> Ok ()
+             | Some id, Some ca, Some credential
+               when id = db.resource
+                    && List.mem id w.declared_uses
+                    && w.resource = "deployment"
+                    && w.consuming_containers <> []
+                    && credential.namespace = w.namespace
+                    && (not
+                          (List.exists
+                             (fun (a : C.address) -> a = credential)
+                             db.administrative_references))
+                    && credential <> m.credential
+                    && ca.configmap.namespace = w.namespace
+                    && ca.configmap.name = ca_configmap
+                    && matches_ca ca -> Ok ()
+             | _ ->
+               error
+                 "unsupported or incomplete workload/database/container delivery \
+                  declaration")
+         in
+         Ok
+           { resource = w.resource
+           ; id = w.subject
+           ; namespace = w.namespace
+           ; name = w.name
+           ; database = w.database
+           ; consuming_containers = w.consuming_containers
+           })
+      s.workloads
+  in
+  let database =
+    { id = db.resource
+    ; ca_configmap
+    ; administrative_secret
+    ; migration =
+        { namespace = m.namespace
+        ; container = m.container
+        ; configmap = migration_ca.configmap.name
+        }
+    }
+  in
+  let e = Qual_candidate.expected verified in
+  (* Digests bind the entire declarations, including credential/migration addresses.
+     Store only nonsecret provenance; the complete typed subject set is retained in intent. *)
+  let receipt =
+    `Assoc
+      [ "revision", `String e.revision
+      ; "bundle_digest", `String e.bundle_digest
+      ; "definition_digest", `String e.definition_digest
+      ; "specimen_digest", `String e.specimen_digest
+      ; "target", `String e.target
+      ; "requested_target", `String e.requested_target
+      ; "workspace", `String s.workspace
+      ]
+  in
+  let run =
+    { attempt
+    ; assessment
+    ; candidate = d.revision
+    ; specimen = s.digest
+    ; scenario
+    ; contract_digest = d.digest
+    ; ca_key = d.ca_key
+    ; ca_path = d.ca_file
+    ; credential_key = d.credential_key
+    ; dml_class = d.dml_class
+    ; (* This adapter implements only candidate-bound CA evaluation. Unsupported
+        DML/TLS facts cannot PASS, but their policy obligations remain required. *)
+      capabilities = [ "ca" ]
+    ; kubernetes
+    ; candidate_binding = Some receipt
+    }
+  in
+  Ok (run, { databases = [ database ]; workloads; intent_digest = s.digest })
+;;
+
+let expected_workloads (intent : intent) =
+  List.map
+    (fun (w : workload) ->
+       `Assoc
+         [ "subject", `String w.id
+         ; "resource", `String w.resource
+         ; "namespace", `String w.namespace
+         ; "name", `String w.name
+         ; ( "database"
+           , match w.database with
+             | None -> `Null
+             | Some v -> `String v )
+         ; ( "consuming_containers"
+           , `List (List.map (fun x -> `String x) w.consuming_containers) )
+         ])
+    intent.workloads
+;;

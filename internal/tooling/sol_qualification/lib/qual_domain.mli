@@ -1,5 +1,6 @@
-(** Offline qualification domain. No released-candidate binding or release verdict
-    API exists here. Fixture evidence is always MECHANISM evidence. *)
+(** Qualification domain for offline MECHANISM validation. Freshly verified
+    candidate declarations can supply expectations; no release-verdict authority
+    or live observation transport exists here. *)
 type kube_target =
   { principal : string
   ; cluster : string
@@ -263,3 +264,16 @@ module Fixture : sig
 
   val blocked : instance -> evidence:string list -> string -> (verdict, string) result
 end
+
+(** Freshly verified candidate declarations may drive MECHANISM obligations only.
+    Unsupported promises are refused before selection, never treated as exclusions.
+    Currently requires Sol-managed CA delivery and Deployment consumers. *)
+val bind_candidate
+  :  scenario:scenario
+  -> attempt:string
+  -> assessment:string
+  -> kubernetes:kube_target
+  -> Qual_candidate.t
+  -> (run * intent, string) result
+
+val expected_workloads : intent -> Yojson.Safe.t list

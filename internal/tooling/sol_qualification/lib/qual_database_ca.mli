@@ -1,5 +1,6 @@
-(** I3 fixture-bound CA observation/evaluation. One mechanism for AWS/GCP contexts;
-    no installed-release binding, policy transfer, executor or live harness call. *)
+(** Shared CA observation/evaluation for AWS/GCP contexts. Callers bind expected
+    contracts and inject offline readers; no live transport, policy transfer or
+    release-qualification authority is installed. *)
 type recorded = private
   { verdict : Qual_domain.verdict
   ; receipt : Qual_evidence.reference

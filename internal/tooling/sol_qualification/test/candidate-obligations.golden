@@ -1,0 +1,10 @@
+aws/a1/database/ca/comms/notify_worker
+aws/a1/database/ca/payments/charge_svc
+aws/a1/database/dml/comms/notify_worker
+aws/a1/database/dml/payments/charge_svc
+aws/a1/database/no-master/comms/notify_worker
+aws/a1/database/no-master/payments/charge_svc
+aws/a1/database/tls/comms/notify_worker
+aws/a1/database/tls/payments/charge_svc
+aws/a1/database/migration/app_db
+aws/a1/database/migration-ca/app_db
