@@ -266,11 +266,47 @@ let applicability (o : obligations) = o.excluded
 let instance_key i = i.key
 let instance_kind i = i.kind
 
+(* Fixed-shape projection of typed fields: no arbitrary JSON or naming inference.
+   Persist this identity so durable coverage cannot collapse back to key equality. *)
+let instance_identity (i : instance) =
+  let address (a : secret_address) =
+    `Assoc [ "namespace", `String a.namespace; "name", `String a.name ]
+  in
+  sha256
+    (Yojson.Safe.to_string
+       (`Assoc
+           [ "run", run_json i.run
+           ; "kind", `String (kind_name i.kind)
+           ; "subject", `String i.subject
+           ; "key", `String i.key
+           ; ( "database"
+             , `Assoc
+                 [ "id", `String i.database.id
+                 ; "ca_configmap", `String i.database.ca_configmap
+                 ; "administrative_secret", address i.database.administrative_secret
+                 ] )
+           ; ( "workload"
+             , match i.workload with
+               | None -> `Null
+               | Some w ->
+                 `Assoc
+                   [ "id", `String w.id
+                   ; "namespace", `String w.namespace
+                   ; "name", `String w.name
+                   ; ( "database"
+                     , match w.database with
+                       | None -> `Null
+                       | Some id -> `String id )
+                   ] )
+           ]))
+;;
+
 let obligations_json o =
   `Assoc
     [ "run", run_json o.run
     ; "selection", `String o.selection_digest
     ; "required", `List (List.map (fun i -> `String i.key) o.required)
+    ; "requirements", `List (List.map (fun i -> `String (instance_identity i)) o.required)
     ; ( "excluded"
       , `List
           (List.map
@@ -511,6 +547,7 @@ let verdict_json v =
   in
   `Assoc
     [ "instance", `String v.instance.key
+    ; "requirement", `String (instance_identity v.instance)
     ; "run", run_json v.instance.run
     ; "decision", `String status
     ; "detail", `String detail

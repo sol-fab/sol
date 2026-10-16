@@ -35,6 +35,7 @@ val instances : obligations -> instance list
 val applicability : obligations -> (string * string) list
 val instance_key : instance -> string
 val instance_kind : instance -> kind
+val instance_identity : instance -> string
 val obligations_json : obligations -> Yojson.Safe.t
 
 type ca_requirement
