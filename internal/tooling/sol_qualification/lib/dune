@@ -1,0 +1,5 @@
+(library
+ (name sol_qualification)
+ (wrapped false)
+ (modules qual_domain)
+ (libraries yojson digestif))

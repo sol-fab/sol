@@ -1,0 +1,16 @@
+local/a1/database/ca/w1
+local/a1/database/ca/w2
+local/a1/database/ca/w3
+local/a1/database/ca/w4
+local/a1/database/ca/w5
+local/a1/database/dml/w1
+local/a1/database/dml/w2
+local/a1/database/dml/w3
+local/a1/database/dml/w4
+local/a1/database/dml/w5
+local/a1/database/no-master/w1
+local/a1/database/no-master/w2
+local/a1/database/no-master/w3
+local/a1/database/no-master/w4
+local/a1/database/no-master/w5
+local/a1/database/migration/ledger
