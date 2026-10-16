@@ -1,0 +1,315 @@
+{
+  "apiVersion": "apps/v1",
+  "kind": "DeploymentList",
+  "metadata": {
+    "resourceVersion": "200",
+    "continue": ""
+  },
+  "items": [
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "w1",
+        "namespace": "apps",
+        "uid": "deployment-1",
+        "resourceVersion": "101",
+        "annotations": {
+          "fixture": "UNREGISTERED_ANNOTATION_SECRET"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "w1"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "w1"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "app",
+                "image": "fixture.invalid/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "env": [
+                  {
+                    "name": "DATABASE_PASSWORD",
+                    "value": "UNREGISTERED_ENV_SECRET"
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "ca-volume",
+                    "mountPath": "/etc/sol/db-ca",
+                    "readOnly": true
+                  }
+                ]
+              },
+              {
+                "name": "metrics",
+                "image": "fixture.invalid/metrics:v1"
+              }
+            ],
+            "volumes": [
+              {
+                "name": "ca-volume",
+                "configMap": {
+                  "name": "declared-ledger-ca"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "w2",
+        "namespace": "apps",
+        "uid": "deployment-2",
+        "resourceVersion": "102",
+        "annotations": {
+          "fixture": "UNREGISTERED_ANNOTATION_SECRET"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "w2"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "w2"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "app",
+                "image": "fixture.invalid/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "env": [
+                  {
+                    "name": "DATABASE_PASSWORD",
+                    "value": "UNREGISTERED_ENV_SECRET"
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "ca-volume",
+                    "mountPath": "/etc/sol/db-ca",
+                    "readOnly": true
+                  }
+                ]
+              },
+              {
+                "name": "metrics",
+                "image": "fixture.invalid/metrics:v1"
+              }
+            ],
+            "volumes": [
+              {
+                "name": "ca-volume",
+                "configMap": {
+                  "name": "declared-ledger-ca"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "w3",
+        "namespace": "apps",
+        "uid": "deployment-3",
+        "resourceVersion": "103",
+        "annotations": {
+          "fixture": "UNREGISTERED_ANNOTATION_SECRET"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "w3"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "w3"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "app",
+                "image": "fixture.invalid/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "env": [
+                  {
+                    "name": "DATABASE_PASSWORD",
+                    "value": "UNREGISTERED_ENV_SECRET"
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "ca-volume",
+                    "mountPath": "/etc/sol/db-ca",
+                    "readOnly": true
+                  }
+                ]
+              },
+              {
+                "name": "metrics",
+                "image": "fixture.invalid/metrics:v1"
+              }
+            ],
+            "volumes": [
+              {
+                "name": "ca-volume",
+                "configMap": {
+                  "name": "declared-ledger-ca"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "w4",
+        "namespace": "apps",
+        "uid": "deployment-4",
+        "resourceVersion": "104",
+        "annotations": {
+          "fixture": "UNREGISTERED_ANNOTATION_SECRET"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "w4"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "w4"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "app",
+                "image": "fixture.invalid/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "env": [
+                  {
+                    "name": "DATABASE_PASSWORD",
+                    "value": "UNREGISTERED_ENV_SECRET"
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "ca-volume",
+                    "mountPath": "/etc/sol/db-ca",
+                    "readOnly": true
+                  }
+                ]
+              },
+              {
+                "name": "metrics",
+                "image": "fixture.invalid/metrics:v1"
+              }
+            ],
+            "volumes": [
+              {
+                "name": "ca-volume",
+                "configMap": {
+                  "name": "declared-ledger-ca"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "w5",
+        "namespace": "apps",
+        "uid": "deployment-5",
+        "resourceVersion": "105",
+        "annotations": {
+          "fixture": "UNREGISTERED_ANNOTATION_SECRET"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "w5"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "w5"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "app",
+                "image": "fixture.invalid/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "env": [
+                  {
+                    "name": "DATABASE_PASSWORD",
+                    "value": "UNREGISTERED_ENV_SECRET"
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "ca-volume",
+                    "mountPath": "/etc/sol/db-ca",
+                    "readOnly": true
+                  }
+                ]
+              },
+              {
+                "name": "metrics",
+                "image": "fixture.invalid/metrics:v1"
+              }
+            ],
+            "volumes": [
+              {
+                "name": "ca-volume",
+                "configMap": {
+                  "name": "declared-ledger-ca"
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

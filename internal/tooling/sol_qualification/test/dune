@@ -14,3 +14,11 @@
  (name ci-unit)
  (deps
   (alias_rec runtest)))
+
+(test
+ (name test_kubernetes)
+ (modules test_kubernetes)
+ (libraries sol_qualification alcotest yojson unix)
+ (deps
+  intent.json
+  (glob_files kubernetes/*.json)))

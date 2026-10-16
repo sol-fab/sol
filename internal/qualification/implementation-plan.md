@@ -5,12 +5,13 @@ migration decisions from [#1487](https://github.com/sol-fab/sol/pull/1487), whos
 prototype is not a source of product expectations and is not included in the implementation.
 GitHub issues and PRs own work status; this document owns the sequence and acceptance gates.
 
-## Landed foundation
+## Implemented foundation
 
 | Increment | Implementation | Boundary |
 |---|---|---|
 | I1 — [#1490](https://github.com/sol-fab/sol/pull/1490) | Shared typed domain, complete expected selection, independent obligation expansion, exact plan/outcome accounting, distinct requirement types and full instance identity | Explicitly bound offline MECHANISM fixtures; no production policy transfer |
 | I2 — [#1494](https://github.com/sol-fab/sol/pull/1494) | Immutable evidence, explicit assessments, required capture slots, full verdict-identity and dependency verification, recovery and secret-safe capture | Local trusted-producer model; no executor, release binding or live lifecycle integration |
+| I3 — [shared offline CA observation](../tooling/sol_qualification/lib/qual_database_ca.mli) | One independent Kubernetes schema decoder and pure CA evaluator, complete expected consumers/containers, persisted read/evaluate/verdict path, identity/freshness and hostile classification fixtures | No product projection, production transport/authentication, I4 harness comparison or live assertion replacement |
 
 The [package contract](../tooling/sol_qualification/sol_qualification.md) and actual
 [domain](../tooling/sol_qualification/lib/qual_domain.mli) /
@@ -25,7 +26,6 @@ has been removed yet; implementation of an abstraction alone is not consolidatio
 
 | Increment | Deliverable and acceptance | Exact removal or consolidation point |
 |---|---|---|
-| I3 — Offline shared CA contract and Kubernetes observer | Use explicitly bound fixture contracts and real Kubernetes schemas. One pure CA predicate and one independent Kubernetes observer serve AWS/GCP contexts. Bind actual object addresses, key and consuming-container mount; establish observation-time identity/endpoint and unreadable-result classification. Exercise #1497's failure cases. | Keep live assertions unchanged. Do not restore the retired prototype's observer/predicate/reporting path. This is new shared capability, not yet a claim of provider-harness consolidation. |
 | Product contract projection — separate focused change | Generate deterministically from existing canonical definitions; cross-test actual rendered ConfigMap keys, volumes, mounts, credential references and runtime inputs. Include the projection in a suitable future candidate and bind its exact bytes/revision. Missing/unsupported projections are refused. | No manually maintained contract table, source-text parser or compatibility registry. Consume existing candidate verification. Do not modify or rebuild alpha.37. This change requires product-authority review. |
 | I4 — Offline AWS/GCP comparison | Run new and existing assertions against the same hostile fixtures, without a cluster. Use correct candidate-bound CA expectations; distinguish preserved failures from intentional stronger checks and GCP's new coverage. Offline I3/I4 can progress before a new projected candidate exists, but cannot qualify an existing release. | The temporary comparison is a migration test, not a second runtime oracle or a fallback. |
 | I5 — Scoped AWS adoption and family policy transfer | After comparison and a supported projected candidate, review the exact migrated claim-family boundary and verified-manifest consumption. Retain unrelated matrix owners. Adopt in an isolated harness revision outside active campaigns. | Delete the migrated AWS `app_verify_database_ca` predicate body and superseded required-check declarations. Generate the migrated family's matrix policy projection; preserve historical records. No CA-only path can promote a release with other required claims unestablished. |

@@ -8,8 +8,9 @@ establishes whether Sol satisfied its declared contract.
 This document preserves the design from [#1487](https://github.com/sol-fab/sol/pull/1487)
 without its experimental executable. The shared domain and durable recorder landed in
 [#1490](https://github.com/sol-fab/sol/pull/1490) and
-[#1494](https://github.com/sol-fab/sol/pull/1494). They support explicitly bound offline
-**MECHANISM** fixtures only. They cannot qualify an installed release or replace a live
+[#1494](https://github.com/sol-fab/sol/pull/1494). The [shared Kubernetes CA observer](../tooling/sol_qualification/lib/qual_database_ca.mli)
+now integrates those owners for both AWS/GCP fixture contexts. These implementations
+support explicitly bound offline **MECHANISM** fixtures only. They cannot qualify an installed release or replace a live
 assertion. No live policy authority has moved. The [implementation plan](implementation-plan.md)
 sets the remaining comparison, review and deletion gates.
 
@@ -93,28 +94,28 @@ source provenance must remain unreadable, not become an empty reference set.
 | Persistence error | Operational failure without a fabricated evidence reference or recorded verdict |
 
 The evaluator alone matches observation subject, candidate/run/assessment, expected binding
-and, once implemented, endpoint/identity freshness. The recorder validates structural
+and CA read endpoint/identity freshness. The recorder validates structural
 provenance and persistence. The coordinator dispatches correctly typed requests; it does not
 implement another version of the predicate. A command result or an in-memory decision is not
 a durable qualification verdict.
 
-The future shared Kubernetes observer must exercise
-[#1497](https://github.com/sol-fab/sol/issues/1497) as an adversarial classification case.
+The shared Kubernetes observer exercises
+[#1497](https://github.com/sol-fab/sol/issues/1497) as an adversarial classification case with offline fixtures.
 Forbidden, timeout, process-launch failure, malformed output and incomplete listings cannot
 establish absence. A failed provider command never establishes Absent. Absence requires a
 positively established authoritative result for the bound subject. For a required-presence
 claim that result is FAIL; for a required-absence claim it may establish PASS. An empty
 successful subset is not proof of complete discovery.
 
-The AWS and GCP database contracts should share one Kubernetes observation implementation
-with bound provider context. Reuse candidate-owned declarations and schemas, while observing
+AWS and GCP CA contracts share one Kubernetes observation implementation with bound
+fixture context. Broader database observation capabilities remain future work. Reuse candidate-owned declarations and schemas, while observing
 Kubernetes independently of Sol's renderer/apply path. Cross-test real rendered artifacts
 against declared expectations; do not compare a renderer against itself.
 
 ## Worked CA path
 
-The end-to-end observer/decoder integration below is still future work; the domain
-and recorder operations already exist for fixtures:
+The fixture-bound observer/decoder implements this path. Production transport and
+released-candidate binding remain separate prerequisites:
 
 1. Bind the run to its contract and scenario, select expected consumers from canonical
    intent, and expand the independent catalog into obligations.
