@@ -4,7 +4,9 @@
   (deps
    ../../bin/main.exe
    ../fixtures/terraform-output-gcp-cloud.json
-   (source_tree ../../../platform/cloud)))
+   (source_tree ../../../platform/cloud)
+   (source_tree ../../../examples/pluto)
+   (source_tree ../../../internal/fixtures/venus)))
  (preprocess
   (pps ppx_windtrap))
  (libraries windtrap sol_cli sol_cli_test_support unix yojson str yaml logs))
