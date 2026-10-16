@@ -65,8 +65,12 @@ let man =
        substrate: it destroys nothing, claims no absence, and exits 1 naming the \
        namespace, the kind and the operation that failed. The precondition does not \
        apply when there is no cluster to release from (the substrate is absent, or the \
-       cluster cannot be reached), and `--accept-unreleased` destroys anyway, recording \
-       that the absence check, not the release, decided the outcome."
+       cluster cannot be reached), nor to a declared namespace that does not exist: a \
+       workload cannot be running without its namespace, so a target whose workloads \
+       were never deployed is destroyed without an override, while a namespace that \
+       exists is still read and a namespace whose existence cannot be established is \
+       still refused. `--accept-unreleased` destroys anyway, recording that the absence \
+       check, not the release, decided the outcome."
   ; `P
       "A target whose Terraform state cannot be listed is refused, not destroyed: the \
        listing is what tells `terraform output` apart from a confirmed absence, so a \

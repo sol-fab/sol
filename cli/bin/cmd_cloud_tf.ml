@@ -810,8 +810,10 @@ let accept_unreleased_flag =
            be established as released. A supported destroy releases those workloads and \
            waits for their pods before it destroys the substrate, so a provider is never \
            asked to drop durable application state while the workloads that own it may \
-           still be running. Without this flag such a destroy stops before the substrate \
-           and destroys nothing.")
+           still be running. A declared namespace that does not exist is not an \
+           unestablished release: no workload can be running without its namespace, so \
+           that case does not need this flag. Without this flag a destroy stops before \
+           the substrate and destroys nothing.")
 ;;
 
 let plan_cmd =
