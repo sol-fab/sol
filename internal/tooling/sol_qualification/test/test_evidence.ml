@@ -71,7 +71,12 @@ let open_store ?fault ?(secrets = []) directory run =
 ;;
 
 let begin_run t =
-  E.start_assessment t ~reason:"initial offline fixture" ~previous:[] |> get
+  E.start_assessment
+    ~required_captures:[]
+    t
+    ~reason:"initial offline fixture"
+    ~previous:[]
+  |> get
 ;;
 
 let subject i = List.rev (String.split_on_char '/' (D.instance_key i)) |> List.hd
@@ -115,7 +120,7 @@ let decide run request evidence =
                } ))
   | D.No_master_copy r ->
     D.evaluate
-      (D.No_master_checked (r, obs D.{ namespace = "apps"; workload; keys = [] }))
+      (D.No_master_checked (r, obs D.{ namespace = "apps"; workload; references = [] }))
   | D.Tls_connectivity r ->
     D.evaluate
       (D.Tls_checked (r, obs D.{ namespace = "apps"; workload; verified = true }))
@@ -125,8 +130,12 @@ let decide run request evidence =
          (r, obs D.{ database = "ledger"; key = "POSTGRES_URL"; nonempty = true }))
 ;;
 
-let record_all t run =
-  let o = obligations run in
+let record_all ?selected t run =
+  let o =
+    match selected with
+    | None -> obligations run
+    | Some o -> o
+  in
   let requests = List.map D.plan (D.instances o) in
   let verdicts =
     List.map
@@ -147,7 +156,7 @@ let record_all t run =
 
 let seal_all t run =
   let o, requests, verdicts = record_all t run in
-  E.seal t ~obligations:o ~requests ~verdicts |> get
+  E.seal ~captures:[] t ~obligations:o ~requests ~verdicts |> get
 ;;
 
 let test_restart () =
@@ -191,6 +200,7 @@ let test_restart () =
     (* An observation alone is not a verdict; do not invent one on continuation. *)
     rejects
       (E.seal
+         ~captures:[]
          t
          ~obligations:(obligations run)
          ~requests:(List.map D.plan (D.instances (obligations run)))
@@ -204,6 +214,7 @@ let test_restart () =
     ignore (begin_run t);
     rejects
       (E.seal
+         ~captures:[]
          t
          ~obligations:(obligations run)
          ~requests:(List.map D.plan (D.instances (obligations run)))
@@ -223,12 +234,18 @@ let test_manifest () =
     let t = open_store directory run in
     ignore (begin_run t);
     let o, requests, verdicts = record_all t run in
-    rejects (E.seal t ~obligations:o ~requests ~verdicts:(List.tl verdicts));
-    rejects (E.seal t ~obligations:o ~requests:(List.tl requests) ~verdicts);
-    let manifest = E.seal t ~obligations:o ~requests ~verdicts |> get in
+    rejects (E.seal ~captures:[] t ~obligations:o ~requests ~verdicts:(List.tl verdicts));
+    rejects (E.seal ~captures:[] t ~obligations:o ~requests:(List.tl requests) ~verdicts);
+    let manifest = E.seal ~captures:[] t ~obligations:o ~requests ~verdicts |> get in
     E.close t;
     let summary =
-      E.verify_manifest ~directory ~run ~obligations:(obligations run) manifest |> get
+      E.verify_manifest
+        ~required_captures:[]
+        ~directory
+        ~run
+        ~obligations:(obligations run)
+        manifest
+      |> get
     in
     Alcotest.(check bool) "verified mechanism pass" true summary.passed;
     let foreign =
@@ -243,6 +260,7 @@ let test_manifest () =
     in
     rejects
       (E.verify_manifest
+         ~required_captures:[]
          ~directory
          ~run:foreign
          ~obligations:(obligations foreign)
@@ -258,10 +276,12 @@ let test_reassessment () =
     E.close t;
     let second = run ~assessment:"a2" () in
     let t = open_store directory second in
-    rejects (E.start_assessment t ~reason:"" ~previous:[ a1 ]);
-    rejects (E.start_assessment t ~reason:"new attempt" ~previous:[]);
+    rejects (E.start_assessment ~required_captures:[] t ~reason:"" ~previous:[ a1 ]);
+    rejects
+      (E.start_assessment ~required_captures:[] t ~reason:"new attempt" ~previous:[]);
     ignore
       (E.start_assessment
+         ~required_captures:[]
          t
          ~reason:"new assessment preserves earlier proof"
          ~previous:[ a1 ]
@@ -281,20 +301,35 @@ let test_reassessment () =
            E.record_verdict t v ~observations:[ e ] |> get)
         requests
     in
-    let failed = E.seal t ~obligations:o ~requests ~verdicts |> get in
+    let failed = E.seal ~captures:[] t ~obligations:o ~requests ~verdicts |> get in
     E.close t;
     rejects
-      (E.verify_manifest ~directory ~run:second ~obligations:(obligations second) passed);
+      (E.verify_manifest
+         ~required_captures:[]
+         ~directory
+         ~run:second
+         ~obligations:(obligations second)
+         passed);
     Alcotest.(check bool)
       "explicit failed assessment"
       false
-      (E.verify_manifest ~directory ~run:second ~obligations:(obligations second) failed
+      (E.verify_manifest
+         ~required_captures:[]
+         ~directory
+         ~run:second
+         ~obligations:(obligations second)
+         failed
        |> get)
         .passed;
     Alcotest.(check bool)
       "historical pass preserved, never selected as current"
       true
-      (E.verify_manifest ~directory ~run:first ~obligations:(obligations first) passed
+      (E.verify_manifest
+         ~required_captures:[]
+         ~directory
+         ~run:first
+         ~obligations:(obligations first)
+         passed
        |> get)
         .passed)
 ;;
@@ -304,7 +339,12 @@ let test_conflicts () =
     let run = run () in
     let t = open_store directory run in
     ignore (begin_run t);
-    rejects (E.start_assessment t ~reason:"silently replace assessment" ~previous:[]);
+    rejects
+      (E.start_assessment
+         ~required_captures:[]
+         t
+         ~reason:"silently replace assessment"
+         ~previous:[]);
     let request = List.hd (D.instances (obligations run)) |> D.plan in
     let i = D.requested request in
     let e = E.capture t ~subject:(subject i) ~payload:(`String "first read") |> get in
@@ -325,7 +365,7 @@ let test_corruption () =
          let t = open_store directory run in
          ignore (begin_run t);
          let o, requests, verdicts = record_all t run in
-         let manifest = E.seal t ~obligations:o ~requests ~verdicts |> get in
+         let manifest = E.seal ~captures:[] t ~obligations:o ~requests ~verdicts |> get in
          E.close t;
          let path =
            Filename.concat
@@ -336,9 +376,19 @@ let test_corruption () =
          then Unix.unlink path
          else Out_channel.with_open_bin path (fun c -> output_string c "corrupt");
          rejects
-           (E.verify_manifest ~directory ~run ~obligations:(obligations run) manifest);
+           (E.verify_manifest
+              ~required_captures:[]
+              ~directory
+              ~run
+              ~obligations:(obligations run)
+              manifest);
          let t = open_store directory run in
-         rejects (E.start_assessment t ~reason:"initial offline fixture" ~previous:[]);
+         rejects
+           (E.start_assessment
+              ~required_captures:[]
+              t
+              ~reason:"initial offline fixture"
+              ~previous:[]);
          E.close t))
     [ false; true ]
 ;;
@@ -355,6 +405,7 @@ let test_wrong_binding () =
          rejects (E.open_store ~directory ~run:foreign ~secrets:[] ());
          rejects
            (E.verify_manifest
+              ~required_captures:[]
               ~directory
               ~run:foreign
               ~obligations:(obligations foreign)
@@ -371,12 +422,18 @@ let test_complete_unsealed_restart () =
     E.close t;
     let t = open_store directory r in
     ignore (begin_run t);
-    let manifest = E.seal t ~obligations:o ~requests ~verdicts |> get in
+    let manifest = E.seal ~captures:[] t ~obligations:o ~requests ~verdicts |> get in
     E.close t;
     Alcotest.(check bool)
       "complete decisions require explicit finalization"
       true
-      (E.verify_manifest ~directory ~run:r ~obligations:(obligations r) manifest |> get)
+      (E.verify_manifest
+         ~required_captures:[]
+         ~directory
+         ~run:r
+         ~obligations:(obligations r)
+         manifest
+       |> get)
         .passed)
 ;;
 
@@ -398,7 +455,7 @@ let test_transitive_corruption () =
     in
     let path = Filename.concat (Filename.concat directory "members") (E.digest dep) in
     Out_channel.with_open_bin path (fun c -> output_string c "corrupt observation");
-    rejects (E.seal t ~obligations:o ~requests ~verdicts);
+    rejects (E.seal ~captures:[] t ~obligations:o ~requests ~verdicts);
     E.close t)
 ;;
 
@@ -431,7 +488,7 @@ let test_crashes () =
                   ignore (begin_run t);
                   armed := true;
                   if manifest_target
-                  then ignore (E.seal t ~obligations:o ~requests ~verdicts)
+                  then ignore (E.seal ~captures:[] t ~obligations:o ~requests ~verdicts)
                   else
                     ignore
                       (E.capture t ~subject:"w1" ~payload:(`String "partial capture"));
@@ -446,6 +503,7 @@ let test_crashes () =
                 then
                   rejects
                     (E.seal
+                       ~captures:[]
                        t
                        ~obligations:o
                        ~requests:(List.map D.plan (D.instances o))
@@ -473,6 +531,7 @@ let test_crashes () =
                          "recovered manifest closure verified"
                          true
                          (E.verify_manifest
+                            ~required_captures:[]
                             ~directory
                             ~run:r
                             ~obligations:(obligations r)
@@ -591,7 +650,7 @@ let test_forged_subset_manifest () =
     let t = open_store directory r in
     ignore (begin_run t);
     let o, requests, verdicts = record_all t r in
-    let manifest = E.seal t ~obligations:o ~requests ~verdicts |> get in
+    let manifest = E.seal ~captures:[] t ~obligations:o ~requests ~verdicts |> get in
     E.close t;
     let path ref = Filename.concat (Filename.concat directory "members") (E.digest ref) in
     let victim = List.hd verdicts in
@@ -636,7 +695,9 @@ let test_forged_subset_manifest () =
     let ch = Unix.out_channel_of_descr fd in
     output_string ch bytes;
     close_out ch;
-    match E.verify_manifest ~directory ~run:r ~obligations:o forged with
+    match
+      E.verify_manifest ~required_captures:[] ~directory ~run:r ~obligations:o forged
+    with
     | Ok _ -> Alcotest.fail "self-consistent subset qualified"
     | Error e ->
       Alcotest.(check string)
@@ -656,7 +717,7 @@ let test_detached_verdict_evidence () =
          let unrelated =
            E.capture t ~subject:"unrelated" ~payload:(`String "unrelated") |> get
          in
-         let manifest = E.seal t ~obligations:o ~requests ~verdicts |> get in
+         let manifest = E.seal ~captures:[] t ~obligations:o ~requests ~verdicts |> get in
          E.close t;
          let path ref =
            Filename.concat (Filename.concat directory "members") (E.digest ref)
@@ -719,7 +780,14 @@ let test_detached_verdict_evidence () =
          let forged_manifest =
            rewrite "manifest" (replace_field "dependencies" (`List deps) body)
          in
-         match E.verify_manifest ~directory ~run:r ~obligations:o forged_manifest with
+         match
+           E.verify_manifest
+             ~required_captures:[]
+             ~directory
+             ~run:r
+             ~obligations:o
+             forged_manifest
+         with
          | Ok _ -> Alcotest.fail "unsupported verdict qualified"
          | Error e ->
            Alcotest.(check string)
@@ -744,7 +812,12 @@ let test_persistence_failure () =
     armed := false;
     let o = obligations r in
     rejects
-      (E.seal t ~obligations:o ~requests:(List.map D.plan (D.instances o)) ~verdicts:[]);
+      (E.seal
+         ~captures:[]
+         t
+         ~obligations:o
+         ~requests:(List.map D.plan (D.instances o))
+         ~verdicts:[]);
     (* A storage error does not destroy the handle; recovery diagnostics can still
      be committed when storage recovers. It does not retroactively create proof. *)
     ignore (E.diagnostic t "capture failed; no qualification verdict exists" |> get);
@@ -762,8 +835,238 @@ let test_failure_after_complete_decisions () =
     armed := true;
     rejects (E.diagnostic t "required capture failed");
     armed := false;
-    rejects (E.seal t ~obligations:o ~requests ~verdicts);
+    rejects (E.seal ~captures:[] t ~obligations:o ~requests ~verdicts);
     E.close t)
+;;
+
+let test_durable_requirement_identity () =
+  temp (fun directory ->
+    let r = run () in
+    let t = open_store directory r in
+    ignore (begin_run t);
+    let rec alter = function
+      | `Assoc fields ->
+        `Assoc
+          (List.map
+             (fun (k, v) ->
+                ( k
+                , if k = "administrative_secret"
+                  then
+                    `Assoc [ "namespace", `String "other"; "name", `String "other-admin" ]
+                  else alter v ))
+             fields)
+      | `List xs -> `List (List.map alter xs)
+      | v -> v
+    in
+    let selected =
+      D.select r (D.Fixture.intent (alter (Yojson.Safe.from_file "intent.json")) |> domain)
+      |> domain
+    in
+    let altered = D.bind_obligations r D.Aws selected |> domain in
+    let _, requests, verdicts = record_all ~selected:altered t r in
+    let expected = obligations r in
+    let expected_requests = List.map D.plan (D.instances expected) in
+    (* All keys and run IDs match; these PASS verdicts establish another binding. *)
+    (match
+       E.seal t ~obligations:expected ~requests:expected_requests ~verdicts ~captures:[]
+     with
+     | Ok _ -> Alcotest.fail "different bindings qualified through persistence"
+     | Error e ->
+       Alcotest.(check string)
+         "persisted semantics checked"
+         "verdict requirement identity mismatch"
+         e.diagnostic);
+    let manifest =
+      E.seal t ~obligations:altered ~requests ~verdicts ~captures:[] |> get
+    in
+    E.close t;
+    (* Make its obligation snapshot original while retaining the mismatched verdicts.
+       Hashing the changed envelope cannot make those verdicts prove original intent. *)
+    let path reference =
+      Filename.concat (Filename.concat directory "members") (E.digest reference)
+    in
+    let json = Yojson.Safe.from_file (path manifest) in
+    let rec replace = function
+      | `Assoc xs ->
+        `Assoc
+          (List.map
+             (fun (k, v) ->
+                k, if k = "obligations" then D.obligations_json expected else replace v)
+             xs)
+      | v -> v
+    in
+    let bytes = D.canonical_json (replace json) |> domain in
+    let forged =
+      E.reference_of_json
+        (`Assoc
+            [ "digest", `String (D.sha256 bytes)
+            ; "size", `Int (String.length bytes)
+            ; "kind", `String "manifest"
+            ])
+      |> get
+    in
+    let fd =
+      Unix.openfile (path forged) [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] 0o600
+    in
+    let ch = Unix.out_channel_of_descr fd in
+    output_string ch bytes;
+    close_out ch;
+    match
+      E.verify_manifest
+        ~directory
+        ~run:r
+        ~obligations:expected
+        ~required_captures:[]
+        forged
+    with
+    | Ok _ -> Alcotest.fail "recovery ignored requirement identity"
+    | Error e ->
+      Alcotest.(check string)
+        "recovered semantics checked"
+        "verdict requirement identity mismatch"
+        e.diagnostic)
+;;
+
+let test_failed_capture_restart () =
+  List.iter
+    (fun required ->
+       temp (fun directory ->
+         let r = run () in
+         let spec =
+           if required then [ "independent-inventory", "fixture-cluster" ] else []
+         in
+         let start t =
+           E.start_assessment
+             t
+             ~reason:"required capture recovery"
+             ~previous:[]
+             ~required_captures:spec
+           |> get
+         in
+         let t = open_store directory r in
+         ignore (start t);
+         let o, requests, verdicts = record_all t r in
+         E.close t;
+         let pid = Unix.fork () in
+         if pid = 0
+         then (
+           try
+             let armed = ref false in
+             let fault boundary =
+               if !armed && boundary = E.Temp_written
+               then raise (Sys_error "required capture cannot persist")
+             in
+             let t = open_store ~fault directory r in
+             ignore (start t);
+             armed := true;
+             let result =
+               if required
+               then
+                 E.capture_required
+                   t
+                   ~id:"independent-inventory"
+                   ~subject:"fixture-cluster"
+                   ~payload:(`String "successful inventory")
+               else
+                 E.capture
+                   t
+                   ~subject:"extra-diagnostic"
+                   ~payload:(`String "optional diagnostic")
+             in
+             (* Exit before any failure diagnostic can be persisted. *)
+             match result with
+             | Error _ -> Unix._exit 97
+             | Ok _ -> Unix._exit 96
+           with
+           | _ -> Unix._exit 95)
+         else (
+           child_failed_expected pid;
+           let t = open_store directory r in
+           if required
+           then
+             rejects
+               (E.start_assessment
+                  t
+                  ~reason:"required capture recovery"
+                  ~previous:[]
+                  ~required_captures:[]);
+           ignore (start t);
+           let resumed = E.seal t ~obligations:o ~requests ~verdicts ~captures:[] in
+           if required
+           then (
+             (match resumed with
+              | Ok _ -> Alcotest.fail "required capture disappeared across restart"
+              | Error e ->
+                Alcotest.(check string)
+                  "durable missing capture"
+                  "required capture coverage incomplete or duplicated"
+                  e.diagnostic);
+             let optional =
+               E.capture
+                 t
+                 ~subject:"fixture-cluster"
+                 ~payload:(`String "not a declared slot")
+               |> get
+             in
+             rejects (E.seal t ~obligations:o ~requests ~verdicts ~captures:[ optional ]);
+             rejects
+               (E.capture_required
+                  t
+                  ~id:"independent-inventory"
+                  ~subject:"other-cluster"
+                  ~payload:`Null);
+             let capture =
+               E.capture_required
+                 t
+                 ~id:"independent-inventory"
+                 ~subject:"fixture-cluster"
+                 ~payload:(`String "recaptured inventory")
+               |> get
+             in
+             rejects
+               (E.seal
+                  t
+                  ~obligations:o
+                  ~requests
+                  ~verdicts
+                  ~captures:[ capture; capture ]);
+             let manifest =
+               E.seal t ~obligations:o ~requests ~verdicts ~captures:[ capture ] |> get
+             in
+             E.close t;
+             rejects
+               (E.verify_manifest
+                  ~directory
+                  ~run:r
+                  ~obligations:o
+                  ~required_captures:[]
+                  manifest);
+             Alcotest.(check bool)
+               "recapture restores completeness"
+               true
+               (E.verify_manifest
+                  ~directory
+                  ~run:r
+                  ~obligations:o
+                  ~required_captures:spec
+                  manifest
+                |> get)
+                 .passed)
+           else (
+             let manifest = resumed |> get in
+             E.close t;
+             Alcotest.(check bool)
+               "unrequired diagnostic is not an obligation"
+               true
+               (E.verify_manifest
+                  ~directory
+                  ~run:r
+                  ~obligations:o
+                  ~required_captures:[]
+                  manifest
+                |> get)
+                 .passed))))
+    [ true; false ]
 ;;
 
 let () =
@@ -784,6 +1087,9 @@ let () =
           ; "self-consistent manifest subset", test_forged_subset_manifest
           ; "detached verdict evidence", test_detached_verdict_evidence
           ; "persistence failure remains operational", test_persistence_failure
+          ; ( "failed capture restart distinguishes required slots"
+            , test_failed_capture_restart )
+          ; "durable requirement identity", test_durable_requirement_identity
           ; "complete decisions without seal", test_complete_unsealed_restart
           ; "transitive observation corruption", test_transitive_corruption
           ; ( "capture failure after complete decisions"

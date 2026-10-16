@@ -213,6 +213,79 @@ let references json =
   | _ -> fail "integrity" "missing dependency list"
 ;;
 
+(* Required capture slots are assessment inputs, not inferred from successful
+   captures. They survive a failed write because the assessment commits first. *)
+let capture_spec_json spec =
+  let keys = List.map fst spec in
+  if
+    List.exists
+      (fun (id, subject) -> String.trim id = "" || String.trim subject = "")
+      spec
+  then fail "coverage" "empty required capture identity"
+  else
+    let* () =
+      match reconcile_keys ~expected:keys ~actual:keys with
+      | Ok () -> Ok ()
+      | Error e -> fail "coverage" e
+    in
+    Ok
+      (`List
+          (List.sort compare spec
+           |> List.map (fun (id, subject) ->
+             `Assoc [ "id", `String id; "subject", `String subject ])))
+;;
+
+let capture_spec assessment =
+  match field "payload" assessment with
+  | Some payload ->
+    (match field "required_captures" payload with
+     | Some (`List xs) ->
+       let rec parse acc = function
+         | [] ->
+           let* _ = capture_spec_json acc in
+           Ok (List.rev acc)
+         | x :: xs ->
+           (match string "id" x, string "subject" x with
+            | Some id, Some subject -> parse ((id, subject) :: acc) xs
+            | _ -> fail "coverage" "invalid required capture specification")
+       in
+       parse [] xs
+     | _ -> fail "coverage" "missing required capture specification")
+  | None -> fail "coverage" "missing assessment definition"
+;;
+
+let reconcile_captures directory assessment captures =
+  let* expected = capture_spec assessment in
+  let rec read acc = function
+    | [] -> Ok acc
+    | r :: rs ->
+      let* json = load directory r in
+      if
+        r.kind <> "observation"
+        || not
+             (field_is "run" json (Option.value ~default:`Null (field "run" assessment)))
+      then fail "coverage" "required capture assessment mismatch"
+      else (
+        match field "payload" json with
+        | Some p ->
+          (match string "capture_id" p, string "subject" p with
+           | Some id, Some subject -> read ((id, subject) :: acc) rs
+           | _ -> fail "coverage" "missing required capture identity")
+        | None -> fail "coverage" "missing capture payload")
+  in
+  let* actual = read [] captures in
+  let* () =
+    match
+      reconcile_keys ~expected:(List.map fst expected) ~actual:(List.map fst actual)
+    with
+    | Ok () -> Ok ()
+    | Error _ -> fail "coverage" "required capture coverage incomplete or duplicated"
+  in
+  if List.sort compare expected = List.sort compare actual
+  then Ok ()
+  else fail "coverage" "required capture subject mismatch"
+;;
+
 (* Structural receipt validation belongs here, shared by commit and recovery.
    Requirement/subject semantics remain exclusively in the pure evaluator. *)
 let validate_receipt directory json deps =
@@ -244,6 +317,7 @@ let validate_receipt directory json deps =
   in
   match string "kind" json with
   | Some "assessment" ->
+    let* _ = capture_spec json in
     if supports <> [] then invalid "invalid assessment history dependency" else Ok ()
   | Some "observation" | Some "diagnostic" ->
     let* () = one_assessment () in
@@ -279,8 +353,13 @@ let validate_receipt directory json deps =
         | _ -> invalid "malformed verdict payload"))
   | Some "manifest" ->
     let* () = one_assessment () in
-    if List.for_all (fun r -> r.kind = "verdict") supports
-    then Ok ()
+    if List.for_all (fun r -> r.kind = "verdict" || r.kind = "observation") supports
+    then
+      let* assessment = load directory (List.hd assessments) in
+      reconcile_captures
+        directory
+        assessment
+        (List.filter (fun r -> r.kind = "observation") supports)
     else invalid "invalid manifest dependency"
   | _ -> invalid "unknown receipt kind"
 ;;
@@ -526,7 +605,7 @@ let assessments t =
 
 let same_assessment t json = field_is "run" json (run_json t.run)
 
-let start_assessment t ~reason ~previous =
+let start_assessment t ~reason ~previous ~required_captures =
   let* () = assert_open t in
   if String.trim reason = ""
   then fail "assessment" "reassessment needs explicit reason"
@@ -543,7 +622,10 @@ let start_assessment t ~reason ~previous =
       | Error s -> fail "assessment" s
     in
     let previous = List.sort (fun a b -> String.compare a.digest b.digest) previous in
-    let payload = sanitize t.secrets (`Assoc [ "reason", `String reason ]) in
+    let* spec = capture_spec_json required_captures in
+    let payload =
+      sanitize t.secrets (`Assoc [ "reason", `String reason; "required_captures", spec ])
+    in
     if
       List.length current > 1
       || List.exists
@@ -572,6 +654,20 @@ let capture t ~subject ~payload =
   then fail "capture" "missing observation subject"
   else
     commit t "observation" [ a ] (`Assoc [ "subject", `String subject; "facts", payload ])
+;;
+
+let capture_required t ~id ~subject ~payload =
+  let* a = active t in
+  let* assessment = load t.directory a in
+  let* expected = capture_spec assessment in
+  if not (List.mem (id, subject) expected)
+  then fail "capture" "undeclared required capture or wrong subject"
+  else
+    commit
+      t
+      "observation"
+      [ a ]
+      (`Assoc [ "capture_id", `String id; "subject", `String subject; "facts", payload ])
 ;;
 
 let diagnostic t text =
@@ -619,7 +715,31 @@ let verdicts_for t refs =
   loop [] refs
 ;;
 
-let seal t ~obligations ~requests ~verdicts =
+let reconcile_verdict_instances obligations bodies =
+  let expected = instances obligations in
+  let* () =
+    match
+      reconcile_keys
+        ~expected:(List.map instance_key expected)
+        ~actual:(List.filter_map (string "instance") bodies)
+    with
+    | Ok () -> Ok ()
+    | Error e -> fail "coverage" e
+  in
+  if
+    List.for_all
+      (fun payload ->
+         List.exists
+           (fun i ->
+              string "instance" payload = Some (instance_key i)
+              && string "requirement" payload = Some (instance_identity i))
+           expected)
+      bodies
+  then Ok ()
+  else fail "coverage" "verdict requirement identity mismatch"
+;;
+
+let seal t ~obligations ~requests ~verdicts ~captures =
   let* a = active t in
   let* () =
     match t.failed with
@@ -632,17 +752,10 @@ let seal t ~obligations ~requests ~verdicts =
     | Ok () -> Ok ()
     | Error e -> fail "coverage" e
   in
+  let* assessment = load t.directory a in
+  let* () = reconcile_captures t.directory assessment captures in
   let* bodies = verdicts_for t verdicts in
-  let keys = List.filter_map (string "instance") bodies in
-  let* () =
-    match
-      reconcile_keys
-        ~expected:(List.map instance_key (instances obligations))
-        ~actual:keys
-    with
-    | Ok () -> Ok ()
-    | Error e -> fail "coverage" e
-  in
+  let* () = reconcile_verdict_instances obligations bodies in
   if not (field_is "run" (obligations_json obligations) (run_json t.run))
   then fail "coverage" "wrong obligation run"
   else
@@ -660,11 +773,11 @@ let seal t ~obligations ~requests ~verdicts =
     commit
       t
       "manifest"
-      (a :: verdicts)
+      ((a :: verdicts) @ captures)
       (`Assoc [ "obligations", obligations_json obligations; "passed", `Bool passed ])
 ;;
 
-let verify_manifest ~directory ~run ~obligations reference =
+let verify_manifest ~directory ~run ~obligations ~required_captures reference =
   protect [] "verify" (fun () ->
     let* binding_bytes = canon (binding run) in
     if read_file (Filename.concat directory "binding.json") <> binding_bytes
@@ -676,6 +789,18 @@ let verify_manifest ~directory ~run ~obligations reference =
       then fail "verify" "explicit assessment/manifest mismatch"
       else
         let* deps = references json in
+        let* expected_spec = capture_spec_json required_captures in
+        let* () =
+          match List.find_opt (fun r -> r.kind = "assessment") deps with
+          | None -> fail "verify" "missing assessment"
+          | Some assessment ->
+            let* assessment = load directory assessment in
+            let* spec = capture_spec assessment in
+            let* actual_spec = capture_spec_json spec in
+            if equal_json expected_spec actual_spec
+            then Ok ()
+            else fail "verify" "required capture specification mismatch"
+        in
         let rec bodies acc = function
           | [] -> Ok acc
           | r :: rs ->
@@ -687,7 +812,7 @@ let verify_manifest ~directory ~run ~obligations reference =
               match field "payload" j with
               | Some p -> bodies (p :: acc) rs
               | None -> fail "verify" "missing verdict")
-            else if r.kind = "assessment"
+            else if r.kind = "assessment" || r.kind = "observation"
             then bodies acc rs
             else fail "verify" "invalid manifest dependency"
         in
@@ -710,27 +835,10 @@ let verify_manifest ~directory ~run ~obligations reference =
               "verify"
               "sealed obligations disagree with independently bound policy/selection"
         in
-        let expected =
-          match field "required" policy with
-          | Some (`List xs) ->
-            List.filter_map
-              (function
-                | `String s -> Some s
-                | _ -> None)
-              xs
-          | _ -> []
-        in
         let* () =
-          if expected = [] || not (field_is "run" policy (run_json run))
-          then fail "verify" "missing/misbound obligation set"
-          else (
-            match
-              reconcile_keys
-                ~expected
-                ~actual:(List.filter_map (string "instance") bodies)
-            with
-            | Ok () -> Ok ()
-            | Error e -> fail "verify" e)
+          if not (field_is "run" policy (run_json run))
+          then fail "verify" "misbound obligation set"
+          else reconcile_verdict_instances obligations bodies
         in
         let passed = List.for_all (fun j -> string "decision" j = Some "PASS") bodies in
         if field "passed" payload <> Some (`Bool passed)

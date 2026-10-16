@@ -72,19 +72,34 @@ current-assessment outcome; `verify_manifest` takes independently bound obligati
 and verifies the explicit assessment,
 candidate/specimen binding, every dependency and the selected decisions.
 Receipt validation checks dependency kinds, same-assessment provenance and exact
-verdict-evidence correspondence during both commit and recovery. The evaluator
-alone owns requirement/subject matching. It never
+verdict-evidence correspondence during both commit and recovery. Persisted verdicts also retain the domain owner's full requirement identity
+(run/contract, kind/subject and workload/database bindings); sealing and recovery
+compare it against independently bound obligations, rather than only string keys.
+The evaluator alone owns observation-to-requirement matching. It never
 searches for a green result or trusts a manifest's self-declared reduced universe.
 `read_capture` returns verified persisted facts for
 independent typed decoding; it does not compare facts against a requirement.
 
 Open with `open_store ~directory ~run ~secrets ()`, explicitly select an assessment
-with `start_assessment ~reason ~previous`, capture safe projections, record evaluated
+with `start_assessment ~reason ~previous ~required_captures`, capture safe projections, record evaluated
 fixture verdicts with their actual observation references, then seal. A new assessment
 must cite all previous assessment roots and an explicit reason. Old bytes remain
 unchanged. A conflicting decision in an assessment is rejected; a later failed
 assessment cannot select an old PASS. Published data are reverified/re-synced on
 read/recovery; temporary/unreferenced observations do not become decisions.
+
+Additional required captures are declared as (ID, subject) slots in the immutable
+assessment definition **before** observations. `capture_required` fills a declared
+slot; `seal ~captures` and manifest recovery reconcile every slot exactly once.
+The verifier independently receives the same capture specification. A restart
+cannot remove a slot or replace it with an unlabelled or wrong-subject observation.
+A failed required capture must be recaptured after recovery before sealing, even
+if every database verdict was already PASS. Optional diagnostics are not evidence
+obligations: once a new process verifies the complete required graph, a lost optional
+diagnostic does not invalidate it. There is no durable claim that the failed process
+itself succeeded. The caller owns which captures are required; successful captures
+do not define the universe. This is a fixture assessment input, not another policy
+catalog or workflow-state store.
 
 The error result contains a stage and safe diagnostic, never a fake receipt.
 Persistence failure taints the current session against final success. The recorder
@@ -109,6 +124,19 @@ writer/decision conflicts, I/O errors and secret-bearing subprocess
 stdout/stderr/Kubernetes projections. All files, including temporaries, are scanned
 for injected credential values. Process-kill tests do not simulate a disk/controller
 that lies about `fsync`; acknowledged filesystem durability remains an assumption.
+
+## Evidence trust boundary
+
+The local evidence producer, qualification executable and operating-system account
+are trusted. Private files and a single-writer lock protect against accidental misuse
+and cooperating writers; SHA-256 and dependency validation detect incomplete writes,
+corruption, conflicting records and incorrectly scoped receipts. Content addressing
+does **not** authenticate the producer or prove that observed facts are truthful.
+An actor able to replace the store and binding metadata can build an internally
+consistent fabricated graph. This format is not an authentication protocol for
+untrusted uploads. A future release consumer of remotely supplied evidence would
+need a separately reviewed producer-authentication boundary; I2 adds no signatures
+or remote service.
 
 ## Out of scope
 

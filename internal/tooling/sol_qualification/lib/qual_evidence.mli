@@ -56,9 +56,20 @@ val start_assessment
   :  t
   -> reason:string
   -> previous:reference list
+  -> required_captures:(string * string) list
   -> (reference, error) result
 
 val capture : t -> subject:string -> payload:Yojson.Safe.t -> (reference, error) result
+
+(** A separately required capture slot must be declared before any observations.
+    The pair is (capture ID, subject); missing slots block seal after restart. *)
+val capture_required
+  :  t
+  -> id:string
+  -> subject:string
+  -> payload:Yojson.Safe.t
+  -> (reference, error) result
+
 val diagnostic : t -> string -> (reference, error) result
 
 val record_verdict
@@ -72,12 +83,14 @@ val seal
   -> obligations:Qual_domain.obligations
   -> requests:Qual_domain.request list
   -> verdicts:reference list
+  -> captures:reference list
   -> (reference, error) result
 
 val verify_manifest
   :  directory:string
   -> run:Qual_domain.run
   -> obligations:Qual_domain.obligations
+  -> required_captures:(string * string) list
   -> reference
   -> (summary, error) result
 
