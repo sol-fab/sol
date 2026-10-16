@@ -14,3 +14,4 @@ local/a1/database/no-master/w3
 local/a1/database/no-master/w4
 local/a1/database/no-master/w5
 local/a1/database/migration/ledger
+local/a1/database/migration-ca/ledger

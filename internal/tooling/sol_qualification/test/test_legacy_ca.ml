@@ -196,6 +196,13 @@ let intent provider =
           [ `Assoc
               [ "id", `String "app_db"
               ; "ca_configmap", `String (R.ca_configmap_name (identity provider).target)
+              ; ( "migration"
+                , `Assoc
+                    [ "namespace", `String (R.database_namespace (identity provider))
+                    ; "container", `String M.migration_container_name
+                    ; ( "configmap"
+                      , `String (R.ca_configmap_name (identity provider).target) )
+                    ] )
               ; ( "administrative_secret"
                 , `Assoc
                     [ "namespace", `String (R.database_namespace (identity provider))
@@ -703,6 +710,8 @@ let run_i3 dir provider test =
          let transport q =
            let resource =
              match q.K.resource with
+             | K.Job ->
+               Alcotest.fail "application comparison unexpectedly requested migration Job"
              | K.Deployment -> "deploy"
              | K.Configmap -> "configmap"
            in

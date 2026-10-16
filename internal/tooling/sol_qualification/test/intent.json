@@ -6,6 +6,11 @@
       "administrative_secret": {
         "namespace": "database-system",
         "name": "ledger-admin"
+      },
+      "migration": {
+        "namespace": "database-system",
+        "container": "migrate",
+        "configmap": "declared-ledger-ca"
       }
     }
   ],

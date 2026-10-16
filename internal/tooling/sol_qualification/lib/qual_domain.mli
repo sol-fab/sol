@@ -44,7 +44,7 @@ type ca_container =
   ; mounts : ca_mount list
   }
 
-type deployment =
+type pod_template =
   { namespace : string
   ; name : string
   ; uid : string
@@ -62,7 +62,19 @@ type ca_configmap =
   }
 
 type ca_facts =
-  { deployment : deployment kube_read
+  { deployment : pod_template kube_read
+  ; configmap : ca_configmap kube_read
+  }
+
+type job_identity =
+  { namespace : string
+  ; name : string
+  ; uid : string
+  }
+
+type migration_ca_facts =
+  { execution : job_identity kube_read
+  ; job : pod_template kube_read
   ; configmap : ca_configmap kube_read
   }
 
@@ -83,6 +95,7 @@ type kind =
   | No_master
   | Tls
   | Migration
+  | Migration_ca
 
 type owner =
   | Legacy_matrix of string
@@ -99,6 +112,7 @@ val bind_obligations : run -> scenario -> selection -> (obligations, string) res
 val instances : obligations -> instance list
 val applicability : obligations -> (string * string) list
 val instance_key : instance -> string
+val instance_run : instance -> run
 val instance_kind : instance -> kind
 val instance_identity : instance -> string
 val obligations_json : obligations -> Yojson.Safe.t
@@ -108,6 +122,7 @@ type dml_requirement
 type no_master_requirement
 type tls_requirement
 type migration_requirement
+type migration_ca_requirement
 
 type request =
   | Ca_delivery of ca_requirement
@@ -115,6 +130,7 @@ type request =
   | No_master_copy of no_master_requirement
   | Tls_connectivity of tls_requirement
   | Migration_input of migration_requirement
+  | Migration_ca_delivery of migration_ca_requirement
 
 type ca_binding = private
   { instance : instance
@@ -129,8 +145,23 @@ type ca_binding = private
   ; target : kube_target
   }
 
+type migration_ca_binding = private
+  { instance : instance
+  ; run : run
+  ; subject : string
+  ; namespace : string
+  ; container : string
+  ; configmap : string
+  ; ca_key : string
+  ; ca_path : string
+  ; target : kube_target
+  }
+
 val ca_binding : ca_requirement -> ca_binding
+val migration_ca_binding : migration_ca_requirement -> migration_ca_binding
 val kube_target_json : kube_target -> Yojson.Safe.t
+val read_context_json : read_context -> Yojson.Safe.t
+val read_context_of_json : Yojson.Safe.t -> (read_context, string) result
 val canonical_path : absolute:bool -> string -> bool
 val plan : instance -> request
 val requested : request -> instance
@@ -183,6 +214,7 @@ type recorded_check =
   | No_master_checked of no_master_requirement * unit_secret_facts observation
   | Tls_checked of tls_requirement * tls_facts observation
   | Migration_checked of migration_requirement * migration_facts observation
+  | Migration_ca_checked of migration_ca_requirement * migration_ca_facts observation
 
 type decision =
   | Pass
