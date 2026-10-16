@@ -185,6 +185,8 @@ let test_release_deletes_only_label_matched_workloads_with_the_recorded_uid () =
     Sol_cli_report.collect (fun () ->
       Sol_cli_workload_scope.release_workloads
         ~run
+          (* The namespace exists, so the release path under test is the namespaced one. *)
+        ~namespace_probe:(fun _ -> Sol_cli_workload_scope.Namespace_exists)
         ~delete:(fun ~namespace:_ ~names ->
           deleted := !deleted @ names;
           Ok ())

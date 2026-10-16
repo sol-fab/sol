@@ -357,8 +357,42 @@ esac
 set -eu
 printf 'kubectl %s\n' "$*" >>"$LIFECYCLE_LOG"
 [ "$KUBECONFIG" != /ambient/forbidden ] || exit 93
+case "$*" in
+  "auth can-i get namespaces")
+    # The authorizer's own answer about the RBAC grant, which Sol asks for before it trusts an
+    # absence read. An identity whose namespace view is namespace-scoped answers no here.
+    printf 'yes\n'
+    exit 0
+    ;;
+  "get namespace kube-system "*)
+    # Every cluster has kube-system. Sol validates a namespace view before it trusts an
+    # absence from it, so the fake has to answer this the way a real cluster does even while
+    # the destroy models the target's own namespaces going away.
+    printf 'namespace/kube-system\n'
+    exit 0
+    ;;
+esac
+
 if [ "${DESTROYING:-}" = 1 ]; then
-  case "$*" in "get namespace "*) exit 1 ;; esac
+  case "$*" in
+    "get namespace "*)
+      # Destroy asks whether a namespace exists, from the cluster-scoped object. Kubernetes
+      # answers a namespace that is not there with NotFound, and a refusal with Forbidden;
+      # Sol tells those apart, so this fake must too. A namespace that owns one of the seeded
+      # workloads exists (WORKSPACE_PODS models a cluster that still runs them); the platform
+      # namespaces the fake does not model are gone, which is what the platform absence
+      # verification reads.
+      destroyed_namespace="$(name_arg "$@")"
+      if awk -F'\t' -v ns="$destroyed_namespace" '
+           $0 !~ /^#/ && NF == 4 && $2 == ns { found = 1 }
+           END { exit(found ? 0 : 1) }' "$owned_seed"; then
+        printf 'namespace/%s\n' "$destroyed_namespace"
+        exit 0
+      fi
+      printf 'Error from server (NotFound): namespaces "%s" not found\n' "$destroyed_namespace" >&2
+      exit 1
+      ;;
+  esac
 fi
 if [ "${AUTH_ABSENT:-}" = 1 ]; then
   case "$*" in "auth can-i "*) exit 94 ;; esac

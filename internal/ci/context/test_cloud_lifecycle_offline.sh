@@ -1250,19 +1250,43 @@ fi
 gcp_access_log="$tmp/gcp-access-failure.log"
 rm -f "$GCP_SQL_PREPARED_FILE" "$GKE_PREPARED_FILE" "$FAIL_MARKER_DIR/access" \
   "$FAIL_MARKER_DIR/bootstrap-window"
-if ! (cd "$tmp/work" && FAIL_ON=access DESTROYING=1 LIFECYCLE_LOG="$gcp_access_log" \
-        "$sol" destroy prod/gcp/us-central1 --apply) \
+# The release's existence observation asks for cluster access before teardown does, so the
+# injected one-shot get-credentials failure lands there: the destroy must refuse (it cannot
+# establish whether the declared namespaces exist, and it does not fall back to a weaker read),
+# report what it could not establish, and leave the target standing. A re-run then proceeds,
+# because a transient access failure is recoverable by re-running, and the window (modelled
+# open) is closed by an apply.
+if (cd "$tmp/work" && FAIL_ON=access WINDOW_OPEN=1 DESTROYING=1 LIFECYCLE_LOG="$gcp_access_log" \
+      "$sol" destroy prod/gcp/us-central1 --apply) \
     >"$gcp_access_log.out" 2>&1
 then
   cat "$gcp_access_log.out" >&2
-  echo "GCP destroy failed despite verifying substrate absence" >&2
+  echo "a destroy whose namespace existence could not be established claimed success:" >&2
   exit 1
 fi
-grep -F 'bootstrap window could not be observed before teardown' "$gcp_access_log.out" >/dev/null || {
-  echo "the cluster access failure was not reported as unobservable before teardown:" >&2
+grep -F 'establishing whether the namespace exists failed' "$gcp_access_log.out" >/dev/null || {
+  echo "the cluster access failure was not reported as the unestablished existence read:" >&2
   cat "$gcp_access_log.out" >&2
   exit 1
 }
+grep -F -- '--accept-unreleased' "$gcp_access_log.out" >/dev/null || {
+  echo "a refused release did not leave the operator the documented override:" >&2
+  cat "$gcp_access_log.out" >&2
+  exit 1
+}
+if grep -F 'reached verified absence' "$gcp_access_log.out" >/dev/null; then
+  echo "a destroy that destroyed nothing claimed verified absence:" >&2
+  cat "$gcp_access_log.out" >&2
+  exit 1
+fi
+if ! (cd "$tmp/work" && WINDOW_OPEN=1 DESTROYING=1 LIFECYCLE_LOG="$gcp_access_log" \
+        "$sol" destroy prod/gcp/us-central1 --apply) \
+    >>"$gcp_access_log.out" 2>&1
+then
+  cat "$gcp_access_log.out" >&2
+  echo "a re-run after a transient access failure did not converge (FND-0077):" >&2
+  exit 1
+fi
 grep -F 'reached verified absence' "$gcp_access_log.out" >/dev/null || {
   echo "GCP teardown succeeded without proving substrate absence:" >&2
   cat "$gcp_access_log.out" >&2
@@ -1273,7 +1297,10 @@ grep -F 'could not establish ephemeral cluster access' "$gcp_access_log.out" >/d
   cat "$gcp_access_log.out" >&2
   exit 1
 }
-access_line="$(grep -nF 'get-credentials' "$gcp_access_log" | tail -1 | cut -d: -f1 || true)"
+# Anchored on the *first* ask for cluster access, which is the one the injected failure hits.
+# Later asks (the release's namespace view, the platform teardown, the de-escalation probe) are
+# expected and make the last ask an unstable anchor.
+access_line="$(grep -nF 'get-credentials' "$gcp_access_log" | head -1 | cut -d: -f1 || true)"
 close_plan_line="$(grep -nE -- '-chdir=[^ ]*cloud/gcp/cluster plan ' "$gcp_access_log" \
   | grep -F -- 'provisioner_bootstrap_admin=false' | tail -1 | cut -d: -f1 || true)"
 if [ -z "$access_line" ] || [ -z "$close_plan_line" ] || [ "$close_plan_line" -le "$access_line" ]; then
