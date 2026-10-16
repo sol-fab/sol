@@ -446,6 +446,24 @@ case " $* " in
     printf 'secret/redpanda-users created\n'
     exit 0
     ;;
+  # The database CA mount (#1481): the app phase reads the declared ConfigMap at each consuming
+  # namespace, then reads a workload to see it mounted. `-o yaml` distinguishes the workload read
+  # from the cold-start name read below; each flag models the failure the assertion must catch.
+  *" get deploy -n "*" -o yaml "*)
+    if [ "${STUB_CA_UNMOUNTED:-0}" != "1" ]; then
+      printf 'volumes:\n  - name: db-ca\n    configMap:\n      name: %s-db-ca\n' \
+        "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}"
+    fi
+    exit 0
+    ;;
+  *" get configmap "*"-db-ca"*)
+    if [ "${STUB_CA_ABSENT:-0}" = "1" ]; then
+      printf 'Error from server (NotFound): configmaps "%s-db-ca" not found\n' \
+        "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}" >&2
+      exit 1
+    fi
+    exit 0
+    ;;
   # The cold-start boundary (#1473): the phase reads the cluster for a workload that moved or a
   # release that was recorded before the immutable artifacts existed. The default is "nothing
   # there" (the deploy refused before it established the workload namespaces); each flag models
@@ -899,6 +917,25 @@ has "the supplied keys are recorded without their values" \
 has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
   "database_delivery: qualreg-aws-us-east-1-ddl-creds@pluto-comms (migration Job, as the deploy declared it), qualreg-aws-us-east-1-dml-creds@pluto-payments (unit consumer)" \
   "$TMP/ok.logs/prerequisites.txt"
+has "and the database CA is asserted at each consuming namespace (#1481)" \
+  "database_ca: qualreg-aws-us-east-1-db-ca present at every consuming namespace" \
+  "$TMP/ok.logs/prerequisites.txt"
+has "with the declared ConfigMap read from a consuming namespace" \
+  "get configmap qualreg-aws-us-east-1-db-ca -n pluto-payments" "$TMP/ok.kubectl"
+has "and with a workload read to see it mounted" \
+  "get deploy -n pluto-payments -o yaml" "$TMP/ok.kubectl"
+
+printf '\nscenario: a database CA the deploy declared but did not write to the consumer is caught (#1481)\n'
+run_row caabsent TRANSPORT=0 STUB_CA_ABSENT=1
+refused caabsent "a CA absent from a consuming namespace fails the app phase"
+has "and names the namespace where it is missing" \
+  "where the workloads read it" "$TMP/caabsent.out"
+
+printf '\nscenario: a workload that does not mount the declared database CA is caught (#1481)\n'
+run_row caunmounted TRANSPORT=0 STUB_CA_UNMOUNTED=1
+refused caunmounted "a workload with no CA mount fails the app phase"
+has "and names the CA it did not mount" \
+  "mounts the declared CA ConfigMap" "$TMP/caunmounted.out"
 has "the run identity records the bundle version" \
   "sol_version: $VERSION" "$TMP/ok.logs/sol-identity.txt"
 has "and the bundle's digest-pinned migration runner" \

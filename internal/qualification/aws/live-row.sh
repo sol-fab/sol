@@ -887,12 +887,38 @@ app_verify_database_delivery() {
     say "$consumer still carries POSTGRES_URL; the unit is not reading the class Secret"
     return 1
   fi
+  # The CA is a **mount**, read from the workload's own namespace, not a value routed like the
+  # class Secret. The deploy declares the ConfigMap name (`sol-database-identity … ca-configmap=`);
+  # require it at every consuming namespace and at the declared location, and require each
+  # consuming workload to reference it — a CA written only beside the migration Job leaves the pod
+  # in ContainerCreating and the rollout unfinishable (#1481).
+  local ca
+  ca="$(app_database_field ca-configmap)"
+  if [ -z "$ca" ]; then
+    say "the deploy declared no ca-configmap, so the database CA mount cannot be verified"
+    return 1
+  fi
+  for namespace in $(app_namespaces) "$declared_ns"; do
+    if ! kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get configmap "$ca" -n "$namespace" \
+      >/dev/null 2>&1; then
+      say "the deploy declared CA ConfigMap $ca and it is absent from $namespace, where the workloads read it"
+      return 1
+    fi
+  done
+  for namespace in $(app_namespaces); do
+    if ! kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get deploy -n "$namespace" -o yaml 2>/dev/null \
+      | grep -q "$ca"; then
+      say "no workload in $namespace mounts the declared CA ConfigMap $ca"
+      return 1
+    fi
+  done
   {
     printf 'database_delivery: %s@%s (migration Job, as the deploy declared it), %s@%s (unit consumer)\n' \
       "$ddl_name" "$declared_ns" "$name-dml-creds" "$dml"
     printf 'database_delivery_assertion: the consumer unit Secret carries no POSTGRES_URL\n'
+    printf 'database_ca: %s present at every consuming namespace and the declared location, and mounted by every consuming workload\n' "$ca"
   } >>"$LOG_DIR/prerequisites.txt"
-  say "the deploy delivered the database as $name-ddl-creds / $name-dml-creds; the consumer's unit Secret carries no master copy"
+  say "the deploy delivered the database as $name-ddl-creds / $name-dml-creds and the CA $ca to every consuming namespace; the consumer's unit Secret carries no master copy"
 }
 
 phase_app() {
