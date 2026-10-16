@@ -87,6 +87,14 @@ Instead, separate the two questions and the two methods:
 State which one a verification is, so the next person does not rediscover the refusal and reach for
 weakening the check.
 
+## Typed qualification consolidation
+
+The [accepted architecture](architecture.md) and [implementation plan](implementation-plan.md)
+separate the merged offline MECHANISM core from future observer, policy and live-adoption
+work. The implementation is documented in the
+[qualification core package](../tooling/sol_qualification/sol_qualification.md).
+Existing live entry points and matrices retain their current authority.
+
 ## Current executable surfaces
 
 - `local/local-qual.sh` plus `rows-ocaml.sh` / `rows-ts.sh` — integrated local behavioral
