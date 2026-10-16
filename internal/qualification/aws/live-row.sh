@@ -810,11 +810,18 @@ app_push_images() {
 # the repositories; `cloud` publishes them once the environment is reconciled, and every later
 # deploy names them (the cold-target ordering, issue #1413).
 app_image_ref_args() {
-  local ref args=""
+  local ref args="" file="$LOG_DIR/app-image-refs.txt"
+  # A cold deploy has no published digest yet, so the file legitimately does not exist and the
+  # argument list is empty; testing for it keeps an intended empty result from printing a shell
+  # error into the run log and reading like a failure.
+  [ -f "$file" ] || {
+    printf '%s' ""
+    return 0
+  }
   while IFS= read -r ref; do
     [ -n "$ref" ] || continue
     args="$args --image-ref $(printf '%q' "$ref")"
-  done <"$LOG_DIR/app-image-refs.txt"
+  done <"$file"
   printf '%s' "$args"
 }
 
