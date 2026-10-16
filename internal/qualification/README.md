@@ -90,8 +90,9 @@ weakening the check.
 ## Current executable surfaces
 
 - `runner/` — opt-in OCaml database CA contract prototype with an independent
-  Kubernetes observer and bounded command evidence; see its README for scope and
-  offline checks. It does not replace the live entry points or promote release claims.
+  Kubernetes observer and bounded command evidence; its README records a known CA-key
+  mismatch, scope and offline checks. The linked ownership proposal is for review
+  before implementation expands. It does not replace live entry points or promote claims.
 - `local/local-qual.sh` plus `rows-ocaml.sh` / `rows-ts.sh` — integrated local behavioral
   evidence. Local evidence never promotes a provider claim.
 - `aws/live-row.sh` — AWS lifecycle/application qualification; its `verify` phase runs

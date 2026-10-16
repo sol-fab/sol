@@ -5,6 +5,17 @@ can make the cloud harnesses easier to maintain. It implements one representativ
 contract: database CA ConfigMap delivery and Deployment volume references. The live
 AWS/GCP entry points continue to own their existing phases and assertions.
 
+The next deliverable is the [qualification ownership proposal](architecture-proposal.md),
+for review before extending this implementation or migrating a harness. PR #1487
+remains draft.
+
+**Known contract mismatch:** this prototype checks `ca.crt`, but Sol's database
+contract declares `ca.pem`. Its offline fixtures repeated the wrong premise.
+The executable's mechanism tests do not establish agreement with the product
+contract, and it must not replace a live assertion in its current form. The
+proposal identifies the owning declaration and the correction required before
+adoption. This design revision does not change the executable.
+
 ## Boundaries
 
 `database_ca.ml` defines the claim and an `Observer` module interface. The observer
@@ -46,7 +57,8 @@ eval "$(opam env)"
 dune build internal/qualification/runner/main.exe
 ```
 
-An operator can run the read-only contract against a previously deployed specimen:
+The invocation shape below illustrates the read-only prototype. The known key
+mismatch above must be corrected before using its verdict against a live specimen:
 
 ```sh
 dune exec internal/qualification/runner/main.exe -- \
@@ -103,14 +115,10 @@ explicit observation interface, per-claim accounting and reusable command eviden
 it does not yet demonstrate a net reduction in the complete harness. Do not build a
 generic workflow engine or rewrite both providers on that evidence alone.
 
-The next bounded migration should feed the existing AWS consumer selection into this
-contract and run the old and new assertions against the same offline harness fixtures.
-Preserve all existing hostile cases and explain deliberate strengthening (nonempty CA
-data is stricter than the current existence-only check). Once equivalence and improved
-failure accounting are demonstrated, replace the old assertion. Then adapt GCP using
-the same contract and its own kubeconfig. The live alpha.37 driver and publisher/destroy
-identity work (#1485) do not need to change for this prototype.
-
-Only after that adoption should the runner own common failure capture/finalization.
-Keep independent provider absence observers intact and keep mutation/teardown policy
-out of this first read-only experiment.
+Review the authoritative interface model first: complete selection, contract inputs,
+observation facts, execution identity, evidence provenance and lifecycle supervision.
+The proposal gives ownership boundaries, a dependency graph and the migration sequence.
+Fixture comparison remains a migration check after that review, rather than the next
+architectural deliverable. The live alpha.37 driver and publisher/destroy identity
+work (#1485) remain independent. Keep the current harnesses and provider absence
+observers unchanged during this design review.
