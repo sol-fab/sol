@@ -114,7 +114,10 @@ command's output.
 6. The five IAM roles created by the operator from that root's generated policy documents
    (`terraform output -raw <name>_policy_json`), each used on its own session — the publisher
    on a session used by nothing else. Sol owns the policy contracts, never the role
-   lifecycle.
+   lifecycle. The harness is given the publisher's ARN as `PUBLISHER_ROLE_ARN` and assumes
+   that role itself: publication never runs on the operator's ambient credentials, and the
+   phases that publish refuse rather than fall back when the ARN is absent or the session
+   cannot be assumed (`internal/qualification/aws/live-row.sh`).
 7. The qualification transport role (a name the harness is given, never a target field).
 8. A target file `examples/pluto/sol/environments.local.yml` copied from
    `aws-target.example.yml` with real values. It is untracked by design, so the record
@@ -186,11 +189,14 @@ the Secret with the run's generated or operator-supplied `sol-workloads` SCRAM c
 the supplied input, and re-run the same deploy to resume. Before publishing, read the cluster to
 establish the cold-start boundary itself: no Deployment in `pluto-payments`/`pluto-comms` and no
 `sol.dev/type=release` ConfigMap — an unreadable namespace is UNKNOWN, never absence. Then publish
-the images `prepare` built into the repositories Sol created, `docker inspect` each for its digest,
+the images `prepare` built into the repositories Sol created **as the publisher identity**: the
+harness assumes `PUBLISHER_ROLE_ARN` on its own session, records the identity that session answers
+with in `publisher-identity.txt`, and refuses to publish at all when the ARN is absent or the
+session cannot be assumed. `docker inspect` each image for its digest,
 and preview the whole target with `sol plan <target> --var-file <tfvars> --image-ref
 <unit>=<repo>@sha256:<digest>`; build the deploy/access/operator kubeconfigs; capture nodes and the
 cluster root state. Evidence: `cloud-apply.log`, `cloud-apply-resume.log`,
-`platform-credential.log`, `cold-start-*.err`, `cloud-plan.log`,
+`platform-credential.log`, `cold-start-*.err`, `cloud-plan.log`, `publisher-identity.txt`,
 `ecr-sol-repositories-before.txt`, `ecr-sol-repositories-after.txt`, `prerequisites.txt`,
 `k8s-nodes.txt`, `state/cloud.tfstate`, and the verbatim `lifecycle phase:` line per invocation.
 Rows: I1, I2, I4, A, F1, F2.
@@ -217,9 +223,15 @@ visible to the service — never broker progress (DEC-039 §5). Both paths decid
 Textual substring matching cannot establish success, so an empty or malformed response cannot
 be read as the worker's effect.
 
-**`destroy`** — capture both roots' state with `terraform state pull` into the bundle, run
-`sol destroy <target> --apply`, then the independent inventory. **`verify`** runs the
-inventory alone. Rows: I3, I5, I7–I9, H6.
+**`destroy`** — select the Kubernetes destination explicitly (`destroy_kube_destination`): the
+attempt's own deploy kubeconfig when the declared cluster is readable and that kubeconfig
+addresses its current endpoint, an empty config when the provider positively answers the
+cluster is absent, and a recorded `blocked` when the cluster cannot be read or reached — so
+a fresh session's shell never decides, and a stale same-named context can never aim the
+release at another cluster. Then capture both roots' state with `terraform state pull` into
+the bundle, run `sol destroy <target> --apply`, then the independent inventory. Evidence:
+`destroy-kubeconfig.txt` (the classification), `cloud-destroy.log`, the inventory files.
+**`verify`** runs the inventory alone. Rows: I3, I5, I7–I9, H6.
 
 ### VERIF-021 — managed secret projection and the fenced grant (alpha E4, E6)
 
@@ -286,7 +298,12 @@ lands, E5 is `BLOCKED` — recorded as blocked, never weakened.
 
 1. `terraform state pull` for both the cluster and platform roots into the evidence bundle
    **before** any teardown (ledger rule 4).
-2. `sol destroy <target> --apply`; capture every `lifecycle phase:` line and the
+2. `sol destroy <target> --apply`, run from a fresh session as well as a continued one: the
+   phase selects the destination itself (this attempt's kubeconfig, or none) and records in
+   `destroy-kubeconfig.txt` whether the workload release was `attempted`, `skipped` because the
+   cluster is positively absent, or `blocked` because the cluster could not be read or reached —
+   an unreadable cluster or an unreachable API is UNKNOWN there, never a skipped release.
+   Capture every `lifecycle phase:` line and the
    terraform argv (I7's `-var` order, I8's targeted preparation, I9's `Destroying` → `Absent`).
 3. Independent inventory (`absence.py`, read-only), tri-state `PRESENT` / `ABSENT` / `UNKNOWN`,
    over EKS clusters, RDS instances, subnet groups and snapshots, EC2 instances, VPCs, NAT gateways,
