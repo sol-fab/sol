@@ -69,7 +69,7 @@ let unserved_manifest_resources ~served ~chdir =
   | Error error -> Error (Sol_cli_process.error_to_string error)
 ;;
 
-let absent env =
+let platform_namespaces =
   [ "cert-manager"
   ; "ingress-nginx"
   ; "argocd"
@@ -77,8 +77,66 @@ let absent env =
   ; Sol_cli_manifest.monitoring_namespace
   ; "postgresql"
   ]
-  |> List.for_all (fun namespace ->
-    not (Sol_cli_cluster.process_ok ~env [ "kubectl"; "get"; "namespace"; namespace ]))
+;;
+
+(* One platform namespace's state, from an explicit classification of the read rather than from
+   its exit status:
+
+     - PRESENT: the read succeeded and named the namespace.
+     - ABSENT: the API server answered NotFound, which is a positive observation that the
+       namespace object is not there.
+     - UNKNOWN: anything else -- refused, unauthorized, timed out, unreachable, unlaunchable, or
+       a successful read that did not name the namespace. A failed read is not absence.
+
+   This verification runs after the platform destroy and its answer is what lets the destroy
+   claim absence, so reading an unreadable namespace as a namespace that is gone is a false
+   success (sol-fab/sol#1497). Kubernetes evaluates RBAC for the resource before object lookup,
+   so an identity without a grant in the namespace answers Forbidden; only NotFound establishes
+   that nothing is there. *)
+type namespace_state =
+  | Namespace_present
+  | Namespace_absent
+  | Namespace_unknown of string
+
+let namespace_state ~env namespace =
+  let args = [ "kubectl"; "get"; "namespace"; namespace; "-o"; "name" ] in
+  match Sol_cli_process.run (Sol_cli_process.cmd ~env args) with
+  | Error error ->
+    (match Sol_cli_kubectl.classify error with
+     | Sol_cli_kubectl.Not_found -> Namespace_absent
+     | _ -> Namespace_unknown (Sol_cli_process.error_to_string error))
+  | Ok (answered : Sol_cli_process.output) ->
+    let printed = String.trim answered.stdout in
+    let expected = Printf.sprintf "namespace/%s" namespace in
+    if String.equal printed expected
+    then Namespace_present
+    else
+      Namespace_unknown
+        (Printf.sprintf "the read answered %S rather than %S" printed expected)
+;;
+
+let verify_absent ~env =
+  let rec go = function
+    | [] -> Ok ()
+    | namespace :: rest ->
+      (match namespace_state ~env namespace with
+       | Namespace_absent -> go rest
+       | Namespace_present ->
+         Error (Printf.sprintf "namespace %s is still there" namespace)
+       | Namespace_unknown reason ->
+         Error
+           (Printf.sprintf
+              "whether namespace %s is gone could not be established: %s"
+              namespace
+              reason))
+  in
+  go platform_namespaces
+;;
+
+let absent env =
+  match verify_absent ~env with
+  | Ok () -> true
+  | Error _ -> false
 ;;
 
 let terraform_outcome = Sol_cli_terraform_steps.terraform_outcome
@@ -87,9 +145,11 @@ let destroy ~run_log ~env ~chdir ~vars =
   let destroy_once () = Sol_cli_terraform.destroy ~env ~chdir ~var_files:[] ~vars () in
   let destroy = Sol_cli_run_log.run_phase run_log ~name:"platform-destroy" destroy_once in
   let verify_absent () =
-    if not (absent env)
-    then Error "platform absence verification failed after destroy"
-    else Ok ()
+    match verify_absent ~env with
+    | Ok () -> Ok ()
+    | Error reason ->
+      Error
+        (Printf.sprintf "platform absence verification failed after destroy: %s" reason)
   in
   match destroy with
   | Ok _ -> verify_absent ()
