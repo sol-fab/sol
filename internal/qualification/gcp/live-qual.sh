@@ -380,6 +380,12 @@ INVENTORY_CLASSES=(
   "dns-zone|present"
 )
 
+# The release teardown policy this document is eligible under. The promotion
+# gate loads `internal/tooling/release/teardown-policy.v1.json`; a document
+# naming another policy is not promotion-eligible. Keep this value in sync with
+# that file; `internal/ci/test_teardown_policy.py` guards the class universe.
+TEARDOWN_POLICY_NAME="sol-teardown-v1"
+
 inventory_expectation() {
   local wanted="$1" entry
   for entry in "${INVENTORY_CLASSES[@]}"; do
@@ -993,6 +999,116 @@ inventory_reconcile() {
   return "$rc"
 }
 
+# Project the rows `verify_absent` already decided into one durable, candidate-
+# bound document. This is a projection, not a second decision: the states and
+# the overall verdict come from the same `inventory post` result and the same
+# `INVENTORY_CLASSES` table the loop above reads. Promotion verifies this
+# document; it never re-observes the provider.
+write_inventory_verdict() {
+  local rc="$1" json="$LOG_DIR/gcp-inventory-verdict.json" text="$LOG_DIR/gcp-inventory-verdict.txt"
+  local candidate_json="null" caller="" scope="" required="" classes="" rows="$INVENTORY_TSV"
+  local verdict_word
+
+  if [ -n "${SOL_CANDIDATE:-}" ] && [ -f "$SOL_CANDIDATE" ]; then
+    candidate_json="$(jq -c '{version, revision, bundle_sha256, runner_image}' "$SOL_CANDIDATE" 2>/dev/null || printf 'null')"
+    if ! printf '%s' "$candidate_json" | jq -e '
+      (.version | type == "string" and length > 0) and
+      (.revision | test("^[0-9a-f]{40}$")) and
+      (.bundle_sha256 | test("^[0-9a-f]{64}$")) and
+      (.runner_image | test("@sha256:[0-9a-f]{64}$"))
+    ' >/dev/null 2>&1; then
+      say "  ✗ the candidate document does not name the four-field identity; the teardown verdict cannot be promotion-eligible"
+      candidate_json="null"
+      rc=1
+    fi
+  else
+    say "  ✗ the candidate document is not readable; the teardown verdict cannot be promotion-eligible"
+    candidate_json="null"
+    rc=1
+  fi
+
+  caller="$(head -n1 "$LOG_DIR/inventory-scope-caller.log" 2>/dev/null || true)"
+  scope="$(jq -n \
+    --arg cluster "${CLUSTER:-}" \
+    --arg project "${PROJECT:-}" \
+    --arg region "${REGION:-}" \
+    --arg caller "$caller" \
+    --arg state_key "${STATE_KEY:-}" \
+    '{cluster: $cluster, project: $project, region: $region, caller: $caller, state_key: $state_key}')"
+  required="$(for entry in "${INVENTORY_CLASSES[@]}"; do
+    printf '%s\n' "${entry%%|*}"
+  done | jq -R -s 'split("\n") | map(select(length > 0))')"
+
+  if [ ! -f "$rows" ]; then
+    say "  ✗ the post-teardown inventory rows are missing; the teardown verdict records no observations"
+    rows="/dev/null"
+    rc=1
+  fi
+  classes="$(jq -R -s '
+    split("\n") | map(select(length > 0) | split("\t")) |
+    map({
+      class: .[0],
+      state: .[1],
+      expectation: (if .[2] == "scope" then "present" else .[2] end),
+      detail: (.[3] // "")
+    })
+  ' "$rows")"
+
+  if [ "$rc" = "0" ]; then verdict_word="ABSENT"; else verdict_word="NOT ABSENT"; fi
+  if ! jq -n \
+    --argjson schema 1 \
+    --arg policy "$TEARDOWN_POLICY_NAME" \
+    --arg provider gcp \
+    --argjson candidate "$candidate_json" \
+    --arg attempt "${ATTEMPT:-}" \
+    --arg target "${TARGET:-}" \
+    --argjson scope "$scope" \
+    --argjson required_classes "$required" \
+    --argjson classes "$classes" \
+    --arg verdict "$verdict_word" \
+    '{
+      schema: $schema,
+      policy: $policy,
+      provider: $provider,
+      candidate: $candidate,
+      attempt: $attempt,
+      target: $target,
+      scope: $scope,
+      required_classes: $required_classes,
+      classes: $classes,
+      verdict: $verdict
+    }' >"$json"; then
+    say "  ✗ the teardown verdict JSON could not be written at $json"
+    return 1
+  fi
+
+  {
+    printf 'attempt=%s\n' "${ATTEMPT:--}"
+    printf 'target=%s\n' "${TARGET:--}"
+    printf 'state_key=%s\n' "${STATE_KEY:--}"
+    printf 'cluster=%s\n' "${CLUSTER:-}"
+    printf 'project=%s\n' "${PROJECT:-}"
+    printf 'region=%s\n' "${REGION:-}"
+    printf 'caller=%s\n' "${caller:--}"
+    printf 'provider=gcp\n'
+    printf 'policy=%s\n' "$TEARDOWN_POLICY_NAME"
+    while IFS=$'\t' read -r class verdict expect detail; do
+      [ -n "$class" ] || continue
+      printf '%s: %s (%s)\n' "$class" "$verdict" "${detail:-no detail}"
+    done <"$rows"
+    printf 'verdict: %s\n' "$verdict_word"
+  } >"$text" || {
+    say "  ✗ the teardown verdict text could not be written at $text"
+    return 1
+  }
+  # A candidate/rows failure is a failure of the teardown verdict too: the
+  # artifact is written for diagnosis, but the run must not report success.
+  if [ "$rc" != "0" ]; then
+    return 1
+  fi
+  return 0
+}
+
 verify_absent() {
   local rc=0 class verdict expect detail
   if ! inventory post; then
@@ -1016,6 +1132,10 @@ verify_absent() {
         ;;
     esac
   done <"$INVENTORY_TSV"
+  if ! write_inventory_verdict "$rc"; then
+    say "  ✗ the teardown verdict did not establish a promotion-eligible result"
+    rc=1
+  fi
   return "$rc"
 }
 
@@ -1097,6 +1217,7 @@ bundle_manifest() {
     printf 'terraform state (durable) . %s\n' "$(artifact_status "$LOG_DIR/state/durable.tfstate")"
     printf 'inventory (pre-teardown) .. %s\n' "$(artifact_status "$LOG_DIR/inventory-pre.tsv")"
     printf 'inventory (post-teardown) . %s\n' "$(artifact_status "$LOG_DIR/inventory-post.tsv")"
+    printf 'teardown verdict .......... %s\n' "$(artifact_status "$LOG_DIR/gcp-inventory-verdict.json")"
     printf '\nphase transcripts:\n'
     for f in "$LOG_DIR"/*.log; do [ -e "$f" ] || continue; printf '  %s\n' "$(basename "$f")"; done
   } >"$m"
@@ -1110,7 +1231,7 @@ verify_bundle() {
   # snapshots are evidence, not requirements: no row claims them, and the capture
   # records per object whether the backend held one, held none, or was unreadable.
   local required=( "inventory-pre.tsv" "evidence-manifest.txt" )
-  [ "$TEARDOWN_ATTEMPTED" = "1" ] && required+=( "inventory-post.tsv" )
+  [ "$TEARDOWN_ATTEMPTED" = "1" ] && required+=( "inventory-post.tsv" "gcp-inventory-verdict.json" )
   case "$INSTALL_STATE" in
     failed)    ;;
     succeeded) required+=( "ready-phases.txt" ) ;;

@@ -1459,6 +1459,30 @@ lacks "the durable zone is not passed as disposable intent" "--var=create_dns_zo
 has "the durable zone is explicitly excluded" "--var=create_dns_zone=false" "$TMP/destroy-ok.argv"
 present "$TMP/destroy-ok.logs/inventory-pre.tsv" "the pre-teardown inventory precedes teardown"
 present "$TMP/destroy-ok.logs/inventory-post.tsv" "the post-teardown inventory is captured"
+verdict_json="$TMP/destroy-ok.logs/gcp-inventory-verdict.json"
+present "$verdict_json" "the promotion-verifiable teardown verdict is captured"
+is "the teardown verdict names the gcp provider" "$(jq -r .provider "$verdict_json")" "gcp"
+policy_name="$(sed -n 's/^TEARDOWN_POLICY_NAME="\([^"]*\)"/\1/p' "$HARNESS" | head -1)"
+is "the teardown verdict names the release policy" "$(jq -r .policy "$verdict_json")" "$policy_name"
+is "the teardown verdict names the candidate it observed" "$(jq -r '.candidate.revision' "$verdict_json")" "$CANDIDATE_REVISION"
+is "the teardown verdict binds the attempt" "$(jq -r .attempt "$verdict_json")" "$ATTEMPT"
+is "the teardown verdict binds the target" "$(jq -r .target "$verdict_json")" "$TARGET"
+is "the teardown verdict records the cluster scope" "$(jq -r .scope.cluster "$verdict_json")" "test-cluster"
+is "the teardown verdict states absence" "$(jq -r .verdict "$verdict_json")" "ABSENT"
+declared_verdict="$(sed -n '/^INVENTORY_CLASSES=(/,/^)/p' "$HARNESS" \
+  | sed -n 's/^  "\([^|]*\)|.*/\1/p' | sort)"
+is "the teardown verdict declares the same class universe" \
+  "$(jq -r '.required_classes | sort | join("\n")' "$verdict_json")" "$declared_verdict"
+is "the teardown verdict observes exactly the declared classes" \
+  "$(jq -r '.classes | map(.class) | sort | join("\n")' "$verdict_json")" "$declared_verdict"
+if jq -e 'all(.classes[];
+    (.expectation == "absent" and .state == "ABSENT")
+    or (.expectation == "present" and .state == "PRESENT"))' "$verdict_json" >/dev/null; then
+  ok "every class is in its required terminal state"
+else
+  no "every class is in its required terminal state" "all expectations met" \
+    "$(jq -c '.classes' "$verdict_json" | cut -c1-160)"
+fi
 present "$TMP/destroy-ok.logs/state/cloud.tfstate" "the state snapshot is frozen before teardown (H3)"
 if [ -f "$TARGET_FILE" ]; then no "the target is removed after verified teardown" "removed" "still present"; else ok "the target is removed after verified teardown"; fi
 
@@ -1467,6 +1491,11 @@ run_case destroy-leftover destroy STUB_TARGET_PRESENT=1
 if [ "$(cat "$TMP/destroy-leftover.rc")" = "0" ]; then no "non-zero exit when resources remain" "non-zero" "0"; else ok "non-zero exit when resources remain"; fi
 if [ -f "$TARGET_FILE" ]; then ok "the target is retained when teardown is unverified"; else no "the target is retained when teardown is unverified" "present" "removed"; fi
 has "the leftover names a class the contract requires (artifact registry)" "artifact-registry still exists" "$TMP/destroy-leftover.out"
+verdict_json="$TMP/destroy-leftover.logs/gcp-inventory-verdict.json"
+present "$verdict_json" "the failing teardown also leaves a structured verdict"
+is "the failing structured verdict does not claim absence" "$(jq -r .verdict "$verdict_json")" "NOT ABSENT"
+is "the leftover class is PRESENT in the structured verdict" \
+  "$(jq -r '.classes[] | select(.class == "artifact-registry") | .state' "$verdict_json")" "PRESENT"
 
 printf '\nscenario: apply fails at the platform boundary\n'
 run_case cloud-fail cloud STUB_APPLY_RC=1 STUB_CLUSTER_EXISTS=1 STUB_KUBE_SIGNATURE=dial
@@ -1517,6 +1546,11 @@ for mode in permission transport invalid; do
   else
     no "the target is retained ($mode)" "present" "removed"
   fi
+  verdict_json="$TMP/probe-$mode.logs/gcp-inventory-verdict.json"
+  is "the unreadable class is UNKNOWN in the structured verdict ($mode)" \
+    "$(jq -r '.classes[] | select(.class == "artifact-registry") | .state' "$verdict_json")" "UNKNOWN"
+  is "the structured verdict does not claim absence ($mode)" \
+    "$(jq -r .verdict "$verdict_json")" "NOT ABSENT"
 done
 
 printf '\nscenario: every inventory row is one tab-separated line per declared class\n'
@@ -1549,6 +1583,10 @@ has "it names the class that was never observed" \
   "gke-cluster: the class was not observed" "$TMP/inventory-missing-class.out"
 has "and the verdict says absence was not established" \
   "gke-cluster: could NOT determine absence" "$TMP/inventory-missing-class.out"
+is "the missing class is UNKNOWN in the structured verdict" \
+  "$(jq -r '.classes[] | select(.class == "gke-cluster") | .state' "$TMP/inventory-missing-class.logs/gcp-inventory-verdict.json")" "UNKNOWN"
+is "the incomplete structured verdict does not claim absence" \
+  "$(jq -r .verdict "$TMP/inventory-missing-class.logs/gcp-inventory-verdict.json")" "NOT ABSENT"
 if [ -f "$TARGET_FILE" ]; then
   ok "an incomplete inventory keeps the target for a later destroy"
 else
