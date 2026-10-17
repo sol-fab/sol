@@ -135,10 +135,9 @@
 
 (rule
  (alias runtest)
- (deps ../bin/main.exe)
+ (deps ../bin/main.exe check_dockerfile.sh)
  (action
-  (bash
-   "set -eu\nsol=$(pwd)/%{deps}\ntmp=$(mktemp -d)\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/app/payments/charge_svc\"\ncat > \"$tmp/app/payments/charge_svc/Dockerfile\" <<'EOF'\nFROM scratch\nEOF\ncd \"$tmp\"\ntouch \"$tmp/sol.yml\"\n\"$sol\" check >\"$tmp/ok.out\"\nrm \"$tmp/app/payments/charge_svc/Dockerfile\"\nif \"$sol\" check >\"$tmp/bad.out\" 2>&1; then\n  echo 'sol check unexpectedly passed without Dockerfile' >&2\n  exit 1\nfi\ngrep -F 'Dockerfile is missing' \"$tmp/bad.out\" >/dev/null")))
+  (run bash %{dep:check_dockerfile.sh} %{dep:../bin/main.exe})))
 
 (rule
  (alias runtest)
