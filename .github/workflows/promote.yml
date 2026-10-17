@@ -89,13 +89,19 @@ jobs:
             "$RUNNER_TEMP/candidate/candidate.json"
 
       # The decision is the gate: identity match plus a complete passing AWS and
-      # GCP verdict, each with an independent absence result. A missing, failed,
-      # stale or other-candidate verdict fails here, before anything is published.
+      # GCP verdict, each with a teardown claim whose attached evidence verifies
+      # against the candidate, provider, attempt, target, class states and its own
+      # ABSENT verdict. A missing, failed, stale, other-candidate, unbound,
+      # incomplete or altered evidence file fails here, before anything is
+      # published. `gh release download` fetched every attached asset into this
+      # directory, so a claim that names a file the operator did not attach cannot
+      # pass by naming it.
       - name: Decide promotion eligibility
         run: |
           python3 internal/tooling/release/promotion.py decide \
             --candidate "$RUNNER_TEMP/candidate/candidate.json" \
-            --verdict "$RUNNER_TEMP/candidate/qualification-verdict.json"
+            --verdict "$RUNNER_TEMP/candidate/qualification-verdict.json" \
+            --dir "$RUNNER_TEMP/candidate"
 
       # GitHub rejects a release body over 125000 characters, and the generated
       # changelog carries one entry per merged pull request since the previous
