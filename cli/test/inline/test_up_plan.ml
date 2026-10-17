@@ -314,6 +314,15 @@ let test_local_plan_routes_the_database_credential_like_the_cloud () =
       "the local plan's consumer carries the sanitized stand-in target"
       true
       (charge_svc.Sol_cli_deployment_plan.db_uses_target = Some "ci-smoke");
+    (* The local platform's PostgreSQL is in-cluster (`postgresql`), and the ordinary
+       NetworkPolicy already admits that namespace. The managed-database allowance is for a
+       database the *target* provisions and publishes a destination fact for, so the local
+       shape must not claim it. Asserting the field keeps the egress gate's signal identical
+       to the plan's own ownership signal. *)
+    check_bool
+      "the local plan claims no target-provisioned database for the managed-egress gate"
+      true
+      (charge_svc.Sol_cli_deployment_plan.db_ca_target = None);
     let rendered =
       match
         Sol_cli_deployment_render.render_spec

@@ -2459,7 +2459,44 @@ let test_the_reader_routes_on_the_capability_not_the_key_name () =
       Windtrap.bool
       ~msg:"and mounts no CA the deploy does not publish"
       false
-      (has ("name: " ^ ca) external_charge))
+      (has ("name: " ^ ca) external_charge);
+    (* The managed-database egress gate asks exactly this question: does the unit consume the
+       database the target provisions? Assert [db_ca_target] directly across the plan shapes,
+       so its meaning is not inferred only from the CA mount the renderer happens to build. *)
+    let db_ca_target plan name =
+      (List.find
+         (fun (s : Sol_cli_deployment_plan.service_spec) -> s.source_name = name)
+         plan.Sol_cli_deployment_plan.services)
+        .db_ca_target
+    in
+    let check_target label expected plan name =
+      Windtrap.equal
+        (Windtrap.option Windtrap.string)
+        ~msg:label
+        expected
+        (db_ca_target plan name)
+    in
+    check_target
+      "a Sol-provisioned consumer is the managed-database consumer"
+      (Some "prod-aws-us-east-1")
+      sol
+      "charge_svc";
+    check_target
+      "a unit that declares POSTGRES_URL but not `uses` is not a managed-database \
+       consumer"
+      None
+      sol
+      "declared_only";
+    check_target
+      "a unit with no database dependency is not a managed-database consumer"
+      None
+      sol
+      "plain_svc";
+    check_target
+      "an externally bound consumer is not a managed-database consumer"
+      None
+      external_plan
+      "charge_svc")
 ;;
 
 let%test "2b: the reader routes on the resource, not the key name or the owner" =
