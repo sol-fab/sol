@@ -59,12 +59,11 @@ elif args[:2] == ["auth", "whoami"]:
         sys.exit(1)
     value = world.get("after_whoami", world["whoami"]) if state["auth"] > 1 else world["whoami"]
 elif args[:2] == ["auth", "can-i"]:
-    # The driver requires `yes` for the exact reads it will perform; a test can
-    # model an unestablished read authority by denying it.
-    if world.get("deny_reads"):
-        print("no")
-        sys.exit(0)
-    print("yes")
+    # Collection reads require list. With deny_reads, model get-only authority:
+    # the former get preflight would pass even though the observation cannot.
+    allowed = (args[2] == "list" and not world.get("deny_reads")) or (
+        args[2] == "get" and world.get("deny_reads"))
+    print("yes" if allowed else "no")
     sys.exit(0)
 elif args[:3] == ["get", "namespace", "kube-system"]:
     n = sum(1 for call in state["calls"] if call[:3] == args[:3])

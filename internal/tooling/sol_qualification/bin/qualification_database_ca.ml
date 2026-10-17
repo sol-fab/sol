@@ -154,6 +154,8 @@ let required_reads prepared =
   |> List.sort_uniq compare
 ;;
 
+(* The observer reads collections with a metadata.name selector: Kubernetes
+   authorizes those requests as list, even though kubectl calls them get. *)
 let check_read_authority ~ctx prepared =
   let reads = required_reads prepared in
   List.iter
@@ -162,7 +164,7 @@ let check_read_authority ~ctx prepared =
          Sol_cli_kubectl.run
            ~timeout_s:15.
            ~ctx
-           [ "auth"; "can-i"; "get"; resource; "-n"; namespace ]
+           [ "auth"; "can-i"; "list"; resource; "-n"; namespace ]
        with
        | Ok output when String.trim output.stdout = "yes" -> ()
        | Ok _ ->

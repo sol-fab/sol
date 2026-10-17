@@ -245,15 +245,6 @@ cat >"$TMP/bin/gcloud" <<'STUB'
 case "${1:-} ${2:-}" in
   "auth configure-docker") exit 0 ;;
 esac
-case " $* " in
-  *"config get-value core/account"*)
-    printf '%s\n' "${STUB_GCLOUD_ACCOUNT:-gcp:deployer@example.com}"
-    exit 0 ;;
-  *"config configurations create"* | *"config configurations delete"*)
-    exit 0 ;;
-  *"config set "*)
-    exit 0 ;;
-esac
 if [ "${STUB_DESCRIBE_EMPTY:-0}" = "1" ]; then
   case "$*" in
     *"container clusters describe"*) exit 0 ;;
@@ -444,40 +435,6 @@ case "$*" in
 esac
 case "$*" in
   *"container clusters get-credentials"*)
-    case " $* " in
-      *" --impersonate-service-account "* | *" --configuration "*)
-        if [ -n "${STUB_CA_OBSERVER_GET_CREDENTIALS_RC:-}" ]; then
-          printf 'ERROR: (gcloud.container.clusters.get-credentials) ResponseError: code=403\n' >&2
-          exit "$STUB_CA_OBSERVER_GET_CREDENTIALS_RC"
-        fi
-        kc="${KUBECONFIG:-$HOME/.kube/config}"
-        cat >"$kc" <<YAML
-apiVersion: v1
-kind: Config
-current-context: gke_sol-qualification_us-central1_test-cluster-observer
-clusters:
-  - name: gke_sol-qualification_us-central1_test-cluster-observer
-    cluster:
-      server: https://34.0.0.1
-contexts:
-  - name: gke_sol-qualification_us-central1_test-cluster-observer
-    context:
-      cluster: gke_sol-qualification_us-central1_test-cluster-observer
-      user: sol-ca-observer
-users:
-  - name: sol-ca-observer
-    user:
-      exec:
-        apiVersion: client.authentication.k8s.io/v1beta1
-        command: gke-gcloud-auth-plugin
-        args: []
-        interactiveMode: IfAvailable
-        provideClusterInfo: true
-YAML
-        printf 'kubeconfig entry generated for %s (impersonated).\n' "$CLUSTER"
-        exit 0
-        ;;
-    esac
     if [ -n "${STUB_GET_CREDENTIALS_RC:-}" ]; then
       printf 'ERROR: (gcloud.container.clusters.get-credentials) ResponseError: code=403\n' >&2
       exit "$STUB_GET_CREDENTIALS_RC"
@@ -518,40 +475,6 @@ if [ "${STUB_CLUSTER_EXISTS:-0}" = "1" ]; then
       exit 0 ;;
     *"container clusters describe"*) printf "test-cluster\n"; exit 0 ;;
     *"container clusters get-credentials"*)
-      case " $* " in
-        *" --impersonate-service-account "*)
-          if [ -n "${STUB_CA_OBSERVER_GET_CREDENTIALS_RC:-}" ]; then
-            printf 'ERROR: (gcloud.container.clusters.get-credentials) ResponseError: code=403\n' >&2
-            exit "$STUB_CA_OBSERVER_GET_CREDENTIALS_RC"
-          fi
-          kc="${KUBECONFIG:-$HOME/.kube/config}"
-          cat >"$kc" <<YAML
-apiVersion: v1
-kind: Config
-current-context: gke_sol-qualification_us-central1_test-cluster-observer
-clusters:
-  - name: gke_sol-qualification_us-central1_test-cluster-observer
-    cluster:
-      server: https://34.0.0.1
-contexts:
-  - name: gke_sol-qualification_us-central1_test-cluster-observer
-    context:
-      cluster: gke_sol-qualification_us-central1_test-cluster-observer
-      user: sol-ca-observer
-users:
-  - name: sol-ca-observer
-    user:
-      exec:
-        apiVersion: client.authentication.k8s.io/v1beta1
-        command: gke-gcloud-auth-plugin
-        args: []
-        interactiveMode: IfAvailable
-        provideClusterInfo: true
-YAML
-          printf 'kubeconfig entry generated for %s (impersonated).\n' "$CLUSTER"
-          exit 0
-          ;;
-      esac
       if [ -n "${STUB_GET_CREDENTIALS_RC:-}" ]; then
         printf 'ERROR: (gcloud.container.clusters.get-credentials) ResponseError: code=403\n' >&2
         exit "$STUB_GET_CREDENTIALS_RC"
@@ -632,26 +555,13 @@ case "$*" in
     esac
     exit 0 ;;
   *"get namespace kube-system -o jsonpath"*)
-    printf '%s\n' "${STUB_CA_CLUSTER_UID:-cluster-uid-1}"
+    case " $* " in
+      *ca-observer*) printf '%s\n' "${STUB_CA_OBSERVER_CLUSTER_UID:-${STUB_CA_CLUSTER_UID:-cluster-uid-1}}" ;;
+      *) printf '%s\n' "${STUB_CA_CLUSTER_UID:-cluster-uid-1}" ;;
+    esac
     exit 0 ;;
-  *"config view --minify"*"jsonpath={.contexts[0].context.user}"*)
-    printf 'sol-ca-observer\n'
-    exit 0 ;;
-  *"config view --minify"*"jsonpath={.users[0].user.exec.command}"*)
-    printf 'gke-gcloud-auth-plugin\n'
-    exit 0 ;;
-  *"config view --minify"*"jsonpath={.users[0].user.exec.env"*)
-    cat "${TMP:-/tmp}/ca-observer-config-state" 2>/dev/null || true
-    exit 0 ;;
-  *"config set-credentials "*)
-    for arg in "$@"; do
-      case "$arg" in
-        --exec-env=CLOUDSDK_ACTIVE_CONFIG_NAME=*)
-          printf '%s\n' "${arg#*=CLOUDSDK_ACTIVE_CONFIG_NAME=}" \
-            >"${TMP:-/tmp}/ca-observer-config-state"
-          ;;
-      esac
-    done
+  *"config current-context"*)
+    printf '%s\n' "${STUB_CA_CONTEXT-ca-observer-selected}"
     exit 0 ;;
   *"config view --minify -o jsonpath"*)
     printf '%s\n' "${STUB_CA_ENDPOINT:-https://34.0.0.1}"
@@ -665,12 +575,6 @@ case "$*" in
           esac
         fi
         case " $* " in
-          *"sol-qualifier-unbound"*)
-            if [ "${STUB_CA_OBSERVER_ALLOW_UNBOUND:-0}" = "1" ]; then printf 'yes\n'; else printf 'no\n'; fi
-            ;;
-          *" get deployments.apps "*|*" get configmaps "*|*" get jobs.batch "*)
-            if [ "${STUB_CA_OBSERVER_DENY_READ:-0}" = "1" ]; then printf 'no\n'; else printf 'yes\n'; fi
-            ;;
           *" secrets "*)
             if [ "${STUB_CA_OBSERVER_ALLOW_SECRETS:-0}" = "1" ]; then printf 'yes\n'; else printf 'no\n'; fi
             ;;
@@ -1041,9 +945,8 @@ run_case() {
     IMPERSONATOR=user:test@example.com LE_EMAIL=test@example.com \
     PROJECT=sol-qualification REGION=us-central1 \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" \
-    GCP_CA_OBSERVER_SERVICE_ACCOUNT=sol-ca-observer@sol-qualification.iam.gserviceaccount.com \
     GCP_CA_OBSERVER_PRINCIPAL=gcp:qualifier@sol-qualification.iam.gserviceaccount.com \
-    GCP_CA_OBSERVER_SOURCE_KUBECONFIG= \
+    GCP_CA_OBSERVER_SOURCE_KUBECONFIG="$REPO/internal/qualification/gcp/fixtures/kubeconfig-gcloud-real.yaml" \
     PATH="$TMP/bin:$PATH" "$@" \
     "$harness" "$sub" >"$TMP/$name.out" 2>&1
   echo "$? " >"$TMP/$name.rc"
@@ -1086,9 +989,8 @@ run_case_without_a_phase() {
     IMPERSONATOR=user:test@example.com LE_EMAIL=test@example.com \
     PROJECT=sol-qualification REGION=us-central1 \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" \
-    GCP_CA_OBSERVER_SERVICE_ACCOUNT=sol-ca-observer@sol-qualification.iam.gserviceaccount.com \
     GCP_CA_OBSERVER_PRINCIPAL=gcp:qualifier@sol-qualification.iam.gserviceaccount.com \
-    GCP_CA_OBSERVER_SOURCE_KUBECONFIG= \
+    GCP_CA_OBSERVER_SOURCE_KUBECONFIG="$REPO/internal/qualification/gcp/fixtures/kubeconfig-gcloud-real.yaml" \
     PATH="$TMP/bin:$PATH" "$HARNESS" >"$TMP/no-phase.out" 2>&1
   echo "$? " >"$TMP/no-phase.rc"
   sed -i 's/ //' "$TMP/no-phase.rc"
@@ -1403,15 +1305,14 @@ present "$TMP/app-ok.logs/ca-requirements.json" \
 has "and include the migration namespace read" \
   '"namespace": "pluto-comms", "resource": "jobs.batch"' \
   "$TMP/app-ok.logs/ca-requirements.json"
-has "the observer credential was generated under a private gcloud configuration" \
-  "container clusters get-credentials test-cluster --region us-central1 --project sol-qualification --configuration sol-ca-observer-" \
-  "$TMP/app-ok.argv"
-has "the observer kubeconfig names that configuration for token refresh" \
-  "config set-credentials sol-ca-observer --exec-env=CLOUDSDK_ACTIVE_CONFIG_NAME=sol-ca-observer-" \
-  "$TMP/app-ok.argv"
-has "and the recorded auth mechanism names the impersonated service account" \
-  "auth: gke-gcloud-auth-plugin with gcloud configuration sol-ca-observer-" \
-  "$TMP/app-ok.logs/ca-observer.txt"
+lacks "the harness does not acquire observer credentials" \
+  "--configuration sol-ca-observer-" "$TMP/app-ok.argv"
+lacks "the harness does not rewrite the observer auth plugin" \
+  "config set-credentials" "$TMP/app-ok.argv"
+has "the selected observer context is used without a cluster-name heuristic" \
+  '"context": "ca-observer-selected"' "$TMP/app-ok.logs/ca-request-migration.json"
+has "the recorded auth mechanism names the supplied kubeconfig" \
+  "auth: operator-supplied kubeconfig" "$TMP/app-ok.logs/ca-observer.txt"
 lacks "the harness did not run a second migration outside the shared owner" \
   "migrate apply" "$TMP/app-ok.argv"
 has "the migration request names the gcp scenario" \
@@ -1428,15 +1329,18 @@ has "the deploy authority is recorded for the migration receipt" \
 has "the observer authenticated as the declared principal" \
   "configured_observer_principal: gcp:qualifier@sol-qualification.iam.gserviceaccount.com" \
   "$TMP/app-ok.logs/ca-observer.txt"
-has "the observer is shown to satisfy every obligation-derived read" \
-  "read_authority: every obligation-derived read answered yes" \
+has "the recorded authorization claim names only the bounded sample" \
+  "permission_sample: get/list secrets, create pods/exec, get pods/log, patch deployments/configmaps/jobs and delete jobs denied in candidate-bound namespaces" \
   "$TMP/app-ok.logs/ca-observer.txt"
-has "and wildcard, mutation, Secrets, exec, log and delete are denied" \
-  "forbidden_authority: wildcard, mutation, Secrets, exec, log and delete answered no in every required namespace" \
-  "$TMP/app-ok.logs/ca-observer.txt"
-has "and the unbound namespace is read-denied" \
-  "unbound_namespace: sol-qualifier-unbound (observation reads answered no)" \
-  "$TMP/app-ok.logs/ca-observer.txt"
+lacks "the shell does not duplicate the driver's positive read preflight" \
+  "auth can-i get deployments.apps" "$TMP/app-ok.argv"
+lacks "the harness no longer claims namespace confinement" \
+  "sol-qualifier-unbound" "$TMP/app-ok.argv"
+for permission in "get secrets" "list secrets" "create pods/exec" "get pods/log" \
+  "patch deployments.apps" "patch configmaps" "patch jobs.batch" "delete jobs.batch"; do
+  has "the bounded sample checks $permission" \
+    "auth can-i $permission -n pluto-payments" "$TMP/app-ok.argv"
+done
 has "the requirement set is the candidate-bound obligation set" \
   "requirement_source: candidate-bound obligations" "$TMP/app-ok.logs/ca-observer.txt"
 has "the report is recorded as the CA family authority, not a release acceptance" \
@@ -1533,7 +1437,7 @@ is "the CA phases ran in lifecycle order" \
 
 printf '\nscenario: no independent CA observation identity refuses the app phase\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-no-observer app \
-  GCP_CA_OBSERVER_SERVICE_ACCOUNT=
+  GCP_CA_OBSERVER_SOURCE_KUBECONFIG=
 is "the app phase refuses without an independent observation identity" \
   "$(cat "$TMP/app-ca-no-observer.rc")" "1"
 has "and says the deploy kubeconfig is not a fallback" \
@@ -1560,41 +1464,31 @@ has "and names the observed and configured principals" \
   "not the configured observer gcp:qualifier@sol-qualification.iam.gserviceaccount.com" \
   "$TMP/app-ca-wrong-observer.out"
 
-printf '\nscenario: an observer without the required read refuses the app phase\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-read-denied app \
-  STUB_CA_OBSERVER_DENY_READ=1
-is "the app phase refuses an observer that cannot read the bound resources" \
-  "$(cat "$TMP/app-ca-read-denied.rc")" "1"
-has "and names the unread authority" "cannot perform 'get deployments.apps'" "$TMP/app-ca-read-denied.out"
-
 printf '\nscenario: an observer that can read Secrets refuses the app phase\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-secret-read app \
   STUB_CA_OBSERVER_ALLOW_SECRETS=1
 is "the app phase refuses an observation identity broader than read-only" \
   "$(cat "$TMP/app-ca-secret-read.rc")" "1"
-has "and names the forbidden authority" "read-only observation boundary forbids" \
+has "and names the forbidden authority" "CA observation permission sample forbids" \
   "$TMP/app-ca-secret-read.out"
-
-printf '\nscenario: a wildcard permission on the observer refuses the app phase\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-wildcard app \
-  STUB_CA_OBSERVER_ALLOW='* *'
-is "the app phase refuses a wildcard observer grant" \
-  "$(cat "$TMP/app-ca-wildcard.rc")" "1"
-has "and names the wildcard authority" "holds '* *'" "$TMP/app-ca-wildcard.out"
 
 printf '\nscenario: a representative mutation grant on the observer refuses the app phase\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-mutation app \
-  STUB_CA_OBSERVER_ALLOW='create pods'
+  STUB_CA_OBSERVER_ALLOW='patch deployments.apps'
 is "the app phase refuses a mutation grant" \
   "$(cat "$TMP/app-ca-mutation.rc")" "1"
-has "and names the mutation" "holds 'create pods'" "$TMP/app-ca-mutation.out"
+has "and names the mutation" "holds 'patch deployments.apps'" "$TMP/app-ca-mutation.out"
 
-printf '\nscenario: an observation read in an unbound namespace refuses the app phase\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-unbound app \
-  STUB_CA_OBSERVER_ALLOW_UNBOUND=1
-is "the app phase refuses an observation grant outside the bound namespaces" \
-  "$(cat "$TMP/app-ca-unbound.rc")" "1"
-has "and names the unbound namespace" "sol-qualifier-unbound" "$TMP/app-ca-unbound.out"
+printf '\nscenario: an observer addressing another cluster refuses the app phase\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-foreign-cluster app \
+  STUB_CA_OBSERVER_CLUSTER_UID=other-cluster
+is "the app phase refuses a foreign observer cluster" "$(cat "$TMP/app-ca-foreign-cluster.rc")" "1"
+has "and names the cluster mismatch" "another Kubernetes cluster or endpoint" "$TMP/app-ca-foreign-cluster.out"
+
+printf '\nscenario: no selected observer context refuses the app phase\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-no-context app STUB_CA_CONTEXT=
+is "the app phase refuses an unselected observer context" "$(cat "$TMP/app-ca-no-context.rc")" "1"
+has "and names the missing context" "names no selected context" "$TMP/app-ca-no-context.out"
 
 printf '\nscenario: a CA migration phase failure stops the phase before the final deploy\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-migration-fails app \
@@ -1634,7 +1528,6 @@ is "after both observation phases ran" \
 
 printf '\nscenario: a supplied observer kubeconfig requires a declared principal\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-source-no-principal app \
-  GCP_CA_OBSERVER_SERVICE_ACCOUNT= \
   GCP_CA_OBSERVER_SOURCE_KUBECONFIG="$REPO/internal/qualification/gcp/fixtures/kubeconfig-gcloud-real.yaml" \
   GCP_CA_OBSERVER_PRINCIPAL=
 is "the app phase refuses a supplied kubeconfig without a declared principal" \
@@ -1644,7 +1537,6 @@ has "and says the principal must be declared" \
 
 printf '\nscenario: a supplied observer kubeconfig can authenticate the declared principal\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-source-ok app \
-  GCP_CA_OBSERVER_SERVICE_ACCOUNT= \
   GCP_CA_OBSERVER_SOURCE_KUBECONFIG="$REPO/internal/qualification/gcp/fixtures/kubeconfig-gcloud-real.yaml" \
   GCP_CA_OBSERVER_PRINCIPAL=gcp:qualifier@sol-qualification.iam.gserviceaccount.com \
   STUB_CA_FAIL=report

@@ -53,41 +53,33 @@ MECHANISM-only: it grants neither release-verdict nor live observation authority
 The GCP app phase calls the same `qualification_database_ca` driver at the row's
 `migrate apply` step and after the final deploy, then runs its durable `report`.
 The migration Job is submitted by the deploy identity, while the CA observation
-uses a separate read-only Kubernetes identity. The operator either supplies
-`GCP_CA_OBSERVER_SOURCE_KUBECONFIG` and declares its principal with
-`GCP_CA_OBSERVER_PRINCIPAL`, or names a `GCP_CA_OBSERVER_SERVICE_ACCOUNT` to
-impersonate. In the latter case the harness creates a private gcloud
-configuration, persists it into the generated kubeconfig's
-`gke-gcloud-auth-plugin` exec environment, and verifies the authenticated
-principal. It verifies that the observer authenticated as the declared principal,
-that it differs from the deploy principal, and that both address the same cluster
-UID and endpoint.
+uses a separate operator-established read-only Kubernetes identity. The operator
+supplies `GCP_CA_OBSERVER_SOURCE_KUBECONFIG` with its selected context and declares
+`GCP_CA_OBSERVER_PRINCIPAL`. The harness acquires no credentials; it verifies the
+principal differs from the deploy identity and both address the same cluster UID
+and endpoint. Credential refresh remains the operator's responsibility.
 
-The driver's `requirements` phase exposes the candidate-bound namespace and read
-set. The harness uses exactly that set for its effective-authorization checks:
-every required read must answer yes; wildcard, representative mutation, Secrets,
-exec, log and delete must answer no in every required namespace; and observation
-reads must answer no in an unbound namespace. This is a sample of the effective
-surface, not an exhaustive RBAC audit. It never falls back to the run kubeconfig.
-
-Live assumption: the private-gcloud-configuration binding is verified offline,
-including the authenticated principal, but the first live campaign must also
-confirm that later `gke-gcloud-auth-plugin` token refreshes continue to
-authenticate as the impersonated observer rather than only the initial
-`kubectl auth whoami`.
+The driver's `requirements` phase exposes the candidate-bound namespace/read set.
+The driver checks `list` permission for the collection reads it performs. The
+harness checks eight denials in those namespaces: get/list Secrets, create
+pods/exec, get pods/log, patch Deployments/ConfigMaps/Jobs and delete Jobs. This
+bounded sample does not prove a fully read-only identity or namespace confinement;
+the operator must establish the remaining grants. It never falls back to the run
+kubeconfig. Actual observations and the persisted CA-family report must pass.
 
 The shared launcher validates the submission receipt against the recorded deploy
 authority and the independent observation context against the observer authority;
 they may be different principals but must address the same cluster. The GCP row
 therefore exposes `submission_authority` and `authority` separately, and the
 report requires both to match the phase captures. A missing observer, a shared
-identity, an unreadable resource, a forbidden broad grant, a missing phase capture
+identity, an unreadable resource, a denied sampled permission, a missing phase capture
 or a non-passing report fails the phase. DML/TLS and the other non-CA claims remain
 separate and unestablished.
 
 A suitable published candidate carrying the projection is a prerequisite for **live
 adoption**, not for testing offline machinery. Existing alpha.37 is unsupported and unchanged. The family policy transfer is a prerequisite for
 that family's adoption, not for migrating every unrelated qualification matrix.
+
 
 ## One policy owner per claim family
 

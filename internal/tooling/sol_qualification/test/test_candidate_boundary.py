@@ -553,7 +553,14 @@ class Boundary(fixture.Binding):
                          run["results"]["migration"].stderr)
         self.assertNotEqual(run["results"]["application"].returncode, 0)
 
-    def test_boundary_real_driver_read_authority_denied(self):
+    def test_boundary_real_driver_list_authority_without_get(self):
+        # The fixture allows list and denies get: the actual collection operation
+        # is sufficient, without an unrelated named-object grant.
+        run = self.run_real_driver()
+        self.assertEqual(run["results"]["report"].returncode, 0,
+                         run["results"]["report"].stderr)
+
+    def test_boundary_real_driver_get_without_list_refuses(self):
         run = self.run_real_driver(deny_reads=True)
         self.assertNotEqual(run["results"]["migration"].returncode, 0)
         self.assertIn("cannot read", run["results"]["migration"].stderr)

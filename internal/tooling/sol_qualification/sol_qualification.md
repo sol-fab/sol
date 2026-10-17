@@ -372,14 +372,14 @@ different principals but must name the same cluster UID and endpoint; the phase
 captures record both and the report rejects a capture from either one's
 substitution.
 
-GCP establishes the observer explicitly. With a service account, the harness
-creates a private gcloud configuration, persists it into the generated
-kubeconfig's `gke-gcloud-auth-plugin` exec environment so token refresh retains
-the impersonation, and requires the authenticated principal to equal the declared
-observer; with an operator-supplied kubeconfig, `GCP_CA_OBSERVER_PRINCIPAL` is
-mandatory. The driver's `requirements` phase exposes the candidate-bound namespace
-and read set, which the harness uses for its positive and negative authorization
-checks (wildcard, representative mutation, Secrets, exec, log, delete and an
-unbound namespace). This is a sampled effective-surface check, not an exhaustive
-RBAC audit. There is no fallback to the deploy kubeconfig. A missing observer is
-an unestablished CA family, not a skipped check.
+The operator establishes the GCP observer outside the harness, supplies
+`GCP_CA_OBSERVER_SOURCE_KUBECONFIG` with its selected context, and declares
+`GCP_CA_OBSERVER_PRINCIPAL`. The harness verifies the authenticated principal,
+cluster UID and endpoint; it never acquires credentials or configures gcloud.
+The driver checks `list` permission for its name-filtered collection reads;
+actual reads must succeed too. The `requirements` phase supplies the namespaces
+for eight negative permission probes: get/list Secrets, create pods/exec, get
+pods/log, patch Deployments/ConfigMaps/Jobs and delete Jobs. These are bounded
+safety checks, not proof of a fully read-only identity or namespace confinement.
+The operator owns other grants and credential refresh. There is no fallback to
+the deploy kubeconfig; observer failure leaves the CA family unestablished.
