@@ -70,11 +70,12 @@ printing values.
 
 Deploy and rollback preserve secret values. They verify required unit Secrets
 and the shared platform inputs needed by the operation. For an external key,
-`sol deploy` waits for ESO `SecretSynced`, verifies the materialized key set, then
-verifies workload rollout. ESO sync does not prove that an already-running
-process has loaded a rotated value. Rotate at the external authority, wait for
-ESO, then restart the affected workload with Kubernetes rollout tooling; an
-unchanged `sol deploy` does not restart it.
+`sol deploy` waits for ESO `SecretSynced` with a generation-bound synced version,
+verifies the materialized key set, then verifies workload rollout. `sol secret
+status` evaluates that same readiness state without waiting. ESO sync does not
+prove that an already-running process has loaded a rotated value. Rotate at the
+external authority, wait for ESO, then restart the affected workload with
+Kubernetes rollout tooling; an unchanged `sol deploy` does not restart it.
 
 Sol-owned unit and platform values update their existing Kubernetes Secret in
 place. A later deploy cannot restore a previous value from CI or a local shell.

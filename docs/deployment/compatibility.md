@@ -63,6 +63,29 @@ are declared once in `platform/shared/components.json`; both the local platform
 declaration, so there is nothing to drift. The production-only charts
 (cert-manager, Argo CD) stay pinned in the module.
 
+## Operator-supplied External Secrets Operator
+
+External authority values are delivered by ESO, which Sol neither installs nor
+upgrades, so ESO is not part of the pinned set above and the profile does not
+preflight its version. Sol renders `external-secrets.io/v1`; that API was
+introduced in ESO v0.16, and v0.17 stopped serving the older `v1beta1` API. The
+v0.16 requirement is an API-compatibility floor, not an upgrade-support range:
+ESO itself supports only its current minor release, while this contract pins one
+exact set and treats N/N-1 upgrades as out of scope.
+
+Direct deploy, rollback and `sol secret status` share one readiness predicate.
+It requires `Ready=True` with reason `SecretSynced` and a generation-bound
+`status.syncedResourceVersion` whose prefix is `metadata.generation`. Upstream
+ESO computes that value as `"<metadata.generation>-<hash>"`
+(`pkg/controllers/util.GetResourceVersion`). The shape is an implementation
+detail, not a documented API guarantee, so missing, unrecognized or lagging
+evidence is refused as not ready. An ESO upgrade that changes the shape
+therefore surfaces as a fail-closed readiness failure rather than a silently
+stale Secret. Re-run the external-secrets qualification with the new
+ESO/controller version recorded after such an upgrade; the live evidence owner
+is
+[`internal/qualification/external-secrets/README.md`](../../internal/qualification/external-secrets/README.md).
+
 ## Components a CSI-backed `byo` secret projection would add (not in the supported set)
 
 `DEC-029` selects an external CSI-compatible store (e.g. Vault) as an option for

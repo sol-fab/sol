@@ -155,7 +155,9 @@ owners and presence without printing values.
 Each required application key must declare `sol` or `external` authority in the
 target. Sol can write only `sol` keys. External values are delivered by ESO into
 the unit's separate `-external-secrets` object; deployment verifies the ESO sync
-condition and exact materialized key set before checking workload readiness.
+condition, generation freshness, and exact materialized key set before checking
+workload readiness. `sol secret status` evaluates the same predicate without
+waiting.
 
 Sol verifies that each required value exists and is non-empty; it cannot verify
 that application code reads the environment variable by the expected name. A

@@ -122,4 +122,6 @@ does not populate any application unit Secret.
 The target explicitly maps every required key to `sol` or `external`. An external
 key is delivered by a namespaced ESO `ExternalSecret`; the deploy applies the workload
 only after ESO reports `Ready=True` / `SecretSynced`, and fails closed if it never does.
-Generation freshness is a separate, soft check (see the deployment guide).
+Generation freshness is part of that same readiness gate: the deploy requires
+`status.syncedResourceVersion` to name the applied generation and fails closed when it is absent
+or lagging (see the deployment guide).
