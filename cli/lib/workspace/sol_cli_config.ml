@@ -34,12 +34,6 @@ and secret_authority =
       ; key : string
       }
 
-type unit_secret_resolution =
-  { resolved : (string * secret_authority) list
-  ; missing : string list
-  ; additional : string list
-  }
-
 type index =
   { index_name : string
   ; partition_key : string option
@@ -969,17 +963,6 @@ let secret_authority (target : target) ~unit_address ~key =
 
 let secret_authorities_for_unit (target : target) unit_address =
   List.assoc_opt unit_address target.secret_authorities |> Option.value ~default:[]
-;;
-
-let resolve_secret_authorities (target : target) ~unit_address ~required_keys =
-  let authorities = secret_authorities_for_unit target unit_address in
-  { resolved = List.filter (fun (key, _) -> List.mem key required_keys) authorities
-  ; missing = List.filter (fun key -> not (List.mem_assoc key authorities)) required_keys
-  ; additional =
-      List.filter_map
-        (fun (key, _) -> if List.mem key required_keys then None else Some key)
-        authorities
-  }
 ;;
 
 let merge_target a b =

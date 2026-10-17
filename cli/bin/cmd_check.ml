@@ -42,42 +42,65 @@ let secret_authority_findings ~facts =
              | Error _ -> []
              | Ok toml ->
                let unit_address = workload.service.domain ^ "/" ^ workload.service.name in
-               let required_keys =
-                 Sol_cli_manifest.required_secret_keys
-                   ~transport:(Sol_cli_manifest.kafka_transport platform_shape)
-                   toml.secret_keys
-               in
-               let resolution =
-                 Sol_cli_config.resolve_secret_authorities
-                   config.target
-                   ~unit_address
-                   ~required_keys
-               in
-               let path = "sol/environments.yml" in
-               List.map
-                 (fun key ->
-                    finding
-                      Sol_cli_check.Severity.Error
-                      path
-                      (Printf.sprintf
-                         "%s/%s has no authority mapping for target %s; declare \
-                          authority: sol or external"
-                         unit_address
-                         key
-                         target_path))
-                 resolution.missing
-               @ List.map
-                   (fun key ->
-                      finding
-                        Sol_cli_check.Severity.Warning
-                        path
-                        (Printf.sprintf
-                           "%s/%s maps an undeclared secret for target %s; it will not \
-                            be projected"
-                           unit_address
-                           key
-                           target_path))
-                   resolution.additional)))
+               (* The ownership of every input this unit must carry is the plan gate's own
+                  decision. Resolving `check` through the same function keeps a key the
+                  target's database binding supplies (notably `POSTGRES_URL` for a unit
+                  that declares `uses: [app_db]`) from being reported as an unmapped
+                  declared secret. *)
+               (match
+                  Sol_cli_deploy_selection.unit_consumes_target_database
+                    ~config
+                    ~unit_name:workload.service.name
+                with
+                | Error message ->
+                  [ finding Sol_cli_check.Severity.Error "sol.yml" message ]
+                | Ok db_uses_target ->
+                  let owners =
+                    Sol_cli_deploy_selection.unit_input_owners
+                      ~config
+                      ~unit_address
+                      ~transport:(Sol_cli_manifest.kafka_transport platform_shape)
+                      ~db_uses_target
+                      ~declared:toml.secret_keys
+                  in
+                  let required_keys = List.map fst owners in
+                  (* The warning for a mapped-but-undeclared key is a different question
+                     from which inputs the unit carries: it reads the target's mapping
+                     table directly and does not decide required ownership. *)
+                  let additional =
+                    Sol_cli_config.secret_authorities_for_unit config.target unit_address
+                    |> List.filter_map (fun (key, _) ->
+                      if List.mem key required_keys then None else Some key)
+                  in
+                  let path = "sol/environments.yml" in
+                  List.filter_map
+                    (fun (key, owner) ->
+                       match owner with
+                       | Sol_cli_deploy_selection.Unmapped ->
+                         Some
+                           (finding
+                              Sol_cli_check.Severity.Error
+                              path
+                              (Printf.sprintf
+                                 "%s/%s has no authority mapping for target %s; declare \
+                                  authority: sol or external"
+                                 unit_address
+                                 key
+                                 target_path))
+                       | Unit_secret | Target_database | External_secret _ -> None)
+                    owners
+                  @ List.map
+                      (fun key ->
+                         finding
+                           Sol_cli_check.Severity.Warning
+                           path
+                           (Printf.sprintf
+                              "%s/%s maps an undeclared secret for target %s; it will \
+                               not be projected"
+                              unit_address
+                              key
+                              target_path))
+                      additional))))
 ;;
 
 let findings_for ~facts = function

@@ -631,6 +631,147 @@ let test_check_requires_and_accepts_explicit_secret_authorities () =
       (Sol_cli_string.contains ~needle:"has no authority mapping" stderr))
 ;;
 
+let test_check_uses_the_plans_resolved_input_ownership () =
+  with_subprocess_workspace (fun root ->
+    let write rel body =
+      let path = Filename.concat root rel in
+      ignore (Sol_cli_fs.mkdir_p (Filename.dirname path));
+      Result.get_ok (Sol_cli_fs.write_atomic path body)
+    in
+    write
+      "sol.yml"
+      "project: check_db\n\
+       resources:\n\
+      \  app_db:\n\
+      \    type: postgres\n\
+       services:\n\
+      \  api_svc:\n\
+      \    type: http\n\
+      \    path: app/payments/api_svc\n\
+      \    uses: [app_db]\n\
+      \    language: ocaml\n";
+    write "app/payments/api_svc/Dockerfile" "FROM scratch\n";
+    write
+      "app/payments/api_svc/sol.toml"
+      "[infra.env]\nsecrets = [\"POSTGRES_URL\", \"SOL_API_KEY\"]\n";
+    let write_target secrets =
+      write
+        "sol/environments.yml"
+        ("prod:\n\
+         \  targets:\n\
+         \    aws/us-east-1:\n\
+         \      shape: local\n\
+         \      cluster_name: probe\n"
+         ^ secrets)
+    in
+    (* The binding supplies POSTGRES_URL, so neither command may demand an authority
+       for it. The application key is still unmapped, so both must reject the workspace
+       and name that key — proving the binding exemption did not widen into a bypass. *)
+    write_target "      secrets: {}\n";
+    let check_code, _, check_stderr = run_sol ~root [ "check" ] in
+    Windtrap.equal
+      Windtrap.int
+      ~msg:"check rejects the unmapped application secret"
+      2
+      check_code;
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"check names the unmapped application secret"
+      true
+      (Sol_cli_string.contains
+         ~needle:"payments/api_svc/SOL_API_KEY has no authority mapping"
+         check_stderr);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"check does not demand an authority for the binding-supplied database input"
+      false
+      (Sol_cli_string.contains
+         ~needle:"payments/api_svc/POSTGRES_URL has no authority mapping"
+         check_stderr);
+    let plan_code, _, plan_stderr =
+      run_sol
+        ~root
+        [ "plan"
+        ; "prod/aws/us-east-1"
+        ; "--image-ref"
+        ; "api_svc=registry.example/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ]
+    in
+    Windtrap.equal
+      Windtrap.int
+      ~msg:"plan rejects the same unmapped application secret"
+      1
+      plan_code;
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"plan names the same application secret"
+      true
+      (Sol_cli_string.contains ~needle:"payments/api_svc/SOL_API_KEY" plan_stderr);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"plan does not demand an authority for the database input either"
+      false
+      (Sol_cli_string.contains ~needle:"payments/api_svc/POSTGRES_URL" plan_stderr);
+    (* Mapping the application key is enough: the database input needs no mapping, and
+       check and plan now accept the same workspace. *)
+    write_target
+      "      secrets:\n\
+      \        payments/api_svc:\n\
+      \          SOL_API_KEY:\n\
+      \            authority: sol\n";
+    let check_code, check_stdout, check_stderr = run_sol ~root [ "check" ] in
+    Windtrap.equal
+      Windtrap.int
+      ~msg:"check accepts a unit whose database input is binding-owned"
+      0
+      check_code;
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"check reports success"
+      true
+      (Sol_cli_string.contains ~needle:"sol check: ok" check_stdout);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"check reports no authority error"
+      false
+      (Sol_cli_string.contains ~needle:"has no authority mapping" check_stderr);
+    let plan_code, _, plan_stderr =
+      run_sol
+        ~root
+        [ "plan"
+        ; "prod/aws/us-east-1"
+        ; "--image-ref"
+        ; "api_svc=registry.example/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ]
+    in
+    Windtrap.equal Windtrap.int ~msg:"plan accepts the same workspace" 0 plan_code;
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"plan reports no authority error either"
+      false
+      (Sol_cli_string.contains ~needle:"no secret authority" plan_stderr);
+    (* An explicit POSTGRES_URL mapping is not needed, but when present it is neither an
+       error nor an "undeclared secret" warning: the input is required and binding-owned. *)
+    write_target
+      "      secrets:\n\
+      \        payments/api_svc:\n\
+      \          POSTGRES_URL:\n\
+      \            authority: sol\n\
+      \          SOL_API_KEY:\n\
+      \            authority: sol\n";
+    let check_code, _stdout, check_stderr = run_sol ~root [ "check" ] in
+    Windtrap.equal
+      Windtrap.int
+      ~msg:"an explicit database-input mapping still passes"
+      0
+      check_code;
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the binding-owned key is not called an undeclared secret"
+      false
+      (Sol_cli_string.contains ~needle:"maps an undeclared secret" check_stderr))
+;;
+
 let test_unreadable_workspace_exits_one () =
   with_subprocess_workspace (fun root ->
     let path = Filename.concat root "sol.yml" in
@@ -808,6 +949,10 @@ let%test "check: scoped checks validate workspace generated projections" =
 
 let%test "check: secret authority mappings are explicit and offline" =
   test_check_requires_and_accepts_explicit_secret_authorities ()
+;;
+
+let%test "check: uses the plan's resolved input ownership for database consumers" =
+  test_check_uses_the_plans_resolved_input_ownership ()
 ;;
 
 let%test "check: an unreadable workspace exits 1" = test_unreadable_workspace_exits_one ()
