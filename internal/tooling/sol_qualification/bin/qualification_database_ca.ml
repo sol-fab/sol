@@ -1,15 +1,14 @@
 (* AWS database-CA family driver for the live qualification row.
 
-   It is the single qualification-policy owner for the database-CA family. The
-   live row calls it in phases at the lifecycle points where each observation is
-   valid:
+   The live row calls it in phases at the lifecycle points where each observation
+   is valid:
 
    - [migration] runs the verified candidate's own `migrate apply`, captures the
      actual Job locator and observes its CA before cleanup;
    - [application] observes the declared consumers after the final deploy;
-   - [report] re-reads the durable phase captures and verifies that the complete
-     CA-family outcome set is present and passing. A successful command exit is
-     not by itself a family pass.
+   - [report] re-reads the persisted verdicts and candidate-binding captures and
+     decides the family from those verdicts, never from summary fields copied into
+     a phase capture. A successful phase exit is not a family pass.
 
    It never decides the overall release: a CA-family pass is reported separately
    from DML, TLS and the other required claims. *)
@@ -47,28 +46,6 @@ let scenario = function
   | "aws" -> D.Aws
   | "gcp" -> D.Gcp
   | value -> failwith ("unsupported scenario " ^ value)
-;;
-
-let decision = function
-  | D.Pass -> "pass"
-  | D.Fail _ -> "fail"
-  | D.Unknown _ -> "unknown"
-  | D.Not_run _ -> "not_run"
-;;
-
-let outcome_json (outcome : CA.outcome) =
-  let identity = D.instance_identity outcome.instance in
-  match outcome.result with
-  | Error error ->
-    `Assoc
-      [ "identity", `String identity; "decision", `Null; "error", `String error.E.stage ]
-  | Ok recorded ->
-    `Assoc
-      [ "identity", `String identity
-      ; "decision", `String (decision recorded.verdict.decision)
-      ; "error", `Null
-      ; "verdict", E.reference_json recorded.receipt
-      ]
 ;;
 
 let prepare_request () =
@@ -112,14 +89,60 @@ let prepare_request () =
 ;;
 
 (* Every CA-family claim this path owns, from the verified candidate's complete
-   obligation universe. The report requires exactly this set, so an omitted
-   consumer or migration cannot pass by simply not being observed. *)
+   obligation universe, as (instance key, complete requirement identity). The
+   report requires exactly this set, so an omitted consumer or migration cannot
+   pass by simply not being observed. *)
 let expected_family prepared =
   D.instances prepared.B.obligations
   |> List.filter_map (fun instance ->
     match D.plan instance with
-    | D.Ca_delivery _ | D.Migration_ca_delivery _ -> Some (D.instance_identity instance)
+    | D.Ca_delivery _ | D.Migration_ca_delivery _ ->
+      Some (D.instance_key instance, D.instance_identity instance)
     | _ -> None)
+;;
+
+(* Read authority for the exact resources the observations need, in every
+   namespace they need. The selected identity must answer `yes`; a failure is
+   unestablished, never a fallback to a more privileged identity. *)
+let check_read_authority ~ctx prepared =
+  let reads =
+    D.instances prepared.B.obligations
+    |> List.concat_map (fun instance ->
+      match D.plan instance with
+      | D.Ca_delivery requirement ->
+        let binding = D.ca_binding requirement in
+        [ binding.namespace, "deployments.apps"; binding.namespace, "configmaps" ]
+      | D.Migration_ca_delivery requirement ->
+        let binding = D.migration_ca_binding requirement in
+        [ binding.namespace, "jobs.batch"; binding.namespace, "configmaps" ]
+      | _ -> [])
+    |> List.sort_uniq compare
+  in
+  List.iter
+    (fun (namespace, resource) ->
+       match
+         Sol_cli_kubectl.run
+           ~timeout_s:15.
+           ~ctx
+           [ "auth"; "can-i"; "get"; resource; "-n"; namespace ]
+       with
+       | Ok output when String.trim output.stdout = "yes" -> ()
+       | Ok _ ->
+         failwith
+           (Printf.sprintf
+              "the observation identity cannot read %s in %s; the CA family is \
+               unestablished"
+              resource
+              namespace)
+       | Error error ->
+         failwith
+           (Printf.sprintf
+              "could not establish read authority for %s in %s (%s); the CA family is \
+               unestablished"
+              resource
+              namespace
+              (Sol_cli_process.error_to_string error)))
+    reads
 ;;
 
 let write json path =
@@ -141,6 +164,15 @@ let run_phase () =
   let request, prepared, authority = prepare_request () in
   let phase = text request "phase" in
   let directory = text request "evidence" in
+  let ctx =
+    Sol_cli_kube_destination.of_context
+      ~kubeconfig:(text request "kubeconfig")
+      (text request "context")
+    |> get
+    |> Sol_cli_kube_destination.context_of_destination
+  in
+  check_read_authority ~ctx prepared;
+  let transport = L.create ~ctx ~expected:authority () in
   let recorder = E.open_store ~directory ~run:prepared.B.run ~secrets:[] () |> evidence in
   let previous =
     match E.assessments recorder with
@@ -155,18 +187,8 @@ let run_phase () =
        ~required_captures:prepared.B.required_captures
      |> evidence);
   let binding_capture = B.capture_binding prepared recorder |> evidence in
-  let read_from_kubernetes =
-    let ctx =
-      Sol_cli_kube_destination.of_context
-        ~kubeconfig:(text request "kubeconfig")
-        (text request "context")
-      |> get
-      |> Sol_cli_kube_destination.context_of_destination
-    in
-    let transport = L.create ~ctx ~expected:authority () in
-    L.read transport, fun () -> L.establish transport
-  in
-  let read, establish = read_from_kubernetes in
+  let read = L.read transport in
+  let establish () = L.establish transport in
   let outcome =
     match phase with
     | "migration" ->
@@ -195,17 +217,25 @@ let run_phase () =
               | Error _ -> false)
            outcomes
   in
-  let outcomes =
+  let verdicts =
     match outcome with
-    | Ok outcomes -> outcomes
     | Error _ -> []
+    | Ok outcomes ->
+      List.filter_map
+        (fun (outcome : CA.outcome) ->
+           match outcome.result with
+           | Ok recorded -> Some (E.reference_json recorded.receipt)
+           | Error _ -> None)
+        outcomes
   in
+  (* A phase capture is only a pointer list: the binding slot and the persisted
+     verdict references. It carries no decision of its own. *)
   let payload =
     `Assoc
       [ "phase", `String phase
       ; "ok", `Bool passed
       ; "binding", E.reference_json binding_capture
-      ; "outcomes", `List (List.map outcome_json outcomes)
+      ; "verdicts", `List verdicts
       ]
   in
   let capture = E.capture recorder ~subject:("ca-family/" ^ phase) ~payload |> evidence in
@@ -220,72 +250,82 @@ let run_phase () =
   exit (if passed then 0 else 1)
 ;;
 
+(* The persisted verdict schema is exactly `D.verdict_json`; this decodes that
+   shape and rejects anything else. *)
+let verdict_keys = [ "decision"; "detail"; "evidence"; "instance"; "requirement"; "run" ]
+
+let decode_verdict ~directory ~run json =
+  let reference = E.reference_of_json json |> evidence in
+  let captured = E.read_capture ~directory ~run reference |> evidence in
+  let payload = captured.E.payload in
+  let keys =
+    match payload with
+    | `Assoc fields -> List.map fst fields |> List.sort compare
+    | _ -> failwith "a persisted verdict is not an object"
+  in
+  if keys <> verdict_keys
+  then failwith "a persisted verdict does not match the verdict schema"
+  else (
+    let instance = text payload "instance" in
+    let requirement = text payload "requirement" in
+    if field payload "run" <> D.run_json run
+    then failwith "a persisted verdict belongs to another assessment"
+    else if field payload "decision" <> `String "PASS"
+    then failwith (Printf.sprintf "verdict %s is not PASS" requirement)
+    else (
+      ignore (field payload "detail" |> Yojson.Safe.Util.to_string);
+      ignore (field payload "evidence" |> Yojson.Safe.Util.to_list);
+      instance, requirement))
+;;
+
+let verify_binding_capture ~directory ~run json =
+  let reference = E.reference_of_json json |> evidence in
+  let captured = E.read_capture ~directory ~run reference |> evidence in
+  if captured.E.subject <> B.binding_subject
+  then failwith "the phase binding capture is not the candidate binding"
+  else if captured.E.payload <> D.run_json run
+  then failwith "the phase binding capture belongs to another candidate assessment"
+;;
+
 let run_report () =
   let request, prepared, _ = prepare_request () in
   let directory = text request "evidence" in
   let run = prepared.B.run in
-  let verify_reference json =
-    match json with
-    | `Null -> ()
-    | value ->
-      let reference = E.reference_of_json value |> evidence in
-      ignore (E.read_capture ~directory ~run reference |> evidence)
-  in
-  let read_outcomes path =
+  let phase path =
     let payload = (captured_payload ~directory ~run path).E.payload in
-    (* The phase's binding slot and every recorded verdict must still be readable
-       and digest-valid. The report never rests on the phase's exit status. *)
-    verify_reference (field payload "binding");
-    match field payload "outcomes" with
-    | `List values ->
-      List.map
-        (fun value ->
-           verify_reference (field value "verdict");
-           ( text value "identity"
-           , match field value "decision" with
-             | `String "pass" -> `Pass
-             | `String "fail" -> `Fail
-             | `String "unknown" -> `Unknown
-             | _ -> `Not_run ))
-        values
-    | _ -> []
+    let verdicts =
+      match field payload "verdicts" with
+      | `List values -> values
+      | _ -> failwith "phase capture carries no verdict references"
+    in
+    verify_binding_capture ~directory ~run (field payload "binding");
+    List.map (decode_verdict ~directory ~run) verdicts
   in
   let observed =
-    read_outcomes (text request "migration_capture")
-    @ read_outcomes (text request "application_capture")
+    phase (text request "migration_capture") @ phase (text request "application_capture")
   in
   let expected = expected_family prepared in
-  let reported = List.map fst observed in
-  let complete =
-    List.length observed = List.length expected
-    && List.sort compare reported = List.sort compare expected
-  in
-  let all_pass = List.for_all (fun (_, decision) -> decision = `Pass) observed in
+  let complete = List.sort compare observed = List.sort compare expected in
   let payload =
     `Assoc
       [ "phase", `String "report"
-      ; "ca_family", `String (if complete && all_pass then "pass" else "fail")
+      ; "ca_family", `String (if complete then "pass" else "fail")
       ; "complete", `Bool complete
       ; "release_accepted", `Bool false
       ; ( "outcomes"
         , `List
             (List.map
-               (fun (identity, decision) ->
+               (fun (instance, requirement) ->
                   `Assoc
-                    [ "identity", `String identity
-                    ; ( "decision"
-                      , `String
-                          (match decision with
-                           | `Pass -> "pass"
-                           | `Fail -> "fail"
-                           | `Unknown -> "unknown"
-                           | `Not_run -> "not_run") )
+                    [ "instance", `String instance
+                    ; "requirement", `String requirement
+                    ; "decision", `String "pass"
                     ])
                observed) )
       ]
   in
   write payload (text request "report");
-  exit (if complete && all_pass then 0 else 1)
+  exit (if complete then 0 else 1)
 ;;
 
 let () =
