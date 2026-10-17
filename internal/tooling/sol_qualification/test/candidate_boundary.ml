@@ -150,6 +150,7 @@ let launcher_probe verified path =
     MX.run
       ~verified
       ~expected:kube
+      ~submission_authority:kube
       ~binding
       ~timeout_s:10.
       ~completion_timeout_s:10.
@@ -231,10 +232,15 @@ let integration_config =
 ;;
 
 let integration_whoami =
+  let principal =
+    match Sys.getenv_opt "SOL_INTEGRATION_PRINCIPAL" with
+    | Some value -> value
+    | None -> kube.principal
+  in
   obj
     [ "apiVersion", str "authentication.k8s.io/v1"
     ; "kind", str "SelfSubjectReview"
-    ; "status", obj [ "userInfo", obj [ "username", str kube.principal ] ]
+    ; "status", obj [ "userInfo", obj [ "username", str principal ] ]
     ]
 ;;
 
@@ -536,6 +542,7 @@ let integration_probe prepared =
       ~read:(L.read transport)
       ~establish:(fun () -> L.establish transport)
       ~expected:kube
+      ~submission_authority:kube
       ~binding:(String.make 64 'b')
       ~timeout_s:10.
       ~completion_timeout_s:10.

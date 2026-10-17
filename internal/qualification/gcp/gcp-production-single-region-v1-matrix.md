@@ -107,6 +107,12 @@ AWS-only.
 - **Calling identity** (`IMPERSONATOR`, e.g. `user:you@example.com`) must read each class the
   inventory probes with a viewer-level role, so an absence read is `ABSENT` rather than
   `UNKNOWN`. An unreadable class fails the absence verdict.
+- **Database-CA observation identity**: supply `GCP_CA_OBSERVER_SERVICE_ACCOUNT` (a dedicated
+  service account the caller can impersonate) or `GCP_CA_OBSERVER_SOURCE_KUBECONFIG`. It must
+  be a different principal from the deploy identity, must read Deployments, ConfigMaps and
+  Jobs in every observed namespace, and must not hold Secrets, `pods/exec`, `pods/log` or
+  `delete` there. The harness refuses an absent, shared or broader identity rather than
+  falling back to the deploy kubeconfig.
 - **Target identities**: the provisioner / cluster-access / deploy / operator contracts come
   from `docs/deployment/production-bootstrap.md`; the target names them and `sol deploy` fails
   closed without them.

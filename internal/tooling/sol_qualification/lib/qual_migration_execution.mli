@@ -33,6 +33,7 @@ module Fixture : sig
     -> workspace:string
     -> requested_target:string
     -> expected:Qual_domain.kube_target
+    -> submission_authority:Qual_domain.kube_target
     -> binding:string
     -> timeout_s:float
     -> completion_timeout_s:float
@@ -47,9 +48,12 @@ end
     path. The candidate is probed first and refused before any mutation when it
     does not advertise the receipt protocol.
 
-    [establish] independently supplies the submission's observation context; it is
-    never taken from the product, and it must name [expected] and still be fresh
-    when the locator is handed to [consume].
+    [establish] independently supplies the observation context; it is never taken
+    from the product, and it must name [expected] and still be fresh when the
+    locator is handed to [consume]. [submission_authority] is who the product
+    submitted the Job as; it defaults to [expected]. When an independent observer
+    differs from the submission identity, the two must still address the same
+    cluster endpoint, and the persisted observation context remains [expected].
 
     [consume] is called with the validated locator before the product is
     acknowledged, so the ephemeral Job still exists. Its result is returned unless
@@ -64,6 +68,7 @@ end
 val run
   :  verified:Qual_candidate.t
   -> expected:Qual_domain.kube_target
+  -> submission_authority:Qual_domain.kube_target
   -> binding:string
   -> timeout_s:float
   -> completion_timeout_s:float

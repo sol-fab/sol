@@ -56,10 +56,22 @@ let scenario = function
   | value -> failwith ("unsupported scenario " ^ value)
 ;;
 
+let scenario_label = function
+  | "aws" -> "AWS"
+  | "gcp" -> "GCP"
+  | value -> failwith ("unsupported scenario " ^ value)
+;;
+
+let authority_of_json json : D.kube_target =
+  { principal = text json "principal"
+  ; cluster = text json "cluster"
+  ; endpoint = text json "endpoint"
+  }
+;;
+
 let prepare_request () =
   let request = Yojson.Safe.from_file (arg "--request") in
   let pins = field request "pins" in
-  let authority_json = field request "authority" in
   let expected : C.expected =
     { revision = text pins "revision"
     ; bundle_digest = text pins "bundle_digest"
@@ -69,11 +81,17 @@ let prepare_request () =
     ; target = text pins "target"
     }
   in
-  let authority : D.kube_target =
-    { principal = text authority_json "principal"
-    ; cluster = text authority_json "cluster"
-    ; endpoint = text authority_json "endpoint"
-    }
+  let scenario_name = text request "scenario" in
+  let authority = authority_of_json (field request "authority") in
+  (* The product submits the migration Job as a different Kubernetes identity
+     from the read-only observer on providers where Sol cannot hand its write
+     credential to qualification. The observation authority remains [authority];
+     only the submission receipt is checked against this one. Absent means the
+     same identity, which preserves the AWS row's existing binding. *)
+  let submission_authority =
+    match field request "submission_authority" with
+    | `Null -> authority
+    | json -> authority_of_json json
   in
   let verified =
     C.verify
@@ -87,7 +105,7 @@ let prepare_request () =
   let prepared =
     B.prepare
       ~verified
-      ~scenario:(scenario (text request "scenario"))
+      ~scenario:(scenario scenario_name)
       ~attempt:(text request "attempt")
       ~assessment:(text request "assessment")
       ~kubernetes:authority
@@ -99,7 +117,7 @@ let prepare_request () =
     | "deploy" -> "deploy"
     | other -> failwith ("unsupported observation identity scope " ^ other)
   in
-  request, prepared, authority, identity_scope
+  request, prepared, authority, submission_authority, identity_scope, scenario_name
 ;;
 
 (* Every CA-family claim this path owns, from the verified candidate's complete
@@ -174,8 +192,18 @@ let captured_payload ~directory ~run reference_path =
   E.read_capture ~directory ~run reference |> evidence
 ;;
 
+let kube_json (target : D.kube_target) =
+  `Assoc
+    [ "principal", `String target.principal
+    ; "cluster", `String target.cluster
+    ; "endpoint", `String target.endpoint
+    ]
+;;
+
 let run_phase () =
-  let request, prepared, authority, identity_scope = prepare_request () in
+  let request, prepared, authority, submission_authority, identity_scope, scenario_name =
+    prepare_request ()
+  in
   let phase = text request "phase" in
   let directory = text request "evidence" in
   let ctx =
@@ -193,7 +221,7 @@ let run_phase () =
   ignore
     (E.start_assessment
        recorder
-       ~reason:"AWS database CA family"
+       ~reason:(scenario_label scenario_name ^ " database CA family")
        ~previous:[]
        ~required_captures:prepared.B.required_captures
      |> evidence);
@@ -210,6 +238,7 @@ let run_phase () =
         ~read
         ~establish
         ~expected:authority
+        ~submission_authority
         ~binding:(text request "binding")
         ~timeout_s:30.
         ~completion_timeout_s:600.
@@ -240,12 +269,16 @@ let run_phase () =
         outcomes
   in
   (* A phase capture is only a pointer list: the binding slot and the persisted
-     verdict references. It carries no decision of its own. *)
+     verdict references. It carries no decision of its own. The submission and
+     observation authorities are recorded separately so the report cannot later
+     collapse the two roles into one. *)
   let payload =
     `Assoc
       [ "phase", `String phase
       ; "ok", `Bool passed
       ; "identity_scope", `String identity_scope
+      ; "authority", kube_json authority
+      ; "submission_authority", kube_json submission_authority
       ; "binding", E.reference_json binding_capture
       ; "verdicts", `List verdicts
       ]
@@ -297,7 +330,9 @@ let verify_binding_capture ~directory ~run json =
 ;;
 
 let run_report () =
-  let request, prepared, _, identity_scope = prepare_request () in
+  let request, prepared, authority, submission_authority, identity_scope, scenario_name =
+    prepare_request ()
+  in
   let directory = text request "evidence" in
   let run = prepared.B.run in
   let recorder = E.open_store ~directory ~run ~secrets:[] () |> evidence in
@@ -305,7 +340,7 @@ let run_report () =
   ignore
     (E.start_assessment
        recorder
-       ~reason:"AWS database CA family"
+       ~reason:(scenario_label scenario_name ^ " database CA family")
        ~previous:[]
        ~required_captures:prepared.B.required_captures
      |> evidence);
@@ -318,6 +353,12 @@ let run_report () =
     in
     if text payload "identity_scope" <> identity_scope
     then failwith "phase identity scope does not match the report";
+    if canonical (field payload "authority") <> canonical (kube_json authority)
+    then failwith "phase observation authority does not match the report";
+    if
+      canonical (field payload "submission_authority")
+      <> canonical (kube_json submission_authority)
+    then failwith "phase submission authority does not match the report";
     verify_binding_capture ~directory ~run (field payload "binding");
     let references =
       List.map (fun json -> E.reference_of_json json |> evidence) verdicts
@@ -338,6 +379,8 @@ let run_report () =
       ; "complete", `Bool complete
       ; "identity_scope", `String identity_scope
       ; "independent_qualifier", `Bool (identity_scope = "qualifier")
+      ; "authority", kube_json authority
+      ; "submission_authority", kube_json submission_authority
       ; "release_accepted", `Bool false
       ; ( "outcomes"
         , `List

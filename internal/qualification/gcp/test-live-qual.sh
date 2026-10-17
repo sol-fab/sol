@@ -2,11 +2,39 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-HARNESS="$HERE/live-qual.sh"
 REPO="$(cd "$HERE/../../.." && pwd)"
 TMP="$(mktemp -d)"
 export ATTEMPT="${ATTEMPT:-qual-self-test}"
 export TARGET="${TARGET:-qual/gcp/us-central1}"
+
+# Run the harness from a scratch root so the database-contract verifier can be a
+# stub, exactly as the AWS row's test does. The harness resolves everything from
+# its own location, so a copy of the files it sources is sufficient.
+ROOT="$TMP/root"
+mkdir -p "$ROOT/internal/qualification/gcp" "$ROOT/internal/qualification"
+cp "$HERE/live-qual.sh" "$ROOT/internal/qualification/gcp/"
+cp "$HERE/observer.py" "$ROOT/internal/qualification/gcp/"
+cp "$HERE/qual-gcp.tfvars" "$ROOT/internal/qualification/gcp/"
+cp -R "$HERE/fixtures" "$ROOT/internal/qualification/gcp/"
+cp "$REPO/internal/qualification/sol-under-test.sh" "$ROOT/internal/qualification/"
+cp "$REPO/internal/qualification/candidate-binding.sh" "$ROOT/internal/qualification/"
+cp "$REPO/internal/qualification/attempt.sh" "$ROOT/internal/qualification/"
+cat >"$ROOT/internal/qualification/database-contract-binding.py" <<'STUB'
+#!/usr/bin/env python3
+import json, sys
+# Test stub: the row's pins recorder only needs the canonical shape.
+print(json.dumps({
+    "candidate": {"revision": "0" * 40, "bundle_sha256": "0" * 64},
+    "definition": {"digest": "0" * 64},
+    "specimen": {"digest": "0" * 64,
+                 "declaration": {"requested_target": sys.argv[-1], "target": sys.argv[-1]}},
+}))
+STUB
+git -C "$ROOT" init -q
+git -C "$ROOT" add -A
+git -c user.name=qualification -c user.email=qualification@example.invalid \
+  -C "$ROOT" commit -qm "scratch qualification root"
+HARNESS="$ROOT/internal/qualification/gcp/live-qual.sh"
 
 SCRATCH_WS="$TMP/workspace"
 TARGET_FILE="$SCRATCH_WS/sol/environments.local.yml"
@@ -82,6 +110,7 @@ is() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1" "$3" "$2"; fi; }
 has() { if grep -qF -- "$2" "$3"; then ok "$1"; else no "$1" "contains: $2" "$(tr '\n' '|' <"$3" | cut -c1-160)"; fi; }
 lacks() { if grep -qF -- "$2" "$3"; then no "$1" "absent: $2" "present"; else ok "$1"; fi; }
 present() { if [ -s "$1" ]; then ok "$2"; else no "$2" "present and non-empty" "missing: $1"; fi; }
+not_exists() { if [ -e "$2" ]; then no "$1" "absent: $2" "present"; else ok "$1"; fi; }
 
 suite_environment
 
@@ -403,6 +432,49 @@ case "$*" in
       *)        printf "ERROR: (gcloud.iam.roles.describe) PERMISSION_DENIED: The caller does not have permission\n" >&2; exit 1 ;;
     esac ;;
 esac
+case "$*" in
+  *"container clusters get-credentials"*)
+    case " $* " in
+      *" --impersonate-service-account "*)
+        if [ -n "${STUB_CA_OBSERVER_GET_CREDENTIALS_RC:-}" ]; then
+          printf 'ERROR: (gcloud.container.clusters.get-credentials) ResponseError: code=403\n' >&2
+          exit "$STUB_CA_OBSERVER_GET_CREDENTIALS_RC"
+        fi
+        kc="${KUBECONFIG:-$HOME/.kube/config}"
+        cat >"$kc" <<YAML
+apiVersion: v1
+kind: Config
+current-context: gke_sol-qualification_us-central1_test-cluster-observer
+clusters:
+  - name: gke_sol-qualification_us-central1_test-cluster-observer
+    cluster:
+      server: https://34.0.0.1
+contexts:
+  - name: gke_sol-qualification_us-central1_test-cluster-observer
+    context:
+      cluster: gke_sol-qualification_us-central1_test-cluster-observer
+      user: sol-ca-observer
+users:
+  - name: sol-ca-observer
+    user: {}
+YAML
+        printf 'kubeconfig entry generated for %s (impersonated).\n' "$CLUSTER"
+        exit 0
+        ;;
+    esac
+    if [ -n "${STUB_GET_CREDENTIALS_RC:-}" ]; then
+      printf 'ERROR: (gcloud.container.clusters.get-credentials) ResponseError: code=403\n' >&2
+      exit "$STUB_GET_CREDENTIALS_RC"
+    fi
+    if [ "${STUB_CLUSTER_EXISTS:-0}" != "1" ] && [ "${STUB_TARGET_PRESENT:-0}" != "1" ]; then
+      printf 'ERROR: (gcloud.container.clusters.get-credentials) NOT_FOUND: the cluster does not exist\n' >&2
+      exit 1
+    fi
+    kc="${KUBECONFIG:-$HOME/.kube/config}"
+    sed "s/sol-qual-gcp-15g/$CLUSTER/g" "$STUB_KUBECONFIG_FIXTURE" >"$kc" 2>/dev/null || true
+    printf 'kubeconfig entry generated for %s.\n' "$CLUSTER"
+    exit 0 ;;
+esac
 if [ "${STUB_CLUSTER_EXISTS:-0}" = "1" ]; then
   case "$*" in
   *"value(status)"*)
@@ -430,6 +502,34 @@ if [ "${STUB_CLUSTER_EXISTS:-0}" = "1" ]; then
       exit 0 ;;
     *"container clusters describe"*) printf "test-cluster\n"; exit 0 ;;
     *"container clusters get-credentials"*)
+      case " $* " in
+        *" --impersonate-service-account "*)
+          if [ -n "${STUB_CA_OBSERVER_GET_CREDENTIALS_RC:-}" ]; then
+            printf 'ERROR: (gcloud.container.clusters.get-credentials) ResponseError: code=403\n' >&2
+            exit "$STUB_CA_OBSERVER_GET_CREDENTIALS_RC"
+          fi
+          kc="${KUBECONFIG:-$HOME/.kube/config}"
+          cat >"$kc" <<YAML
+apiVersion: v1
+kind: Config
+current-context: gke_sol-qualification_us-central1_test-cluster-observer
+clusters:
+  - name: gke_sol-qualification_us-central1_test-cluster-observer
+    cluster:
+      server: https://34.0.0.1
+contexts:
+  - name: gke_sol-qualification_us-central1_test-cluster-observer
+    context:
+      cluster: gke_sol-qualification_us-central1_test-cluster-observer
+      user: sol-ca-observer
+users:
+  - name: sol-ca-observer
+    user: {}
+YAML
+          printf 'kubeconfig entry generated for %s (impersonated).\n' "$CLUSTER"
+          exit 0
+          ;;
+      esac
       if [ -n "${STUB_GET_CREDENTIALS_RC:-}" ]; then
         printf 'ERROR: (gcloud.container.clusters.get-credentials) ResponseError: code=403\n' >&2
         exit "$STUB_GET_CREDENTIALS_RC"
@@ -499,6 +599,42 @@ case "$*" in
     printf 'Forwarding from 127.0.0.1:18080 -> 80\n'
     exec sleep 3600
     ;;
+  *"auth whoami"*)
+    case " $* " in
+      *ca-observer*)
+        printf '%s\n' "${STUB_CA_OBSERVER_PRINCIPAL:-gcp:qualifier@sol-qualification.iam.gserviceaccount.com}"
+        ;;
+      *)
+        printf '%s\n' "${STUB_CA_DEPLOY_PRINCIPAL:-gcp:deployer@example.com}"
+        ;;
+    esac
+    exit 0 ;;
+  *"get namespace kube-system -o jsonpath"*)
+    printf '%s\n' "${STUB_CA_CLUSTER_UID:-cluster-uid-1}"
+    exit 0 ;;
+  *"config view --minify -o jsonpath"*)
+    printf '%s\n' "${STUB_CA_ENDPOINT:-https://34.0.0.1}"
+    exit 0 ;;
+  *"auth can-i"*)
+    case " $* " in
+      *ca-observer*)
+        case " $* " in
+          *" get deployments.apps "*|*" get configmaps "*|*" get jobs.batch "*)
+            if [ "${STUB_CA_OBSERVER_DENY_READ:-0}" = "1" ]; then printf 'no\n'; else printf 'yes\n'; fi
+            ;;
+          *" secrets "*)
+            if [ "${STUB_CA_OBSERVER_ALLOW_SECRETS:-0}" = "1" ]; then printf 'yes\n'; else printf 'no\n'; fi
+            ;;
+          *)
+            printf 'no\n'
+            ;;
+        esac
+        ;;
+      *)
+        printf 'yes\n'
+        ;;
+    esac
+    exit 0 ;;
   "create secret generic"*)
     if [ "${STUB_SECRET_CREATE_FAILS:-0}" = "1" ]; then
       printf 'Error from server (Forbidden): secrets "redpanda-users" is forbidden\n' >&2
@@ -598,7 +734,14 @@ case "$*" in
     printf 'monitoring  sh.helm.release.v1.loki.v1        helm.sh/release.v1\n'
     exit 0 ;;
   *"config get-contexts"*)
-    printf 'gke_old-project_us-central1_sol-qual-gcp-15c\ngke_sol-qualification_us-central1_test-cluster\n'
+    case " $* " in
+      *ca-observer*)
+        printf 'gke_sol-qualification_us-central1_test-cluster-observer\n'
+        ;;
+      *)
+        printf 'gke_old-project_us-central1_sol-qual-gcp-15c\ngke_sol-qualification_us-central1_test-cluster\n'
+        ;;
+    esac
     exit 0
     ;;
   *"config use-context"*) exit 0 ;;
@@ -683,6 +826,61 @@ STUB
 cat >"$TMP/bin/gzip" <<'STUB'
 #!/usr/bin/env bash
 cat
+STUB
+
+# Stub for the shared CA-family driver. The row calls it at the documented phase
+# points; the observer's own semantics are covered by the offline qualification
+# suite. This harness checks the wiring, phase ordering, request authorities and
+# failure propagation.
+cat >"$TMP/bin/qualification_database_ca" <<'STUB'
+#!/usr/bin/env bash
+set -uo pipefail
+phase="" request=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --phase) phase="$2"; shift 2 ;;
+    --request) request="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$request" ] || { echo "stub CA driver: no --request" >&2; exit 2; }
+[ -n "${LOG_DIR:-}" ] && printf '%s\n' "$phase" >>"$LOG_DIR/ca-phases.txt"
+python3 - "$request" <<'PY'
+import json, sys
+request = json.load(open(sys.argv[1]))
+if request.get("scenario") != "gcp":
+    print("stub CA driver: the row did not request the gcp scenario", file=sys.stderr)
+    raise SystemExit(3)
+if request.get("identity_scope") != "qualifier":
+    print("stub CA driver: the row did not name an independent observer", file=sys.stderr)
+    raise SystemExit(3)
+if "submission_authority" not in request:
+    print("stub CA driver: the row did not separate submission from observation", file=sys.stderr)
+    raise SystemExit(3)
+if request["submission_authority"] == request["authority"]:
+    print("stub CA driver: submission and observation identities are the same", file=sys.stderr)
+    raise SystemExit(3)
+PY
+if [ "${STUB_CA_FAIL:-}" = "$phase" ]; then
+  echo "the shared database-CA observer refused the $phase phase" >&2
+  exit 1
+fi
+capture="$(python3 - "$request" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1])).get("capture",""))
+PY
+)"
+report="$(python3 - "$request" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1])).get("report",""))
+PY
+)"
+[ -n "$capture" ] && : >"$capture"
+[ -n "$report" ] && : >"$report"
+if [ "$phase" = "report" ] && [ -n "${STUB_CA_REPORT:-}" ]; then
+  printf '%s\n' "$STUB_CA_REPORT" >"$report"
+fi
+exit 0
 STUB
 
 chmod +x "$TMP"/bin/*
@@ -776,6 +974,9 @@ run_case() {
   env ALLOW_CANONICAL=1 SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" CLUSTER=test-cluster \
     IMPERSONATOR=user:test@example.com LE_EMAIL=test@example.com \
     PROJECT=sol-qualification REGION=us-central1 \
+    SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" \
+    GCP_CA_OBSERVER_SERVICE_ACCOUNT=sol-ca-observer@sol-qualification.iam.gserviceaccount.com \
+    GCP_CA_OBSERVER_SOURCE_KUBECONFIG= \
     PATH="$TMP/bin:$PATH" "$@" \
     "$harness" "$sub" >"$TMP/$name.out" 2>&1
   echo "$? " >"$TMP/$name.rc"
@@ -790,7 +991,7 @@ run_case() {
 run_mutated_case() {
   local name="$1" sub="$2" mutation="$3"
   shift 3
-  local mutated="$HERE/.live-qual-mutated-$name.sh"
+  local mutated="$(dirname "$HARNESS")/.live-qual-mutated-$name.sh"
   sed "$mutation" "$HARNESS" >"$mutated"
   chmod +x "$mutated"
   HARNESS_UNDER_TEST="$mutated"
@@ -817,6 +1018,9 @@ run_case_without_a_phase() {
   env ALLOW_CANONICAL=1 SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" CLUSTER=test-cluster \
     IMPERSONATOR=user:test@example.com LE_EMAIL=test@example.com \
     PROJECT=sol-qualification REGION=us-central1 \
+    SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" \
+    GCP_CA_OBSERVER_SERVICE_ACCOUNT=sol-ca-observer@sol-qualification.iam.gserviceaccount.com \
+    GCP_CA_OBSERVER_SOURCE_KUBECONFIG= \
     PATH="$TMP/bin:$PATH" "$HARNESS" >"$TMP/no-phase.out" 2>&1
   echo "$? " >"$TMP/no-phase.rc"
   sed -i 's/ //' "$TMP/no-phase.rc"
@@ -1118,11 +1322,36 @@ has "and the TypeScript namespace's image too" \
   "docker push us-central1-docker.pkg.dev/sol-qualification/test-cluster/pluto/order-svc:qual-" "$DOCKER_LOG"
 lacks "the harness publishes no migration runner: the release bundle pins its own" \
   "sol-migration-runner" "$DOCKER_LOG"
-has "the workspace's migrations are applied before the deploy" "migrate apply" "$TMP/app-ok.argv"
-lacks "the migrate step is not asked to publish a runner" \
-  "migrate apply qual/gcp/us-central1 --registry" "$TMP/app-ok.argv"
-has "Sol is handed no runner reference at all" \
-  "migrate apply qual/gcp/us-central1 [runner=unset]" "$TMP/app-ok.argv"
+present "$TMP/app-ok.logs/ca-phases.txt" \
+  "the shared CA family owner recorded its phases"
+has "the shared CA owner ran the migration phase at the row's migration step" \
+  "migration" "$TMP/app-ok.logs/ca-phases.txt"
+has "and the application phase after the final deploy" \
+  "application" "$TMP/app-ok.logs/ca-phases.txt"
+has "and the report phase that re-reads durable evidence" \
+  "report" "$TMP/app-ok.logs/ca-phases.txt"
+lacks "the harness did not run a second migration outside the shared owner" \
+  "migrate apply" "$TMP/app-ok.argv"
+has "the migration request names the gcp scenario" \
+  '"scenario": "gcp"' "$TMP/app-ok.logs/ca-request-migration.json"
+has "the request names the independent observation identity" \
+  "gcp:qualifier@sol-qualification.iam.gserviceaccount.com" \
+  "$TMP/app-ok.logs/ca-request-migration.json"
+has "and the deploy identity as the submission authority" \
+  "gcp:deployer@example.com" "$TMP/app-ok.logs/ca-request-migration.json"
+has "the observer authority is recorded separately from the deploy authority" \
+  "gcp:qualifier@sol-qualification.iam.gserviceaccount.com" "$TMP/app-ok.logs/ca-authority.json"
+has "the deploy authority is recorded for the migration receipt" \
+  "gcp:deployer@example.com" "$TMP/app-ok.logs/ca-deploy-authority.json"
+has "the observer is shown to be read-only in every observed namespace" \
+  "read_authority: get deployments.apps, configmaps and jobs.batch established in every namespace" \
+  "$TMP/app-ok.logs/ca-observer.txt"
+has "and forbidden mutating reads are denied there" \
+  "forbidden_authority: get/list secrets, pods/exec, pods/log and delete were denied in every namespace" \
+  "$TMP/app-ok.logs/ca-observer.txt"
+has "the report is recorded as the CA family authority, not a release acceptance" \
+  "database_ca: the shared candidate-bound observer established the GCP application and migration CA family" \
+  "$TMP/app-ok.logs/prerequisites.txt"
 has "the deploy is given the target's own registry" \
   "--registry us-central1-docker.pkg.dev/sol-qualification/test-cluster" "$TMP/app-ok.argv"
 has "and every selected workload is pinned by digest" \
@@ -1209,6 +1438,78 @@ lacks "and the harness records no connection string at all" "://" \
 lacks "and never the password in the clear" "qual-secret" "$TMP/app-ok.logs/app-runtime-secrets.txt"
 lacks "only a unit that protects /metrics declares the API key, so it is not a workspace runtime secret" "SOL_API_KEY:" \
   "$TMP/app-ok.logs/app-runtime-secrets.txt"
+is "the CA phases ran in lifecycle order" \
+  "$(tr '\n' ',' <"$TMP/app-ok.logs/ca-phases.txt")" "migration,application,report,"
+
+printf '\nscenario: no independent CA observation identity refuses the app phase\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-no-observer app \
+  GCP_CA_OBSERVER_SERVICE_ACCOUNT=
+is "the app phase refuses without an independent observation identity" \
+  "$(cat "$TMP/app-ca-no-observer.rc")" "1"
+has "and says the deploy kubeconfig is not a fallback" \
+  "no independent GCP database-CA observation identity" "$TMP/app-ca-no-observer.out"
+not_exists "no authority was fabricated without an observer" \
+  "$TMP/app-ca-no-observer.logs/ca-authority.json"
+not_exists "and the shared CA owner never ran" "$TMP/app-ca-no-observer.logs/ca-phases.txt"
+
+printf '\nscenario: an observer that is the deploy identity refuses the app phase\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-operator app \
+  STUB_CA_OBSERVER_PRINCIPAL=gcp:deployer@example.com
+is "the app phase refuses a non-independent observer" \
+  "$(cat "$TMP/app-ca-operator.rc")" "1"
+has "and names the conflation" \
+  "CA observation identity is the deploy identity" "$TMP/app-ca-operator.out"
+
+printf '\nscenario: an observer without the required read refuses the app phase\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-read-denied app \
+  STUB_CA_OBSERVER_DENY_READ=1
+is "the app phase refuses an observer that cannot read the bound resources" \
+  "$(cat "$TMP/app-ca-read-denied.rc")" "1"
+has "and names the unread authority" "cannot read deployments.apps" "$TMP/app-ca-read-denied.out"
+
+printf '\nscenario: an observer that can read Secrets refuses the app phase\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-secret-read app \
+  STUB_CA_OBSERVER_ALLOW_SECRETS=1
+is "the app phase refuses an observation identity broader than read-only" \
+  "$(cat "$TMP/app-ca-secret-read.rc")" "1"
+has "and names the forbidden authority" "read-only observation boundary forbids" \
+  "$TMP/app-ca-secret-read.out"
+
+printf '\nscenario: a CA migration phase failure stops the phase before the final deploy\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-migration-fails app \
+  STUB_CA_FAIL=migration
+is "the app phase fails when the shared migration observation fails" \
+  "$(cat "$TMP/app-ca-migration-fails.rc")" "1"
+has "and the failure is recorded as a phase failure" \
+  "database-CA migration phase did not pass" "$TMP/app-ca-migration-fails.out"
+not_exists "the final deploy never ran" "$TMP/app-ca-migration-fails.logs/app-deploy.log"
+lacks "and the application phase was not reached" "application" \
+  "$TMP/app-ca-migration-fails.logs/ca-phases.txt"
+not_exists "and no report was produced" "$TMP/app-ca-migration-fails.logs/ca-report.json"
+
+printf '\nscenario: a CA application phase failure prevents a report\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-application-fails app \
+  STUB_CA_FAIL=application
+is "the app phase fails when the shared application observation fails" \
+  "$(cat "$TMP/app-ca-application-fails.rc")" "1"
+has "the migration phase succeeded first" "migration" \
+  "$TMP/app-ca-application-fails.logs/ca-phases.txt"
+has "and the application phase ran" "application" \
+  "$TMP/app-ca-application-fails.logs/ca-phases.txt"
+lacks "but the report was not reached" "report" \
+  "$TMP/app-ca-application-fails.logs/ca-phases.txt"
+not_exists "so no passing report exists" "$TMP/app-ca-application-fails.logs/ca-report.json"
+
+printf '\nscenario: a CA report failure refuses an apparently successful app phase\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-report-fails app \
+  STUB_CA_FAIL=report
+is "the app phase fails when the durable report does not pass" \
+  "$(cat "$TMP/app-ca-report-fails.rc")" "1"
+has "and names the report phase" "database-CA report phase did not pass" \
+  "$TMP/app-ca-report-fails.out"
+is "after both observation phases ran" \
+  "$(tr '\n' ',' <"$TMP/app-ca-report-fails.logs/ca-phases.txt")" \
+  "migration,application,report,"
 
 printf '\nscenario: a stalled orders read-back fails the phase, so success cannot be manufactured\n'
 # The earlier app cases restored the DNS/identity curl stub; the transaction

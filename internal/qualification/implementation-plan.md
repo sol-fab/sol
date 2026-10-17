@@ -45,8 +45,31 @@ MECHANISM-only: it grants neither release-verdict nor live observation authority
 |---|---|---|
 | Candidate execution and observation prerequisites | Establish a reviewed source of the actual migration execution receipt, including Job UID and observation identity. Retain snapshot freshness and full assessment binding; handle ephemeral Jobs whose absence after completion cannot retroactively establish execution. Support or explicitly refuse every consuming workload resource kind. | No inferred Job names, fixture execution receipt promoted to live evidence, or declaration mistaken for independent observation. Any new product execution-receipt authority requires review. |
 | I5 — Scoped AWS adoption and family policy transfer | After comparison and a supported projected candidate, review the exact migrated claim-family boundary and verified-manifest consumption. Retain unrelated matrix owners. Adopt in an isolated harness revision outside active campaigns. | Delete the migrated AWS `app_verify_database_ca` predicate body and superseded required-check declarations. Generate the migrated family's matrix policy projection; preserve historical records. No CA-only path can promote a release with other required claims unestablished. |
-| I6 — GCP adoption and remaining database requirements | Reuse the shared observer/evaluator. Compare and migrate DML delivery, migration inputs, TLS and administrative-binding checks. Implement independently evidenced actual DML authority verification as a required obligation; reference/class checks do not satisfy it. | Remove migrated predicates from both providers' `app_verify_database_delivery`. Replace duplicate `app_database_declaration` / `app_database_field` parsing when their callers use the single candidate-bound decoder. GCP CA verification is added coverage, not a fictional deletion. |
+| I6 — GCP adoption and remaining database requirements | Adopt the shared candidate-bound CA owner in the GCP row (application and migration phases, separate read-only observer, durable report). Compare and migrate DML delivery, migration inputs, TLS and administrative-binding checks. Implement independently evidenced actual DML authority verification as a required obligation; reference/class checks do not satisfy it. | The GCP row no longer makes a CA decision itself: the shared owner does, and the deploy identity is not accepted as its observer. DML/TLS predicates remain until their shared replacements exist. Replace duplicate `app_database_declaration` / `app_database_field` parsing when their callers use the single candidate-bound decoder. GCP CA verification was added coverage, not a fictional deletion. |
 | I7 — Shared execution, capture and failure supervision | Consolidate AWS/GCP `run` and local `run_logged`, then checkpoint/finalization and handled-failure cleanup. Preserve interactive setup, direct provider diagnostics, concrete phases and independent absence verification. | Remove duplicated command/capture/timeout handling, GCP failure-bookkeeping branches, and manifest/validation code only as shared replacements assume those guarantees. No generic workflow engine. |
+
+### GCP CA adoption
+
+The GCP app phase calls the same `qualification_database_ca` driver at the row's
+`migrate apply` step and after the final deploy, then runs its durable `report`.
+The migration Job is submitted by the deploy identity, while the CA observation
+uses a separate read-only Kubernetes identity established through
+`GCP_CA_OBSERVER_SERVICE_ACCOUNT` (a GCP service account impersonated for
+`gcloud container clusters get-credentials`) or an operator-supplied
+`GCP_CA_OBSERVER_SOURCE_KUBECONFIG`. The harness verifies that the observer
+principal differs from the deploy principal, that both address the same cluster
+UID and endpoint, that the required `get` reads exist in every observed
+namespace, and that `get`/`list` Secrets, `pods/exec`, `pods/log` and `delete`
+are denied. It never falls back to the run kubeconfig.
+
+The shared launcher validates the submission receipt against the recorded deploy
+authority and the independent observation context against the observer authority;
+they may be different principals but must address the same cluster. The GCP row
+therefore exposes `submission_authority` and `authority` separately, and the
+report requires both to match the phase captures. A missing observer, a shared
+identity, an unreadable resource, a forbidden broad grant, a missing phase capture
+or a non-passing report fails the phase. DML/TLS and the other non-CA claims remain
+separate and unestablished.
 
 A suitable published candidate carrying the projection is a prerequisite for **live
 adoption**, not for testing offline machinery. Existing alpha.37 is unsupported and unchanged. The family policy transfer is a prerequisite for

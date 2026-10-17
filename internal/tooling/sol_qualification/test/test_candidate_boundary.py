@@ -36,9 +36,9 @@ if sys.argv[1:3] == ["migrate", "apply"]:
         "namespace": os.environ.get("FAKE_MIGRATION_NAMESPACE", "database-system"),
         "name": os.environ.get("FAKE_MIGRATION_NAME", "boundary-migration"),
         "uid": os.environ.get("FAKE_MIGRATION_UID", "boundary-submission-uid"),
-        "principal": "offline-reader",
-        "cluster": "offline-cluster",
-        "endpoint": "https://offline.invalid",
+        "principal": os.environ.get("FAKE_MIGRATION_PRINCIPAL", "offline-reader"),
+        "cluster": os.environ.get("FAKE_MIGRATION_CLUSTER", "offline-cluster"),
+        "endpoint": os.environ.get("FAKE_MIGRATION_ENDPOINT", "https://offline.invalid"),
         "observed_at": 1,
     }
     os.write(0, (json.dumps(receipt) + "\\n").encode())
@@ -348,21 +348,26 @@ class Boundary(fixture.Binding):
 
     # --- the actual compiled driver through the row's request/phase interface ---
 
-    def ca_request(self, root, pins, phase, capture, report, binding, evidence):
+    def ca_request(self, root, pins, phase, capture, report, binding, evidence,
+                   scenario="aws", authority=None, submission_authority=None):
         request = {
             "repository": str(REPOSITORY),
             "candidate": str(self.candidate),
             "install": str(self.install),
             "workspace": str(self.workspace),
             "pins": pins,
-            "authority": {"principal": "offline-reader", "cluster": "offline-cluster",
-                          "endpoint": "https://offline.invalid"},
+            "authority": authority or {
+                "principal": "offline-reader", "cluster": "offline-cluster",
+                "endpoint": "https://offline.invalid"},
+            "submission_authority": submission_authority or {
+                "principal": "offline-reader", "cluster": "offline-cluster",
+                "endpoint": "https://offline.invalid"},
             "kubeconfig": str(root / "explicit.kubeconfig"),
             "context": "explicit-observer",
             "identity_scope": "qualifier",
             "attempt": "offline",
             "assessment": "a1",
-            "scenario": "aws",
+            "scenario": scenario,
             "evidence": str(evidence),
             "phase": phase,
             "capture": str(capture),
@@ -383,56 +388,81 @@ class Boundary(fixture.Binding):
                          "the real driver attempted provider execution")
         return result
 
-    def run_real_driver(self, mutation=None, deny_reads=False):
-        sol = self.install / "bin/sol"
-        sol.write_text(PROTOCOL_SOL.replace("__VERSION__", fixture.VERSION))
-        sol.chmod(0o755)
-        self.archive()
-        bound = self.run_binding(True)
-        pins = self.expected(bound)
-        self.pin_path.write_text(json.dumps(pins))
-        root, env = self.integration_environment()
-        if mutation is not None:
-            env["SOL_INTEGRATION_MUTATION"] = mutation
-        previous = {key: os.environ.get(key) for key in env}
-        os.environ.update(env)
+    def run_real_driver(self, mutation=None, deny_reads=False, scenario="aws",
+                        authority=None, submission_authority=None, receipt_principal=None):
+        authority = authority or {
+            "principal": "offline-reader", "cluster": "offline-cluster",
+            "endpoint": "https://offline.invalid"}
+        submission_authority = submission_authority or authority
+        receipt_principal = receipt_principal or submission_authority["principal"]
+        target_file = self.workspace / "sol/environments.yml"
+        original_target = target_file.read_text()
+        original_target_name = fixture.TARGET
+        if scenario == "gcp":
+            target_file.write_text(original_target.replace("aws/region", "gcp/region"))
+            fixture.TARGET = "dev/gcp/region"
         try:
-            os.environ["SOL_WORLD_ONLY"] = "1"
+            sol = self.install / "bin/sol"
+            sol.write_text(PROTOCOL_SOL.replace("__VERSION__", fixture.VERSION))
+            sol.chmod(0o755)
+            self.archive()
+            bound = self.run_binding(True)
+            pins = self.expected(bound)
+            self.pin_path.write_text(json.dumps(pins))
+            root, env = self.integration_environment()
+            env["SOL_INTEGRATION_PRINCIPAL"] = authority["principal"]
+            if mutation is not None:
+                env["SOL_INTEGRATION_MUTATION"] = mutation
+            previous = {key: os.environ.get(key) for key in env}
+            os.environ.update(env)
             try:
-                self.invoke(True, pins, exercise=False)
+                os.environ["SOL_WORLD_ONLY"] = "1"
+                try:
+                    self.invoke(True, pins, exercise=False, scenario=scenario)
+                finally:
+                    os.environ.pop("SOL_WORLD_ONLY", None)
+                migration = json.loads((root / "migration.json").read_text())
+                if deny_reads:
+                    world = json.loads((root / "world.json").read_text())
+                    world["deny_reads"] = True
+                    (root / "world.json").write_text(json.dumps(world))
+                driver_env = dict(
+                    os.environ, PATH=str(self.private_bin),
+                    PROVIDER_MARKER=str(self.root / "provider-called"),
+                    SOL_HOME=str(self.root / "wrong-assets"),
+                    FAKE_MIGRATION_NAMESPACE=migration["namespace"],
+                    FAKE_MIGRATION_NAME=migration["name"],
+                    FAKE_MIGRATION_UID=migration["uid"],
+                    FAKE_MIGRATION_PRINCIPAL=receipt_principal,
+                    FAKE_MIGRATION_CLUSTER=submission_authority["cluster"],
+                    FAKE_MIGRATION_ENDPOINT=submission_authority["endpoint"])
+                evidence = root / "ca-evidence"
+                results = {}
+                for phase in ("migration", "application"):
+                    capture = root / f"ca-{phase}-capture.json"
+                    request = self.ca_request(
+                        root, pins, phase, capture, root / f"ca-{phase}.json", "b" * 64,
+                        evidence, scenario=scenario, authority=authority,
+                        submission_authority=submission_authority)
+                    results[phase] = self.invoke_ca_driver(phase, request, driver_env)
+                report_path = root / "ca-report.json"
+                request = self.ca_request(
+                    root, pins, "report", "", report_path, "", evidence,
+                    scenario=scenario, authority=authority,
+                    submission_authority=submission_authority)
+                results["report"] = self.invoke_ca_driver("report", request, driver_env)
+                value = json.loads(report_path.read_text()) if report_path.exists() else None
+                return {"root": root, "env": driver_env, "pins": pins, "migration": migration,
+                        "results": results, "report": value, "evidence": evidence}
             finally:
-                os.environ.pop("SOL_WORLD_ONLY", None)
-            migration = json.loads((root / "migration.json").read_text())
-            if deny_reads:
-                world = json.loads((root / "world.json").read_text())
-                world["deny_reads"] = True
-                (root / "world.json").write_text(json.dumps(world))
-            driver_env = dict(
-                os.environ, PATH=str(self.private_bin),
-                PROVIDER_MARKER=str(self.root / "provider-called"),
-                SOL_HOME=str(self.root / "wrong-assets"),
-                FAKE_MIGRATION_NAMESPACE=migration["namespace"],
-                FAKE_MIGRATION_NAME=migration["name"],
-                FAKE_MIGRATION_UID=migration["uid"])
-            evidence = root / "ca-evidence"
-            results = {}
-            for phase in ("migration", "application"):
-                capture = root / f"ca-{phase}-capture.json"
-                request = self.ca_request(root, pins, phase, capture,
-                                          root / f"ca-{phase}.json", "b" * 64, evidence)
-                results[phase] = self.invoke_ca_driver(phase, request, driver_env)
-            report_path = root / "ca-report.json"
-            request = self.ca_request(root, pins, "report", "", report_path, "", evidence)
-            results["report"] = self.invoke_ca_driver("report", request, driver_env)
-            value = json.loads(report_path.read_text()) if report_path.exists() else None
-            return {"root": root, "env": driver_env, "pins": pins, "migration": migration,
-                    "results": results, "report": value, "evidence": evidence}
+                for key, value in previous.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
         finally:
-            for key, value in previous.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
+            fixture.TARGET = original_target_name
+            target_file.write_text(original_target)
 
     def test_boundary_real_driver_report(self):
         run = self.run_real_driver()
@@ -450,6 +480,54 @@ class Boundary(fixture.Binding):
         self.assertEqual(len(value["outcomes"]), 3, value)
         self.assertFalse(
             any("checkout" in item["instance"] for item in value["outcomes"]), value)
+
+    def test_boundary_real_driver_gcp_separates_submission_from_observation(self):
+        observer = {"principal": "gcp:qualifier", "cluster": "offline-cluster",
+                    "endpoint": "https://offline.invalid"}
+        writer = {"principal": "gcp:deployer", "cluster": "offline-cluster",
+                  "endpoint": "https://offline.invalid"}
+        run = self.run_real_driver(scenario="gcp", authority=observer,
+                                   submission_authority=writer)
+        for phase in ("migration", "application", "report"):
+            result = run["results"][phase]
+            self.assertEqual(result.returncode, 0, phase + ": " + result.stderr)
+        value = run["report"]
+        self.assertEqual(value["ca_family"], "pass", value)
+        self.assertTrue(value["complete"], value)
+        self.assertFalse(value["release_accepted"], value)
+        self.assertEqual(value["authority"]["principal"], "gcp:qualifier", value)
+        self.assertEqual(value["submission_authority"]["principal"], "gcp:deployer", value)
+        self.assertEqual(len(value["outcomes"]), 3, value)
+        self.assertTrue(all(item["instance"].startswith("gcp/")
+                            for item in value["outcomes"]), value)
+
+    def test_boundary_real_driver_gcp_rejects_foreign_submission_identity(self):
+        observer = {"principal": "gcp:qualifier", "cluster": "offline-cluster",
+                    "endpoint": "https://offline.invalid"}
+        writer = {"principal": "gcp:deployer", "cluster": "offline-cluster",
+                  "endpoint": "https://offline.invalid"}
+        run = self.run_real_driver(scenario="gcp", authority=observer,
+                                   submission_authority=writer,
+                                   receipt_principal="gcp:intruder")
+        result = run["results"]["migration"]
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        phase = json.loads((run["root"] / "ca-migration.json").read_text())
+        self.assertIn("another Kubernetes authority", phase["error"])
+
+    def test_boundary_real_driver_gcp_report_without_phases_fails(self):
+        observer = {"principal": "gcp:qualifier", "cluster": "offline-cluster",
+                    "endpoint": "https://offline.invalid"}
+        writer = {"principal": "gcp:deployer", "cluster": "offline-cluster",
+                  "endpoint": "https://offline.invalid"}
+        run = self.run_real_driver(scenario="gcp", authority=observer,
+                                   submission_authority=writer)
+        empty = run["root"] / "ca-empty-evidence"
+        report = run["root"] / "ca-empty-report.json"
+        request = self.ca_request(
+            run["root"], run["pins"], "report", "", report, "", empty,
+            scenario="gcp", authority=observer, submission_authority=writer)
+        result = self.invoke_ca_driver("report", request, run["env"])
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_boundary_real_driver_missing_mount_fails(self):
         run = self.run_real_driver(mutation="missing_mount")
