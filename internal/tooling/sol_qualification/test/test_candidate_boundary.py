@@ -359,6 +359,7 @@ class Boundary(fixture.Binding):
                           "endpoint": "https://offline.invalid"},
             "kubeconfig": str(root / "explicit.kubeconfig"),
             "context": "explicit-observer",
+            "identity_scope": "qualifier",
             "attempt": "offline",
             "assessment": "a1",
             "scenario": "aws",
@@ -442,6 +443,8 @@ class Boundary(fixture.Binding):
         self.assertEqual(value["ca_family"], "pass", value)
         self.assertTrue(value["complete"], value)
         self.assertFalse(value["release_accepted"], value)
+        self.assertEqual(value["identity_scope"], "qualifier", value)
+        self.assertTrue(value["independent_qualifier"], value)
         # Two declared database consumers and one migration context; the
         # Kafka-only nonconsumer is not required to carry the CA.
         self.assertEqual(len(value["outcomes"]), 3, value)

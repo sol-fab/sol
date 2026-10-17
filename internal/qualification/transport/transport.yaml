@@ -9,6 +9,29 @@ rules:
   - apiGroups: [""]
     resources: ["pods/portforward"]
     verbs: ["create"]
+  # The cluster-scoped identity read the CA observer records independently
+  # (kube-system's server-returned UID). Nothing else cluster-scoped is granted.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
+---
+# Reusable read-only set for the application/migration CA observations. It is
+# bound only by the RoleBindings establish.sh creates in the declared observation
+# namespaces; there is deliberately no ClusterRoleBinding for it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sol-qualifier-observe
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

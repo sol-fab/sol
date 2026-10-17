@@ -73,18 +73,51 @@ def main():
         for d in documents
         for rule in d.get("rules", [])
     ]
-    resources = sorted({r for resources, _ in rules for r in resources})
-    if resources != ["pods", "pods/portforward", "services"]:
-        fail(f"the qualification transport's resource set changed: '{' '.join(resources)} '")
-    by_resources = dict((tuple(resources), verbs) for resources, verbs in rules)
-    pod_rule = by_resources.get(("pods", "services"), [])
-    fwd_rule = by_resources.get(("pods/portforward",), [])
-    if pod_rule != ["get", "list"]:
-        fail(f"the addressing rule's verbs changed: '{' '.join(pod_rule)} ' (expected get, list)")
-    if fwd_rule != ["create"]:
-        fail(f"the transport rule's verbs changed: '{' '.join(fwd_rule)} ' (expected create)")
+    expected = {
+        "pods": ["get", "list"],
+        "services": ["get", "list"],
+        "pods/portforward": ["create"],
+        "namespaces": ["get"],
+        "deployments": ["get", "list"],
+        "jobs": ["get", "list"],
+        "configmaps": ["get", "list"],
+    }
+    by_resource = {}
+    for resources, verbs in rules:
+        for resource in resources:
+            if resource in by_resource and by_resource[resource] != verbs:
+                fail(f"the qualification transport declares two verb sets for resource '{resource}'")
+            by_resource[resource] = verbs
+    if sorted(by_resource) != sorted(expected):
+        fail(f"the qualification transport's resource set changed: '{' '.join(sorted(by_resource))} '")
+    for resource, verbs in expected.items():
+        if by_resource.get(resource) != verbs:
+            fail(f"the rule for '{resource}' grants '{' '.join(by_resource.get(resource, []))}' (expected {' '.join(verbs)})")
     if any(set(verbs) & MUTATING for _, verbs in rules):
         fail("the qualification transport grants a mutating verb")
+
+    clusters = {
+        d.get("metadata", {}).get("name"): d
+        for d in documents
+        if d.get("kind") == "ClusterRole"
+    }
+    observe = clusters.get("sol-qualifier-observe")
+    if observe is None:
+        fail("the qualification transport has no sol-qualifier-observe ClusterRole")
+    observe_rules = {
+        (tuple(sorted(rule.get("resources", []))), tuple(sorted(rule.get("verbs", []))))
+        for rule in observe.get("rules", [])
+    }
+    expected_observe = {
+        (("deployments",), ("get", "list")),
+        (("jobs",), ("get", "list")),
+        (("configmaps",), ("get", "list")),
+    }
+    if observe_rules != expected_observe:
+        fail("the observation ClusterRole's rules changed")
+    for d in documents:
+        if d.get("kind") == "ClusterRoleBinding" and d.get("roleRef", {}).get("name") == "sol-qualifier-observe":
+            fail("the observation reads are bound cluster-wide; they must be namespaced RoleBindings")
     for directory in sorted(p for p in (root / "platform/cloud").glob("*/*") if p.is_dir()):
         for path in directory.rglob("*"):
             if path.is_file() and re.search(r"sol:qualifiers|sol-qualifier-transport", path.read_text(errors="replace")):

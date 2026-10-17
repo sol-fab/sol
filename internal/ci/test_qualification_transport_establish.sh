@@ -95,6 +95,8 @@ case "$1" in
         if [ ! -f "$state/entry" ] || [ ! -f "$state/role" ]; then echo no; exit 0; fi
         case "$*" in
           *"list services"* | *"create pods --subresource=portforward"*) echo yes ;;
+          *"get namespaces"*) echo yes ;;
+          *"get deployments.apps"* | *"list deployments.apps"* | *"get jobs.batch"* | *"list configmaps"*) echo yes ;;
           *"create pods --subresource=exec"*)
             if [ -f "$state/exec" ]; then echo yes; else echo no; fi
             ;;
@@ -127,7 +129,7 @@ reset_state() {
 }
 
 run_establish() {
-  if "$establish" sol-qual-cluster sol-qualifier-transport us-east-1 pluto-payments >"$work/out" 2>&1; then
+  if "$establish" sol-qual-cluster sol-qualifier-transport us-east-1 pluto-payments pluto-comms >"$work/out" 2>&1; then
     status=0
   else
     status=$?
@@ -169,6 +171,7 @@ expect_file "the access entry remains" "$work/state/entry"
 expect_no_file "the cluster-admin window is closed" "$work/state/wide"
 expect_no_file "the window is never closed by a disassociation" "$work/state/disassociated"
 expect_text "verified the effective surface" "the verification is the reported evidence"
+expect_text "deployments/jobs/configmaps readable" "the observation grants are part of the verified surface"
 
 echo
 echo "establish: a surface broader than declared is refused, and nothing broad is left behind"

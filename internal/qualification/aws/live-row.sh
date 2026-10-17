@@ -273,10 +273,11 @@ PY
 ca_request() {
   local phase="$1" capture="${2:-}" report="${3:-}" binding="${4:-}"
   python3 - "$ROOT" "$SOL_CANDIDATE" "$SOL_INSTALL" "$WORKSPACE" "$LOG_DIR" \
-    "$CA_KUBECONFIG" "$CA_CONTEXT" "$ATTEMPT" "$phase" "$capture" "$report" "$binding" <<'PY'
+    "$CA_KUBECONFIG" "$CA_CONTEXT" "$ATTEMPT" "$phase" "$capture" "$report" "$binding" \
+    "$QUALIFIER_KUBECONFIG" <<'PY'
 import json, os, sys
 (root, candidate, install, workspace, log, kubeconfig, context, attempt,
- phase, capture, report, binding) = sys.argv[1:13]
+ phase, capture, report, binding, qualifier_kubeconfig) = sys.argv[1:14]
 request = {
     "repository": root,
     "candidate": candidate,
@@ -286,6 +287,7 @@ request = {
     "authority": json.load(open(os.path.join(log, "ca-authority.json"))),
     "kubeconfig": kubeconfig,
     "context": context,
+    "identity_scope": "qualifier" if kubeconfig == qualifier_kubeconfig else "deploy",
     "attempt": attempt,
     "assessment": "database-ca",
     "scenario": "aws",
@@ -304,7 +306,7 @@ PY
 # Invoke the shared owner for one phase. A phase's exit status is not evidence:
 # the report phase re-reads the recorded captures and verdicts.
 ca_qualify() {
-  local phase="$1" capture="${2:-}" report="${3:-}" binding="${4:-}"
+  local phase="$1" capture="${2:-}" report="${3:-}" binding="${4:-}" status=0
   if [ ! -x "$SOL_QUALIFICATION_CA" ]; then
     say "the shared database-CA qualifier is not built at $SOL_QUALIFICATION_CA"
     return 1
@@ -313,9 +315,15 @@ ca_qualify() {
     say "could not build the database-CA $phase request"
     return 1
   fi
-  if ! "$SOL_QUALIFICATION_CA" --phase "$phase" \
-      --request "$LOG_DIR/ca-request-$phase.json" >"$LOG_DIR/ca-$phase.log" 2>&1; then
+  # The driver bounds its own child and cleanup; this outer watchdog keeps a
+  # hung driver from hanging the phase, and names the cleanup responsibility.
+  timeout "$PHASE_TIMEOUT" "$SOL_QUALIFICATION_CA" --phase "$phase" \
+    --request "$LOG_DIR/ca-request-$phase.json" >"$LOG_DIR/ca-$phase.log" 2>&1 || status=$?
+  if [ "$status" != 0 ]; then
     say "the shared database-CA $phase phase did not pass; see $LOG_DIR/ca-$phase.log"
+    if [ "$status" = 124 ]; then
+      say "the $phase phase exceeded ${PHASE_TIMEOUT}s; its cleanup is unestablished and remains the operator's responsibility"
+    fi
     tail -n 20 "$LOG_DIR/ca-$phase.log"
     return 1
   fi
@@ -772,7 +780,7 @@ phase_transport() {
   say "transport-establish"
   if ! KUBECONFIG="$QUALIFIER_KUBECONFIG" timeout "$PHASE_TIMEOUT" \
       "$ROOT/internal/qualification/transport/establish.sh" \
-      "$CLUSTER" "$QUALIFIER_ROLE" "$AWS_REGION" "$APP_NS" \
+      "$CLUSTER" "$QUALIFIER_ROLE" "$AWS_REGION" "$APP_NS" "$WORKER_NS" \
       >"$LOG_DIR/transport-establish.log" 2>&1; then
     say "FAILED: transport-establish (last 40 lines; full log $LOG_DIR/transport-establish.log)"
     tail -n 40 "$LOG_DIR/transport-establish.log"

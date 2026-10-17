@@ -93,7 +93,13 @@ let prepare_request () =
       ~kubernetes:authority
     |> get
   in
-  request, prepared, authority
+  let identity_scope =
+    match text request "identity_scope" with
+    | "qualifier" -> "qualifier"
+    | "deploy" -> "deploy"
+    | other -> failwith ("unsupported observation identity scope " ^ other)
+  in
+  request, prepared, authority, identity_scope
 ;;
 
 (* Every CA-family claim this path owns, from the verified candidate's complete
@@ -169,7 +175,7 @@ let captured_payload ~directory ~run reference_path =
 ;;
 
 let run_phase () =
-  let request, prepared, authority = prepare_request () in
+  let request, prepared, authority, identity_scope = prepare_request () in
   let phase = text request "phase" in
   let directory = text request "evidence" in
   let ctx =
@@ -239,6 +245,7 @@ let run_phase () =
     `Assoc
       [ "phase", `String phase
       ; "ok", `Bool passed
+      ; "identity_scope", `String identity_scope
       ; "binding", E.reference_json binding_capture
       ; "verdicts", `List verdicts
       ]
@@ -290,7 +297,7 @@ let verify_binding_capture ~directory ~run json =
 ;;
 
 let run_report () =
-  let request, prepared, _ = prepare_request () in
+  let request, prepared, _, identity_scope = prepare_request () in
   let directory = text request "evidence" in
   let run = prepared.B.run in
   let recorder = E.open_store ~directory ~run ~secrets:[] () |> evidence in
@@ -309,6 +316,8 @@ let run_report () =
       | `List values -> values
       | _ -> failwith "phase capture carries no verdict references"
     in
+    if text payload "identity_scope" <> identity_scope
+    then failwith "phase identity scope does not match the report";
     verify_binding_capture ~directory ~run (field payload "binding");
     let references =
       List.map (fun json -> E.reference_of_json json |> evidence) verdicts
@@ -327,6 +336,8 @@ let run_report () =
       [ "phase", `String "report"
       ; "ca_family", `String (if complete then "pass" else "fail")
       ; "complete", `Bool complete
+      ; "identity_scope", `String identity_scope
+      ; "independent_qualifier", `Bool (identity_scope = "qualifier")
       ; "release_accepted", `Bool false
       ; ( "outcomes"
         , `List

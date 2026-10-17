@@ -5,6 +5,8 @@ cluster="${1:?usage: establish.sh <cluster-name> <iam-role-name> [region] [names
 role="${2:?usage: establish.sh <cluster-name> <iam-role-name> [region] [namespace]}"
 region="${3:-us-east-1}"
 verify_ns="${4:-default}"
+if [ "$#" -ge 4 ]; then shift 4; else shift "$#"; fi
+observe_ns=("$verify_ns" "$@")
 
 account="$(aws sts get-caller-identity --query Account --output text)"
 arn="arn:aws:iam::${account}:role/${role}"
@@ -158,6 +160,31 @@ done
 kubectl --context "$alias" get clusterrole sol-qualifier-transport >/dev/null 2>&1 ||
   { echo "  could not apply the transport manifest" >&2; exit 1; }
 
+# The observation reads are namespace-scoped: the reusable ClusterRole is bound
+# only in the namespaces the CA family observes, and only while the temporary
+# establishment window is open.
+for ns in "${observe_ns[@]}"; do
+  if ! kubectl --context "$alias" apply -f - >/dev/null 2>&1 <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sol-qualifier-observe
+  namespace: ${ns}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sol-qualifier-observe
+subjects:
+  - kind: Group
+    name: sol:qualifiers
+    apiGroup: rbac.authorization.k8s.io
+EOF
+  then
+    echo "  could not bind the observation reads in ${ns}" >&2
+    exit 1
+  fi
+done
+
 echo "  closing the window by deleting the access entry and recreating it with only sol:qualifiers"
 recreate_narrow_entry
 
@@ -242,12 +269,28 @@ probe_effective_surface() {
       return 1
     fi
   }
+  allow_in() {
+    local ns="$1" verb="$2" resource="$3" verdict
+    verdict="$(kubectl --context "$alias" auth can-i "$verb" "$resource" -n "$ns" 2>/dev/null)"
+    if [ "$verdict" != yes ]; then
+      echo "  the declared observation grant is not effective in ${ns}: auth can-i ${verb} ${resource} did not answer yes" >&2
+      return 1
+    fi
+  }
   deny '*' '*' || return 1
   deny create pods exec || return 1
   deny get pods log || return 1
   deny delete pods || return 1
+  deny get secrets || return 1
   allow list services || return 1
   allow create pods portforward || return 1
+  allow get namespaces || return 1
+  for ns in "${observe_ns[@]}"; do
+    allow_in "$ns" get deployments.apps || return 1
+    allow_in "$ns" list deployments.apps || return 1
+    allow_in "$ns" get jobs.batch || return 1
+    allow_in "$ns" list configmaps || return 1
+  done
   return 0
 }
 
@@ -289,7 +332,7 @@ fi
 
 end_state=narrow
 trap - EXIT
-echo "  verified the effective surface as ${role} in ${verify_ns}: pods and services readable, secrets denied, pods/portforward permitted, pods/exec, pods/log, delete pods and */* denied"
+echo "  verified the effective surface as ${role} in ${verify_ns}: pods and services readable, namespaces readable, deployments/jobs/configmaps readable in ${observe_ns[*]}, secrets denied, pods/portforward permitted, pods/exec, pods/log, delete pods and */* denied"
 
 echo "qualification transport established. Verify with:"
 echo "  aws eks update-kubeconfig --name ${cluster} --alias ${alias} --role-arn ${arn}"
