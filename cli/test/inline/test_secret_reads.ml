@@ -421,6 +421,31 @@ let test_external_secret_status_reports_sync_and_materialized_keys () =
         state)
 ;;
 
+let observed_external_secret_state mode =
+  with_fake_kubectl ~mode (fun ~calls:_ ~manifests:_ ->
+    Sol_cli_secret.external_secret_status
+      ~ctx
+      ~namespace:"payments"
+      ~unit_name:"charge-svc"
+      ~expected_keys:[ "PAYMENT_KEY" ])
+;;
+
+let test_external_secret_status_never_calls_unknown_freshness_ready mode expected =
+  match observed_external_secret_state mode with
+  | Error message -> Windtrap.failf "ESO status observation failed: %s" message
+  | Ok state ->
+    Windtrap.equal
+      Windtrap.string
+      ~msg:(mode ^ ": reports the readiness deploy would observe")
+      expected
+      state;
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:(mode ^ ": never reports ready when deploy would refuse")
+      false
+      (String.starts_with ~prefix:"ready" state)
+;;
+
 let external_workload_spec () : Sol_cli_deployment_plan.service_spec =
   let k8s_name =
     match Sol_cli_deployment_plan.k8s_name_result "charge-svc" with
@@ -506,6 +531,42 @@ let test_external_secret_readiness_fails_closed mode expected_message =
         ~msg:("reports readiness failure for " ^ mode)
         true
         (Sol_cli_string.contains ~needle:expected_message message))
+;;
+
+(* The two commands read the same observation through the same predicate. The fixture is
+   raw ESO JSON, not a reproduction of the predicate: deploy evaluates it with its normal
+   wait, status evaluates it once without waiting, and their verdicts must match. *)
+let test_external_secret_status_agrees_with_deploy_readiness () =
+  [ "eso-ready"; "eso-not-synced"; "eso-no-synced-version"; "eso-stale-version" ]
+  |> List.iter (fun mode ->
+    with_fake_kubectl ~mode (fun ~calls:_ ~manifests:_ ->
+      let deploy_ready =
+        match
+          Sol_cli_secret.verify_external_secret_ready
+            ~timeout_s:0.
+            ~ctx
+            (external_workload_spec ())
+        with
+        | Ok () -> true
+        | Error _ -> false
+      in
+      let status =
+        match
+          Sol_cli_secret.external_secret_status
+            ~ctx
+            ~namespace:"payments"
+            ~unit_name:"charge-svc"
+            ~expected_keys:[ "PAYMENT_KEY" ]
+        with
+        | Ok state -> state
+        | Error message -> Windtrap.failf "ESO status observation failed: %s" message
+      in
+      let status_ready = String.starts_with ~prefix:"ready" status in
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:(mode ^ ": status readiness equals deploy readiness")
+        deploy_ready
+        status_ready))
 ;;
 
 (* syncedResourceVersion names the generation ESO processed, so a matching one is a
@@ -693,6 +754,29 @@ let%test "verify: TLS contract Job requires platform inputs before submit" =
 
 let%test "external Secret status reports readiness and keys" =
   test_external_secret_status_reports_sync_and_materialized_keys ()
+;;
+
+let%test "external Secret status refuses a Ready object with no synced version" =
+  test_external_secret_status_never_calls_unknown_freshness_ready
+    "eso-no-synced-version"
+    "not ready (no generation-bound synced version: status.syncedResourceVersion is \
+     absent)"
+;;
+
+let%test "external Secret status refuses an unsynced ESO condition" =
+  test_external_secret_status_never_calls_unknown_freshness_ready
+    "eso-not-synced"
+    "not ready (SecretSyncedError)"
+;;
+
+let%test "external Secret status refuses a lagging generation" =
+  test_external_secret_status_never_calls_unknown_freshness_ready
+    "eso-stale-version"
+    "not ready (syncedResourceVersion 2-abc has not reached generation 3)"
+;;
+
+let%test "external Secret status and deploy readiness agree" =
+  test_external_secret_status_agrees_with_deploy_readiness ()
 ;;
 
 let%test "external Secret deploy readiness accepts exact synced key set" =

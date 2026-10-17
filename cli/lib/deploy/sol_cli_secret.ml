@@ -793,9 +793,11 @@ let eso_sync_poll_s = 2.
    successful sync, and only writes it when the object changed (its own shouldRefresh
    compares the two), so a matching generation means ESO processed the spec we applied and
    a periodic refresh cannot produce that value. The format is an implementation detail
-   rather than a documented API guarantee, so it is a best-effort signal: absent,
-   unrecognized, or not advanced within the bound, we proceed on Ready=True/SecretSynced
-   and warn. This never fails closed on the format. *)
+   rather than a documented API guarantee, but "absent" is not "fresh": without a
+   generation-bound version there is no evidence that the sync belongs to the spec this
+   selection asked for. Both the deploy wait and `sol secret status` decide readiness
+   through {!eso_readiness_of_json}, so an absent or lagging version cannot be accepted by
+   one and rejected by the other. *)
 let synced_version_matches ~generation synced_version =
   match generation, synced_version with
   | Some generation, Some version ->
@@ -803,6 +805,34 @@ let synced_version_matches ~generation synced_version =
       (Option.is_some
          (Sol_cli_string.strip_prefix_opt ~prefix:(generation ^ "-") version))
   | _ -> None
+;;
+
+(* **The readiness predicate.** Deploy waits on [Eso_not_ready] and [Eso_generation_lags]
+   within its configured bound; [Eso_freshness_unknown] is terminal because waiting cannot
+   manufacture a generation-bound version. `sol secret status` evaluates the same value
+   once and never waits. *)
+type eso_readiness =
+  | Eso_ready of { refresh_time : string option }
+  | Eso_not_ready_state of string
+  | Eso_generation_lags of
+      { generation : string option
+      ; synced_version : string option
+      }
+  | Eso_freshness_unknown of string
+
+let eso_readiness_of_json json =
+  match eso_state_of_json json with
+  | Eso_not_ready reason -> Eso_not_ready_state reason
+  | Eso_synced { generation; synced_version; refresh_time } ->
+    (match synced_version_matches ~generation synced_version with
+     | Some true -> Eso_ready { refresh_time }
+     | Some false -> Eso_generation_lags { generation; synced_version }
+     | None ->
+       Eso_freshness_unknown
+         (match generation, synced_version with
+          | _, None -> "status.syncedResourceVersion is absent"
+          | None, _ -> "metadata.generation is absent"
+          | Some _, Some _ -> "the synced version is not a generation prefix"))
 ;;
 
 let wait_for_external_secret_sync ~timeout_s ~poll_s ~ctx ~namespace ~external_name =
@@ -825,8 +855,9 @@ let wait_for_external_secret_sync ~timeout_s ~poll_s ~ctx ~namespace ~external_n
         output.Sol_cli_process.stdout
     in
     let expired () = Unix.gettimeofday () >= deadline in
-    match eso_state_of_json external_secret with
-    | Eso_not_ready reason ->
+    match eso_readiness_of_json external_secret with
+    | Eso_ready _ -> Ok ()
+    | Eso_not_ready_state reason ->
       if expired ()
       then
         Error
@@ -838,44 +869,39 @@ let wait_for_external_secret_sync ~timeout_s ~poll_s ~ctx ~namespace ~external_n
       else (
         Unix.sleepf poll_s;
         poll ())
-    | Eso_synced { generation; synced_version; refresh_time = _ } ->
-      (match synced_version_matches ~generation synced_version with
-       | Some true -> Ok ()
-       | Some false ->
-         (* A *known* mismatch: what ESO published has not reached the spec this selection
-            asks for. Proceeding is how a changed binding quietly keeps serving the old
-            database — the previous ExternalSecret still reports Ready, its Secret still
-            carries the key, and a key check passes. *)
-         if expired ()
-         then
-           Error
-             (Printf.sprintf
-                "ExternalSecret %s/%s has not synced the spec this selection asks for: \
-                 syncedResourceVersion %s has not reached generation %s. Refusing to \
-                 treat the previous sync as evidence for this one."
-                namespace
-                external_name
-                (Option.value synced_version ~default:"unknown")
-                (Option.value generation ~default:"unknown"))
-         else (
-           Unix.sleepf poll_s;
-           poll ())
-       | None ->
-         (* No freshness evidence at all. "Unsupported" is not "fresh": without a
-            generation-bound version there is nothing that distinguishes this selection's
-            sync from an earlier one's, and the same silent substitution follows. Ready
-            alone is not evidence about *which* spec was synced. *)
-         Error
-           (Printf.sprintf
-              "ExternalSecret %s/%s reports Ready but carries no generation-bound synced \
-               version (%s), so there is no evidence the sync belongs to this selection. \
-               Refusing to proceed on readiness alone."
-              namespace
-              external_name
-              (match generation, synced_version with
-               | _, None -> "status.syncedResourceVersion is absent"
-               | None, _ -> "metadata.generation is absent"
-               | Some _, Some _ -> "the synced version is not a generation prefix")))
+    | Eso_generation_lags { generation; synced_version } ->
+      (* A *known* mismatch: what ESO published has not reached the spec this selection
+         asks for. Proceeding is how a changed binding quietly keeps serving the old
+         database — the previous ExternalSecret still reports Ready, its Secret still
+         carries the key, and a key check passes. *)
+      if expired ()
+      then
+        Error
+          (Printf.sprintf
+             "ExternalSecret %s/%s has not synced the spec this selection asks for: \
+              syncedResourceVersion %s has not reached generation %s. Refusing to treat \
+              the previous sync as evidence for this one."
+             namespace
+             external_name
+             (Option.value synced_version ~default:"unknown")
+             (Option.value generation ~default:"unknown"))
+      else (
+        Unix.sleepf poll_s;
+        poll ())
+    | Eso_freshness_unknown detail ->
+      (* No freshness evidence at all. "Unsupported" is not "fresh": without a
+         generation-bound version there is nothing that distinguishes this selection's
+         sync from an earlier one's, and the same silent substitution follows. Ready alone
+         is not evidence about *which* spec was synced, and no amount of waiting produces
+         the missing field, so this is terminal. *)
+      Error
+        (Printf.sprintf
+           "ExternalSecret %s/%s reports Ready but carries no generation-bound synced \
+            version (%s), so there is no evidence the sync belongs to this selection. \
+            Refusing to proceed on readiness alone."
+           namespace
+           external_name
+           detail)
   in
   poll ()
 ;;
@@ -975,9 +1001,20 @@ let external_secret_status ~ctx ~namespace ~unit_name ~expected_keys =
            ~what:(Printf.sprintf "ExternalSecret %s/%s" namespace name)
            raw
        in
-       (match eso_state_of_json json with
-        | Eso_not_ready reason -> Ok ("not ready (" ^ reason ^ ")")
-        | Eso_synced { refresh_time; _ } ->
+       (* Evaluate deploy's readiness predicate exactly once, without waiting. Only
+          [Eso_ready] may produce "ready": a missing or lagging freshness signal is the
+          same observation deploy refuses, so status reports it as not ready too. *)
+       (match eso_readiness_of_json json with
+        | Eso_not_ready_state reason -> Ok ("not ready (" ^ reason ^ ")")
+        | Eso_generation_lags { generation; synced_version } ->
+          Ok
+            (Printf.sprintf
+               "not ready (syncedResourceVersion %s has not reached generation %s)"
+               (Option.value synced_version ~default:"unknown")
+               (Option.value generation ~default:"unknown"))
+        | Eso_freshness_unknown detail ->
+          Ok ("not ready (no generation-bound synced version: " ^ detail ^ ")")
+        | Eso_ready { refresh_time } ->
           let* materialized = get_named_secret_json ~ctx ~name namespace in
           let found =
             materialized

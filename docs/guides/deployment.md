@@ -254,17 +254,21 @@ requires External Secrets Operator v0.16 or later. Direct deploy waits for ESO t
 checks the materialized Secret's key set, and then verifies rollout readiness. GitOps emits the same
 ExternalSecret and workload references; Argo CD and ESO reconcile after CI writes the manifests.
 `sol plan` reports declarations, not proof that provider credentials can read a value.
-`sol secret status` reports observed ESO sync state and refresh time when available; it cannot
-prove an already-running process has loaded a rotated value.
+`sol secret status` evaluates the same readiness state as the deploy, once and without waiting,
+and reports why a Secret is not ready; it cannot prove an already-running process has loaded a
+rotated value.
 
 ESO's ExternalSecret `Ready` condition carries only `type`, `status`, `reason`, `message` and
 `lastTransitionTime`; it publishes no observed generation. To verify that ESO has processed the
 spec Sol just applied, Sol reads `status.syncedResourceVersion`, whose generation prefix changes
-only when the object changes, so a periodic `refreshInterval` refresh cannot produce it. That
-format is an ESO implementation detail rather than a documented API guarantee: when the field is
-absent, or its prefix does not advance to the applied generation within the wait bound, Sol
-proceeds on `Ready=True`/`SecretSynced` and logs that per-spec freshness was not verified. The
-deploy never fails closed on that format.
+only when the object changes, so a periodic `refreshInterval` refresh cannot produce it. This
+format is an ESO implementation detail rather than a documented API guarantee, but missing
+freshness evidence is not treated as fresh: a `Ready=True`/`SecretSynced` condition with no
+generation-bound synced version is refused immediately, because waiting cannot manufacture the
+missing signal and an earlier sync would otherwise be accepted as evidence for this one. When the
+prefix is present but has not reached the applied generation, deploy waits within its bound and
+then fails closed. `sol secret status` applies the same predicate without waiting, so it cannot
+report `ready` for an observation the deploy would reject.
 
 ESO rotation is manual: rotate at the external authority, wait for ESO sync, then restart the
 affected workload with Kubernetes rollout tooling. An unchanged `sol deploy` is not a restart.

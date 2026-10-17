@@ -370,10 +370,10 @@ let run_status target =
   let* platform_shape = Sol_cli_config.platform_shape config in
   let* facts = Sol_cli_workspace_model.load_cwd () in
   let* ctx = destination_context config in
-  let* workspace =
-    Sol_cli_workspace.resolve_validated ~dir:(Sys.getcwd ())
-    |> Result.map_error Sol_cli_workspace.workspace_error_to_string
-  in
+  (* The namespace is "<workspace-name>-<domain>", named for the workspace directory's
+     basename. The resolved root is an absolute path, which is not a namespace; `set` and
+     `delete` derive the same name this way. *)
+  let workspace = Sol_cli_workspace.current_name () in
   let* rows =
     Sol_cli_workspace_model.workloads facts
     |> Sol_cli_result.map_list (fun (workload : Sol_cli_workspace_model.workload) ->
