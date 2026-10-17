@@ -1413,6 +1413,13 @@ let destroy_deps
                  ~var_files
                  ~vars:(destroy_apply_vars ())
                  ())))
+    ; destroy_authorization =
+        (fun () ->
+          Sol_cli_authorization_stage.destroy ~assets ~run_log ~target:target_cfg
+          |> Result.map (function
+            | Sol_cli_authorization_stage.Established ->
+              "authorization: the reconciler identity and its fence were removed"
+            | Not_declared -> Sol_cli_authorization_stage.outcome_to_string Not_declared))
     ; verify_destruction =
         (fun ~pre_destroy ~preparation ->
           verification_observation
