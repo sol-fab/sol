@@ -4,6 +4,7 @@
  (wrapped false)
  (libraries
   eio
+  mtime
   eio.unix
   obs-eio
   obs-prometheus-eio

@@ -10,7 +10,7 @@ bug-reports: "https://github.com/sol-fab/sol/issues"
 depends: [
   "ocaml" {>= "5.4.0"}
   "dune" {>= "3.0"}
-  "caqti" "eio" "obs-eio" "obs-prometheus-eio" "pg-eio"
+  "caqti" "eio" "mtime" "obs-eio" "obs-prometheus-eio" "pg-eio"
   "sol-env" "sol-obs" "sol-retry" "sol-runtime"
 ]
 pin-depends: [

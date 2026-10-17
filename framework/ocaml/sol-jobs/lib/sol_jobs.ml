@@ -235,21 +235,35 @@ let with_runtime_unflushed
   =
   let metrics_renderer = Option.map Sol_obs.metrics_renderer ot in
   let obs_eio_t = Option.map Sol_obs.obs_eio ot in
-  let job_count, job_duration =
+  let job_count, job_duration, handler_count, queue_errors =
     match obs_eio_t with
-    | None -> None, None
+    | None -> None, None, None, None
     | Some o ->
       let c, h =
         Obs_eio.register_counter_and_histogram
           o
           ~counter_name:"sol_jobs_processed_total"
-          ~counter_help:"Total jobs processed by status"
+          ~counter_help:"Confirmed durable job transitions by status"
           ~counter_labels:[ "status"; "kind" ]
           ~histogram_name:"sol_jobs_job_duration_seconds"
           ~histogram_help:"Job handler duration in seconds"
-          ~histogram_labels:[]
+          ~histogram_labels:[ "kind" ]
       in
-      Some c, Some h
+      let handler_count =
+        Obs_eio.register_counter
+          o
+          ~name:"sol_jobs_handler_outcomes_total"
+          ~help:"Handler returns before queue finalization"
+          ~label_names:[ "status"; "kind" ]
+      in
+      let queue_errors =
+        Obs_eio.register_counter
+          o
+          ~name:"sol_jobs_queue_errors_total"
+          ~help:"Queue operation failures and confirmed claim losses"
+          ~label_names:[ "kind"; "action"; "reason" ]
+      in
+      Some c, Some h, Some handler_count, Some queue_errors
   in
   let signal_stop, signal_stop_r = Eio.Promise.create () in
   let remaining =
@@ -278,7 +292,15 @@ let with_runtime_unflushed
            (`Tcp (Eio.Net.Ipaddr.V4.any, metrics_port))
            render)
       metrics_renderer;
-    body ~sw ~ot:obs_eio_t ~job_count ~job_duration ~should_stop ~record_terminal)
+    body
+      ~sw
+      ~ot:obs_eio_t
+      ~job_count
+      ~job_duration
+      ~handler_count
+      ~queue_errors
+      ~should_stop
+      ~record_terminal)
 ;;
 
 let with_runtime ~env ~ot ~metrics_port ~stop ~max_jobs ~body =
@@ -378,7 +400,17 @@ module Make (J : JOB) = struct
       ~metrics_port
       ~stop
       ~max_jobs
-      ~body:(fun ~sw:_ ~ot ~job_count ~job_duration ~should_stop ~record_terminal ->
+      ~body:
+        (fun
+          ~sw:_
+          ~ot
+          ~job_count
+          ~job_duration
+          ~handler_count
+          ~queue_errors
+          ~should_stop
+          ~record_terminal
+        ->
         Option.iter (fun f -> f ()) on_ready;
         let log_warn fields msg =
           match ot with
@@ -394,59 +426,82 @@ module Make (J : JOB) = struct
           | Some c -> c ~labels:[ "status", status; "kind", kind ] 1
           | None -> ()
         in
-        let lease_lost id ~attempts ~action =
+        let queue_error ~kind ~action ~reason =
+          Option.iter
+            (fun (c : Obs_eio.counter_fn) ->
+               c ~labels:[ "kind", kind; "action", action; "reason", reason ] 1)
+            queue_errors
+        in
+        let lease_lost id ~kind ~attempts ~action =
+          queue_error ~kind ~action ~reason:"lease_lost";
           log_warn
             [ "job_id", string_of_int id
+            ; "kind", kind
             ; "attempt", string_of_int attempts
             ; "action", action
             ]
             "sol-jobs: lease lost -- the job was re-claimed while this handler ran; this \
              outcome was not recorded and the job may have run concurrently"
         in
-        let finalize_success id ~kind ~attempts ~t0 =
-          (match Pg_db.find pool complete_q (id, attempts, J.workspace) with
-           | Ok (Some _) -> ()
-           | Ok None -> lease_lost id ~attempts ~action:"complete"
-           | Error e ->
-             log_warn
-               [ "job_id", string_of_int id; "error", Pg_error.to_string e ]
-               "sol-jobs: failed to mark the job completed (will be reclaimed after its \
-                lease expires and re-run)");
-          (match job_duration with
-           | Some h -> h (Eio.Time.now env#clock -. t0)
-           | None -> ());
-          count "ok" ~kind;
-          record_terminal ()
+        let transition ~id ~kind ~attempts ~action result =
+          match result with
+          | Ok (Some _) ->
+            count
+              (match action with
+               | "complete" -> "ok"
+               | "fail" -> "failed"
+               | action -> action)
+              ~kind;
+            true
+          | Ok None ->
+            lease_lost id ~kind ~attempts ~action;
+            false
+          | Error e ->
+            queue_error ~kind ~action ~reason:"database_error";
+            log_warn
+              [ "job_id", string_of_int id
+              ; "kind", kind
+              ; "attempt", string_of_int attempts
+              ; "action", action
+              ; "error", Pg_error.to_string e
+              ]
+              "sol-jobs: failed to persist job transition (the lease may expire and the \
+               job may run again)";
+            false
         in
-        let finalize_failure id ~kind ~attempts ~t0 ~msg =
-          (match job_duration with
-           | Some h -> h (Eio.Time.now env#clock -. t0)
-           | None -> ());
+        let finalize_success id ~kind ~attempts =
+          if
+            transition
+              ~id
+              ~kind
+              ~attempts
+              ~action:"complete"
+              (Pg_db.find pool complete_q (id, attempts, J.workspace))
+          then record_terminal ()
+        in
+        let finalize_failure id ~kind ~attempts ~msg =
           let exhausted =
             retry_policy.max_attempts >= 0 && attempts >= retry_policy.max_attempts
           in
           if exhausted
           then (
-            (match Pg_db.find pool fail_q (msg, id, attempts, J.workspace) with
-             | Ok (Some _) -> ()
-             | Ok None -> lease_lost id ~attempts ~action:"fail"
-             | Error e ->
-               log_warn
-                 [ "job_id", string_of_int id; "error", Pg_error.to_string e ]
-                 "sol-jobs: failed to mark job permanently failed");
-            count "failed" ~kind;
-            record_terminal ())
+            if
+              transition
+                ~id
+                ~kind
+                ~attempts
+                ~action:"fail"
+                (Pg_db.find pool fail_q (msg, id, attempts, J.workspace))
+            then record_terminal ())
           else (
             let delay = locked_backoff_s retry_policy attempts in
-            (match Pg_db.find pool retry_q (delay, msg, id, attempts, J.workspace) with
-             | Ok (Some _) -> ()
-             | Ok None -> lease_lost id ~attempts ~action:"retry"
-             | Error e ->
-               log_warn
-                 [ "job_id", string_of_int id; "error", Pg_error.to_string e ]
-                 "sol-jobs: failed to schedule job retry (will be reclaimed after its \
-                  lease expires and re-run)");
-            count "retry" ~kind)
+            ignore
+              (transition
+                 ~id
+                 ~kind
+                 ~attempts
+                 ~action:"retry"
+                 (Pg_db.find pool retry_q (delay, msg, id, attempts, J.workspace))))
         in
         let last_sweep = ref 0.0 in
         let sweep_expired () =
@@ -497,15 +552,35 @@ module Make (J : JOB) = struct
               record_terminal ();
               loop ~failures:0
             | Ok (Some (id, kind, payload, attempts, _)) ->
-              let t0 = Eio.Time.now env#clock in
+              let t0 = Eio.Time.Mono.now env#mono_clock in
               let outcome =
                 let never, _ = Eio.Promise.create () in
                 Eio.Fiber.first
                   (fun () ->
-                     try Result.bind (J.decode payload) J.handle with
-                     | Eio.Cancel.Cancelled _ as exn -> raise exn
-                     | (Out_of_memory | Stack_overflow | Sys.Break) as exn -> raise exn
-                     | exn -> Error (Printexc.to_string exn))
+                     let outcome =
+                       try Result.bind (J.decode payload) J.handle with
+                       | Eio.Cancel.Cancelled _ as exn -> raise exn
+                       | (Out_of_memory | Stack_overflow | Sys.Break) as exn -> raise exn
+                       | exn -> Error (Printexc.to_string exn)
+                     in
+                     Option.iter
+                       (fun (c : Obs_eio.counter_fn) ->
+                          c
+                            ~labels:
+                              [ ("status", if Result.is_ok outcome then "ok" else "error")
+                              ; "kind", kind
+                              ]
+                            1)
+                       handler_count;
+                     Option.iter
+                       (fun (h : Obs_eio.histogram_fn) ->
+                          h
+                            ~labels:[ "kind", kind ]
+                            (Mtime.Span.to_float_ns
+                               (Mtime.span t0 (Eio.Time.Mono.now env#mono_clock))
+                             /. 1e9))
+                       job_duration;
+                     outcome)
                   (fun () ->
                      let rec renew () =
                        Eio.Time.sleep env#clock (lease_s /. 3.0);
@@ -514,9 +589,10 @@ module Make (J : JOB) = struct
                        with
                        | Ok (Some _) -> renew ()
                        | Ok None ->
-                         lease_lost id ~attempts ~action:"renew";
+                         lease_lost id ~kind ~attempts ~action:"renew";
                          Eio.Promise.await never
                        | Error e ->
+                         queue_error ~kind ~action:"renew" ~reason:"database_error";
                          log_warn
                            [ "job_id", string_of_int id; "error", Pg_error.to_string e ]
                            "sol-jobs: lease renewal failed";
@@ -525,8 +601,8 @@ module Make (J : JOB) = struct
                      renew ())
               in
               (match outcome with
-               | Ok () -> finalize_success id ~kind ~attempts ~t0
-               | Error msg -> finalize_failure id ~kind ~attempts ~t0 ~msg);
+               | Ok () -> finalize_success id ~kind ~attempts
+               | Error msg -> finalize_failure id ~kind ~attempts ~msg);
               loop ~failures:0)
         in
         loop ~failures:0)
