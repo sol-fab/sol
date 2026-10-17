@@ -631,14 +631,19 @@ inventory_remember_identity() {
 # that cannot decode it, is a shape failure: an empty answer from a command
 # whose output the harness cannot read is not an absence.
 inventory_json_rows() {
-  local out="$1" program="$2"
-  jq -e 'type == "array"' "$out" >/dev/null 2>&1 || return 1
+  local out="$1" shape="$2" program="$3"
+  # The attribution fields are part of the shape. A document that drops
+  # `IPAddress`, `network` or `name` would otherwise decode to empty strings and
+  # read as "nothing attributable", which is a false absence: it is UNKNOWN.
+  jq -e "$shape" "$out" >/dev/null 2>&1 || return 1
   jq -r "$program" "$out" 2>/dev/null || return 1
 }
 
 attribute_addresses() {
   local class="$1" out="$2" name address rows
-  rows="$(inventory_json_rows "$out" '.[] | [.name, (.address // "")] | @tsv')" || return 1
+  rows="$(inventory_json_rows "$out" \
+    'type == "array" and all(.[]; has("name"))' \
+    '.[] | [.name, (.address // "")] | @tsv')" || return 1
   [ -n "$rows" ] || return 0
   while IFS=$'\t' read -r name address; do
     [ -n "$name" ] || return 1
@@ -653,7 +658,9 @@ attribute_addresses() {
 
 attribute_forwarding_rules() {
   local class="$1" out="$2" name address network subnetwork rows
-  rows="$(inventory_json_rows "$out" '.[] | [.name, (.IPAddress // ""), (.network // ""), (.subnetwork // "")] | @tsv')" || return 1
+  rows="$(inventory_json_rows "$out" \
+    'type == "array" and all(.[]; has("name") and has("IPAddress"))' \
+    '.[] | [.name, (.IPAddress // ""), (.network // ""), (.subnetwork // "")] | @tsv')" || return 1
   [ -n "$rows" ] || return 0
   while IFS=$'\t' read -r name address network subnetwork; do
     [ -n "$name" ] || return 1
@@ -670,7 +677,9 @@ attribute_forwarding_rules() {
 
 attribute_disks() {
   local class="$1" out="$2" name label rows
-  rows="$(inventory_json_rows "$out" '.[] | [.name, (.labels["goog-k8s-cluster-name"] // "")] | @tsv')" || return 1
+  rows="$(inventory_json_rows "$out" \
+    'type == "array" and all(.[]; has("name") and ((.labels // {}) | type == "object"))' \
+    '.[] | [.name, (.labels["goog-k8s-cluster-name"] // "")] | @tsv')" || return 1
   [ -n "$rows" ] || return 0
   while IFS=$'\t' read -r name label; do
     [ -n "$name" ] || return 1
@@ -685,7 +694,9 @@ attribute_disks() {
 
 attribute_peerings() {
   local class="$1" out="$2" name network rows
-  rows="$(inventory_json_rows "$out" '.[] | [.name, (.network // "")] | @tsv')" || return 1
+  rows="$(inventory_json_rows "$out" \
+    'type == "array" and all(.[]; has("name") and has("network"))' \
+    '.[] | [.name, (.network // "")] | @tsv')" || return 1
   [ -n "$rows" ] || return 0
   while IFS=$'\t' read -r name network; do
     [ -n "$name" ] || return 1

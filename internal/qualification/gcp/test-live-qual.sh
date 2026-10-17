@@ -285,6 +285,11 @@ case "$*" in
     fi
     printf '[]\n'; exit 0 ;;
   *"compute forwarding-rules list"*)
+    if [ "${STUB_FORWARDING_WRONG_SHAPE:-0}" = "1" ]; then
+      # A document whose attribution fields are not the ones this class reads.
+      # It must not decode to "nothing attributable".
+      printf '[{"nickname":"a1b2c3d4"}]\n'; exit 0
+    fi
     if [ "${STUB_FORWARDING_RESIDUE:-0}" = "1" ]; then
       printf '[{"name":"k8s2-residue","IPAddress":"34.0.0.1","network":"https://www.googleapis.com/compute/v1/projects/sol-qualification/global/networks/test-cluster"}]\n'; exit 0
     fi
@@ -1408,6 +1413,18 @@ printf '\nscenario: an unrelated resource in the class is not the target residue
 run_case disk-unrelated verify STUB_DISK_HASHED=1
 has "an unattributable disk reads ABSENT" "disks: ABSENT" "$TMP/disk-unrelated.out"
 is "and the verification passes" "$(cat "$TMP/disk-unrelated.rc")" "0"
+
+printf '\nscenario: an enumeration whose shape is wrong is UNKNOWN, not absent\n'
+run_case forwarding-wrong-shape verify STUB_FORWARDING_WRONG_SHAPE=1
+has "a document without the attribution fields is UNKNOWN" \
+  "forwarding-rules: UNKNOWN" "$TMP/forwarding-wrong-shape.out"
+has "and the report says it could not decode the shape" \
+  "shape is not one this class can decode" "$TMP/forwarding-wrong-shape.out"
+if [ "$(cat "$TMP/forwarding-wrong-shape.rc")" = "0" ]; then
+  no "a wrong-shaped enumeration does not verify" "non-zero" "0"
+else
+  ok "a wrong-shaped enumeration does not verify"
+fi
 
 printf '\nscenario: the post inventory accounts for what the pre inventory attributed\n'
 PRESEED_PRIOR_IDENTITIES=$'forwarding-rules\ta1b2c3d4' run_case prior-identity-residue verify STUB_LB_ADDRESS=1
