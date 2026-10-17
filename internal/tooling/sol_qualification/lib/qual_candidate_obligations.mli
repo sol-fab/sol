@@ -12,6 +12,10 @@ type t = private
     this handle instead of accepting a later, possibly unrelated installation. *)
 val verified : t -> Qual_candidate.t
 
+(** The subject the candidate-binding capture is written under. The writer
+    declares it; readers must not reproduce the rule. *)
+val binding_subject : string
+
 val prepare
   :  verified:Qual_candidate.t
   -> scenario:Qual_domain.scenario

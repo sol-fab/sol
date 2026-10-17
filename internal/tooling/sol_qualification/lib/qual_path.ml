@@ -26,6 +26,79 @@ let migration_requirement obligations =
   | _ -> Error "the qualification path supports exactly one migration execution"
 ;;
 
+let check_recorder prepared (recorder : E.t) =
+  if D.same_run prepared.B.run (E.run recorder)
+  then Ok ()
+  else Error "evidence recorder belongs to another candidate assessment"
+;;
+
+(* Application CA delivery is observed at the point the workloads exist. The live
+   row calls this after its final deploy; it is separate from the migration phase
+   because the migration Job no longer exists by then. *)
+let observe_application ~directory ~prepared ~recorder ~read =
+  let* () = check_recorder prepared recorder in
+  CA.observe_all
+    ~directory
+    ~run:prepared.B.run
+    ~obligations:prepared.B.obligations
+    ~recorder
+    ~read
+;;
+
+(* The migration phase runs the verified candidate's own `migrate apply` at the
+   point the product lifecycle performs it, capturing the actual Job locator and
+   observing its CA before the product's cleanup is released. A skip is reported
+   as a skip, not inferred as a satisfied execution. *)
+let migration
+      ~directory
+      ~prepared
+      ~recorder
+      ~read
+      ~establish
+      ~expected
+      ~binding
+      ~timeout_s
+      ~completion_timeout_s
+  =
+  let* () = check_recorder prepared recorder in
+  let* requirement = migration_requirement prepared.B.obligations in
+  let* execution =
+    QME.run
+      ~verified:prepared.B.verified
+      ~expected
+      ~binding
+      ~timeout_s
+      ~completion_timeout_s
+      ~establish
+      ~consume:(fun locator ->
+        let* execution =
+          CA.capture_execution
+            recorder
+            requirement
+            ~context:locator.context
+            locator.identity
+          |> Result.map_error (fun error -> error.E.stage ^ ": " ^ error.E.diagnostic)
+        in
+        CA.observe_migrations
+          ~directory
+          ~run:prepared.B.run
+          ~obligations:prepared.B.obligations
+          ~recorder
+          ~read
+          ~execution:(fun _ -> Ok execution))
+  in
+  match execution with
+  | QME.Executed outcomes -> Ok outcomes
+  | QME.Skipped reason ->
+    Error
+      (Printf.sprintf
+         "the candidate performed no migration execution (%s); the migration CA family \
+          is unestablished"
+         reason)
+;;
+
+(* Offline composition. Live callers use the phases separately at the lifecycle
+   points where each observation is valid. *)
 let run
       ~directory
       ~prepared
@@ -37,44 +110,18 @@ let run
       ~timeout_s
       ~completion_timeout_s
   =
-  let run = prepared.B.run in
-  let obligations = prepared.B.obligations in
-  if not (D.same_run run (E.run recorder))
-  then Error "evidence recorder belongs to another candidate assessment"
-  else
-    let* requirement = migration_requirement obligations in
-    let* application = CA.observe_all ~directory ~run ~obligations ~recorder ~read in
-    let* execution =
-      QME.run
-        ~verified:prepared.B.verified
-        ~expected
-        ~binding
-        ~timeout_s
-        ~completion_timeout_s
-        ~establish
-        ~consume:(fun locator ->
-          let* execution =
-            CA.capture_execution
-              recorder
-              requirement
-              ~context:locator.context
-              locator.identity
-            |> Result.map_error (fun error -> error.E.stage ^ ": " ^ error.E.diagnostic)
-          in
-          CA.observe_migrations
-            ~directory
-            ~run
-            ~obligations
-            ~recorder
-            ~read
-            ~execution:(fun _ -> Ok execution))
-    in
-    match execution with
-    | QME.Executed migration -> Ok { application; migration }
-    | QME.Skipped reason ->
-      Error
-        (Printf.sprintf
-           "the candidate performed no migration execution (%s); the migration CA family \
-            is unestablished"
-           reason)
+  let* application = observe_application ~directory ~prepared ~recorder ~read in
+  let* migration =
+    migration
+      ~directory
+      ~prepared
+      ~recorder
+      ~read
+      ~establish
+      ~expected
+      ~binding
+      ~timeout_s
+      ~completion_timeout_s
+  in
+  Ok { application; migration }
 ;;
