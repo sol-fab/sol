@@ -206,6 +206,15 @@ case "$1" in
       *) : ;;
     esac
     ;;
+  destroy)
+    # Keep the target the harness wrote, so a test can assert what `sol destroy`
+    # actually read: the harness removes it after a verified teardown.
+    if [ -n "${STUB_TARGET_COPY:-}" ] \
+      && [ -f "${WORKSPACE:-}/sol/environments.local.yml" ]; then
+      cp "${WORKSPACE}/sol/environments.local.yml" "$STUB_TARGET_COPY"
+    fi
+    [ "${STUB_DESTROY_RC:-0}" = "0" ]
+    ;;
   *) : ;;
 esac
 STUB
@@ -941,8 +950,12 @@ run_case() {
     [ -s "$LOG_DIR/attempt.txt" ] || printf 'attempt=%s\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
   fi
   local harness="${HARNESS_UNDER_TEST:-$HARNESS}"
+  # The install-time ACME contact is not an input to teardown (#1400), so a case can
+  # ask for the documented minimal destroy environment by leaving it unset.
+  local -a le_env=(LE_EMAIL=test@example.com)
+  if [ "${OMIT_LE_EMAIL:-0}" = "1" ]; then le_env=(); fi
   env ALLOW_CANONICAL=1 SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" CLUSTER=test-cluster \
-    IMPERSONATOR=user:test@example.com LE_EMAIL=test@example.com \
+    IMPERSONATOR=user:test@example.com "${le_env[@]}" \
     PROJECT=sol-qualification REGION=us-central1 \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" \
     GCP_CA_OBSERVER_PRINCIPAL=gcp:qualifier@sol-qualification.iam.gserviceaccount.com \
@@ -1786,6 +1799,25 @@ lacks "an empty harness target file is not treated as a foreign one" \
   "was not written by this harness" "$TMP/destroy-empty-target.out"
 has "and the phase went on to destroy its target, which it could only do from a usable file" \
   "sol destroy" "$TMP/destroy-empty-target.argv"
+
+printf '\nscenario: destroy does not require the install-only ACME contact (#1400)\n'
+OMIT_LE_EMAIL=1 run_case destroy-no-le-email destroy \
+  STUB_TARGET_COPY="$TMP/destroy-no-le-email.target"
+is "the documented minimal destroy invocation exits 0" \
+  "$(cat "$TMP/destroy-no-le-email.rc")" "0"
+lacks "and does not abort on an unset LE_EMAIL" \
+  "LE_EMAIL: unbound variable" "$TMP/destroy-no-le-email.out"
+has "it writes the target destroy needs" \
+  "wrote target qual/gcp/us-central1" "$TMP/destroy-no-le-email.out"
+present "$TMP/destroy-no-le-email.target" "and the written target is what sol destroy reads"
+has "the target binds the cluster identity" \
+  "cluster_name: test-cluster" "$TMP/destroy-no-le-email.target"
+has "and the provisioner impersonator" \
+  "provisioner_impersonator: user:test@example.com" "$TMP/destroy-no-le-email.target"
+has "the teardown target declares a non-deliverable contact" \
+  "letsencrypt_email: teardown@invalid" "$TMP/destroy-no-le-email.target"
+has "and teardown runs against that target" \
+  "sol destroy qual/gcp/us-central1" "$TMP/destroy-no-le-email.argv"
 
 printf '\nscenario: no phase given\n'
 run_case_without_a_phase
