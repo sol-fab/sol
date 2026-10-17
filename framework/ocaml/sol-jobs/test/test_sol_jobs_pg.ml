@@ -126,7 +126,7 @@ let assert_isolated pool =
   | Error e -> Windtrap.failf "schema isolation check failed: %s" (Pg_error.to_string e)
 ;;
 
-let with_pool f =
+let with_pool ?(pool_size = 1) f =
   match postgres_url with
   | None ->
     Windtrap.fail
@@ -141,7 +141,7 @@ let with_pool f =
     (match
        Pg_db.create_pool
          ~url:(connection_url url)
-         ~pool_size:1
+         ~pool_size
          ~sw
          ~stdenv:(env :> Caqti_eio.stdenv)
          ()
@@ -684,15 +684,57 @@ let test_duplicate_enqueue_with_a_dedupe_key_is_a_no_op () =
 ;;
 
 let test_concurrent_duplicate_enqueue_inserts_one_row () =
-  with_pool (fun _env pool ->
+  with_pool ~pool_size:2 (fun env pool ->
     List.iter (exec_sql pool) ddl;
-    ignore
-      (Eio.Fiber.both
-         (fun () -> enqueue_slow ~dedupe_key:"evt-2" pool)
-         (fun () -> enqueue_slow ~dedupe_key:"evt-2" pool));
+    let inserted, inserted_r = Eio.Promise.create () in
+    let contending, contending_r = Eio.Promise.create () in
+    let pids = ref [] in
+    let identify tx =
+      match
+        Pg_db.find
+          tx
+          (Caqti_request.Infix.(Caqti_type.unit ->? Caqti_type.int)
+             "SELECT pg_backend_pid()")
+          ()
+      with
+      | Ok (Some pid) ->
+        pids := pid :: !pids;
+        Ok ()
+      | Ok None -> Windtrap.fail "no backend pid"
+      | Error e -> Error e
+    in
+    let check = function
+      | Ok () -> ()
+      | Error e -> Windtrap.fail (Pg_error.to_string e)
+    in
+    Eio.Time.with_timeout_exn env#clock 5.0 (fun () ->
+      Eio.Fiber.both
+        (fun () ->
+           check
+             (Pg_db.transaction pool (fun tx ->
+                let open Result.Syntax in
+                let* () = identify tx in
+                let* () = Slows.enqueue tx ~dedupe_key:"evt-2" "work" in
+                Eio.Promise.resolve inserted_r ();
+                Eio.Promise.await contending;
+                Eio.Time.sleep env#clock 0.05;
+                Ok ())))
+        (fun () ->
+           Eio.Promise.await inserted;
+           check
+             (Pg_db.transaction pool (fun tx ->
+                let open Result.Syntax in
+                let* () = identify tx in
+                Eio.Promise.resolve contending_r ();
+                Slows.enqueue tx ~dedupe_key:"evt-2" "work"))));
+    Windtrap.equal
+      Windtrap.int
+      ~msg:"two independent database connections"
+      2
+      (List.length (List.sort_uniq Int.compare !pids));
     Windtrap.equal
       (Windtrap.list (Windtrap.triple Windtrap.string Windtrap.string Windtrap.int))
-      ~msg:"the unique index admits exactly one of two concurrent inserts"
+      ~msg:"the unique index admits one row from overlapping transactions"
       [ "slow", "pending", 0 ]
       (rows pool))
 ;;
@@ -747,11 +789,101 @@ let test_expired_terminal_row_releases_its_key () =
       (List.length (rows pool)))
 ;;
 
+let test_retention_is_scoped_to_declared_kinds () =
+  with_pool (fun env pool ->
+    List.iter (exec_sql pool) ddl;
+    enqueue_slow ~dedupe_key:"retained" pool;
+    (Slow.on_handle := fun () -> Ok ());
+    run_slow ~max_jobs:1 env pool;
+    exec_sql pool "UPDATE sol_jobs SET finished_at = now() - interval '1 day'";
+    (match Pg_db.transaction pool (fun tx -> Reports.enqueue tx "old-report") with
+     | Ok () -> ()
+     | Error e -> Windtrap.fail (Pg_error.to_string e));
+    exec_sql
+      pool
+      "UPDATE sol_jobs SET status = 'completed', finished_at = now() - interval '1 day' \
+       WHERE kind = 'build_report'";
+    (match Reports.run ~env ~pool ~max_jobs:0 ~terminal_retention_s:3600.0 () with
+     | Ok () -> ()
+     | Error e -> Windtrap.fail (Sol_jobs.run_error_to_string e));
+    enqueue_slow ~dedupe_key:"retained" pool;
+    Windtrap.equal
+      (Windtrap.list (Windtrap.triple Windtrap.string Windtrap.string Windtrap.int))
+      ~msg:"report cleanup removes its row but preserves the slow job and its key"
+      [ "slow", "completed", 1 ]
+      (rows pool))
+;;
+
+let test_enqueue_rejects_invalid_declared_kinds () =
+  with_pool (fun _env pool ->
+    List.iter (exec_sql pool) ddl;
+    List.iter
+      (fun invalid ->
+         let module Invalid = struct
+           include Slow
+
+           let kinds = [ "slow"; invalid ]
+         end
+         in
+         let module Jobs = Sol_jobs.Make (Invalid) in
+         match Pg_db.transaction pool (fun tx -> Jobs.enqueue tx "work") with
+         | Error _ -> ()
+         | Ok () -> Windtrap.fail "invalid kind declaration was accepted")
+      [ ""; "Bad Kind"; "a,b" ];
+    Windtrap.equal Windtrap.int 0 (List.length (rows pool)))
+;;
+
+let test_enqueue_and_domain_write_share_commit_and_rollback () =
+  with_pool (fun _env pool ->
+    List.iter (exec_sql pool) ddl;
+    exec_sql pool "CREATE TABLE domain_write (id int PRIMARY KEY)";
+    let insert =
+      Caqti_request.Infix.(Caqti_type.int ->. Caqti_type.unit)
+        "INSERT INTO domain_write VALUES (?)"
+    in
+    let transaction id rollback =
+      Pg_db.transaction pool (fun tx ->
+        let open Result.Syntax in
+        let* () = Pg_db.exec tx insert id in
+        let* () = Slows.enqueue tx "work" in
+        if rollback then Error (Pg_error.Query_error "deliberate rollback") else Ok ())
+    in
+    (match transaction 1 true with
+     | Error _ -> ()
+     | Ok () -> Windtrap.fail "rollback succeeded");
+    Windtrap.equal Windtrap.int 0 (List.length (rows pool));
+    (match transaction 2 false with
+     | Ok () -> ()
+     | Error e -> Windtrap.fail (Pg_error.to_string e));
+    Windtrap.equal Windtrap.int 1 (List.length (rows pool));
+    match
+      Pg_db.collect
+        pool
+        (Caqti_request.Infix.(Caqti_type.unit ->* Caqti_type.int)
+           "SELECT id FROM domain_write")
+        ()
+    with
+    | Ok ids -> Windtrap.equal (Windtrap.list Windtrap.int) [ 2 ] ids
+    | Error e -> Windtrap.fail (Pg_error.to_string e))
+;;
+
 let () =
   Windtrap.run
     ~argv:[||]
     "sol_jobs_pg"
     [ Windtrap.group
+        "enqueue and retention boundaries"
+        [ Windtrap.test
+            "retention is scoped to kinds"
+            test_retention_is_scoped_to_declared_kinds
+        ; Windtrap.test
+            "invalid declared kinds cannot enqueue"
+            test_enqueue_rejects_invalid_declared_kinds
+        ; Windtrap.test
+            "domain write and enqueue commit or roll back together"
+            test_enqueue_and_domain_write_share_commit_and_rollback
+        ]
+    ; Windtrap.group
         "claim by kind (BUG-044 a)"
         [ Windtrap.test
             "two Make instances do not cross-claim"

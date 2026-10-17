@@ -8,12 +8,12 @@
 
 | Work model | Substrate | Primitive |
 |---|---|---|
-| Stream/event consumption | Kafka | `sol-worker` (`Worker.Make`/`Make_with_retry`) |
+| Stream/event consumption | Kafka | `sol-worker` (`Worker.Make`) |
 | Durable independent jobs | Postgres | `sol-jobs` (`Sol_jobs.Make`), hosted by a `-worker` |
 
 `sol-worker`/Kafka says "this happened" (a fact about the world, ordered per partition, one shared log any number of consumer groups can independently replay). `sol-jobs`/Postgres says "this must happen" (a unit of work with an owner, claimed once, retried until it succeeds or is given up on). Reach for `sol-jobs` when a piece of work is independent of any other event's ordering — sending a welcome email, generating a PDF, retrying a webhook delivery — and reach for `sol-worker` when correctness depends on processing events for the same key in order. Do not use `sol-jobs` merely because a job "happens to relate to" an earlier one; that is what Kafka's partition ordering is for.
 
-**The one thing Kafka structurally cannot give you:** transactional enqueue. `Sol_jobs.Make(J).enqueue` issues a plain `INSERT`, so calling it with the `pool` handle from inside `Db.transaction`'s callback enqueues the job in the *same* Postgres transaction as whatever application state change caused it — no dual-write hole between "the order was placed" and "the confirmation-email job exists." A Kafka publish can never join a Postgres transaction.
+**The one thing Kafka structurally cannot give you:** transactional enqueue. `Sol_jobs.Make(J).enqueue` issues a plain `INSERT`, so calling it with the `tx` handle from inside `Db.transaction`'s callback enqueues the job in the *same* Postgres transaction as whatever application state change caused it — no dual-write hole between "the order was placed" and "the confirmation-email job exists." A Kafka publish can never join a Postgres transaction.
 
 ## Module type
 
@@ -50,7 +50,7 @@ module J = struct
 end
 ```
 
-Multiple job "kinds" are just constructors of one `t` — the same way an app's Kafka `MESSAGE` type can carry a variant payload. Dispatch is `J.handle`'s own pattern match. `kind` labels metrics and logs, and it is also what a poller **claims by** (BUG-044): `kinds` lists every value `kind` can return, and a `Make(J)` poller claims only rows whose `kind` is in `J.kinds`. So separate `Make` instances with different job types can share the one table without claiming — and failing to decode — each other's jobs. Each kind is non-empty and uses only `a-z`, `0-9`, `_`, `.`, `-`; `run` refuses anything else with `` `Config ``, and `enqueue` refuses a job whose `kind` is not in `J.kinds`, because no poller would ever claim it.
+Multiple job "kinds" are just constructors of one `t` — the same way an app's Kafka `MESSAGE` type can carry a variant payload. Dispatch is `J.handle`'s own pattern match. `kind` labels metrics and logs, and it is also what a poller **claims by** (BUG-044): `kinds` lists every value `kind` can return, and a `Make(J)` poller claims only rows whose `kind` is in `J.kinds`. So separate `Make` instances with different job types can share the one table without claiming — and failing to decode — each other's jobs. Each kind is non-empty and uses only `a-z`, `0-9`, `_`, `.`, `-`; `run` refuses anything else with `` `Config ``, and `enqueue` validates the same kind declaration and refuses a job whose `kind` is not in `J.kinds`, because no poller would ever claim it.
 
 `decode`'s `Error _` is treated exactly like a `handle` failure: retried per the configured `retry_policy`, eventually terminal. There is no separate poison-message path the way Kafka's decode-error handling needs one — unlike a Kafka partition, one bad row can never block any other job's claim.
 
@@ -100,7 +100,7 @@ Db.transaction pool (fun tx ->
   Jobs.enqueue tx ~dedupe_key:event.id (Send_confirmation_email { order_id }))
 ```
 
-- The uniqueness constraint on `(kind, dedupe_key)` lives in the database, not only in `enqueue`: two concurrent enqueues of the same key insert one row.
+- The uniqueness constraint on `(workspace, kind, dedupe_key)` lives in the database, not only in `enqueue`: two concurrent enqueues of the same key insert one row.
 - **A duplicate is success.** `enqueue` returns `Ok ()` whether it inserted the row or found one already there — the caller cannot, and should not have to, tell those apart. No job id is returned, so nothing else about the existing row is observable.
 - Omitting `~dedupe_key` keeps the plain at-least-once insert: two calls enqueue two jobs. That is the right shape when the caller has no stable id to offer.
 
@@ -113,6 +113,8 @@ redeliver evt-1 ────────────────────┘
 ```
 
 Past the window the key is free again, so a redelivery *older than the window* enqueues a second job. **That horizon is part of the contract**: choose a window longer than the redelivery you need to absorb, and keep a handler idempotent if it must survive anything older. The alternative — retaining forever — would grow the job table with throughput.
+
+Each sweep deletes only terminal rows in the runner's workspace and `J.kinds`. Runners accepting overlapping kinds must use compatible codecs and consistent retry and retention policies; the runtime does not coordinate or validate policies across binaries. Disjoint kinds can use different retention windows. Rows for kinds with no running consumer are not automatically swept.
 
 Sweeping happens inside the poller (`~sweep_interval_s`, default 60s), so it needs no separate process or cron. `status = 'completed'` rows are never claimed: the claim query and its partial index both filter on `'pending'`.
 
@@ -145,14 +147,16 @@ While `J.handle` runs, a sibling fiber renews the lease every `lease_s / 3` usin
 
 Fenced finalization protects the queue if a lease is lost:
 
-The claim increments `attempts` and returns it, and the complete (`DELETE`), retry and fail statements all match `id = ? AND attempts = ?`. A stale holder's finalize therefore matches no row: it cannot delete the job out from under the new holder or clear its lease. The loss is logged (`sol-jobs: lease lost`, with `job_id`, `attempt`, `action`), and the stale outcome is not recorded — the new holder's is.
+The claim increments `attempts` and returns it, and the complete, retry and fail statements all match `id = ? AND attempts = ?`. A stale holder's finalize therefore matches no row: it cannot complete the new holder's job or clear its lease. The loss is logged (`sol-jobs: lease lost`, with `job_id`, `attempt`, `action`), and the stale outcome is not recorded — the new holder's is.
+
+Deduplicating enqueue does not deduplicate execution. A handler may run concurrently with an older attempt after lease expiry, and a crash after an external side effect but before completion may repeat the effect. Put a stable business operation ID in the payload and use it as the external provider's idempotency key across all attempts. An attempt number is not an idempotency key. Same-database effects can use a transaction and a unique operation record; check-then-send cannot make external effects atomic. Handlers must be safe to repeat, including concurrently, or provide application reconciliation for ambiguous external results.
 
 Warnings go through `ot` when given and stderr otherwise. Keep handlers idempotent, since crash recovery is at-least-once.
 
 On completion:
 
-- **`Ok ()`** — the row is deleted. Completed jobs are not retained.
-- **`Error msg`, attempts remaining** — `run_at` is pushed forward by the same backoff formula `sol-worker`'s `retry_policy` uses (`base_delay_s * 2^(attempt-1)`, jittered by `jitter_ratio`, clamped to `max_delay_s`), `locked_until` is cleared, and `last_error` records `msg`.
+- **`Ok ()`** — the row becomes `completed` and is retained until its retention window expires.
+- **`Error msg`, attempts remaining** — `run_at` is pushed forward by the shared `Sol_retry` backoff formula (`base_delay_s * 2^(attempt-1)`, jittered by `jitter_ratio`, clamped to `max_delay_s`), `locked_until` is cleared, and `last_error` records `msg`.
 - **`Error msg`, attempts exhausted** — `status` becomes `'failed'` (terminal — the claim query's `WHERE status = 'pending'` never selects it again), `last_error` records the final message. A failed row stays in the table for operator visibility, the closest thing `sol-jobs` has to a DLQ.
 
 `retry_policy`'s shape and default (`base_delay_s = 1.0; max_delay_s = 600.0; max_attempts = 5; jitter_ratio = 0.1`) intentionally bounds retries by default — `sol-jobs` is a durable at-least-once queue, not an infinite-retry stream consumer, so a poison job lands in `'failed'` rather than retrying forever unless an app explicitly opts into `max_attempts < 0`.
