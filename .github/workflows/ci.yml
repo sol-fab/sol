@@ -278,12 +278,12 @@ jobs:
 
       # Dune keeps a failing test's detailed output under `_build/_tests/` (and
       # its command log, when written, at `_build/log`) instead of only in the
-      # step log. The runner is destroyed with the job, so preserve exactly that
-      # evidence on failure and nothing else: the narrow path list keeps
-      # kubeconfigs, environment files and workspace material out of the
-      # artifact. The step is skipped on a successful run, so it costs nothing
-      # there, and the attempt in the name keeps a re-run from colliding with the
-      # original failure's artifact.
+      # step log. The runner is destroyed with the job, so preserve that evidence
+      # on failure. The path list is narrow -- it does not upload the workspace,
+      # kubeconfigs or environment files -- but it is not a redaction boundary:
+      # test output can itself contain sensitive values. The step is skipped on a
+      # successful run, so it costs nothing there, and the attempt in the name
+      # keeps a re-run from colliding with the original failure's artifact.
       - name: Upload Dune test failure output
         if: failure() && needs.classify.outputs.kind != 'docs-only'
         uses: actions/upload-artifact@v4
