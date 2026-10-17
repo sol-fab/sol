@@ -130,6 +130,12 @@ The harness records the identities it attributes before teardown (`inventory pre
 the post-teardown observation to account for them (`verify`): a resource whose name no longer
 matches after destruction is still residue if the pre-inventory recorded it. That supplements
 discovery; it does not replace it, because a controller can create resources after the snapshot.
+
+Two limits are stated rather than implied. An enumeration reads JSON and requires the fields it
+attributes by (`name`, `IPAddress`, `network`, the GKE disk label); if a provider changes those
+names the class reads UNKNOWN, not absent. And attribution still needs a declared identity: a GKE
+address reserved but never attached to a forwarding rule carries no name, label, network link or
+recorded address, so a complete project enumeration would not attribute it to the target.
 Before provisioning, the same read-only probes (or the console) confirm no resource in the target's
 class set already carries the chosen `CLUSTER` name.
 
