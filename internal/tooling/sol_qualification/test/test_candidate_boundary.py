@@ -438,6 +438,15 @@ class Boundary(fixture.Binding):
                     FAKE_MIGRATION_ENDPOINT=submission_authority["endpoint"])
                 evidence = root / "ca-evidence"
                 results = {}
+                request = self.ca_request(
+                    root, pins, "requirements", "", str(root / "ca-requirements.json"), "",
+                    evidence, scenario=scenario, authority=authority,
+                    submission_authority=submission_authority)
+                results["requirements"] = self.invoke_ca_driver(
+                    "requirements", request, driver_env)
+                requirements = (
+                    json.loads(results["requirements"].stdout)
+                    if results["requirements"].returncode == 0 else None)
                 for phase in ("migration", "application"):
                     capture = root / f"ca-{phase}-capture.json"
                     request = self.ca_request(
@@ -453,7 +462,8 @@ class Boundary(fixture.Binding):
                 results["report"] = self.invoke_ca_driver("report", request, driver_env)
                 value = json.loads(report_path.read_text()) if report_path.exists() else None
                 return {"root": root, "env": driver_env, "pins": pins, "migration": migration,
-                        "results": results, "report": value, "evidence": evidence}
+                        "results": results, "report": value, "evidence": evidence,
+                        "requirements": requirements}
             finally:
                 for key, value in previous.items():
                     if value is None:
@@ -466,7 +476,7 @@ class Boundary(fixture.Binding):
 
     def test_boundary_real_driver_report(self):
         run = self.run_real_driver()
-        for phase in ("migration", "application", "report"):
+        for phase in ("requirements", "migration", "application", "report"):
             result = run["results"][phase]
             self.assertEqual(result.returncode, 0, phase + ": " + result.stderr)
         value = run["report"]
@@ -500,6 +510,14 @@ class Boundary(fixture.Binding):
         self.assertEqual(len(value["outcomes"]), 3, value)
         self.assertTrue(all(item["instance"].startswith("gcp/")
                             for item in value["outcomes"]), value)
+        requirements = run["requirements"]
+        self.assertEqual(sorted(requirements["namespaces"]),
+                         ["sol-db-specimen-dev-gcp-region", "specimen-comms",
+                          "specimen-payments"], requirements)
+        self.assertIn({"namespace": "sol-db-specimen-dev-gcp-region",
+                       "resource": "jobs.batch"}, requirements["reads"], requirements)
+        self.assertIn({"namespace": "specimen-payments",
+                       "resource": "deployments.apps"}, requirements["reads"], requirements)
 
     def test_boundary_real_driver_gcp_rejects_foreign_submission_identity(self):
         observer = {"principal": "gcp:qualifier", "cluster": "offline-cluster",

@@ -1,4 +1,4 @@
-(* AWS database-CA family driver for the live qualification row.
+(* AWS/GCP database-CA family driver for the live qualification rows.
 
    The live row calls it in phases at the lifecycle points where each observation
    is valid:
@@ -8,7 +8,10 @@
    - [application] observes the declared consumers after the final deploy;
    - [report] re-reads the persisted verdicts and candidate-binding captures and
      decides the family from those verdicts, never from summary fields copied into
-     a phase capture. A successful phase exit is not a family pass.
+     a phase capture. A successful phase exit is not a family pass;
+   - [requirements] prints the candidate-bound observation universe (namespaces,
+     reads and instance keys) so a harness can drive its effective-permission
+     checks from the same authority the phases observe.
 
    It never decides the overall release: a CA-family pass is reported separately
    from DML, TLS and the other required claims. *)
@@ -134,22 +137,25 @@ let expected_family prepared =
 ;;
 
 (* Read authority for the exact resources the observations need, in every
-   namespace they need. The selected identity must answer `yes`; a failure is
-   unestablished, never a fallback to a more privileged identity. *)
+   namespace they need. This is the same obligation-derived set the evaluator
+   observes; the harness uses the `requirements` phase to drive its own security
+   checks rather than maintaining a second namespace authority. *)
+let required_reads prepared =
+  D.instances prepared.B.obligations
+  |> List.concat_map (fun instance ->
+    match D.plan instance with
+    | D.Ca_delivery requirement ->
+      let binding = D.ca_binding requirement in
+      [ binding.namespace, "deployments.apps"; binding.namespace, "configmaps" ]
+    | D.Migration_ca_delivery requirement ->
+      let binding = D.migration_ca_binding requirement in
+      [ binding.namespace, "jobs.batch"; binding.namespace, "configmaps" ]
+    | _ -> [])
+  |> List.sort_uniq compare
+;;
+
 let check_read_authority ~ctx prepared =
-  let reads =
-    D.instances prepared.B.obligations
-    |> List.concat_map (fun instance ->
-      match D.plan instance with
-      | D.Ca_delivery requirement ->
-        let binding = D.ca_binding requirement in
-        [ binding.namespace, "deployments.apps"; binding.namespace, "configmaps" ]
-      | D.Migration_ca_delivery requirement ->
-        let binding = D.migration_ca_binding requirement in
-        [ binding.namespace, "jobs.batch"; binding.namespace, "configmaps" ]
-      | _ -> [])
-    |> List.sort_uniq compare
-  in
+  let reads = required_reads prepared in
   List.iter
     (fun (namespace, resource) ->
        match
@@ -198,6 +204,42 @@ let kube_json (target : D.kube_target) =
     ; "cluster", `String target.cluster
     ; "endpoint", `String target.endpoint
     ]
+;;
+
+(* The candidate-bound observation universe, exposed for the harness's own
+   effective-permission checks. It is derived from the same obligations the
+   phases observe; it is not a second policy or namespace rule. *)
+let run_requirements () =
+  let _request, prepared, authority, submission_authority, _identity_scope, scenario_name =
+    prepare_request ()
+  in
+  let reads = required_reads prepared in
+  let namespaces = List.map fst reads |> List.sort_uniq compare in
+  let observations =
+    D.instances prepared.B.obligations
+    |> List.filter_map (fun instance ->
+      match D.plan instance with
+      | D.Ca_delivery _ | D.Migration_ca_delivery _ -> Some (D.instance_key instance)
+      | _ -> None)
+  in
+  let payload =
+    `Assoc
+      [ "phase", `String "requirements"
+      ; "scenario", `String scenario_name
+      ; "namespaces", `List (List.map (fun name -> `String name) namespaces)
+      ; ( "reads"
+        , `List
+            (List.map
+               (fun (namespace, resource) ->
+                  `Assoc [ "namespace", `String namespace; "resource", `String resource ])
+               reads) )
+      ; "observations", `List (List.map (fun key -> `String key) observations)
+      ; "authority", kube_json authority
+      ; "submission_authority", kube_json submission_authority
+      ]
+  in
+  print_endline (Yojson.Safe.to_string payload);
+  exit 0
 ;;
 
 let run_phase () =
@@ -403,6 +445,7 @@ let () =
   try
     match arg "--phase" with
     | "report" -> run_report ()
+    | "requirements" -> run_requirements ()
     | "migration" | "application" -> run_phase ()
     | value -> failwith ("unsupported phase " ^ value)
   with

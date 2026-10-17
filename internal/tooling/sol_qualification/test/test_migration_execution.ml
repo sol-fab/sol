@@ -111,6 +111,7 @@ let with_install
        if producer then write (root ^ "/install/bin/sol-database-contract") fake_producer;
        Sol_cli_fs.mkdir_p (root ^ "/workspace") |> get;
        Unix.putenv "FAKE_TARGET" target;
+       Unix.putenv "FAKE_BINDING" binding;
        Unix.putenv "FAKE_PRINCIPAL" kube.principal;
        Unix.putenv "FAKE_CLUSTER" kube.cluster;
        Unix.putenv "FAKE_ENDPOINT" kube.endpoint;
@@ -242,7 +243,11 @@ let separates_submission_from_observation () =
         observed := Some locator;
         Ok 11)
     in
-    check (outcome = Ok 11) "a distinct submission identity was rejected";
+    check
+      (outcome = Ok 11)
+      (match outcome with
+       | Ok _ -> "a distinct submission identity was rejected"
+       | Error message -> "a distinct submission identity was rejected: " ^ message);
     check (Option.is_some !observed) "consume never ran";
     acknowledged root)
 ;;

@@ -108,11 +108,14 @@ AWS-only.
   inventory probes with a viewer-level role, so an absence read is `ABSENT` rather than
   `UNKNOWN`. An unreadable class fails the absence verdict.
 - **Database-CA observation identity**: supply `GCP_CA_OBSERVER_SERVICE_ACCOUNT` (a dedicated
-  service account the caller can impersonate) or `GCP_CA_OBSERVER_SOURCE_KUBECONFIG`. It must
-  be a different principal from the deploy identity, must read Deployments, ConfigMaps and
-  Jobs in every observed namespace, and must not hold Secrets, `pods/exec`, `pods/log` or
-  `delete` there. The harness refuses an absent, shared or broader identity rather than
-  falling back to the deploy kubeconfig.
+  service account the caller can impersonate) or `GCP_CA_OBSERVER_SOURCE_KUBECONFIG` and declare
+  the expected principal with `GCP_CA_OBSERVER_PRINCIPAL` (required in the supplied-kubeconfig
+  case). It must authenticate as that principal, be a different principal from the deploy
+  identity, must read Deployments, ConfigMaps and Jobs in every candidate-bound namespace, and
+  must not hold wildcard, mutation, Secrets, `pods/exec`, `pods/log` or `delete` there. The
+  harness also checks that observation reads are denied in an unbound namespace. This is a
+  sampled effective-surface check, not an exhaustive RBAC audit. It refuses an absent, shared,
+  mismatched or broader identity rather than falling back to the deploy kubeconfig.
 - **Target identities**: the provisioner / cluster-access / deploy / operator contracts come
   from `docs/deployment/production-bootstrap.md`; the target names them and `sol deploy` fails
   closed without them.

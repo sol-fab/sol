@@ -53,14 +53,22 @@ MECHANISM-only: it grants neither release-verdict nor live observation authority
 The GCP app phase calls the same `qualification_database_ca` driver at the row's
 `migrate apply` step and after the final deploy, then runs its durable `report`.
 The migration Job is submitted by the deploy identity, while the CA observation
-uses a separate read-only Kubernetes identity established through
-`GCP_CA_OBSERVER_SERVICE_ACCOUNT` (a GCP service account impersonated for
-`gcloud container clusters get-credentials`) or an operator-supplied
-`GCP_CA_OBSERVER_SOURCE_KUBECONFIG`. The harness verifies that the observer
-principal differs from the deploy principal, that both address the same cluster
-UID and endpoint, that the required `get` reads exist in every observed
-namespace, and that `get`/`list` Secrets, `pods/exec`, `pods/log` and `delete`
-are denied. It never falls back to the run kubeconfig.
+uses a separate read-only Kubernetes identity. The operator either supplies
+`GCP_CA_OBSERVER_SOURCE_KUBECONFIG` and declares its principal with
+`GCP_CA_OBSERVER_PRINCIPAL`, or names a `GCP_CA_OBSERVER_SERVICE_ACCOUNT` to
+impersonate. In the latter case the harness creates a private gcloud
+configuration, persists it into the generated kubeconfig's
+`gke-gcloud-auth-plugin` exec environment, and verifies the authenticated
+principal. It verifies that the observer authenticated as the declared principal,
+that it differs from the deploy principal, and that both address the same cluster
+UID and endpoint.
+
+The driver's `requirements` phase exposes the candidate-bound namespace and read
+set. The harness uses exactly that set for its effective-authorization checks:
+every required read must answer yes; wildcard, representative mutation, Secrets,
+exec, log and delete must answer no in every required namespace; and observation
+reads must answer no in an unbound namespace. This is a sample of the effective
+surface, not an exhaustive RBAC audit. It never falls back to the run kubeconfig.
 
 The shared launcher validates the submission receipt against the recorded deploy
 authority and the independent observation context against the observer authority;
