@@ -345,3 +345,22 @@ replaced Job UID do not pass; that a consistently renamed CA volume still passes
 the claim unestablished; and that interrupted capture cannot seal. It also
 confirms that a complete application+migration CA PASS cannot accept a release
 while DML, TLS and other required claims remain unestablished.
+
+### Phased live use
+
+The live row observes at two different lifecycle points, so the path exposes them
+separately:
+
+- `observe_application` runs after the final deploy, when every declared consumer
+  exists.
+- `migration` runs at the row's normal `sol migrate apply` step, through the
+  verified candidate's own command, and observes the migration CA before cleanup.
+  A reported skip is an unestablished migration family, not a satisfied one.
+- `run` is the offline composition of both phases for fixtures.
+
+The AWS driver (`qualification_database_ca`) runs those phases and then a `report`
+phase that re-reads the durable phase captures, each phase's binding slot and each
+recorded verdict, and requires exactly the candidate's complete CA-family instance
+set with every decision passing. A successful phase exit is not a family pass, and
+a CA-family pass is never an overall release pass while DML/TLS remain
+unestablished.
