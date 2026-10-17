@@ -24,7 +24,9 @@ let fake_sol =
 import json, os, time
 binding = os.environ["SOL_MIGRATION_EXECUTION_BINDING"]
 message = (
-    {"schema": 1, "kind": "Unavailable"}
+    {"schema": 1, "kind": "NoExecution", "reason": "no migration files found"}
+    if os.environ.get("FAKE_NO_EXECUTION") == "1"
+    else {"schema": 1, "kind": "Unavailable"}
     if os.environ.get("FAKE_UNAVAILABLE") == "1"
     else {
         "schema": 1,
@@ -81,6 +83,7 @@ let environment =
   ; "FAKE_ACK_MARKER"
   ; "FAKE_PROTOCOL"
   ; "FAKE_UNAVAILABLE"
+  ; "FAKE_NO_EXECUTION"
   ; "FAKE_HANG_AFTER_ACK"
   ; "SOL_MIGRATION_EXECUTION_BINDING"
   ]
@@ -88,6 +91,7 @@ let environment =
 
 let with_install
       ?(producer = true)
+      ?(no_execution = false)
       ?(protocol = {|{"channel":"migration-execution","schema":1}|})
       fn
   =
@@ -113,6 +117,7 @@ let with_install
        Unix.putenv "FAKE_BLOCKED_MARKER" (root ^ "/blocked");
        Unix.putenv "FAKE_ACK_MARKER" (root ^ "/ack");
        Unix.putenv "FAKE_PROTOCOL" protocol;
+       Unix.putenv "FAKE_NO_EXECUTION" (if no_execution then "1" else "");
        fn root)
 ;;
 
@@ -126,7 +131,7 @@ let fresh_context () =
   }
 ;;
 
-let launch
+let launch_outcome
       ?(requested = target)
       ?(expected = kube)
       ?(launch_binding = binding)
@@ -145,6 +150,32 @@ let launch
     ~completion_timeout_s
     ~establish:(fun () -> Ok (Option.value context ~default:(fresh_context ())))
     ~consume
+;;
+
+(* Most tests exercise a submitted execution; unwrap it so a skip is a fixture
+   failure rather than a silently accepted value. *)
+let launch
+      ?requested
+      ?expected
+      ?launch_binding
+      ?context
+      ?completion_timeout_s
+      root
+      consume
+  =
+  match
+    launch_outcome
+      ?requested
+      ?expected
+      ?launch_binding
+      ?context
+      ?completion_timeout_s
+      root
+      consume
+  with
+  | Ok (Q.Executed value) -> Ok value
+  | Ok (Q.Skipped reason) -> Error ("unexpected skipped execution: " ^ reason)
+  | Error message -> Error message
 ;;
 
 let wait_for path =
@@ -286,6 +317,18 @@ let overdue_child_is_unestablished () =
         "overdue outcome does not name the remaining cleanup responsibility")
 ;;
 
+let no_execution_is_reported_not_inferred () =
+  with_install ~no_execution:true (fun root ->
+    let outcome =
+      launch_outcome root (fun _ -> Alcotest.fail "consume ran for a skipped execution")
+    in
+    (match outcome with
+     | Ok (Q.Skipped reason) -> check (String.trim reason <> "") "skip reason missing"
+     | Ok (Q.Executed _) -> Alcotest.fail "a skipped execution became a receipt"
+     | Error message -> Alcotest.fail ("a skipped execution became an error: " ^ message));
+    acknowledged root)
+;;
+
 let probes_the_bundled_protocol () =
   with_install (fun root ->
     check
@@ -334,6 +377,10 @@ let () =
             "unavailable is not a receipt"
             `Quick
             unavailable_is_not_a_receipt
+        ; Alcotest.test_case
+            "a skipped execution is reported, not inferred"
+            `Quick
+            no_execution_is_reported_not_inferred
         ; Alcotest.test_case
             "an overdue child leaves the outcome unestablished"
             `Quick

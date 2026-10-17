@@ -160,7 +160,8 @@ let launcher_probe verified path =
   let json =
     match outcome with
     | Error message -> obj [ "ok", `Bool false; "error", str message ]
-    | Ok (identity, target) ->
+    | Ok (MX.Skipped reason) -> obj [ "ok", `Bool false; "skipped", str reason ]
+    | Ok (MX.Executed (identity, target)) ->
       obj
         [ "ok", `Bool true
         ; "namespace", str identity.D.namespace

@@ -18,6 +18,7 @@ type receipt =
 
 type message =
   | Execution of receipt
+  | No_execution of string
   | Unavailable
 
 let valid_binding s =
@@ -57,6 +58,10 @@ let prepare () =
 let encode = function
   | Unavailable ->
     Yojson.Safe.to_string (`Assoc [ "schema", `Int 1; "kind", `String "Unavailable" ])
+  | No_execution reason ->
+    Yojson.Safe.to_string
+      (`Assoc
+          [ "schema", `Int 1; "kind", `String "NoExecution"; "reason", `String reason ])
   | Execution r ->
     Yojson.Safe.to_string
       (`Assoc
@@ -90,6 +95,15 @@ let decode input =
   | `String "Unavailable"
     when json = `Assoc [ "kind", `String "Unavailable"; "schema", `Int 1 ] ->
     Ok Unavailable
+  | `String "NoExecution" ->
+    let* reason = text "reason" in
+    let expected =
+      Yojson.Safe.from_string (encode (No_execution reason))
+      |> Sol_cli_database_contract_data.canonical
+    in
+    if String.trim reason = "" || expected <> Ok json
+    then Error "invalid execution metadata"
+    else Ok (No_execution reason)
   | `String "MigrationExecution" ->
     let* binding = text "binding" in
     let* target = text "target" in
@@ -211,4 +225,13 @@ let notify message =
     if acknowledgment = "capture-finished"
     then Ok ()
     else Error "invalid capture acknowledgment")
+;;
+
+(* A normal product run has no launcher: report only when one asked. An absent or
+   unusable channel never changes the product's own wait, cleanup or exit status. *)
+let notify_when_requested message =
+  match prepare () with
+  | Ok None -> Ok ()
+  | Ok (Some _) -> notify message
+  | Error message -> Error message
 ;;

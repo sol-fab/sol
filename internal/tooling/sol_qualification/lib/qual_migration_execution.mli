@@ -9,6 +9,15 @@ type locator = private
   ; identity : Qual_domain.job_identity
   }
 
+(** The product either submitted a Job ([Executed], with the caller's consume
+    result) or reported over the same opt-in channel that its normal lifecycle
+    required none ([Skipped], with the product's reason). A skip is not a
+    satisfied execution; the qualification policy decides whether it can accept
+    one. *)
+type 'a outcome =
+  | Executed of 'a
+  | Skipped of string
+
 (** The installed candidate's bundled producer must advertise the receipt protocol
     before the launcher will let a candidate mutate a cluster. A missing, failing
     or mismatched producer is [Ok false] only when it answered with another
@@ -29,7 +38,7 @@ module Fixture : sig
     -> completion_timeout_s:float
     -> establish:(unit -> (Qual_domain.read_context, string) result)
     -> consume:(locator -> ('a, string) result)
-    -> ('a, string) result
+    -> ('a outcome, string) result
 end
 
 (** Launch the verified candidate's own
@@ -60,4 +69,4 @@ val run
   -> completion_timeout_s:float
   -> establish:(unit -> (Qual_domain.read_context, string) result)
   -> consume:(locator -> ('a, string) result)
-  -> ('a, string) result
+  -> ('a outcome, string) result

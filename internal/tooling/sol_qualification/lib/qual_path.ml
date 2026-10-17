@@ -44,7 +44,7 @@ let run
   else
     let* requirement = migration_requirement obligations in
     let* application = CA.observe_all ~directory ~run ~obligations ~recorder ~read in
-    let* migration =
+    let* execution =
       QME.run
         ~verified:prepared.B.verified
         ~expected
@@ -69,5 +69,12 @@ let run
             ~read
             ~execution:(fun _ -> Ok execution))
     in
-    Ok { application; migration }
+    match execution with
+    | QME.Executed migration -> Ok { application; migration }
+    | QME.Skipped reason ->
+      Error
+        (Printf.sprintf
+           "the candidate performed no migration execution (%s); the migration CA family \
+            is unestablished"
+           reason)
 ;;

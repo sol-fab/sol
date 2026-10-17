@@ -99,6 +99,13 @@ let reap pid completion_timeout_s =
   loop ()
 ;;
 
+(* The product either submitted a Job or reported, over the same opt-in channel,
+   that its normal lifecycle required none. An absent job is not inferred from a
+   name, and a skip is not silently treated as a satisfied execution. *)
+type 'a outcome =
+  | Executed of 'a
+  | Skipped of string
+
 module Fixture = struct
   (* Process boundary without candidate authority. Production callers must use
      [run], which pins the verified candidate's own executable; this entry point
@@ -147,20 +154,24 @@ module Fixture = struct
            match message with
            | M.Unavailable ->
              Error "the launched candidate did not establish an execution receipt"
+           | M.No_execution reason -> Ok (Skipped reason)
            | M.Execution receipt ->
              let* () = validate ~binding ~requested_target ~expected receipt in
              let* context = establish () in
              let* () = validate_context ~expected context in
-             consume
-               { receipt
-               ; context
-               ; identity =
-                   D.
-                     { namespace = receipt.namespace
-                     ; name = receipt.name
-                     ; uid = receipt.uid
-                     }
-               })
+             let* result =
+               consume
+                 { receipt
+                 ; context
+                 ; identity =
+                     D.
+                       { namespace = receipt.namespace
+                       ; name = receipt.name
+                       ; uid = receipt.uid
+                       }
+                 }
+             in
+             Ok (Executed result))
     in
     if !overdue
     then

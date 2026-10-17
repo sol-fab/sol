@@ -18,6 +18,7 @@ type receipt =
 
 type message =
   | Execution of receipt
+  | No_execution of string
   | Unavailable
 
 val encode : message -> string
@@ -41,3 +42,8 @@ val send : Unix.file_descr -> message -> (unit, string) result
 val receive : ?timeout_s:float -> Unix.file_descr -> (message, string) result
 val acknowledge : Unix.file_descr -> (unit, string) result
 val notify : message -> (unit, string) result
+
+(** [notify_when_requested message] is [Ok ()] when no launcher asked for capture,
+    so a normal product run never writes to a terminal or blocks. When one did ask,
+    it behaves like [notify]. *)
+val notify_when_requested : message -> (unit, string) result
