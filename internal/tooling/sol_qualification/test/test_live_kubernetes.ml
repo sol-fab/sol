@@ -534,6 +534,8 @@ let product_execution
              let receipt =
                match message with
                | M.Execution r -> r
+               | M.No_execution reason ->
+                 Alcotest.fail ("unexpected skipped execution: " ^ reason)
                | M.Unavailable -> Alcotest.fail "actual execution unavailable"
              in
              check
@@ -943,6 +945,15 @@ let protocol_rejects_malformed () =
     (M.decode (M.encode (M.Execution receipt)) = Ok (M.Execution receipt))
     "receipt roundtrip";
   check (M.decode (M.encode M.Unavailable) = Ok M.Unavailable) "unavailable roundtrip";
+  check
+    (M.decode (M.encode (M.No_execution "no migration files found"))
+     = Ok (M.No_execution "no migration files found"))
+    "no-execution roundtrip";
+  check
+    (match M.decode {|{"schema":1,"kind":"NoExecution","reason":" "}|} with
+     | Error _ -> true
+     | Ok _ -> false)
+    "blank no-execution reason accepted";
   let valid = Yojson.Safe.from_string (M.encode (M.Execution receipt)) in
   let reject input =
     match M.decode input with

@@ -211,6 +211,19 @@ let run_apply_in_cluster ~ctx ~dir ~table ~target_path ~active =
   if files = []
   then (
     Printf.printf "(no migration files found in %s -- nothing to do)\n" dir;
+    (* Report the skipped execution when (and only when) a launcher asked. The
+       qualification policy decides whether a skipped execution can satisfy it;
+       this command just tells the truth instead of leaving the observer to time
+       out or infer a Job from a name. *)
+    (match
+       Sol_cli_migration_execution.notify_when_requested
+         (No_execution "no migration files found")
+     with
+     | Ok () -> ()
+     | Error message ->
+       Sol_cli_report.warn
+         "Migration execution capture is unestablished (%s); continuing normal behavior."
+         message);
     Ok ())
   else
     let* image = Sol_cli_migration_job.runner_image () in
