@@ -34,12 +34,6 @@ and secret_authority =
       ; key : string
       }
 
-type unit_secret_resolution =
-  { resolved : (string * secret_authority) list
-  ; missing : string list
-  ; additional : string list
-  }
-
 val destination_of_target : target -> (Sol_cli_kube_destination.t, string) result
 
 type index =
@@ -133,12 +127,6 @@ val secret_authority
   -> secret_authority option
 
 val secret_authorities_for_unit : target -> string -> (string * secret_authority) list
-
-val resolve_secret_authorities
-  :  target
-  -> unit_address:string
-  -> required_keys:string list
-  -> unit_secret_resolution
 
 val vars_with_profile_precedence
   :  has_profile:bool
