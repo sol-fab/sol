@@ -110,6 +110,7 @@ type t =
   ; scoped_identities : string list
   ; authorization_reconciler_field : string
   ; authorization_trust_field : string
+  ; authorization_destroy_trust_placeholder : string
   ; authorization_root_vars :
       Sol_cli_config.target -> ((string * string) list, string) result
   ; authorization_fence_addresses : string list
