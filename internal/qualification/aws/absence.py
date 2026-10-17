@@ -109,6 +109,12 @@ REVISION = re.compile(r"[0-9a-f]{40}")
 HEX64 = re.compile(r"[0-9a-f]{64}")
 RUNNER_DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
 
+# The release teardown policy this document is eligible under. The promotion
+# gate loads `internal/tooling/release/teardown-policy.v1.json`; a document
+# naming another policy is not promotion-eligible. Keep this value in sync with
+# that file; `internal/ci/test_teardown_policy.py` guards the class universe.
+POLICY_NAME = "sol-teardown-v1"
+
 
 @dataclass(frozen=True)
 class Runtime:
@@ -923,6 +929,7 @@ def render_json(runtime: Runtime, report: Report) -> str:
 
     document = {
         "schema": 1,
+        "policy": POLICY_NAME,
         "provider": "aws",
         "candidate": runtime.candidate,
         "attempt": runtime.attempt,

@@ -321,6 +321,7 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
         check("the verdict states absence", "verdict: ABSENT" in verdict)
         check("the inventory states its attribution limitations", "limitations:" in inventory and "attribution is by the target's declared identities" in inventory)
         check("the structured verdict names its schema and provider", document["schema"] == 1 and document["provider"] == "aws")
+        check("the structured verdict names the release teardown policy", document["policy"] == absence.POLICY_NAME)
         check("the structured verdict names the candidate it was observed for", document["candidate"] == CANDIDATE)
         check("the structured verdict binds the attempt and target", document["attempt"] == "attempt-1" and document["target"] == "qualreg/aws/us-east-1")
         check("the structured verdict records the provider scope", document["scope"]["cluster"] == CLUSTER and document["scope"]["region"] == REGION and document["scope"]["account"] == ACCOUNT)
