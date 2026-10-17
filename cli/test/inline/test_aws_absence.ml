@@ -23,19 +23,26 @@ let target : Sol_cli_config.target =
   ; node_failure_headroom_nodes = None
   ; profile = None
   ; shape = Some Sol_cli_profile.Local
-  ; provider_fields = []
+  ; provider_fields =
+      [ ( "aws"
+        , [ "provisioner_role_arn", "arn:aws:iam::111122223333:role/sol-provisioner" ] )
+      ]
   ; secret_authorities = []
   }
 ;;
 
-let fake_aws ~log ~list_out ~tags_out ~tags_exit =
+let fake_aws ~log ~sts_out ~list_out ~list_exit ~tags_out ~tags_exit =
   Printf.sprintf
     {|#!/bin/sh
 printf '%%s\n' "$*" >> %s
 case "$1 $2" in
-  "elbv2 describe-load-balancers")
+  "sts get-caller-identity")
     printf '%%s' %s
     exit 0
+    ;;
+  "elbv2 describe-load-balancers")
+    printf '%%s' %s%s
+    exit %d
     ;;
   "elbv2 describe-tags")
     printf '%%s' %s%s
@@ -45,20 +52,23 @@ esac
 exit 0
 |}
     log
+    (Filename.quote sts_out)
     (Filename.quote list_out)
+    (if list_exit = 0 then "" else " >&2")
+    list_exit
     (Filename.quote tags_out)
     (if tags_exit = 0 then "" else " >&2")
     tags_exit
 ;;
 
-let with_fake_aws ~list_out ~tags_out ~tags_exit f =
+let with_fake_aws ~sts_out ~list_out ~list_exit ~tags_out ~tags_exit f =
   let dir = Filename.temp_file "sol-fake-aws-" "" in
   Sys.remove dir;
   Unix.mkdir dir 0o755;
   let log = Filename.concat dir "calls.log" in
   let bin = Filename.concat dir "aws" in
   let oc = open_out bin in
-  output_string oc (fake_aws ~log ~list_out ~tags_out ~tags_exit);
+  output_string oc (fake_aws ~log ~sts_out ~list_out ~list_exit ~tags_out ~tags_exit);
   close_out oc;
   Unix.chmod bin 0o755;
   let old_path =
@@ -99,8 +109,15 @@ let load_balancer observations =
   List.find (fun o -> String.equal (class_of o) "load balancer") observations
 ;;
 
-let with_calls ~list_out ~tags_out ~tags_exit f =
-  with_fake_aws ~list_out ~tags_out ~tags_exit (fun () ->
+let with_calls
+      ?(sts_out = "111122223333\n")
+      ?(list_exit = 0)
+      ~list_out
+      ~tags_out
+      ~tags_exit
+      f
+  =
+  with_fake_aws ~sts_out ~list_out ~list_exit ~tags_out ~tags_exit (fun () ->
     let observations =
       Sol_cli_aws_absence.observations target ~cluster_name:"acme-prod"
     in
@@ -244,4 +261,77 @@ let test_not_found_wording_is_provider_specific () =
 
 let%test "absence scan: both providers agree except on 'no such'" =
   test_not_found_wording_is_provider_specific ()
+;;
+
+let test_a_not_found_list_failure_is_unobservable () =
+  with_calls
+    ~list_out:
+      "An error occurred (ResourceNotFoundException): the load balancer could not be found\n"
+    ~list_exit:1
+    ~tags_out:""
+    ~tags_exit:0
+    (fun ~log:_ ~observations ->
+       match load_balancer observations with
+       | Sol_cli_absence.Unobservable u ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the provider's not-found text is kept as the unknown's reason"
+           true
+           (Sol_cli_string.contains ~needle:"not be found" u.reason)
+       | Sol_cli_absence.Absent _ ->
+         Windtrap.fail
+           "a failed enumeration containing 'not found' must not become absence"
+       | _ -> Windtrap.fail "a failed enumeration must be Unobservable")
+;;
+
+let%test "load balancer inventory: a not-found list failure is Unobservable" =
+  test_a_not_found_list_failure_is_unobservable ()
+;;
+
+let test_mismatched_aws_account_is_unobservable () =
+  with_fake_aws
+    ~sts_out:"999999999999\n"
+    ~list_out:""
+    ~list_exit:0
+    ~tags_out:""
+    ~tags_exit:0
+    (fun () ->
+       match Sol_cli_aws_absence.substrate_absence target ~cluster_name:"acme-prod" with
+       | Sol_cli_absence.Unobservable u ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the mismatch names the caller's account"
+           true
+           (Sol_cli_string.contains ~needle:"999999999999" u.reason);
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"and the account the target declares"
+           true
+           (Sol_cli_string.contains ~needle:"111122223333" u.reason)
+       | Sol_cli_absence.Absent _ ->
+         Windtrap.fail "another account's empty listing is not this target's absence"
+       | _ -> Windtrap.fail "an account mismatch must be Unobservable")
+;;
+
+let test_matching_aws_account_can_establish_absence () =
+  with_fake_aws
+    ~sts_out:"111122223333\n"
+    ~list_out:""
+    ~list_exit:0
+    ~tags_out:""
+    ~tags_exit:0
+    (fun () ->
+       match Sol_cli_aws_absence.substrate_absence target ~cluster_name:"acme-prod" with
+       | Sol_cli_absence.Absent _ -> ()
+       | Sol_cli_absence.Unobservable u ->
+         Windtrap.failf "the target's own account was refused: %s" u.reason
+       | _ -> Windtrap.fail "an empty listing in the target's account is absence")
+;;
+
+let%test "EKS absence: a caller in another account is Unobservable" =
+  test_mismatched_aws_account_is_unobservable ()
+;;
+
+let%test "EKS absence: an empty listing in the target's account is Absent" =
+  test_matching_aws_account_can_establish_absence ()
 ;;

@@ -277,10 +277,14 @@ type state_cluster_identity =
 
 let state_cluster_identity ~provider state =
   let prefixes = Sol_cli_provider_registry.substrate_addresses provider in
+  let kind = Sol_cli_provider_registry.substrate_kind provider in
   let substrate =
     List.find_opt
       (fun (resource : Sol_cli_cloud_destroy.resource) ->
-         List.exists (fun prefix -> String.starts_with ~prefix resource.address) prefixes)
+         String.equal resource.kind kind
+         && List.exists
+              (fun prefix -> String.starts_with ~prefix resource.address)
+              prefixes)
       (Sol_cli_cloud_destroy.resources state)
   in
   match substrate with
@@ -344,7 +348,11 @@ let reconcile_ownership
     in
     let dispositions =
       Sol_cli_ownership_reconciliation.dispositions
-        ~entries:(Sol_cli_provider_registry.resource_identity provider ~cluster_name)
+        ~entries:
+          (Sol_cli_provider_registry.resource_identity
+             provider
+             ~cluster_name
+             ~project_id:(Sol_cli_config.provider_field target_cfg "project_id"))
         ~state_addresses:(Sol_cli_cloud_destroy.addresses state)
         observations
     in

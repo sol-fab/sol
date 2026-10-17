@@ -42,6 +42,19 @@ val reconcile_ownership
   -> act:bool
   -> (reconciliation, string) result
 
+type state_cluster_identity =
+  | Cluster_not_in_state
+  | Cluster_named of string
+  | Cluster_unnamed
+
+(** The identity the cloud-root state represents for the substrate. Selection requires the
+    provider's substrate address prefix *and* Terraform type, so a similarly-prefixed
+    object is not mistaken for the cluster. *)
+val state_cluster_identity
+  :  provider:Sol_cli_provider.t
+  -> Sol_cli_cloud_destroy.state_read
+  -> state_cluster_identity
+
 (** Forget cloud-root and platform-root state only when the substrate is positively absent
     at the provider, and only when the cluster identity in that state agrees with the
     target. Exposed so the destroy path's no-unsafe-[state rm] property is exercised

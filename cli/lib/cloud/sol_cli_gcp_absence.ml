@@ -18,11 +18,6 @@ let identity_check
   { resource_class; identity; attribution; argv; attributable }
 ;;
 
-let not_found =
-  Sol_cli_absence.not_found
-    ~needles:[ "not found"; "notfound"; "does not exist"; "was not found" ]
-;;
-
 let checked_with argv = "gcloud " ^ String.concat " " argv
 
 let ok_observation ~check found =
@@ -45,21 +40,15 @@ let ok_observation ~check found =
       }
 ;;
 
+(* Every GCP probe is an enumeration command. An empty successful listing is absence;
+   a nonzero listing is not, even when the provider's message contains "not found": the
+   subject may be the project, the caller's permission or the API's scope, not the
+   resource. Reading that as absence is what allowed a bad scope to authorize state
+   removal. *)
 let run ~check =
   match Sol_cli_process.run (Sol_cli_process.cmd ("gcloud" :: check.argv)) with
   | Ok { Sol_cli_process.stdout; _ } ->
     ok_observation ~check (lines stdout |> List.filter check.attributable)
-  | Error (Sol_cli_process.Non_zero r) when not_found r.stderr ->
-    Absent
-      { resource_class = check.resource_class
-      ; identity = check.identity
-      ; attribution = check.attribution
-      ; checked_with =
-          Printf.sprintf
-            "%s (gcloud reports it does not exist: %s)"
-            (checked_with check.argv)
-            (String.trim r.stderr)
-      }
   | Error (Sol_cli_process.Non_zero r) ->
     Unobservable
       { resource_class = check.resource_class

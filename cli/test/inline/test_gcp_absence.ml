@@ -254,3 +254,28 @@ let%test "location-scoped inventory: a present resource is Present" =
 let%test "location-scoped inventory: a refused list is Unobservable" =
   test_a_refused_list_is_unobservable ()
 ;;
+
+let test_a_not_found_list_failure_is_unobservable () =
+  with_calls
+    ~node_pools_out:
+      "ERROR: (gcloud.container.node-pools.list) NOT_FOUND: The project 'missing' was \
+       not found.\n"
+    ~nats_out:""
+    ~list_exit:1
+    (fun ~log:_ ~observations ->
+       match only observations "GKE node pool" with
+       | Sol_cli_absence.Unobservable u ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the provider's NOT_FOUND text is kept as the unknown's reason"
+           true
+           (Sol_cli_string.contains ~needle:"NOT_FOUND" u.reason)
+       | Sol_cli_absence.Absent _ ->
+         Windtrap.fail
+           "a failed enumeration containing 'not found' must not become absence"
+       | _ -> Windtrap.fail "a failed enumeration must be Unobservable")
+;;
+
+let%test "location-scoped inventory: a not-found list failure is Unobservable" =
+  test_a_not_found_list_failure_is_unobservable ()
+;;

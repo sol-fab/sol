@@ -2377,7 +2377,10 @@ let%test "driver: byo has nothing to observe, identify or credential (DEC-051)" 
     true
     (Sol_cli_provider_registry.observations Sol_cli_provider.Byo target ~cluster_name:"x"
      = []
-     && Sol_cli_provider_registry.resource_identity Sol_cli_provider.Byo ~cluster_name:"x"
+     && Sol_cli_provider_registry.resource_identity
+          Sol_cli_provider.Byo
+          ~cluster_name:"x"
+          ~project_id:None
         = []
      &&
      match

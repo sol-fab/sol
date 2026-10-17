@@ -33,17 +33,16 @@ type disposition =
 
 (* Adoption is destructive authority, so the observed name must match the registry entry
    exactly. Detection may be broader (the inventories report every candidate their attribution
-   rule finds); recovery must not read that breadth as permission to import. The two provider
-   forms that are genuinely qualified are the service account email and the project-qualified
-   custom role name; every other entry is an exact provider name. *)
+   rule finds); recovery must not read that breadth as permission to import. Service-account
+   identities are the complete email derived from the target's project. The one qualified
+   provider form is the project-qualified custom role name, which gcloud may report either as
+   the bare role id or as `projects/<project>/roles/<id>`. *)
 let matches (entry : entry) ~resource_class ~found =
   entry.resource_class = resource_class
   && entry.observed_as <> ""
   &&
   let observed = entry.observed_as in
-  if String.ends_with ~suffix:"@" observed
-  then String.starts_with ~prefix:observed found
-  else if String.equal resource_class "custom role"
+  if String.equal resource_class "custom role"
   then String.equal observed found || String.ends_with ~suffix:("/" ^ observed) found
   else String.equal observed found
 ;;

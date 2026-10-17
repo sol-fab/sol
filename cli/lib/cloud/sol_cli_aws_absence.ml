@@ -43,6 +43,66 @@ let run_argv argv =
   | Error _ -> Error (`Failed "the aws CLI is unavailable")
 ;;
 
+let account_of_role_arn arn =
+  match String.split_on_char ':' arn with
+  | "arn" :: "aws" :: "iam" :: "" :: account :: _ when account <> "" -> Some account
+  | _ -> None
+;;
+
+let declared_account target =
+  let keys =
+    [ "provisioner_role_arn"
+    ; "deploy_role_arn"
+    ; "cluster_access_role_arn"
+    ; "operator_role_arn"
+    ]
+  in
+  let accounts =
+    keys
+    |> List.filter_map (fun key ->
+      Option.bind (Sol_cli_config.provider_field target key) account_of_role_arn)
+    |> List.sort_uniq String.compare
+  in
+  match accounts with
+  | [ account ] -> Ok account
+  | [] ->
+    Error
+      "the target declares no AWS role ARN (provisioner_role_arn, deploy_role_arn, \
+       cluster_access_role_arn or operator_role_arn), so the inventory cannot establish \
+       which AWS account it would list. An unbounded account is not evidence of absence"
+  | accounts ->
+    Error
+      (Printf.sprintf
+         "the target's AWS role ARNs name different accounts (%s), so the inventory \
+          cannot establish which account it would list"
+         (String.concat ", " accounts))
+;;
+
+(* The account is not ambient. Every destructive absence claim must be tied to the account
+   the target declares, and the active caller must be in that account. A mismatch or an
+   unreadable caller identity is unknown, never absence. *)
+let scope_binding target =
+  let open Result.Syntax in
+  let* expected = declared_account target in
+  match
+    run_argv [ "sts"; "get-caller-identity"; "--query"; "Account"; "--output"; "text" ]
+  with
+  | Ok [ actual ] ->
+    let actual = String.trim actual in
+    if String.equal actual expected
+    then Ok ()
+    else
+      Error
+        (Printf.sprintf
+           "the active AWS caller is account %s, but the target's role ARNs name %s; the \
+            inventory would not be listing the target's account"
+           actual
+           expected)
+  | Ok _ -> Error "aws sts get-caller-identity returned no account"
+  | Error (`NotFound reason) | Error (`Failed reason) ->
+    Error ("could not establish the active AWS account: " ^ String.trim reason)
+;;
+
 let run ~check =
   let unobservable reason =
     Unobservable
@@ -69,19 +129,12 @@ let run ~check =
         ; checked_with = check.checked_as
         }
   in
+  (* The top-level probes are enumerations. A failed enumeration is unknown, even when
+     the provider's message contains "not found": the subject may be the account, region,
+     caller or filter, not the resource. Only a successful empty listing establishes
+     absence. *)
   match run_argv check.argv with
-  | Error (`NotFound reason) ->
-    Absent
-      { resource_class = check.resource_class
-      ; identity = check.identity
-      ; attribution = check.attribution
-      ; checked_with =
-          Printf.sprintf
-            "%s (the provider reports it does not exist: %s)"
-            check.checked_as
-            (String.trim reason)
-      }
-  | Error (`Failed reason) -> unobservable reason
+  | Error (`NotFound reason) | Error (`Failed reason) -> unobservable reason
   | Ok candidates ->
     let candidates = List.filter check.attributable candidates in
     (match check.tagged_with with
@@ -404,13 +457,23 @@ let ecr_observation ~region ~registry =
 ;;
 
 let observations (target : Sol_cli_config.target) ~cluster_name =
-  List.map (fun c -> run ~check:c) (checks ~region:target.region ~cluster_name)
-  @ [ ecr_observation ~region:target.region ~registry:(registry_prefix target) ]
-  @ durable_observations ~target
+  match scope_binding target with
+  | Error reason -> Sol_cli_absence.unresolved ~reason
+  | Ok () ->
+    List.map (fun c -> run ~check:c) (checks ~region:target.region ~cluster_name)
+    @ [ ecr_observation ~region:target.region ~registry:(registry_prefix target) ]
+    @ durable_observations ~target
 ;;
 
 let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
-  run ~check:(cluster_check ~region:target.region ~cluster_name)
+  match scope_binding target with
+  | Error reason ->
+    Unobservable
+      { resource_class = "EKS cluster"
+      ; reason
+      ; checked_with = "aws (not run: the target's AWS account could not be established)"
+      }
+  | Ok () -> run ~check:(cluster_check ~region:target.region ~cluster_name)
 ;;
 
 let unresolved = Sol_cli_absence.unresolved
