@@ -193,6 +193,10 @@ val ingress_doc
   -> unit
   -> Sol_cli_yaml.document
 
+(** The additive egress allowance for a unit that declared the target's Sol-provisioned
+    database: one rule, to exactly [cidrs], on [port]/TCP, selecting the unit's own pods. The
+    caller supplies only units with [Sol_cli_deployment_plan.db_ca_target], so this document
+    cannot widen a nonconsumer. *)
 val managed_database_egress_doc
   :  cidrs:string list
   -> port:int

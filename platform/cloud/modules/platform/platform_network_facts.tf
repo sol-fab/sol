@@ -1,5 +1,5 @@
 variable "database_egress_cidrs" {
-  description = "Ranges a workload must reach to use this target's managed database, derived by the cluster root from the placement Sol provisioned. Published to the cluster so the deploy can render the egress a service needs without an author declaring a CIDR. Empty means this target has no managed database, and no allowance is published."
+  description = "Ranges a unit that declares this target's managed database must reach to use it, derived by the cluster root from the placement Sol provisioned. Published to the cluster so the deploy can render the egress a consumer needs without an author declaring a CIDR. Empty means this target has no managed database, and no allowance is published. The deploy applies it only to the units that declared the database; no other workload is widened."
   type        = list(string)
   default     = []
 }

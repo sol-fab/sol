@@ -1548,6 +1548,66 @@ let%test "substrate_prerequisite: a side-effect-free run checks, never creates" 
         Windtrap.fail "an offline run must be able to check an established namespace"))
 ;;
 
+(* The target provisions a database here, so an absent fact is required only for the units
+   that declared it. A nonconsumer must neither be widened nor make the deploy depend on a
+   fact it does not use (#1123). *)
+let with_provisioned_database f =
+  with_context ~resources:"resources:\n  app_db:\n    type: postgres\n" f
+;;
+
+let managed_database_consumer : Sol_cli_deployment_plan.service_spec list =
+  [ { (spec ~domain:"payments" ~name:"charge_svc" ~k8s:"charge-svc" Svc) with
+      db_ca_target = Some "dev-aws-us-east-1"
+    }
+  ]
+;;
+
+let%test "managed_database_workloads: only the declared consumers are selected" =
+  let consumer = List.hd managed_database_consumer in
+  let nonconsumer = List.hd worker_plan in
+  Windtrap.equal
+    (Windtrap.list (Windtrap.pair Windtrap.string Windtrap.string))
+    ~msg:"the declared consumer, and only it"
+    [ Sol_cli_deployment_plan.namespace_to_string consumer.namespace, "charge-svc" ]
+    (Sol_cli_substrate.managed_database_workloads (plan [ consumer; nonconsumer ]))
+;;
+
+let%test
+    "substrate_prerequisite: a nonconsumer of a provisioned database reads no egress fact"
+  =
+  with_fake_kubectl (fun ~calls ->
+    with_provisioned_database (fun ctx ->
+      match substrate_prerequisite ctx ~live:true worker_plan with
+      | Ok () ->
+        Windtrap.equal
+          Windtrap.bool
+          ~msg:"no fact is read on a nonconsumer's behalf"
+          false
+          (Sol_cli_string.contains ~needle:"sol-platform-network" (calls ()))
+      | Error (Sol_cli_deploy_run.Refused message) ->
+        Windtrap.failf "a nonconsumer must not require the database fact: %s" message
+      | Error (Sol_cli_deploy_run.Failed message) ->
+        Windtrap.failf "unexpected failure: %s" message))
+;;
+
+let%test "substrate_prerequisite: a declared consumer without the fact refuses" =
+  with_fake_kubectl (fun ~calls:_ ->
+    with_provisioned_database (fun ctx ->
+      match substrate_prerequisite ctx ~live:true managed_database_consumer with
+      | Ok () ->
+        Windtrap.fail
+          "a unit that declared the provisioned database must not deploy with no route \
+           to it"
+      | Error (Sol_cli_deploy_run.Refused message) ->
+        Windtrap.equal
+          Windtrap.bool
+          ~msg:"the refusal says the consumer would have no route"
+          true
+          (Sol_cli_string.contains ~needle:"no route" message)
+      | Error (Sol_cli_deploy_run.Failed message) ->
+        Windtrap.failf "the missing fact is a refusal, not a failure report: %s" message))
+;;
+
 let refusal_mentions ~fail_on needle =
   with_fake_kubectl (fun ~calls:_ ->
     with_context (fun ctx ->

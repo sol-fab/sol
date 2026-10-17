@@ -75,14 +75,6 @@ type gate_failure =
   | Refused of string
   | Failed of string
 
-let plan_workloads (plan : Sol_cli_deployment_plan.t) =
-  List.map
-    (fun (spec : Sol_cli_deployment_plan.service_spec) ->
-       ( Sol_cli_deployment_plan.namespace_to_string spec.namespace
-       , Sol_cli_kubernetes_name.k8s_name_to_string spec.k8s_name ))
-    plan.Sol_cli_deployment_plan.services
-;;
-
 (* **#1403: migration verification does not depend on the profile.** A profile answers which
    guarantees a target claims, not what the deploy does, so a profile-less target must still
    refuse to roll workloads against an unapplied schema. What decides is whether the workspace
@@ -226,21 +218,15 @@ let substrate_prerequisite ctx ~plan ~live =
   then Ok ()
   else if live
   then
-    (* The substrate reads the cluster's database-egress fact and applies the allowance. It
-       must know whether this target provisions a database, because only then is an absent
-       fact a failure rather than "nothing to admit". That is the same ownership resolution
-       the database setup step and the Terraform variables use. *)
-    let* manages_database =
-      Sol_cli_resource_binding.resolve ctx.resolved_config
-      |> Result.map (fun bindings ->
-        Sol_cli_resource_binding.provisions bindings ~typ:"postgres")
-      |> Result.map_error (fun message -> Refused message)
-    in
+    (* Only the units that declared the database this target provisions get the allowance.
+       The plan already carries that answer in [db_ca_target] — the same field the renderer
+       uses to mount the setup step's CA ConfigMap — so this gate does not resolve the
+       bindings again. A unit that consumes no database, or one bound externally, is not
+       widened, and no fact is required on its behalf. *)
     Sol_cli_substrate.ensure
       ~ctx:ctx.execution.cluster
       ~namespaces
-      ~workloads:(plan_workloads plan)
-      ~manages_database
+      ~workloads:(Sol_cli_substrate.managed_database_workloads plan)
     |> Result.map_error (fun message -> Refused message)
   else
     Sol_cli_substrate.established ~ctx:ctx.execution.cluster ~namespaces

@@ -2,9 +2,11 @@
 """Mutation test for check_managed_database_egress.
 
 Each case is a way the managed-database contract can regress: enforcement switched off on either
-provider (which is how the GCP row passed while AWS hung), a range no longer derived, no
-publication, a read grant that reaches every configmap or may write, an allowance applied with no
-ranges, one that names no port, or one that is not scoped to ranges at all.
+provider (which is how the GCP row passed while AWS hung), a range no longer derived, a range
+published without a database, no publication, a read grant that reaches every configmap or may
+write, an allowance applied with no ranges, one that names no port, one that is not scoped to
+ranges at all, one widened to every workload instead of the declared consumers, or a malformed
+fact defaulted instead of refused.
 """
 
 import shutil
@@ -24,6 +26,7 @@ COPIED = [
     "platform/cloud/gcp/platform/main.tf",
     "platform/cloud/modules/platform/platform_network_facts.tf",
     "cli/lib/deploy/sol_cli_substrate.ml",
+    "cli/lib/deploy/sol_cli_deploy_run.ml",
     "cli/lib/workspace/sol_cli_manifest_yaml.ml",
 ]
 
@@ -103,6 +106,53 @@ def main():
     tmp = scratch()
     mutate(
         tmp,
+        "platform/cloud/gcp/cluster/outputs.tf",
+        "value = var.create_database ? [",
+        "value = [",
+    )
+    mutate(tmp, "platform/cloud/gcp/cluster/outputs.tf", "  ] : []", "  ]")
+    cases.append(
+        ("gcp-publishes-a-range-without-a-database", tmp, "advertises an allowance")
+    )
+
+    tmp = scratch()
+    mutate(
+        tmp,
+        "cli/lib/deploy/sol_cli_substrate.ml",
+        "match spec.db_ca_target with\n    | None -> None",
+        "match Some () with\n    | None -> None",
+    )
+    cases.append(("all-workloads-widened-to-the-database", tmp, "not scoped to the units"))
+
+    tmp = scratch()
+    mutate(
+        tmp,
+        "cli/lib/deploy/sol_cli_deploy_run.ml",
+        "~workloads:(Sol_cli_substrate.managed_database_workloads plan)",
+        "~workloads:[]",
+    )
+    cases.append(
+        (
+            "deploy-gate-drops-the-declared-consumers",
+            tmp,
+            "does not pass the plan's declared consumers",
+        )
+    )
+
+    tmp = scratch()
+    mutate(
+        tmp,
+        "cli/lib/deploy/sol_cli_substrate.ml",
+        "carries database-egress-cidrs but no",
+        "carries database-egress-cidrs and possibly",
+    )
+    cases.append(
+        ("malformed-fact-port-error-removed", tmp, "defaulted instead of refused")
+    )
+
+    tmp = scratch()
+    mutate(
+        tmp,
         "platform/cloud/gcp/platform/main.tf",
         "  database_egress_cidrs                   = var.database_egress_cidrs\n",
         "",
@@ -131,8 +181,8 @@ def main():
     mutate(
         tmp,
         "cli/lib/deploy/sol_cli_substrate.ml",
-        "if cidrs = [] then Ok None else",
-        "if false then Ok None else",
+        "if cidrs = []\n       then Ok None",
+        "if false\n       then Ok None",
     )
     cases.append(("empty-fact-still-applied", tmp, "carries no ranges"))
 

@@ -15,6 +15,24 @@ let namespaces (plan : Sol_cli_deployment_plan.t) : string list =
   |> List.sort_uniq String.compare
 ;;
 
+(** The units that declared the database *this target provisions*, and only those. The signal
+    is [db_ca_target] — the same field the renderer uses to mount the setup step's CA
+    ConfigMap — so a unit that consumes no database is never widened. A unit that consumes an
+    externally bound database is also absent: Sol does not own that destination and therefore
+    has no provider-derived range for it. That external-egress contract is deliberately not
+    inferred here. *)
+let managed_database_workloads (plan : Sol_cli_deployment_plan.t) : (string * string) list
+  =
+  plan.services
+  |> List.filter_map (fun (spec : Sol_cli_deployment_plan.service_spec) ->
+    match spec.db_ca_target with
+    | None -> None
+    | Some _ ->
+      Some
+        ( Sol_cli_deployment_plan.namespace_to_string spec.namespace
+        , Sol_cli_deployment_plan.k8s_name_to_string spec.k8s_name ))
+;;
+
 let docs_for_namespaces namespaces : Sol_cli_yaml.document list =
   List.map (fun ns -> Sol_cli_manifest.namespace_doc ~ns) namespaces
   @ List.map (fun ns -> Sol_cli_manifest.deploy_role_binding_doc ~ns) namespaces
@@ -51,9 +69,11 @@ let apply_doc ~ctx doc =
    database, and on which port. It is a [result], not an [option], so a refused, unreachable
    or malformed read is not silently "no database" — that conflation is what let a target
    with a managed database deploy with no egress to it. An absent fact is still [Ok None];
-   [ensure] decides whether that is acceptable from the target's ownership, which this
+   [ensure] decides whether that is acceptable from the plan's declared consumers, which this
    function does not know. Returns [Ok None] when the fact carries no ranges (the platform's
-   publication for a target with no managed database). *)
+   publication for a target with no managed database). A fact that carries ranges but no
+   usable port is refused: defaulting the port here would turn an incomplete fact into a
+   permissive rule rather than failing closed. *)
 let platform_network_fact ~ctx =
   let what = "ConfigMap kube-system/sol-platform-network" in
   match
@@ -85,13 +105,34 @@ let platform_network_fact ~ctx =
            |> List.filter (fun cidr -> cidr <> "")
          | _ -> []
        in
-       let port =
-         match List.assoc_opt "database-port" data with
-         | Some (`String text) ->
-           Option.value (int_of_string_opt (String.trim text)) ~default:5432
-         | _ -> 5432
-       in
-       if cidrs = [] then Ok None else Ok (Some (cidrs, port))
+       if cidrs = []
+       then Ok None
+       else (
+         let port =
+           match List.assoc_opt "database-port" data with
+           | Some (`String text) ->
+             (match int_of_string_opt (String.trim text) with
+              | Some port when port > 0 && port <= 65535 -> Ok port
+              | _ ->
+                Error
+                  (Printf.sprintf
+                     "the database-egress fact (%s) carries an invalid database-port: %S"
+                     what
+                     text))
+           | Some _ ->
+             Error
+               (Printf.sprintf
+                  "the database-egress fact (%s) carries a non-string database-port"
+                  what)
+           | None ->
+             Error
+               (Printf.sprintf
+                  "the database-egress fact (%s) carries database-egress-cidrs but no \
+                   database-port, so the allowance cannot be bounded to the database \
+                   port"
+                  what)
+         in
+         Result.map (fun port -> Some (cidrs, port)) port)
      | _ -> Error (Printf.sprintf "the database-egress fact (%s) is not an object" what)
      | exception Yojson.Json_error message ->
        Error
@@ -101,7 +142,7 @@ let platform_network_fact ~ctx =
             message))
 ;;
 
-let ensure ~workloads ~ctx ~namespaces ~manages_database : (unit, string) result =
+let ensure ~workloads ~ctx ~namespaces : (unit, string) result =
   let open Result.Syntax in
   match List.find_opt (fun ns -> List.mem ns reserved_platform_namespaces) namespaces with
   | Some ns ->
@@ -135,12 +176,11 @@ let ensure ~workloads ~ctx ~namespaces ~manages_database : (unit, string) result
                 (fun (ns, name) ->
                    Sol_cli_manifest.managed_database_egress_doc ~cidrs ~port ~ns ~name)
                 workloads)
-         | None when not manages_database -> Ok ()
          | None ->
            Error
-             "the target provisions a Sol-managed database, but the cluster has \
-              published no database-egress ranges (ConfigMap \
-              kube-system/sol-platform-network is absent, unreadable or empty), so the \
+             "the plan's units declare the target's Sol-managed database, but the \
+              cluster has published no database-egress fact (ConfigMap \
+              kube-system/sol-platform-network is absent or carries no ranges), so those \
               workloads would have no route to it. Reconcile the environment for this \
               target so the platform install publishes the range, then retry.")
     in

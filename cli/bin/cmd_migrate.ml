@@ -199,13 +199,7 @@ let run_apply_in_cluster ~ctx ~dir ~table ~target_path ~active =
     in_cluster_context ~target_path ~active
   in
   let namespace = Sol_cli_database_setup_render.database_namespace database in
-  let* () =
-    Sol_cli_substrate.ensure
-      ~ctx
-      ~namespaces:[ namespace ]
-      ~workloads:[]
-      ~manages_database:false
-  in
+  let* () = Sol_cli_substrate.ensure ~ctx ~namespaces:[ namespace ] ~workloads:[] in
   Sol_cli_migration_gate.reconcile_operator_bindings ~ctx ~workspace ~services;
   let* files = Sol_cli_migration_gate.migration_files dir in
   if files = []

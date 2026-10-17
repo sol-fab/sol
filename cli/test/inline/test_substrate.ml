@@ -71,7 +71,6 @@ let test_ensure_refuses_a_reserved_platform_namespace () =
       ~workloads:[]
       ~ctx:Sol_cli_kube_destination.local_context
       ~namespaces:[ "cert-manager" ]
-      ~manages_database:false
   with
   | Ok () -> Windtrap.fail "expected ensure to refuse a reserved platform namespace"
   | Error msg ->
@@ -113,15 +112,15 @@ done
 case "$*" in
   *"get configmap sol-platform-network"*)
     case "$EGRESS_FACT" in
-      present)
-        echo '{"data":{"database-egress-cidrs":"10.0.0.0/16","database-port":"5432"}}'
-        exit 0 ;;
       forbidden)
         echo 'Error from server (Forbidden): configmaps "sol-platform-network" is forbidden: cannot get resource "configmaps"' >&2
         exit 1 ;;
-      *)
+      absent)
         echo 'Error from server (NotFound): configmaps "sol-platform-network" not found' >&2
         exit 1 ;;
+      *)
+        printf '%%s' "$EGRESS_FACT"
+        exit 0 ;;
     esac ;;
   *"get secret sol-secrets"*)
     echo '{"data":{"POSTGRES_URL":"cG9zdGdyZXM="}}'
@@ -273,69 +272,245 @@ let test_operator_bindings_cover_every_workload_namespace () =
       (Sol_cli_string.contains ~needle:"kind: Deployment" doc))
 ;;
 
-(* The database-egress fact. It used to be read with its errors collapsed to [None], so a
-   refused or absent ConfigMap looked exactly like "this target has no managed database":
-   the deploy proceeded and the workloads had no route to it. The two are now distinguished
-   by the target's ownership. *)
-let test_ensure_distinguishes_no_database_from_a_broken_fact () =
-  let run ~egress_fact ~manages_database =
-    with_fake_kubectl ~egress_fact (fun _log ->
+let rec lookup path (v : Yaml.value) =
+  match path, v with
+  | [], v -> Some v
+  | key :: rest, `O members -> Option.bind (List.assoc_opt key members) (lookup rest)
+  | _ -> None
+;;
+
+let string_at path v =
+  match lookup path v with
+  | Some (`String s) -> s
+  | _ -> Windtrap.failf "no string at %s" (String.concat "." path)
+;;
+
+(* A plain YAML scalar resolves to a number, so a port is compared as its rendered number. *)
+let scalar_at path v =
+  match lookup path v with
+  | Some (`String s) -> s
+  | Some (`Float f) -> Printf.sprintf "%g" f
+  | Some (`Bool b) -> string_of_bool b
+  | _ -> Windtrap.failf "no scalar at %s" (String.concat "." path)
+;;
+
+let list_at path v =
+  match lookup path v with
+  | Some (`A items) -> items
+  | _ -> Windtrap.failf "no list at %s" (String.concat "." path)
+;;
+
+let parse_document text =
+  match Yaml.of_string text with
+  | Ok value -> value
+  | Error (`Msg message) ->
+    Windtrap.failf "rendered YAML does not parse: %s\n%s" message text
+;;
+
+(* A fact body as the platform writes it. [port = None] omits the port, which is the
+   malformed shape a partial publication can leave behind. *)
+let fact ~cidrs ?port () =
+  let port_field =
+    match port with
+    | None -> ""
+    | Some port -> Printf.sprintf ",\"database-port\":\"%s\"" port
+  in
+  Printf.sprintf "{\"data\":{\"database-egress-cidrs\":\"%s\"%s}}" cidrs port_field
+;;
+
+let consumer = [ "pluto-checkout", "checkout-svc" ]
+
+let with_fact ~egress_fact ~workloads f =
+  with_fake_kubectl ~egress_fact (fun log ->
+    let outcome =
       S.ensure
-        ~workloads:[ "pluto-checkout", "checkout-svc" ]
+        ~workloads
         ~ctx:Sol_cli_kube_destination.local_context
         ~namespaces:[ "pluto-checkout" ]
-        ~manages_database)
+    in
+    f log outcome)
+;;
+
+(* **A consumer cannot deploy without a usable destination fact.** The fact used to be read
+   with its errors collapsed to [None], so a refused, absent or malformed ConfigMap looked
+   exactly like "no managed database": the deploy proceeded and the workloads had no route.
+   Only the units that declared the managed database ask for the fact, so a target with no
+   such consumer still deploys with no read and no allowance. *)
+let test_ensure_fails_closed_without_a_usable_fact () =
+  let expect_refusal ~label ~needle ~egress_fact =
+    with_fact ~egress_fact ~workloads:consumer (fun log outcome ->
+      match outcome with
+      | Ok () -> Windtrap.failf "%s: the substrate must refuse" label
+      | Error message ->
+        check_bool
+          (label ^ ": names the fact")
+          true
+          (Sol_cli_string.contains ~needle:"sol-platform-network" message);
+        check_bool
+          (label ^ ": says the workloads would have no route")
+          true
+          (Sol_cli_string.contains ~needle:"no route" message);
+        check_bool
+          (label ^ ": applies no allowance")
+          false
+          (Sys.file_exists (log ^ ".manifests"));
+        check_bool
+          (label ^ ": preserves the cause")
+          true
+          (Sol_cli_string.contains ~needle message))
   in
-  (match run ~egress_fact:"absent" ~manages_database:true with
-   | Ok () ->
-     Windtrap.fail
-       "a managed database with no published egress fact must refuse the substrate"
-   | Error message ->
-     check_bool
-       "the refusal names the fact"
-       true
-       (Sol_cli_string.contains ~needle:"sol-platform-network" message);
-     check_bool
-       "the refusal says the workloads would have no route"
-       true
-       (Sol_cli_string.contains ~needle:"no route" message));
-  (match run ~egress_fact:"forbidden" ~manages_database:true with
-   | Ok () -> Windtrap.fail "a refused fact read must not pass as no database"
-   | Error message ->
-     check_bool
-       "the read error is preserved"
-       true
-       (Sol_cli_string.contains ~needle:"Forbidden" message));
-  match run ~egress_fact:"absent" ~manages_database:false with
-  | Ok () -> ()
-  | Error message ->
-    Windtrap.fail ("a target with no managed database needs no egress fact: " ^ message)
+  (* The cause assertions are the specific reason; [no route] is the shared prefix. *)
+  let expect_cause ~label ~needle ~egress_fact =
+    with_fact ~egress_fact ~workloads:consumer (fun _log outcome ->
+      match outcome with
+      | Ok () -> Windtrap.failf "%s: the substrate must refuse" label
+      | Error message ->
+        check_bool
+          (label ^ ": preserves the cause")
+          true
+          (Sol_cli_string.contains ~needle message))
+  in
+  expect_refusal ~label:"absent fact" ~needle:"no route" ~egress_fact:"absent";
+  expect_cause ~label:"forbidden read" ~needle:"Forbidden" ~egress_fact:"forbidden";
+  expect_refusal
+    ~label:"empty ranges"
+    ~needle:"no route"
+    ~egress_fact:(fact ~cidrs:"" ~port:"5432" ());
+  expect_cause
+    ~label:"missing port"
+    ~needle:"no database-port"
+    ~egress_fact:(fact ~cidrs:"10.12.0.0/16" ());
+  expect_cause
+    ~label:"invalid port"
+    ~needle:"invalid database-port"
+    ~egress_fact:(fact ~cidrs:"10.12.0.0/16" ~port:"http" ());
+  (* No declared consumer: even a published fact produces no allowance, and an absent one is
+     not an error. *)
+  with_fact
+    ~egress_fact:(fact ~cidrs:"10.12.0.0/16" ~port:"5432" ())
+    ~workloads:[]
+    (fun log outcome ->
+       (match outcome with
+        | Ok () -> ()
+        | Error message ->
+          Windtrap.fail
+            ("a plan with no managed-database consumer needs no fact: " ^ message));
+       check_bool
+         "no consumer means no allowance is applied"
+         false
+         (Sys.file_exists (log ^ ".manifests")));
+  with_fact ~egress_fact:"absent" ~workloads:[] (fun _log outcome ->
+    match outcome with
+    | Ok () -> ()
+    | Error message ->
+      Windtrap.fail ("an absent fact is irrelevant without a consumer: " ^ message))
 ;;
 
 let test_ensure_applies_the_published_allowance () =
-  with_fake_kubectl ~egress_fact:"present" (fun log ->
-    (match
-       S.ensure
-         ~workloads:[ "pluto-checkout", "checkout-svc" ]
-         ~ctx:Sol_cli_kube_destination.local_context
-         ~namespaces:[ "pluto-checkout" ]
-         ~manages_database:true
-     with
+  let egress_fact = fact ~cidrs:"10.12.0.0/16,10.13.0.0/16" ~port:"5432" () in
+  with_fact ~egress_fact ~workloads:consumer (fun log outcome ->
+    (match outcome with
      | Ok () -> ()
      | Error message -> Windtrap.fail message);
     let manifests =
       try read_file (log ^ ".manifests") with
       | Sys_error _ -> Windtrap.fail "the allowance was not applied"
     in
-    check_bool
-      "the published range is admitted as an ipBlock"
-      true
-      (Sol_cli_string.contains ~needle:"ipBlock" manifests
-       && Sol_cli_string.contains ~needle:"10.0.0.0/16" manifests);
-    check_bool
-      "on the published port"
-      true
-      (Sol_cli_string.contains ~needle:"port: 5432" manifests))
+    let policy = parse_document manifests in
+    Windtrap.equal
+      Windtrap.string
+      ~msg:"the allowance names the workload"
+      "checkout-svc-managed-database-egress"
+      (string_at [ "metadata"; "name" ] policy);
+    Windtrap.equal
+      Windtrap.string
+      ~msg:"the allowance selects the workload's pods, not the namespace"
+      "checkout-svc"
+      (string_at [ "spec"; "podSelector"; "matchLabels"; "app" ] policy);
+    Windtrap.equal
+      (Windtrap.list Windtrap.string)
+      ~msg:"the allowance is egress only"
+      [ "Egress" ]
+      (list_at [ "spec"; "policyTypes" ] policy |> List.map (string_at []));
+    let rules = list_at [ "spec"; "egress" ] policy in
+    Windtrap.equal Windtrap.int ~msg:"one egress rule" 1 (List.length rules);
+    let rule = List.hd rules in
+    let destinations =
+      list_at [ "to" ] rule
+      |> List.map (fun destination ->
+        check_bool
+          "a destination is a bare ipBlock, with no widening exception"
+          true
+          (lookup [ "ipBlock"; "except" ] destination = None);
+        string_at [ "ipBlock"; "cidr" ] destination)
+    in
+    Windtrap.equal
+      (Windtrap.list Windtrap.string)
+      ~msg:"every published destination, and only those"
+      [ "10.12.0.0/16"; "10.13.0.0/16" ]
+      destinations;
+    Windtrap.equal
+      (Windtrap.list Windtrap.string)
+      ~msg:"the published port, on TCP"
+      [ "5432/TCP" ]
+      (list_at [ "ports" ] rule
+       |> List.map (fun port ->
+         scalar_at [ "port" ] port ^ "/" ^ scalar_at [ "protocol" ] port)))
+;;
+
+(* The platform policy is additive with the managed-database allowance, so the existing DNS,
+   platform-namespace and declared-peer egress must remain exactly as they were. Parsing the
+   rendered policy keeps this a contract assertion rather than a substring check. *)
+let test_platform_policy_keeps_dns_platform_and_peer_egress () =
+  let policy =
+    Sol_cli_manifest.network_policy_doc
+      ~egress_to:[ "myapp-orders", "order-svc" ]
+      ~ingress_from:[ "myapp-orders", "order-svc" ]
+      ~ns:"myapp-payments"
+      ~name:"charge-svc"
+      ()
+    |> fun doc -> Sol_cli_yaml.render [ doc ] |> parse_document
+  in
+  let egress = list_at [ "spec"; "egress" ] policy in
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"DNS, platform namespaces and the declared peer"
+    3
+    (List.length egress);
+  let dns = List.nth egress 0 in
+  check_bool
+    "the DNS rule is destination-free and names both protocols"
+    true
+    (lookup [ "to" ] dns = None
+     && List.map
+          (fun port -> scalar_at [ "port" ] port ^ "/" ^ scalar_at [ "protocol" ] port)
+          (list_at [ "ports" ] dns)
+        = [ "53/UDP"; "53/TCP" ]);
+  let platform = List.nth egress 1 in
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"the platform rule keeps the three platform namespaces"
+    [ "redpanda"; "postgresql"; Sol_cli_manifest.monitoring_namespace ]
+    (list_at [ "to" ] platform
+     |> List.filter_map (fun destination ->
+       match
+         lookup
+           [ "namespaceSelector"; "matchLabels"; "kubernetes.io/metadata.name" ]
+           destination
+       with
+       | Some (`String name) -> Some name
+       | _ -> None));
+  let peer = List.hd (list_at [ "to" ] (List.nth egress 2)) in
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"the declared peer keeps its namespace"
+    "myapp-orders"
+    (string_at [ "namespaceSelector"; "matchLabels"; "kubernetes.io/metadata.name" ] peer);
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"the declared peer keeps its pod selector"
+    "order-svc"
+    (string_at [ "podSelector"; "matchLabels"; "app" ] peer)
 ;;
 
 (* **The claim the target-derived database namespace rests on**: `ensure` establishes any
@@ -396,14 +571,22 @@ let%test
 ;;
 
 let%test
-    "workspace substrate (FND-0075): a managed database with no egress fact fails \
-     closed, a target without one does not"
+    "workspace substrate (FND-0075): a managed-database consumer with no usable egress \
+     fact fails closed; no consumer reads no fact"
   =
-  test_ensure_distinguishes_no_database_from_a_broken_fact ()
+  test_ensure_fails_closed_without_a_usable_fact ()
 ;;
 
 let%test
-    "workspace substrate (FND-0075): the published egress range is applied as an ipBlock"
+    "workspace substrate (FND-0075): the published destinations and port are applied as \
+     one bounded ipBlock rule"
   =
   test_ensure_applies_the_published_allowance ()
+;;
+
+let%test
+    "workspace substrate (FND-0075): DNS, platform-namespace and declared-peer egress \
+     are unchanged"
+  =
+  test_platform_policy_keeps_dns_platform_and_peer_egress ()
 ;;
