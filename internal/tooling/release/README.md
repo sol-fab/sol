@@ -150,6 +150,16 @@ blocked or failed row keeps the candidate unpublished until a new candidate is
 qualified. `teardown.absence_verdict` is the independent post-destroy absence
 result — Sol's exit code and Terraform state are not absence evidence.
 
+**Current limit.** `promotion.py decide` checks that the reported
+`absence_verdict` is `pass`; it does not yet verify the `teardown.evidence`
+member named beside it, and the GCP harness does not yet emit a
+`gcp-inventory-verdict.txt` artifact at all. The gate therefore accepts an
+operator attestation, not a digest-bound observation. The gap, a reproduction
+and the proposed fix are recorded in
+[`internal/qualification/records/2026-10-17-promotion-teardown-evidence.md`](../../qualification/records/2026-10-17-promotion-teardown-evidence.md);
+the evidence-backed wording above is the contract the fix must meet, not a
+description of the current check.
+
 ## 3. Promotion (automated gate, operator-triggered)
 
 `.github/workflows/promote.yml` never builds. It downloads the draft candidate
