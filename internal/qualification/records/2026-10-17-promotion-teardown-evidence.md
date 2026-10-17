@@ -1,6 +1,10 @@
 # Promotion accepts an operator attestation as teardown absence (2026-10-17)
 
-**Status: open trust-boundary gap. No behaviour changed by this record.**
+**Status: resolved by #1531. The reproduction below predates the fix and is
+retained as the record of the gap. The gate now verifies the attached evidence
+document's digest, candidate/provider/attempt/target/scope binding, and class
+coverage and dispositions against the versioned release teardown policy, plus
+the document's own `ABSENT` verdict.**
 
 The release promotion gate (`internal/tooling/release/promotion.py`) refuses a
 candidate whose provider verdict lacks `teardown.absence_verdict == "pass"`. It

@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "policy": "sol-teardown-v1",
+  "providers": {
+    "aws": {
+      "scope_fields": ["account", "region"],
+      "classes": [
+        {"class": "eks-cluster", "expectation": "absent"},
+        {"class": "rds-instance", "expectation": "absent"},
+        {"class": "rds-subnet-group", "expectation": "absent"},
+        {"class": "rds-snapshot", "expectation": "absent"},
+        {"class": "ec2-instance", "expectation": "absent"},
+        {"class": "vpc", "expectation": "absent"},
+        {"class": "nat-gateway", "expectation": "absent"},
+        {"class": "elastic-ip", "expectation": "absent"},
+        {"class": "ebs-volume", "expectation": "absent"},
+        {"class": "load-balancer", "expectation": "absent"},
+        {"class": "ecr-repository", "expectation": "absent"},
+        {"class": "iam-role", "expectation": "absent"},
+        {"class": "iam-policy", "expectation": "absent"},
+        {"class": "s3-bucket", "expectation": "absent"},
+        {"class": "cloudwatch-dashboard", "expectation": "absent"},
+        {"class": "cloudwatch-log-group", "expectation": "absent"},
+        {"class": "durable-hosted-zone", "expectation": "present"}
+      ]
+    },
+    "gcp": {
+      "scope_fields": ["project", "region"],
+      "classes": [
+        {"class": "scope-caller", "expectation": "present"},
+        {"class": "scope-project", "expectation": "present"},
+        {"class": "scope-region", "expectation": "present"},
+        {"class": "gke-cluster", "expectation": "absent"},
+        {"class": "sql-instance", "expectation": "absent"},
+        {"class": "network", "expectation": "absent"},
+        {"class": "subnetwork", "expectation": "absent"},
+        {"class": "router", "expectation": "absent"},
+        {"class": "nat", "expectation": "absent"},
+        {"class": "address-regional", "expectation": "absent"},
+        {"class": "address-global", "expectation": "absent"},
+        {"class": "disks", "expectation": "absent"},
+        {"class": "forwarding-rules", "expectation": "absent"},
+        {"class": "artifact-registry", "expectation": "absent"},
+        {"class": "service-account-provisioner", "expectation": "absent"},
+        {"class": "service-account-loki", "expectation": "absent"},
+        {"class": "service-account-thanos", "expectation": "absent"},
+        {"class": "custom-role", "expectation": "absent"},
+        {"class": "role-binding", "expectation": "absent"},
+        {"class": "impersonator-binding", "expectation": "absent"},
+        {"class": "peering", "expectation": "absent"},
+        {"class": "state-bucket", "expectation": "present"},
+        {"class": "dns-zone", "expectation": "present"}
+      ]
+    }
+  }
+}

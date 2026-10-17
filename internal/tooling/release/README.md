@@ -125,13 +125,45 @@ The campaign produces one verdict document, `qualification-verdict.json`, whose
         {"id": "B1", "status": "pass", "evidence": "..."},
         {"id": "I8", "status": "pass", "evidence": "..."}
       ],
-      "teardown": {"absence_verdict": "pass", "evidence": "aws-inventory-verdict.txt"}
+      "teardown": {
+        "absence_verdict": "pass",
+        "binding": {
+          "provider": "aws",
+          "attempt": "<attempt>",
+          "target": "<target>",
+          "cluster": "<cluster>",
+          "scope": {
+            "account": "<account>",
+            "region": "<region>"
+          }
+        },
+        "evidence": {
+          "path": "aws-inventory-verdict.json",
+          "sha256": "<64-hex>"
+        }
+      }
     },
     "gcp": {
       "verdict": "pass",
       "required_rows": ["B1"],
       "rows": [{"id": "B1", "status": "pass", "evidence": "..."}],
-      "teardown": {"absence_verdict": "pass", "evidence": "gcp-inventory-verdict.txt"}
+      "teardown": {
+        "absence_verdict": "pass",
+        "binding": {
+          "provider": "gcp",
+          "attempt": "<attempt>",
+          "target": "<target>",
+          "cluster": "<cluster>",
+          "scope": {
+            "project": "<project>",
+            "region": "<region>"
+          }
+        },
+        "evidence": {
+          "path": "gcp-inventory-verdict.json",
+          "sha256": "<64-hex>"
+        }
+      }
     }
   }
 }
@@ -150,15 +182,105 @@ blocked or failed row keeps the candidate unpublished until a new candidate is
 qualified. `teardown.absence_verdict` is the independent post-destroy absence
 result — Sol's exit code and Terraform state are not absence evidence.
 
-**Current limit.** `promotion.py decide` checks that the reported
-`absence_verdict` is `pass`; it does not yet verify the `teardown.evidence`
-member named beside it, and the GCP harness does not yet emit a
-`gcp-inventory-verdict.txt` artifact at all. The gate therefore accepts an
-operator attestation, not a digest-bound observation. The gap, a reproduction
-and the proposed fix are recorded in
-[`internal/qualification/records/2026-10-17-promotion-teardown-evidence.md`](../../qualification/records/2026-10-17-promotion-teardown-evidence.md);
-the evidence-backed wording above is the contract the fix must meet, not a
-description of the current check.
+### Teardown evidence
+
+A `teardown` claim is promotion-eligible only when it names an attached evidence
+document and that document verifies. The claim carries the binding it expects:
+
+```json
+"teardown": {
+  "absence_verdict": "pass",
+  "binding": {
+    "provider": "aws",
+    "attempt": "<attempt>",
+    "target": "<target>",
+    "cluster": "<cluster>",
+    "scope": {
+      "account": "<account>",
+      "region": "<region>"
+    }
+  },
+  "evidence": {
+    "path": "aws-inventory-verdict.json",
+    "sha256": "<64-hex>"
+  }
+}
+```
+
+The named file is attached to the draft beside `qualification-verdict.json`. It
+is a JSON object of this shape:
+
+```json
+{
+  "schema": 1,
+  "policy": "sol-teardown-v1",
+  "provider": "aws",
+  "candidate": {
+    "version": "...",
+    "revision": "<40-hex>",
+    "bundle_sha256": "<64-hex>",
+    "runner_image": "<image>@sha256:<64-hex>"
+  },
+  "attempt": "...",
+  "target": "...",
+  "scope": {"cluster": "...", "region": "...", "account": "..."},
+  "required_classes": ["eks-cluster", "..."],
+  "classes": [
+    {"class": "eks-cluster", "expectation": "absent", "state": "ABSENT", "detail": "..."},
+    {"class": "durable-hosted-zone", "expectation": "present", "state": "PRESENT", "detail": "..."}
+  ],
+  "verdict": "ABSENT"
+}
+```
+
+`decide` verifies, for each provider:
+
+- the evidence names the release teardown policy it was produced under, and that
+  name matches the policy the gate loaded;
+- the file is a plain name inside the downloaded evidence directory and its
+  SHA-256 matches the claim;
+- `provider`, `attempt`, `target`, `scope.cluster` and every provider scope
+  field the policy requires (`account`/`region` for AWS, `project`/`region` for
+  GCP) match the claim's binding;
+- `candidate` matches `candidate.json` exactly;
+- `required_classes` and `classes` name exactly the policy's class set, once
+  each;
+- every class's recorded `expectation` equals the policy's disposition, every
+  `absent` class is `ABSENT`, every `present` class is `PRESENT`, and no class is
+  `UNKNOWN`;
+- the document's own `verdict` is `ABSENT`.
+
+#### Release teardown policy
+
+The required class set and each class's disposition come from
+[`teardown-policy.v1.json`](teardown-policy.v1.json), not from the evidence
+document. The policy is a reviewed release artefact:
+
+- `sol-teardown-v1` declares 16 AWS disposable classes plus the
+  `durable-hosted-zone` prerequisite, and 18 GCP disposable classes, 3 scope
+  classes and 2 durable prerequisites.
+- It declares the provider scope fields the claim must bind: `account` and
+  `region` for AWS, `project` and `region` for GCP.
+- The gate refuses missing, extra or reclassified classes, and an evidence
+  `policy` name it does not load. A self-consistent document that declares a
+  smaller universe than the policy is therefore not promotion-eligible.
+
+The producer inventories (`RESIDUE_CLASSES` in AWS `absence.py`,
+`INVENTORY_CLASSES` in GCP `live-qual.sh`) remain the observation authority. The
+policy is the release authority; `internal/ci/test_teardown_policy.py` is the
+drift guard that fails when either producer's universe changes without a policy
+update. The gate itself never imports a producer.
+
+Independence of the observing identity is established by the campaign procedure
+(the harness records the caller), not re-proven by `decide`. The gate is offline
+and makes no provider read. The digest is an integrity check, not proof that the
+producer is authentic; signatures and remote evidence storage are deliberately
+out of scope.
+
+A missing, malformed, unbound, incomplete or altered evidence file keeps the
+candidate a draft. The original gap, its reproduction and the decision are
+recorded in
+[`internal/qualification/records/2026-10-17-promotion-teardown-evidence.md`](../../qualification/records/2026-10-17-promotion-teardown-evidence.md).
 
 ## 3. Promotion (automated gate, operator-triggered)
 
@@ -178,11 +300,14 @@ Only then does it flip the draft to published with `gh release edit
 qualified.
 
 The decision refuses when the verdict is missing, malformed, for another
-candidate, missing a required provider, or has a failing/omitted/blocked
-release-blocking row or no independent absence result, and promotion refuses
-when the recorded bundle is absent or changed, or when a fresh cluster can no
-longer pull the recorded runner anonymously. Its mechanics are
-pinned by `internal/ci/test_candidate_promotion.py` and
+candidate, missing a required provider, has a failing/omitted/blocked
+release-blocking row, or carries a teardown claim whose attached evidence is
+missing, unbound, under an unknown policy, incomplete against the release
+policy, reclassified, or altered; promotion also refuses when the recorded
+bundle is absent or changed, or when a fresh cluster can no longer pull the
+recorded runner anonymously. Its mechanics are
+pinned by `internal/ci/test_candidate_promotion.py`,
+`internal/ci/test_teardown_policy.py` and
 `internal/ci/test_runner_image_resolution.sh`; those tests establish the
 mechanics only and are not qualification evidence.
 
@@ -193,9 +318,17 @@ mechanics only and are not qualification evidence.
    workflow refuses a tag that is not the checkout's commit, records the candidate
    as a draft, and never publishes.
 1. Run the authorized AWS and GCP campaign against the installed candidate and
-   write the verdict's `candidate` block from the draft's `candidate.json`.
-2. Attach the verdict to the draft candidate:
-   `gh release upload <version> qualification-verdict.json`.
+   write the verdict's `candidate` block from the draft's `candidate.json`. The
+   campaign writes the structured teardown documents
+   `aws-inventory-verdict.json` and `gcp-inventory-verdict.json`. The teardown
+   `binding` must name the provider scope fields in the policy (`account` and
+   `region` for AWS, `project` and `region` for GCP); the evidence document
+   records the same values and names `sol-teardown-v1`.
+2. Record each document's digest in the verdict and attach the verdict and both
+   documents to the draft candidate:
+   `gh release upload <version> qualification-verdict.json aws-inventory-verdict.json gcp-inventory-verdict.json`.
+   Use `sha256sum <file>` for the digest; the digest is over the exact bytes
+   attached, so compute it after the document is final.
 3. Run **Promote release** with `version=<version>`.
 
 Until step 3, the version is a draft and nothing a user installs can name it.
