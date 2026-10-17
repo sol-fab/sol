@@ -12,7 +12,7 @@ GitHub issues and PRs own work status; this document owns the sequence and accep
 | I1 — [#1490](https://github.com/sol-fab/sol/pull/1490) | Shared typed domain, complete expected selection, independent obligation expansion, exact plan/outcome accounting, distinct requirement types and full instance identity | Explicitly bound offline MECHANISM fixtures; no production policy transfer |
 | I2 — [#1494](https://github.com/sol-fab/sol/pull/1494) | Immutable evidence, explicit assessments, required capture slots, full verdict-identity and dependency verification, recovery and secret-safe capture | Local trusted-producer model; no executor, release binding or live lifecycle integration |
 | I3 — [shared offline CA observation](../tooling/sol_qualification/lib/qual_database_ca.mli) | One independent Kubernetes schema decoder and pure CA evaluator, complete expected consumers/containers, persisted read/evaluate/verdict path, identity/freshness and hostile classification fixtures | No production transport/authentication or live assertion replacement |
-| I4 — [offline comparison](database-ca-comparison.md) | Actual extracted AWS/GCP predicates and shared I3 observer against identical offline objects/failures, canonical product inputs, explicit stronger/new coverage and counterexamples | Temporary migration evidence only; stronger/new coverage is distinguished from preserved legacy behavior |
+| I4 — [offline comparison](database-ca-comparison.md) | Historical comparison retired after both live CA adoptions; meaningful cases mapped to retained shared/provider tests | Regression ownership is documented; no frozen shell implementation remains |
 
 The [package contract](../tooling/sol_qualification/sol_qualification.md) and actual
 [domain](../tooling/sol_qualification/lib/qual_domain.mli) /
@@ -212,10 +212,9 @@ Historical failures the adoption must keep detectable: #1481 (CA written only be
 the migration Job, or a neighbour's mount standing in for the workload's), #1424
 (target vs namespace), #1488 (UNKNOWN rendered as absence), #1499 (a recreated
 same-name Job satisfying the earlier execution) and #1469 (volume name standing in
-for the actual source). The shared volume/mount, absence, identity and legacy
-comparison fixtures cover these. The legacy predicate is frozen at
-`internal/tooling/sol_qualification/test/comparison/legacy-aws-row.sh` as the
-offline comparison baseline only; the live row no longer contains it.
+for the actual source). The shared volume/mount, absence, identity and migration fixtures cover these.
+The [regression coverage map](database-ca-comparison.md) names their retained tests;
+the temporary legacy comparison and frozen shell predicate have been removed.
 
 
 The existing [migration submitter](../../cli/lib/deploy/sol_cli_migration_job.ml)

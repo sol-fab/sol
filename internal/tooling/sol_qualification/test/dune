@@ -24,23 +24,6 @@
   (glob_files kubernetes/*.json)))
 
 (test
- (name test_legacy_ca)
- (modules test_legacy_ca)
- (libraries sol_qualification sol_cli_deploy alcotest yojson unix)
- (deps
-  comparison/kubectl
-  comparison/legacy.py
-  comparison/legacy-aws-row.sh
-  ../../../qualification/aws/live-row.sh
-  ../../../qualification/gcp/live-qual.sh
-  ../../../../examples/pluto/sol.yml)
- (action
-  (setenv
-   I4_REPO_ROOT
-   %{workspace_root}
-   (run %{test}))))
-
-(test
  (name test_migration_ca)
  (modules test_migration_ca)
  (libraries sol_qualification alcotest yojson unix)

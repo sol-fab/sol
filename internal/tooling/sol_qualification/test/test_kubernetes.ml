@@ -344,6 +344,39 @@ let test_mounts () =
     cases
 ;;
 
+(* A healthy neighbour cannot satisfy a missing or miswired declared consumer. *)
+let test_single_consumer_failure () =
+  let changes =
+    [ set "items" (`List [])
+    ; items (volumes (fun _ -> `List []))
+    ; items
+        (volumes (fun xs ->
+           `List
+             (List.map
+                (set "configMap" (`Assoc [ "name", `String "neighbour-ca" ]))
+                (list xs))))
+    ]
+  in
+  List.iter
+    (fun change ->
+       let read q =
+         let reply = baseline "aws" q in
+         if q.K.resource = K.Deployment && q.name = "w3"
+         then modify_stdout change reply
+         else reply
+       in
+       run_read read (fun _ _ _ _ outcomes ->
+         Alcotest.(check int) "complete consumer set" 5 (List.length outcomes);
+         let failed =
+           List.filter
+             (fun outcome -> (recorded outcome).verdict.D.decision <> D.Pass)
+             outcomes
+         in
+         Alcotest.(check int) "exactly the broken consumer refuses" 1 (List.length failed);
+         all "FAIL" failed))
+    changes
+;;
+
 let test_projection () =
   List.iter
     (fun change ->
@@ -751,6 +784,7 @@ let () =
           [ "one shared AWS/GCP observer", test_shared
           ; "multiple namespaces and direct object schemas", test_namespaces_and_objects
           ; "container and volume chain", test_mounts
+          ; "one broken consumer among healthy neighbours", test_single_consumer_failure
           ; "candidate CA key and ConfigMap identity", test_projection
           ; "valid file and remapped subPaths", test_valid_subpaths
           ; "failed commands never establish absence (#1497)", test_failures
