@@ -622,7 +622,9 @@ inventory_prior_identity() {
 }
 
 inventory_remember_identity() {
-  [ "${INVENTORY_MODE:-}" = pre ] || return 0
+  # Both inventories record what they attribute: the pre file is also the input
+  # a post inventory must account for, and the post file is the evidence that it
+  # did.
   [ -n "${INVENTORY_IDENTITIES_TSV:-}" ] || return 0
   printf '%s\t%s\n' "$1" "$2" >>"$INVENTORY_IDENTITIES_TSV"
 }
