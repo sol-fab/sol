@@ -174,16 +174,13 @@ let run_phase () =
   check_read_authority ~ctx prepared;
   let transport = L.create ~ctx ~expected:authority () in
   let recorder = E.open_store ~directory ~run:prepared.B.run ~secrets:[] () |> evidence in
-  let previous =
-    match E.assessments recorder with
-    | Ok refs -> refs
-    | Error _ -> []
-  in
+  (* One assessment spans both phases: the same reason/required-capture spec
+     reopens it rather than creating a conflicting second assessment. *)
   ignore
     (E.start_assessment
        recorder
-       ~reason:("AWS database CA family: " ^ phase)
-       ~previous
+       ~reason:"AWS database CA family"
+       ~previous:[]
        ~required_captures:prepared.B.required_captures
      |> evidence);
   let binding_capture = B.capture_binding prepared recorder |> evidence in
