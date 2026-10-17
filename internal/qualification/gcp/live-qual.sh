@@ -22,6 +22,11 @@ TARGET_ENV="${TARGET%%/*}"
 TARGET_KEY="${TARGET#*/}"
 STATE_KEY="sol/$TARGET/cloud.tfstate/default.tfstate"
 TARGET_MARK="# Written by internal/qualification/gcp/live-qual.sh for $TARGET; each phase rewrites it for the target that phase needs, and it is removed after a verified teardown."
+# Destruction never issues a certificate, but `sol destroy` still feeds the platform
+# root's required letsencrypt_email variable while it destroys that root. A teardown
+# target may therefore declare a non-deliverable contact from the reserved .invalid
+# domain instead of requiring the install-time ACME address (#1400).
+TEARDOWN_LE_EMAIL="teardown@invalid"
 
 PROJECT="${PROJECT:-sol-qualification}"
 REGION="${REGION:-us-central1}"
@@ -246,10 +251,14 @@ remove_target() {
 }
 
 write_target() {
+  local le_email="${LE_EMAIL:-$TEARDOWN_LE_EMAIL}"
   mkdir -p "$(dirname "$TARGET_FILE")"
   if [ -f "$TARGET_FILE" ] && ! owns_target_file; then
     say "REFUSING: $TARGET_FILE exists and was not written by this harness; move it aside first."
     exit 2
+  fi
+  if [ -z "${LE_EMAIL:-}" ]; then
+    say "no LE_EMAIL given: the teardown target declares the non-deliverable contact $le_email; no certificate is created on this path"
   fi
   cat >"$TARGET_FILE" <<YAML
 $TARGET_MARK
@@ -265,7 +274,7 @@ $TARGET_ENV:
       # *shape* is still declared: the platform publishes the authenticated Kafka
       # credential the row's units read, and write_app_target declares the same shape.
       shape: durable
-      letsencrypt_email: $LE_EMAIL
+      letsencrypt_email: $le_email
       cluster_issuer: $CLUSTER_ISSUER
       terraform_var_file: $TFVARS
 
@@ -2486,7 +2495,10 @@ required
                  evidence directory are bound to it, and a repeated ATTEMPT continues it
   CLUSTER        this run's cluster name (also the name every provider probe filters on)
   IMPERSONATOR   user:<email> the provisioner is impersonated as
-  LE_EMAIL       ACME contact address, for the platform's certificates
+  LE_EMAIL       ACME contact address, for the platform's certificates; required by
+                 the cloud and app phases. destroy does not need one: without it the
+                 teardown target declares a non-deliverable contact, because
+                 destruction issues no certificate
   SOL_INSTALL    the extracted release prefix holding bin/sol and share/sol/<version>
   SOL_CANDIDATE  the candidate document this run qualifies (the draft's candidate.json); the
                  run verifies the prefix is that candidate before it provisions anything
