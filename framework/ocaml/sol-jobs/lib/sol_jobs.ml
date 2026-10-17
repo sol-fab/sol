@@ -34,18 +34,19 @@ let validate_retry_policy policy =
   | Error message -> Error (`Config ("retry_policy." ^ message))
 ;;
 
+let positive_finite name value =
+  if Float.is_finite value && value > 0.0
+  then Ok ()
+  else
+    Error
+      (`Config
+          (Printf.sprintf
+             "%s must be a finite number > 0 (got %s)"
+             name
+             (Float.to_string value)))
+;;
+
 let validate_timing ~poll_interval_s ~lease_s =
-  let positive_finite name value =
-    if Float.is_finite value && value > 0.0
-    then Ok ()
-    else
-      Error
-        (`Config
-            (Printf.sprintf
-               "%s must be a finite number > 0 (got %s)"
-               name
-               (Float.to_string value)))
-  in
   match positive_finite "poll_interval_s" poll_interval_s with
   | Error _ as e -> e
   | Ok () -> positive_finite "lease_s" lease_s
@@ -365,6 +366,7 @@ module Make (J : JOB) = struct
         ?(retry_policy = default_retry_policy)
         ?(poll_interval_s = default_poll_interval_s)
         ?(lease_s = default_lease_s)
+        ?execution_timeout_s
         ?ot
         ?(metrics_port = default_metrics_port)
         ?on_ready
@@ -378,6 +380,11 @@ module Make (J : JOB) = struct
     let open Result.Syntax in
     let* () = validate_retry_policy retry_policy in
     let* () = validate_timing ~poll_interval_s ~lease_s in
+    let* () =
+      match execution_timeout_s with
+      | None -> Ok ()
+      | Some seconds -> positive_finite "execution_timeout_s" seconds
+    in
     let* () = validate_kinds J.kinds in
     let* () = validate_workspace J.workspace in
     let* () = validate_retention ~terminal_retention_s ~sweep_interval_s in
@@ -569,54 +576,82 @@ module Make (J : JOB) = struct
               loop ~failures:0
             | Ok (Some (id, kind, payload, attempts, _)) ->
               let t0 = Eio.Time.Mono.now env#mono_clock in
-              let outcome =
-                Eio.Fiber.first
-                  (fun () ->
-                     let outcome =
-                       try Result.bind (J.decode payload) J.handle with
-                       | Eio.Cancel.Cancelled _ as exn -> raise exn
-                       | (Out_of_memory | Stack_overflow | Sys.Break) as exn -> raise exn
-                       | exn -> Error (Printexc.to_string exn)
-                     in
-                     Option.iter
-                       (fun (c : Obs_eio.counter_fn) ->
-                          c
-                            ~labels:
-                              [ ("status", if Result.is_ok outcome then "ok" else "error")
-                              ; "kind", kind
-                              ]
-                            1)
-                       handler_count;
-                     Option.iter
-                       (fun (h : Obs_eio.histogram_fn) ->
-                          h
-                            ~labels:[ "kind", kind ]
-                            (Mtime.Span.to_float_ns
-                               (Mtime.span t0 (Eio.Time.Mono.now env#mono_clock))
-                             /. 1e9))
-                       job_duration;
-                     `Handled outcome)
-                  (fun () ->
-                     let rec renew () =
-                       Eio.Time.sleep env#clock (lease_s /. 3.0);
-                       match
-                         Pg_db.find pool renew_q (lease_s, id, attempts, J.workspace)
-                       with
-                       | Ok (Some _) -> renew ()
-                       | Ok None ->
-                         lease_lost id ~kind ~attempts ~action:"renew";
-                         `Lost_claim
-                       | Error e ->
-                         queue_error ~kind ~action:"renew" ~reason:"database_error";
-                         log_warn
-                           [ "job_id", string_of_int id; "error", Pg_error.to_string e ]
-                           "sol-jobs: lease renewal failed";
-                         renew ()
-                     in
-                     renew ())
+              let elapsed () =
+                Mtime.Span.to_float_ns (Mtime.span t0 (Eio.Time.Mono.now env#mono_clock))
+                /. 1e9
               in
+              let run_handler () =
+                let outcome =
+                  try Result.bind (J.decode payload) J.handle with
+                  | Eio.Cancel.Cancelled _ as exn -> raise exn
+                  | (Out_of_memory | Stack_overflow | Sys.Break) as exn -> raise exn
+                  | exn -> Error (Printexc.to_string exn)
+                in
+                let duration = elapsed () in
+                let execution_outcome =
+                  match execution_timeout_s with
+                  | Some seconds when duration >= seconds -> `Timed_out
+                  | _ -> `Handled outcome
+                in
+                Option.iter
+                  (fun (c : Obs_eio.counter_fn) ->
+                     c
+                       ~labels:
+                         [ ("status", if Result.is_ok outcome then "ok" else "error")
+                         ; "kind", kind
+                         ]
+                       1)
+                  handler_count;
+                Option.iter
+                  (fun (h : Obs_eio.histogram_fn) -> h ~labels:[ "kind", kind ] duration)
+                  job_duration;
+                execution_outcome
+              in
+              let execute () =
+                match execution_timeout_s with
+                | None -> run_handler ()
+                | Some seconds ->
+                  Eio.Fiber.first run_handler (fun () ->
+                    let remaining = seconds -. elapsed () in
+                    if remaining > 0.0 then Eio.Time.Mono.sleep env#mono_clock remaining;
+                    `Timed_out)
+              in
+              let outcome =
+                Eio.Fiber.first execute (fun () ->
+                  let rec renew () =
+                    Eio.Time.sleep env#clock (lease_s /. 3.0);
+                    match
+                      Pg_db.find pool renew_q (lease_s, id, attempts, J.workspace)
+                    with
+                    | Ok (Some _) -> renew ()
+                    | Ok None ->
+                      lease_lost id ~kind ~attempts ~action:"renew";
+                      `Lost_claim
+                    | Error e ->
+                      queue_error ~kind ~action:"renew" ~reason:"database_error";
+                      log_warn
+                        [ "job_id", string_of_int id; "error", Pg_error.to_string e ]
+                        "sol-jobs: lease renewal failed";
+                      renew ()
+                  in
+                  renew ())
+              in
+              Eio.Fiber.check ();
               (match outcome with
                | `Lost_claim -> ()
+               | `Timed_out ->
+                 log_warn
+                   [ "job_id", string_of_int id
+                   ; "kind", kind
+                   ; "attempt", string_of_int attempts
+                   ]
+                   "sol-jobs: cooperative execution deadline exceeded; handler cleanup \
+                    has exited";
+                 finalize_failure
+                   id
+                   ~kind
+                   ~attempts
+                   ~msg:"cooperative execution deadline exceeded"
                | `Handled (Ok ()) -> finalize_success id ~kind ~attempts
                | `Handled (Error msg) -> finalize_failure id ~kind ~attempts ~msg);
               loop ~failures:0)

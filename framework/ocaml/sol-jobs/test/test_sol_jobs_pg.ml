@@ -525,19 +525,31 @@ let test_a_late_heartbeat_keeps_an_unclaimed_lease () =
           incr handled;
           exec_sql pool "UPDATE sol_jobs SET locked_until = now() - interval '1 second'";
           ignore (Eio.Promise.try_resolve lapsed_r ());
-          Eio.Time.sleep env#clock 0.6;
+          Eio.Time.sleep env#clock 2.0;
           Ok ());
     (match
-       Eio.Time.with_timeout env#clock 5.0 (fun () ->
+       Eio.Time.with_timeout env#clock 8.0 (fun () ->
          Eio.Fiber.both
-           (fun () -> run_slow ~lease_s:0.1 ~max_jobs:1 env pool)
+           (fun () -> run_slow ~lease_s:1.2 ~max_jobs:1 env pool)
            (fun () ->
               Eio.Promise.await lapsed;
-              Eio.Time.sleep env#clock 0.25;
+              let query =
+                Caqti_request.Infix.(Caqti_type.unit ->? Caqti_type.bool)
+                  "SELECT locked_until > now() FROM sol_jobs"
+              in
+              let rec await_renewal () =
+                match Pg_db.find pool query () with
+                | Ok (Some true) -> ()
+                | Ok _ ->
+                  Eio.Time.sleep env#clock 0.01;
+                  await_renewal ()
+                | Error e -> Windtrap.fail (Pg_error.to_string e)
+              in
+              await_renewal ();
               Eio.Fiber.both
-                (fun () -> run_slow ~lease_s:0.1 ~stop env pool)
+                (fun () -> run_slow ~lease_s:1.2 ~stop env pool)
                 (fun () ->
-                   Eio.Time.sleep env#clock 0.2;
+                   Eio.Time.sleep env#clock 1.0;
                    ignore (Eio.Promise.try_resolve stop_r ())));
          Ok ())
      with
@@ -1049,6 +1061,7 @@ let test_confirmed_loss_cancels_and_joins_handler () =
                   ~env
                   ~pool
                   ~lease_s:0.3
+                  ~execution_timeout_s:5.0
                   ~stop:old_stop
                   ~ot:obs
                   ~metrics_port:0
@@ -1313,11 +1326,419 @@ let test_released_claim_is_immediately_reclaimable_with_larger_token () =
       (rows pool))
 ;;
 
+let test_deadline_waits_for_cleanup_and_keeps_renewing () =
+  with_pool ~pool_size:2 (fun env pool ->
+    List.iter (exec_sql pool) ddl;
+    enqueue_slow pool;
+    let cancelling, cancelling_r = Eio.Promise.create () in
+    let clean = ref false in
+    (Slow.on_handle
+     := fun () ->
+          try
+            Eio.Time.sleep env#clock 10.0;
+            Ok ()
+          with
+          | Eio.Cancel.Cancelled _ ->
+            Eio.Cancel.protect (fun () ->
+              Eio.Promise.resolve cancelling_r ();
+              Eio.Time.sleep env#clock 0.8;
+              clean := true);
+            Ok ());
+    Eio.Time.with_timeout_exn env#clock 5.0 (fun () ->
+      Eio.Fiber.both
+        (fun () ->
+           (match
+              Slows.run
+                ~env
+                ~pool
+                ~lease_s:0.3
+                ~execution_timeout_s:0.1
+                ~retry_policy:{ Sol_jobs.default_retry_policy with max_attempts = 1 }
+                ~max_jobs:1
+                ()
+            with
+            | Ok () -> ()
+            | Error e -> Windtrap.fail (Sol_jobs.run_error_to_string e));
+           Windtrap.equal
+             Windtrap.bool
+             ~msg:"run waited for protected cleanup"
+             true
+             !clean)
+        (fun () ->
+           Eio.Promise.await cancelling;
+           Eio.Time.sleep env#clock 0.5;
+           match
+             Pg_db.find
+               pool
+               (Caqti_request.Infix.(Caqti_type.unit ->? Caqti_type.bool)
+                  "SELECT attempts=1 AND status='pending' AND locked_until > now() FROM \
+                   sol_jobs")
+               ()
+           with
+           | Ok (Some renewed) ->
+             Windtrap.equal
+               Windtrap.bool
+               ~msg:"lease renewed past original expiry during cleanup"
+               true
+               renewed
+           | _ -> Windtrap.fail "no active cleanup lease"));
+    Windtrap.equal
+      (Windtrap.list (Windtrap.triple Windtrap.string Windtrap.string Windtrap.int))
+      [ "slow", "failed", 1 ]
+      (rows pool);
+    match
+      Pg_db.find
+        pool
+        (Caqti_request.Infix.(Caqti_type.unit ->? Caqti_type.string)
+           "SELECT last_error FROM sol_jobs")
+        ()
+    with
+    | Ok (Some message) ->
+      Windtrap.equal Windtrap.string "cooperative execution deadline exceeded" message
+    | _ -> Windtrap.fail "no timeout failure")
+;;
+
+let test_deadline_retries_only_after_handler_stops () =
+  with_pool (fun env pool ->
+    List.iter (exec_sql pool) ddl;
+    enqueue_slow pool;
+    let calls = ref 0 in
+    let clean = ref false in
+    (Slow.on_handle
+     := fun () ->
+          incr calls;
+          if !calls = 1
+          then
+            Fun.protect
+              ~finally:(fun () -> clean := true)
+              (fun () ->
+                 Eio.Time.sleep env#clock 10.0;
+                 Ok ())
+          else (
+            Windtrap.equal Windtrap.bool true !clean;
+            Ok ()));
+    (match
+       Slows.run
+         ~env
+         ~pool
+         ~lease_s:0.3
+         ~execution_timeout_s:0.1
+         ~max_jobs:1
+         ~retry_policy:
+           { Sol_jobs.default_retry_policy with
+             base_delay_s = 0.0
+           ; max_delay_s = 0.0
+           ; max_attempts = 2
+           }
+         ()
+     with
+     | Ok () -> ()
+     | Error e -> Windtrap.fail (Sol_jobs.run_error_to_string e));
+    Windtrap.equal Windtrap.int 2 !calls;
+    Windtrap.equal
+      (Windtrap.list (Windtrap.triple Windtrap.string Windtrap.string Windtrap.int))
+      [ "slow", "completed", 2 ]
+      (rows pool))
+;;
+
+let test_outer_cancellation_is_not_timeout_failure () =
+  with_pool (fun env pool ->
+    List.iter (exec_sql pool) ddl;
+    enqueue_slow pool;
+    let started, started_r = Eio.Promise.create () in
+    let clean = ref false in
+    (Slow.on_handle
+     := fun () ->
+          Eio.Promise.resolve started_r ();
+          Fun.protect
+            ~finally:(fun () -> clean := true)
+            (fun () ->
+               Eio.Time.sleep env#clock 10.0;
+               Ok ()));
+    Eio.Fiber.first
+      (fun () -> ignore (Slows.run ~env ~pool ~lease_s:0.3 ~execution_timeout_s:5.0 ()))
+      (fun () -> Eio.Promise.await started);
+    Windtrap.equal Windtrap.bool true !clean;
+    Windtrap.equal
+      (Windtrap.list (Windtrap.triple Windtrap.string Windtrap.string Windtrap.int))
+      [ "slow", "pending", 1 ]
+      (rows pool))
+;;
+
+let test_late_completion_includes_decode_before_timer_scheduling () =
+  List.iter
+    (fun block_decode ->
+       with_pool (fun env pool ->
+         List.iter (exec_sql pool) ddl;
+         enqueue_slow pool;
+         let module Blocking = struct
+           include Slow
+
+           let decode payload =
+             if block_decode then Unix.sleepf 0.12;
+             Ok payload
+           ;;
+
+           let handle _ =
+             if not block_decode then Unix.sleepf 0.12;
+             Ok ()
+           ;;
+         end
+         in
+         let module Jobs = Sol_jobs.Make (Blocking) in
+         (match
+            Jobs.run
+              ~env
+              ~pool
+              ~execution_timeout_s:0.05
+              ~max_jobs:1
+              ~retry_policy:{ Sol_jobs.default_retry_policy with max_attempts = 1 }
+              ()
+          with
+          | Ok () -> ()
+          | Error e -> Windtrap.fail (Sol_jobs.run_error_to_string e));
+         Windtrap.equal
+           (Windtrap.list (Windtrap.triple Windtrap.string Windtrap.string Windtrap.int))
+           [ "slow", "failed", 1 ]
+           (rows pool)))
+    [ true; false ]
+;;
+
+let test_renewal_uncertainty_during_timeout_cleanup () =
+  List.iter
+    (fun ownership ->
+       with_pool ~pool_size:2 (fun env pool ->
+         List.iter (exec_sql pool) ddl;
+         enqueue_slow pool;
+         exec_sql pool "CREATE TABLE renewal_fault (enabled bool NOT NULL)";
+         exec_sql pool "INSERT INTO renewal_fault VALUES (false)";
+         exec_sql
+           pool
+           "CREATE FUNCTION reject_renewal() RETURNS trigger LANGUAGE plpgsql AS $$ \
+            BEGIN IF (SELECT enabled FROM renewal_fault) THEN RAISE EXCEPTION \
+            'deliberate temporary renewal failure'; END IF; RETURN NEW; END $$";
+         exec_sql
+           pool
+           "CREATE TRIGGER reject_renewal BEFORE UPDATE ON sol_jobs FOR EACH ROW WHEN \
+            (NEW.attempts=OLD.attempts AND NEW.locked_until IS NOT NULL) EXECUTE \
+            FUNCTION reject_renewal()";
+         let cleanup, cleanup_r = Eio.Promise.create () in
+         let finish, finish_r = Eio.Promise.create () in
+         let stop, stop_r = Eio.Promise.create () in
+         let cleaned = ref false in
+         let calls = ref 0 in
+         (Slow.on_handle
+          := fun () ->
+               incr calls;
+               try
+                 Eio.Time.sleep env#clock 30.0;
+                 Ok ()
+               with
+               | Eio.Cancel.Cancelled _ ->
+                 Eio.Cancel.protect (fun () ->
+                   exec_sql pool "UPDATE renewal_fault SET enabled=true";
+                   Eio.Promise.resolve cleanup_r ();
+                   Eio.Promise.await finish;
+                   cleaned := true);
+                 Eio.Promise.resolve stop_r ();
+                 Ok ());
+         Eio.Switch.run (fun sw ->
+           let obs =
+             Sol_obs.of_env
+               ~sw
+               ~net:env#net
+               ~clock:env#clock
+               ~mono_clock:env#mono_clock
+               ~service:"cleanup-uncertainty-test"
+               ()
+           in
+           let errors action reason =
+             metric_sum
+               (Sol_obs.metrics_renderer obs ())
+               "sol_jobs_queue_errors_total"
+               [ "action", action; "reason", reason ]
+           in
+           let rec await_error action reason =
+             if errors action reason > 0.0
+             then ()
+             else (
+               Eio.Time.sleep env#clock 0.01;
+               await_error action reason)
+           in
+           Eio.Time.with_timeout_exn env#clock 8.0 (fun () ->
+             Eio.Fiber.both
+               (fun () ->
+                  (match
+                     Slows.run
+                       ~env
+                       ~pool
+                       ~ot:obs
+                       ~metrics_port:0
+                       ~stop
+                       ~lease_s:3.0
+                       ~execution_timeout_s:0.05
+                       ~retry_policy:
+                         { Sol_jobs.default_retry_policy with max_attempts = 2 }
+                       ()
+                   with
+                   | Ok () -> ()
+                   | Error e -> Windtrap.fail (Sol_jobs.run_error_to_string e));
+                  Windtrap.equal Windtrap.bool true !cleaned)
+               (fun () ->
+                  Eio.Promise.await cleanup;
+                  await_error "renew" "database_error";
+                  Windtrap.equal
+                    Windtrap.int
+                    ~msg:"no new local attempt during cleanup"
+                    1
+                    !calls;
+                  Windtrap.equal
+                    (Windtrap.list
+                       (Windtrap.pair
+                          Windtrap.string
+                          (Windtrap.triple Windtrap.int Windtrap.bool Windtrap.bool)))
+                    ~msg:"renewal error neither released nor finalized the active attempt"
+                    [ "pending", (1, true, false) ]
+                    (lease_state pool);
+                  exec_sql pool "UPDATE renewal_fault SET enabled=false";
+                  if ownership <> "original" then reclaim_now pool;
+                  if ownership = "confirmed_lost" then await_error "renew" "lease_lost";
+                  Eio.Promise.resolve finish_r ()));
+           let metrics = Sol_obs.metrics_renderer obs () in
+           let retries =
+             metric_sum metrics "sol_jobs_processed_total" [ "status", "retry" ]
+           in
+           if ownership = "original"
+           then (
+             Windtrap.equal (Windtrap.float 0.0) 1.0 retries;
+             Windtrap.equal
+               (Windtrap.list
+                  (Windtrap.pair
+                     Windtrap.string
+                     (Windtrap.triple Windtrap.int Windtrap.bool Windtrap.bool)))
+               [ "pending", (1, false, true) ]
+               (lease_state pool))
+           else (
+             Windtrap.equal (Windtrap.float 0.0) 0.0 retries;
+             Windtrap.equal
+               (Windtrap.list
+                  (Windtrap.pair
+                     Windtrap.string
+                     (Windtrap.triple Windtrap.int Windtrap.bool Windtrap.bool)))
+               [ "pending", (2, true, false) ]
+               (lease_state pool);
+             Windtrap.equal
+               (Windtrap.float 0.0)
+               1.0
+               (errors
+                  (if ownership = "confirmed_lost" then "renew" else "retry")
+                  "lease_lost")))))
+    [ "original"; "reclaimed_before_finalize"; "confirmed_lost" ]
+;;
+
+let test_parent_cancel_during_timeout_cleanup_propagates () =
+  with_pool (fun env pool ->
+    List.iter (exec_sql pool) ddl;
+    enqueue_slow pool;
+    let cleanup, cleanup_r = Eio.Promise.create () in
+    let finish, finish_r = Eio.Promise.create () in
+    let context, context_r = Eio.Promise.create () in
+    let cancelled = ref false in
+    (Slow.on_handle
+     := fun () ->
+          try
+            Eio.Time.sleep env#clock 30.0;
+            Ok ()
+          with
+          | Eio.Cancel.Cancelled _ ->
+            Eio.Cancel.protect (fun () ->
+              Eio.Promise.resolve cleanup_r ();
+              Eio.Promise.await finish);
+            Ok ());
+    let (), diagnostics =
+      capture_stderr (fun () ->
+        Eio.Time.with_timeout_exn env#clock 5.0 (fun () ->
+          Eio.Switch.run (fun sw ->
+            let worker =
+              Eio.Fiber.fork_promise ~sw (fun () ->
+                Eio.Cancel.sub (fun cc ->
+                  Eio.Promise.resolve context_r cc;
+                  try ignore (Slows.run ~env ~pool ~execution_timeout_s:0.05 ()) with
+                  | Eio.Cancel.Cancelled _ -> cancelled := true))
+            in
+            Eio.Promise.await cleanup;
+            Eio.Cancel.cancel
+              (Eio.Promise.await context)
+              (Failure "parent test cancellation");
+            Eio.Promise.resolve finish_r ();
+            Eio.Promise.await_exn worker)))
+    in
+    Windtrap.equal Windtrap.bool true !cancelled;
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"parent cancellation did not enter timeout finalization"
+      false
+      (Sol_runtime.contains_substring ~needle:"handler cleanup has exited" diagnostics);
+    Windtrap.equal
+      (Windtrap.list
+         (Windtrap.pair
+            Windtrap.string
+            (Windtrap.triple Windtrap.int Windtrap.bool Windtrap.bool)))
+      [ "pending", (1, true, false) ]
+      (lease_state pool))
+;;
+
+let test_stop_drains_active_handler_with_deadline () =
+  with_pool (fun env pool ->
+    List.iter (exec_sql pool) ddl;
+    enqueue_slow pool;
+    let stop, stop_r = Eio.Promise.create () in
+    let finished = ref false in
+    (Slow.on_handle
+     := fun () ->
+          Eio.Promise.resolve stop_r ();
+          Eio.Time.sleep env#clock 0.05;
+          finished := true;
+          Ok ());
+    (match Slows.run ~env ~pool ~stop ~execution_timeout_s:2.0 () with
+     | Ok () -> ()
+     | Error e -> Windtrap.fail (Sol_jobs.run_error_to_string e));
+    Windtrap.equal Windtrap.bool true !finished;
+    Windtrap.equal
+      (Windtrap.list (Windtrap.triple Windtrap.string Windtrap.string Windtrap.int))
+      [ "slow", "completed", 1 ]
+      (rows pool))
+;;
+
 let () =
   Windtrap.run
     ~argv:[||]
     "sol_jobs_pg"
     [ Windtrap.group
+        "cooperative execution deadlines"
+        [ Windtrap.test
+            "parent cancellation during timeout cleanup propagates"
+            test_parent_cancel_during_timeout_cleanup_propagates
+        ; Windtrap.test
+            "stop drains active execution with deadline"
+            test_stop_drains_active_handler_with_deadline
+        ; Windtrap.test
+            "renewal uncertainty during timeout cleanup preserves fences"
+            test_renewal_uncertainty_during_timeout_cleanup
+        ; Windtrap.test
+            "late completion includes decoding before timer scheduling"
+            test_late_completion_includes_decode_before_timer_scheduling
+        ; Windtrap.test
+            "timeout cleanup keeps renewing"
+            test_deadline_waits_for_cleanup_and_keeps_renewing
+        ; Windtrap.test
+            "retry waits for handler quiescence"
+            test_deadline_retries_only_after_handler_stops
+        ; Windtrap.test
+            "parent cancellation remains distinct"
+            test_outer_cancellation_is_not_timeout_failure
+        ]
+    ; Windtrap.group
         "pre-handler shutdown release"
         [ Windtrap.test
             "release cannot clear newer claim"

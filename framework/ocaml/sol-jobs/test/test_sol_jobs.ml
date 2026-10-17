@@ -246,6 +246,16 @@ let test_invalid_timing_fails_before_database_or_signals () =
   with
   | Error e -> Windtrap.failf "pool: %s" (Pg_error.to_string e)
   | Ok pool ->
+    List.iter
+      (fun seconds ->
+         match Emails.run ~env ~pool ~execution_timeout_s:seconds () with
+         | Error (`Config msg) ->
+           Windtrap.equal
+             Windtrap.bool
+             true
+             (Sol_runtime.contains_substring ~needle:"execution_timeout_s" msg)
+         | _ -> Windtrap.fail "invalid execution deadline touched the database")
+      [ 0.0; -1.0; nan; infinity ];
     (match Emails.run ~env ~pool ~lease_s:0.0 () with
      | Error (`Config msg) ->
        Windtrap.equal
