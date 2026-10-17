@@ -40,6 +40,18 @@ let ok_observation ~check found =
       }
 ;;
 
+(* gcloud can report a scope failure as a warning on an otherwise successful empty
+   listing (for example, a nonexistent project). The one benign warning is the
+   filter-key notice gcloud emits when the result is empty. Any other stderr on an empty
+   result is unknown, not absence. *)
+let benign_empty_list_warning stderr =
+  lines stderr
+  |> List.for_all (fun line ->
+    String.starts_with
+      ~prefix:"WARNING: The following filter keys were not present in any resource"
+      line)
+;;
+
 (* Every GCP probe is an enumeration command. An empty successful listing is absence;
    a nonzero listing is not, even when the provider's message contains "not found": the
    subject may be the project, the caller's permission or the API's scope, not the
@@ -47,8 +59,16 @@ let ok_observation ~check found =
    removal. *)
 let run ~check =
   match Sol_cli_process.run (Sol_cli_process.cmd ("gcloud" :: check.argv)) with
-  | Ok { Sol_cli_process.stdout; _ } ->
-    ok_observation ~check (lines stdout |> List.filter check.attributable)
+  | Ok { Sol_cli_process.stdout; stderr } ->
+    let found = lines stdout |> List.filter check.attributable in
+    if found = [] && not (benign_empty_list_warning stderr)
+    then
+      Unobservable
+        { resource_class = check.resource_class
+        ; reason = String.trim stderr
+        ; checked_with = checked_with check.argv
+        }
+    else ok_observation ~check found
   | Error (Sol_cli_process.Non_zero r) ->
     Unobservable
       { resource_class = check.resource_class

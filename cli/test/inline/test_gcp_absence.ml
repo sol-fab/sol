@@ -28,13 +28,14 @@ let target : Sol_cli_config.target =
   }
 ;;
 
-let fake_gcloud ~log ~node_pools_out ~nats_out ~list_exit =
+let fake_gcloud ~log ~node_pools_out ~node_pools_err ~nats_out ~list_exit =
   Printf.sprintf
     {|#!/bin/sh
 printf '%%s\n' "$*" >> %s
 case "$*" in
   *"container node-pools list"*)
     printf '%%s' %s%s
+    printf '%%s' %s >&2
     exit %d
     ;;
   *"routers nats list"*)
@@ -47,18 +48,19 @@ exit 0
     log
     (Filename.quote node_pools_out)
     (if list_exit = 0 then "" else " >&2")
+    (Filename.quote node_pools_err)
     list_exit
     (Filename.quote nats_out)
 ;;
 
-let with_fake_gcloud ~node_pools_out ~nats_out ~list_exit f =
+let with_fake_gcloud ~node_pools_out ~node_pools_err ~nats_out ~list_exit f =
   let dir = Filename.temp_file "sol-fake-gcloud-" "" in
   Sys.remove dir;
   Unix.mkdir dir 0o755;
   let log = Filename.concat dir "calls.log" in
   let bin = Filename.concat dir "gcloud" in
   let oc = open_out bin in
-  output_string oc (fake_gcloud ~log ~node_pools_out ~nats_out ~list_exit);
+  output_string oc (fake_gcloud ~log ~node_pools_out ~node_pools_err ~nats_out ~list_exit);
   close_out oc;
   Unix.chmod bin 0o755;
   let old_path =
@@ -107,8 +109,8 @@ let only observations resource_class =
   List.find (fun o -> String.equal (class_of o) resource_class) observations
 ;;
 
-let with_calls ~node_pools_out ~nats_out ~list_exit f =
-  with_fake_gcloud ~node_pools_out ~nats_out ~list_exit (fun () ->
+let with_calls ?(node_pools_err = "") ~node_pools_out ~nats_out ~list_exit f =
+  with_fake_gcloud ~node_pools_out ~node_pools_err ~nats_out ~list_exit (fun () ->
     let observations =
       Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
     in
@@ -278,4 +280,51 @@ let test_a_not_found_list_failure_is_unobservable () =
 
 let%test "location-scoped inventory: a not-found list failure is Unobservable" =
   test_a_not_found_list_failure_is_unobservable ()
+;;
+
+let test_a_scope_warning_on_a_successful_list_is_unobservable () =
+  with_calls
+    ~node_pools_out:""
+    ~node_pools_err:
+      "WARNING: Some requests did not succeed.\n\
+      \ - The resource 'projects/missing-project' was not found\n"
+    ~nats_out:""
+    ~list_exit:0
+    (fun ~log:_ ~observations ->
+       match only observations "GKE node pool" with
+       | Sol_cli_absence.Unobservable u ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the provider's missing-scope warning is kept as the reason"
+           true
+           (Sol_cli_string.contains ~needle:"was not found" u.reason)
+       | Sol_cli_absence.Absent _ ->
+         Windtrap.fail
+           "a successful empty list with a missing-project warning is not absence"
+       | _ -> Windtrap.fail "a scope warning must be Unobservable")
+;;
+
+let test_the_benign_empty_filter_warning_is_still_absence () =
+  with_calls
+    ~node_pools_out:""
+    ~node_pools_err:
+      "WARNING: The following filter keys were not present in any resource : name, region\n"
+    ~nats_out:""
+    ~list_exit:0
+    (fun ~log:_ ~observations ->
+       match only observations "GKE node pool" with
+       | Sol_cli_absence.Absent _ -> ()
+       | Sol_cli_absence.Unobservable u ->
+         Windtrap.failf
+           "the benign empty-result warning was treated as unknown: %s"
+           u.reason
+       | _ -> Windtrap.fail "an empty successful list with a benign warning is absence")
+;;
+
+let%test "GCP scope: a missing-project warning on a successful list is Unobservable" =
+  test_a_scope_warning_on_a_successful_list_is_unobservable ()
+;;
+
+let%test "GCP scope: the benign empty-result filter warning is still absence" =
+  test_the_benign_empty_filter_warning_is_still_absence ()
 ;;

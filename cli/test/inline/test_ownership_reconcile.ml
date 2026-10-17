@@ -514,8 +514,8 @@ let gcp_nonexistent_project_script =
   {|#!/bin/sh
 case " $* " in
   *" container clusters list "*)
-    printf 'ERROR: (gcloud.container.clusters.list) NOT_FOUND: The project missing-project was not found.\n' >&2
-    exit 1
+    printf 'WARNING: Some requests did not succeed.\n - The resource '"'"'projects/missing-project'"'"' was not found\n' >&2
+    exit 0
     ;;
 esac
 exit 0
