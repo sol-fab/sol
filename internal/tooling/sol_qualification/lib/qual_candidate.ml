@@ -16,12 +16,19 @@ type t =
   ; specimen : Data.specimen
   ; expected : expected
   ; provider : Sol_cli_provider.t
+  ; install : string
+  ; workspace : string
   }
 
 let definition v = v.definition
 let specimen v = v.specimen
 let expected v = v.expected
 let provider v = v.provider
+
+(* The verified inputs, retained so a launcher executes the candidate that was
+   verified instead of a path a caller supplies later. *)
+let install v = v.install
+let workspace v = v.workspace
 
 (* Only this constructor issues a verified binding. Saved JSON, including a
    self-consistently rehashed declaration, is not a verified candidate receipt.
@@ -88,5 +95,6 @@ let verify ~repository ~candidate ~install ~workspace ~(expected : expected) =
     || specimen.requested_target <> expected.requested_target
     || specimen.target <> expected.target
   then Error "verified candidate contract differs from the expected assessment binding"
-  else Ok { definition; specimen; expected; provider = target.provider }
+  else
+    Ok { definition; specimen; expected; provider = target.provider; install; workspace }
 ;;

@@ -24,6 +24,27 @@ let safe_failure transport error =
   I.diagnostic error
 ;;
 
+(* One observation of the live authority, used to timestamp a submission receipt
+   independently of whatever the product reports. Resource reads still bracket
+   themselves; this context is never a substitute for that bracketing. *)
+let establish transport =
+  match I.observe ~ctx:transport.ctx with
+  | Error error -> Error (safe_failure transport error)
+  | Ok identity ->
+    let observed = target identity in
+    if observed <> transport.expected
+    then Error "observed Kubernetes principal/cluster/endpoint mismatch"
+    else (
+      let now = now () in
+      Ok
+        { D.target = observed
+        ; verified_at = now
+        ; started_at = now
+        ; finished_at = now
+        ; expires_at = Some (now + 300)
+        })
+;;
+
 let read transport (query : K.query) =
   let started = now () in
   let execute () =

@@ -9,6 +9,7 @@
   qual_kubernetes_live
   qual_database_ca
   qual_candidate_obligations
+  qual_migration_execution
   qual_lock_raw)
  (libraries sol_cli_base sol_cli_workspace yojson digestif unix)
  (foreign_stubs

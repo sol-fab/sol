@@ -134,23 +134,25 @@ let decode_execution (captured : E.captured) =
       }
 ;;
 
+let capture_execution recorder requirement ~context (identity : D.job_identity) =
+  let b = D.migration_ca_binding requirement in
+  E.capture
+    recorder
+    ~subject:b.subject
+    ~payload:
+      (`Assoc
+          [ "schema", `Int 1
+          ; "kind", `String "MigrationExecution"
+          ; "requirement", `String (D.instance_identity b.instance)
+          ; "context", D.read_context_json context
+          ; "namespace", `String identity.namespace
+          ; "name", `String identity.name
+          ; "uid", `String identity.uid
+          ])
+;;
+
 module Fixture = struct
-  let capture_execution recorder requirement ~context (identity : D.job_identity) =
-    let b = D.migration_ca_binding requirement in
-    E.capture
-      recorder
-      ~subject:b.subject
-      ~payload:
-        (`Assoc
-            [ "schema", `Int 1
-            ; "kind", `String "MigrationExecution"
-            ; "requirement", `String (D.instance_identity b.instance)
-            ; "context", D.read_context_json context
-            ; "namespace", `String identity.namespace
-            ; "name", `String identity.name
-            ; "uid", `String identity.uid
-            ])
-  ;;
+  let capture_execution = capture_execution
 end
 
 let evaluate_migration_recorded ~directory ~run ~requirement ~execution ~job ~configmap =

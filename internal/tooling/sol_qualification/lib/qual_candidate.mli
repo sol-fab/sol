@@ -25,3 +25,11 @@ val definition : t -> Sol_cli_database_contract_data.definition
 val specimen : t -> Sol_cli_database_contract_data.specimen
 val expected : t -> expected
 val provider : t -> Sol_cli_provider.t
+
+(** The installed prefix and workspace this handle was verified against. A
+    launcher must execute [Filename.concat (install t) "bin/sol"] in
+    [workspace t]; these accessors retain the verified inputs rather than accept
+    a later caller-supplied path. *)
+val install : t -> string
+
+val workspace : t -> string

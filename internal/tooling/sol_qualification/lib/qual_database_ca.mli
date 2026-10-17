@@ -56,8 +56,21 @@ val observe_migrations
         -> (Qual_evidence.reference, Qual_evidence.error) result)
   -> (outcome list, string) result
 
+(** Persist a submission locator committed by a qualified launcher. The caller
+    must already have validated its provenance: it came from the verified
+    candidate's launched execution, matched the caller's binding and requested
+    target, and carries a context the caller independently established. This
+    function only commits the payload under the run's assessment. *)
+val capture_execution
+  :  Qual_evidence.t
+  -> Qual_domain.migration_ca_requirement
+  -> context:Qual_domain.read_context
+  -> Qual_domain.job_identity
+  -> (Qual_evidence.reference, Qual_evidence.error) result
+
 module Fixture : sig
-  (** Offline execution receipt, never evidence that a released candidate ran a Job. *)
+  (** Offline-named alias for tests; the payload source, not this function,
+      decides whether a locator is production evidence. *)
   val capture_execution
     :  Qual_evidence.t
     -> Qual_domain.migration_ca_requirement

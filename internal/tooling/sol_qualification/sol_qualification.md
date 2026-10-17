@@ -237,12 +237,26 @@ Candidate capabilities cannot exclude it. This experimental catalog remains MECH
 it does not transfer any existing matrix or live release policy.
 
 The observer accepts a persisted execution receipt carrying the requirement identity,
-actual Job namespace/name/UID and observation identity/timing. Its fixture-only receipt
-producer is explicit. The exact Job and ConfigMap reads must follow the receipt and
-match the run, candidate/specimen, cluster/endpoint/principal and freshness policy.
-A recreated same-name Job is UNKNOWN. A missing execution receipt cannot infer a Job.
-Successful, complete, exact native lists can establish absence; failed commands,
-Forbidden, timeouts, spawn errors, malformed schemas and incomplete lists cannot.
+actual Job namespace/name/UID and observation identity/timing. The fixture producer is
+explicit; `Qual_migration_execution` is the qualification-owned launcher. Its
+authority-bearing entry consumes the existing verified-candidate handle and executes that
+handle's own installed `bin/sol`, so a later caller-supplied path cannot redirect it. It
+probes the bundled receipt protocol and refuses a candidate before any mutation when the
+protocol is absent. It accepts a locator only when it matches the launcher binding, the
+requested target and the independently expected principal/cluster/endpoint.
+
+It calls the caller's durable-capture-and-observe step before acknowledging, so the
+ephemeral Job still exists, and the product's exit status is never a verdict. The receipt's
+observation context comes from `Qual_kubernetes_live.establish`, not the product's reported
+timestamp, and the launcher refuses a context that names another authority, is stale, is
+expired or is not established. If the child outlives the caller's completion budget it is
+supervised away, but the outcome is then explicitly unestablished and the remaining cleanup
+responsibility is named; an overdue run is never reported as a completed capture. The exact
+Job and ConfigMap reads must follow the receipt and match the run, candidate/specimen,
+cluster/endpoint/principal and freshness policy. A recreated same-name Job is UNKNOWN. A
+missing execution receipt cannot infer a Job. Successful, complete, exact native lists can
+establish absence; failed commands, Forbidden, timeouts, spawn errors, malformed schemas and
+incomplete lists cannot.
 
 Job and Deployment decoding share pod-template, volume and mount parsing, while
 keeping distinct resource types. The pure CA delivery predicate is shared; migrations

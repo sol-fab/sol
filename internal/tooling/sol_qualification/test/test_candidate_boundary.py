@@ -20,6 +20,33 @@ spec = importlib.util.spec_from_file_location("binding_fixture", HELPER)
 fixture = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixture)
 
+# A candidate's own sol: it reports the installed release version to the existing
+# verifier and speaks the private receipt protocol when the launcher runs it.
+PROTOCOL_SOL = """#!/usr/bin/env python3
+import json, os, sys
+if sys.argv[1:2] == ["--version"]:
+    print("__VERSION__")
+    sys.exit(0)
+if sys.argv[1:3] == ["migrate", "apply"]:
+    receipt = {
+        "schema": 1,
+        "kind": "MigrationExecution",
+        "binding": os.environ["SOL_MIGRATION_EXECUTION_BINDING"],
+        "target": sys.argv[3],
+        "namespace": "database-system",
+        "name": "boundary-migration",
+        "uid": "boundary-submission-uid",
+        "principal": "offline-reader",
+        "cluster": "offline-cluster",
+        "endpoint": "https://offline.invalid",
+        "observed_at": 1,
+    }
+    os.write(0, (json.dumps(receipt) + "\\n").encode())
+    ack = os.read(0, 64).decode().strip()
+    sys.exit(0 if ack == "capture-finished" else 3)
+sys.exit(2)
+"""
+
 class Boundary(fixture.Binding):
     def setUp(self):
         super().setUp()
@@ -201,6 +228,28 @@ class Boundary(fixture.Binding):
         (self.install / "bin/sol").write_text("#!/bin/sh\necho DISTINCTIVE-CREDENTIAL\nexit 31\n")
         self.archive()
         self.invoke(False)
+
+    def test_boundary_launcher_runs_the_verified_candidate(self):
+        # The launcher must execute the verified candidate's own sol (the one whose
+        # bytes the archive digest covers), not a path supplied later.
+        sol = self.install / "bin/sol"
+        sol.write_text(PROTOCOL_SOL.replace("__VERSION__", fixture.VERSION))
+        sol.chmod(0o755)
+        self.archive()
+        bound = self.run_binding(True)
+        pins = self.expected(bound)
+        result = self.root / "launcher.json"
+        os.environ["SOL_LAUNCHER_RESULT"] = str(result)
+        try:
+            self.invoke(True, pins, exercise=True)
+        finally:
+            del os.environ["SOL_LAUNCHER_RESULT"]
+        value = json.loads(result.read_text())
+        self.assertTrue(value["ok"], value)
+        self.assertEqual(value["uid"], "boundary-submission-uid")
+        self.assertEqual(value["name"], "boundary-migration")
+        self.assertEqual(value["namespace"], "database-system")
+        self.assertEqual(value["target"], pins["requested_target"])
 
 if __name__ == "__main__":
     suite = unittest.TestSuite(Boundary(name) for name in dir(Boundary) if name.startswith("test_boundary_"))

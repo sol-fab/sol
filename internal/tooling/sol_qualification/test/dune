@@ -47,6 +47,11 @@
   intent.json
   (glob_files kubernetes/*.json)))
 
+(test
+ (name test_migration_execution)
+ (modules test_migration_execution)
+ (libraries sol_qualification alcotest unix))
+
 (executable
  (name candidate_boundary)
  (modules candidate_boundary)
