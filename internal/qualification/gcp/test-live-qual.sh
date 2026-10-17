@@ -1318,7 +1318,7 @@ else
 fi
 
 printf '\nscenario: the verdict needs every declared class, not just the rows that happened\n'
-run_mutated_case inventory-missing-class verify \
+run_mutated_case inventory-missing-class destroy \
   '/provider_describe gke-cluster /,/gcloud container clusters describe/d'
 is "an inventory that never observed a declared class does not verify" \
   "$(cat "$TMP/inventory-missing-class.rc")" "1"
@@ -1326,6 +1326,11 @@ has "it names the class that was never observed" \
   "gke-cluster: the class was not observed" "$TMP/inventory-missing-class.out"
 has "and the verdict says absence was not established" \
   "gke-cluster: could NOT determine absence" "$TMP/inventory-missing-class.out"
+if [ -f "$TARGET_FILE" ]; then
+  ok "an incomplete inventory keeps the target for a later destroy"
+else
+  no "an incomplete inventory keeps the target for a later destroy" "retained" "removed"
+fi
 
 printf '\nscenario: a row for a class the verdict does not declare is rejected\n'
 run_mutated_case inventory-undeclared-class verify \
@@ -1704,7 +1709,7 @@ has "a state object the run could not read is recorded as such" "COULD NOT READ"
 lacks "which does not by itself make the bundle incomplete" \
   "bundle member missing or empty: state/cloud.tfstate" "$TMP/bundle-unreadable.out"
 
-printf '\nscenario: a filtered list that warns\n'
+printf '\nscenario: a successful list that warns on stderr\n'
 run_case filter-warning destroy STUB_FILTER_WARNING=1
 if grep -q 'address-regional: PRESENT' "$TMP/filter-warning.out"; then
   no "the warning is not read as a resource" "address-regional: ABSENT" "PRESENT"
