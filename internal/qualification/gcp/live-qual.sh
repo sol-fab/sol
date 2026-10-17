@@ -444,9 +444,18 @@ inventory_state() {
   awk -F'\t' -v c="$1" '$1 == c { state = $2 } END { print state }' "$INVENTORY_TSV"
 }
 
+# The identity record is only about the target it was taken from. A shared
+# LOG_DIR can hold an earlier attempt's record, and a pre-teardown file from
+# another cluster or project must never attribute a resource to this one.
+inventory_identity_scope() {
+  printf 'attempt=%s cluster=%s project=%s region=%s' \
+    "${ATTEMPT:--}" "$CLUSTER" "$PROJECT" "$REGION"
+}
+
 inventory_scope() {
   local caller="" project="" region=""
   INVENTORY_SCOPE_OK=0
+  printf '# %s\n' "$(inventory_identity_scope)" >>"$INVENTORY_IDENTITIES_TSV"
 
   if gcloud auth list --filter=status:ACTIVE --format='value(account)' \
       >"$LOG_DIR/inventory-scope-caller.log" 2>"$LOG_DIR/inventory-scope-caller.stderr"; then
@@ -531,9 +540,20 @@ provider_not_found() {
   grep -qiE '(NOT_FOUND|not[_. -]?found|does not exist|No URLs matched)' "$1" "$2"
 }
 
+# `--parent CLASS:IDENTITY` declares that this resource lives inside another
+# class this inventory observes separately (a NAT inside its router). A not-found
+# that names only the parent is then decided from the parent's own observation
+# instead of being read as absence of the child: an absent parent implies an
+# absent child, a present parent makes the failing read ambiguous.
 provider_describe() {
   local class="$1" subject="$2"; shift 2
-  local out="$LOG_DIR/inventory-$class.log" err="$LOG_DIR/inventory-$class.stderr"
+  local parent_class="" parent_identity=""
+  if [ "${1:-}" = "--parent" ]; then
+    parent_class="${2%%:*}"
+    parent_identity="${2#*:}"
+    shift 2
+  fi
+  local out="$LOG_DIR/inventory-$class.log" err="$LOG_DIR/inventory-$class.stderr" diagnostic
   if "$@" >"$out" 2>"$err"; then
     if [ -n "$(tr -d '[:space:]' <"$out")" ]; then
       verdict_row "$class" PRESENT "the named read answered for $subject"
@@ -543,7 +563,24 @@ provider_describe() {
   elif provider_authority_failure "$err" "$out"; then
     verdict_row "$class" UNKNOWN "the read failed on authority or availability, not on the resource: $(provider_detail "$err" "$out")"
   elif provider_not_found "$err" "$out"; then
-    verdict_row "$class" ABSENT "the provider answered that $subject does not exist: $(provider_detail "$err" "$out")"
+    diagnostic="$(cat "$err" "$out" 2>/dev/null)"
+    if [ -n "$parent_identity" ] \
+      && [ -n "$(inventory_text_mentions "$parent_identity" "$diagnostic")" ] \
+      && [ -z "$(inventory_text_mentions "$subject" "$diagnostic")" ]; then
+      case "$(inventory_state "$parent_class")" in
+        ABSENT)
+          verdict_row "$class" ABSENT "the provider named the parent ($parent_class $parent_identity), which is independently absent, so $subject cannot exist"
+          ;;
+        PRESENT)
+          verdict_row "$class" UNKNOWN "the provider named the parent ($parent_class $parent_identity) while the parent is present, so which resource is missing is ambiguous: $(provider_detail "$err" "$out")"
+          ;;
+        *)
+          verdict_row "$class" UNKNOWN "the provider named the parent ($parent_class $parent_identity) and the parent's own state is not established: $(provider_detail "$err" "$out")"
+          ;;
+      esac
+    else
+      verdict_row "$class" ABSENT "the provider answered that $subject does not exist: $(provider_detail "$err" "$out")"
+    fi
   else
     verdict_row "$class" UNKNOWN "the read failed without establishing that $subject is absent: $(provider_detail "$err" "$out")"
   fi
@@ -587,12 +624,26 @@ provider_enumerate() {
 # identity recorded by the pre-teardown inventory. Names are matched by
 # component, so `sol-a` is not matched by `sol-alpha`.
 # ---------------------------------------------------------------------------
-inventory_name_mentions() {
-  awk -v c="$CLUSTER" -v v="${1:-}" 'BEGIN {
-    n = split(v, parts, /[^A-Za-z0-9]+/)
-    for (i = 1; i <= n; i++) if (parts[i] == c) { print "match"; exit }
-  }'
+# The whole needle must appear at a component boundary. Splitting the value and
+# comparing the pieces would never match a hyphenated cluster name: `test-cluster`
+# appears in `test-cluster-router` as one string, not as `test`/`cluster`.
+inventory_text_mentions() {
+  local needle="$1" value="${2:-}" before after rest
+  [ -n "$needle" ] || return 0
+  [ -n "$value" ] || return 0
+  rest="$value"
+  while [[ "$rest" == *"$needle"* ]]; do
+    before="${rest%%"$needle"*}"
+    rest="${rest#*"$needle"}"
+    after="${rest:0:1}"
+    if [[ ! "$before" =~ [A-Za-z0-9]$ ]] && [[ ! "$after" =~ ^[A-Za-z0-9] ]]; then
+      printf 'match\n'
+      return 0
+    fi
+  done
 }
+
+inventory_name_mentions() { inventory_text_mentions "$CLUSTER" "${1:-}"; }
 
 # The load balancer addresses this run already observed. They supplement, never
 # replace, discovery: a GKE-created forwarding rule or address is named
@@ -840,7 +891,11 @@ inventory() {
   # one attributed, not only for the rows its own name rules still match. This
   # supplements discovery; it never replaces it.
   if [ "$mode" = post ] && [ -s "$LOG_DIR/inventory-pre.identities.tsv" ]; then
-    INVENTORY_PRIOR_IDENTITIES="$LOG_DIR/inventory-pre.identities.tsv"
+    if [ "$(head -n1 "$LOG_DIR/inventory-pre.identities.tsv")" = "# $(inventory_identity_scope)" ]; then
+      INVENTORY_PRIOR_IDENTITIES="$LOG_DIR/inventory-pre.identities.tsv"
+    else
+      say "  the pre-teardown identity record belongs to another attempt or scope; it is not used for attribution"
+    fi
   fi
   {
     printf 'attempt\t%s\n' "${ATTEMPT:--}"
@@ -863,7 +918,7 @@ inventory() {
       gcloud compute networks subnets describe "$CLUSTER-nodes" --region "$REGION" --project "$PROJECT" --format='value(name)'
     provider_describe router "$CLUSTER-router" \
       gcloud compute routers describe "$CLUSTER-router" --region "$REGION" --project "$PROJECT" --format='value(name)'
-    provider_describe nat "$CLUSTER-nat" \
+    provider_describe nat "$CLUSTER-nat" --parent "router:$CLUSTER-router" \
       gcloud compute routers nats describe "$CLUSTER-nat" --router "$CLUSTER-router" --region "$REGION" --project "$PROJECT" --format='value(name)'
     # The enumerations below list the whole class in the bound project and
     # attribute in this process. A server-side name filter is not used: GKE

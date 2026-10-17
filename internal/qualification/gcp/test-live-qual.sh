@@ -297,6 +297,23 @@ case "$*" in
       printf '[{"name":"a1b2c3d4","IPAddress":"34.0.0.1","network":"https://www.googleapis.com/compute/v1/projects/sol-qualification/global/networks/other"}]\n'; exit 0
     fi
     printf '[]\n'; exit 0 ;;
+  *"compute routers describe"*)
+    if [ "${STUB_ROUTER_PRESENT:-0}" = "1" ]; then
+      printf 'test-cluster-router\n'; exit 0
+    fi
+    printf "ERROR: (gcloud.compute.routers.describe) NOT_FOUND: The resource 'projects/sol-qualification/regions/us-central1/routers/test-cluster-router' was not found\n" >&2
+    exit 1 ;;
+  *"compute routers nats describe"*)
+    if [ "${STUB_NAT_PARENT_MISSING:-0}" = "1" ]; then
+      printf "ERROR: (gcloud.compute.routers.nats.describe) NOT_FOUND: The resource 'projects/sol-qualification/regions/us-central1/routers/test-cluster-router' was not found\n" >&2
+      exit 1
+    fi
+    if [ "${STUB_NAT_AMBIGUOUS:-0}" = "1" ]; then
+      printf "ERROR: (gcloud.compute.routers.nats.describe) NOT_FOUND: The resource 'projects/sol-qualification/regions/us-central1/routers/test-cluster-router/status' was not found while reading the child\n" >&2
+      exit 1
+    fi
+    printf 'ERROR: (gcloud.compute.routers.nats.describe) NOT_FOUND: The resource test-cluster-nat was not found\n' >&2
+    exit 1 ;;
   *"compute networks peerings list"*)
     if [ "${STUB_PEERING_RESIDUE:-0}" = "1" ]; then
       printf '[{"name":"servicenetworking-google","network":"https://www.googleapis.com/compute/v1/projects/sol-qualification/global/networks/test-cluster"}]\n'; exit 0
@@ -310,6 +327,9 @@ case "$*" in
   # GKE cluster label; the harness enumerates the class and applies the label
   # itself rather than asking the provider to filter.
   *"compute disks list"*)
+    if [ -n "${STUB_DISK_NAME:-}" ]; then
+      printf '[{"name":"%s","labels":{}}]\n' "$STUB_DISK_NAME"; exit 0
+    fi
     if [ "${STUB_DISK_RESIDUE:-0}" = "1" ]; then
       printf '[{"name":"pvc-residue","labels":{"goog-k8s-cluster-name":"%s"}}]\n' "$CLUSTER"; exit 0
     fi
@@ -705,7 +725,16 @@ run_case() {
   fi
   if [ -n "${PRESEED_PRIOR_IDENTITIES:-}" ]; then
     mkdir -p "$LOG_DIR"
-    printf '%s\n' "$PRESEED_PRIOR_IDENTITIES" >"$LOG_DIR/inventory-pre.identities.tsv"
+    printf '# attempt=%s cluster=test-cluster project=sol-qualification region=us-central1\n' \
+      "$ATTEMPT" >"$LOG_DIR/inventory-pre.identities.tsv"
+    printf '%s\n' "$PRESEED_PRIOR_IDENTITIES" >>"$LOG_DIR/inventory-pre.identities.tsv"
+    [ -s "$LOG_DIR/attempt.txt" ] || printf 'attempt=%s\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
+  fi
+  if [ -n "${PRESEED_FOREIGN_PRIOR_IDENTITIES:-}" ]; then
+    mkdir -p "$LOG_DIR"
+    printf '# attempt=another-attempt cluster=another-cluster project=sol-qualification region=us-central1\n' \
+      >"$LOG_DIR/inventory-pre.identities.tsv"
+    printf '%s\n' "$PRESEED_FOREIGN_PRIOR_IDENTITIES" >>"$LOG_DIR/inventory-pre.identities.tsv"
     [ -s "$LOG_DIR/attempt.txt" ] || printf 'attempt=%s\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
   fi
   if [ -n "${PRESEED_FOREIGN_ATTEMPT:-}" ]; then
@@ -1430,6 +1459,51 @@ if [ "$(cat "$TMP/forwarding-wrong-shape.rc")" = "0" ]; then
 else
   ok "a wrong-shaped enumeration does not verify"
 fi
+
+printf '\nscenario: cluster-name attribution uses component boundaries\n'
+for candidate in test-cluster-router prefix-test-cluster-extra test-cluster; do
+  run_case "disk-name-match-$candidate" verify "STUB_DISK_NAME=$candidate"
+  has "a name carrying the cluster at a boundary is residue ($candidate)" \
+    "disks: PRESENT" "$TMP/disk-name-match-$candidate.out"
+  if [ "$(cat "$TMP/disk-name-match-$candidate.rc")" = "0" ]; then
+    no "boundary match fails the verification ($candidate)" "non-zero" "0"
+  else
+    ok "boundary match fails the verification ($candidate)"
+  fi
+done
+for candidate in test-clustered-router test-cluster2-router; do
+  run_case "disk-name-no-match-$candidate" verify "STUB_DISK_NAME=$candidate"
+  has "a name that only embeds the cluster is not residue ($candidate)" \
+    "disks: ABSENT" "$TMP/disk-name-no-match-$candidate.out"
+  is "an unrelated similarly named disk verifies ($candidate)" \
+    "$(cat "$TMP/disk-name-no-match-$candidate.rc")" "0"
+done
+
+printf '\nscenario: a child read that names only its parent\n'
+run_case nat-parent-absent verify STUB_NAT_PARENT_MISSING=1
+has "the router is independently absent" "router: ABSENT" "$TMP/nat-parent-absent.out"
+has "the NAT follows its absent parent" "nat: ABSENT" "$TMP/nat-parent-absent.out"
+is "and the verification passes" "$(cat "$TMP/nat-parent-absent.rc")" "0"
+
+run_case nat-parent-ambiguous verify STUB_ROUTER_PRESENT=1 STUB_NAT_AMBIGUOUS=1
+has "the router is present" "router: PRESENT" "$TMP/nat-parent-ambiguous.out"
+has "the NAT read is UNKNOWN, not absent" "nat: UNKNOWN" "$TMP/nat-parent-ambiguous.out"
+has "and the report says which resource is ambiguous" \
+  "which resource is missing is ambiguous" "$TMP/nat-parent-ambiguous.out"
+if [ "$(cat "$TMP/nat-parent-ambiguous.rc")" = "0" ]; then
+  no "an ambiguous child read does not verify" "non-zero" "0"
+else
+  ok "an ambiguous child read does not verify"
+fi
+
+printf '\nscenario: a prior identity record from another scope is not used\n'
+PRESEED_FOREIGN_PRIOR_IDENTITIES=$'forwarding-rules\ta1b2c3d4' \
+  run_case prior-identities-foreign verify STUB_LB_ADDRESS=1
+has "the foreign identity does not make the rule residue" \
+  "forwarding-rules: ABSENT" "$TMP/prior-identities-foreign.out"
+has "and the report says the record was ignored" \
+  "belongs to another attempt or scope" "$TMP/prior-identities-foreign.out"
+is "so the verification passes" "$(cat "$TMP/prior-identities-foreign.rc")" "0"
 
 printf '\nscenario: the post inventory accounts for what the pre inventory attributed\n'
 PRESEED_PRIOR_IDENTITIES=$'forwarding-rules\ta1b2c3d4' run_case prior-identity-residue verify STUB_LB_ADDRESS=1

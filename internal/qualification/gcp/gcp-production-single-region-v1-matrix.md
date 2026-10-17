@@ -131,6 +131,13 @@ the post-teardown observation to account for them (`verify`): a resource whose n
 matches after destruction is still residue if the pre-inventory recorded it. That supplements
 discovery; it does not replace it, because a controller can create resources after the snapshot.
 
+A child resource read that fails naming only its parent is decided from the parent's own
+observation: an absent router implies its NAT is absent, while a present router leaves the child
+UNKNOWN because which resource is missing is ambiguous. The identity record the pre-inventory
+writes is bound to the attempt, cluster, project and region it was taken from; a record from
+another scope is ignored, and the report says so, rather than attributing another target's
+resource to this one.
+
 Two limits are stated rather than implied. An enumeration reads JSON and requires the fields it
 attributes by (`name`, `IPAddress`, `network`, the GKE disk label); if a provider changes those
 names the class reads UNKNOWN, not absent. And attribution still needs a declared identity: a GKE
