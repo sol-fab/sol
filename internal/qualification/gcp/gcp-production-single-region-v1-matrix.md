@@ -115,7 +115,9 @@ AWS-only.
   must not hold wildcard, mutation, Secrets, `pods/exec`, `pods/log` or `delete` there. The
   harness also checks that observation reads are denied in an unbound namespace. This is a
   sampled effective-surface check, not an exhaustive RBAC audit. It refuses an absent, shared,
-  mismatched or broader identity rather than falling back to the deploy kubeconfig.
+  mismatched or broader identity rather than falling back to the deploy kubeconfig. The first
+  live campaign must confirm that later `gke-gcloud-auth-plugin` token refreshes still
+  authenticate as the impersonated observer, not only the initial `kubectl auth whoami`.
 - **Target identities**: the provisioner / cluster-access / deploy / operator contracts come
   from `docs/deployment/production-bootstrap.md`; the target names them and `sol deploy` fails
   closed without them.

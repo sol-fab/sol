@@ -180,7 +180,7 @@ case "$1" in
         # The real deploy prints this from its database setup step (#1424).
         printf 'sol-database-identity: target=%s resource=app_db namespace=%s ddl-creds=%s authority=%s ca-configmap=%s\n' \
           "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}" \
-          "${STUB_DDL_NAMESPACE:-pluto-comms}" \
+          "${STUB_DDL_NAMESPACE-pluto-comms}" \
           "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-ddl-creds" \
           "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-db-credentials" \
           "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-db-ca"
@@ -192,7 +192,7 @@ case "$1" in
       # runs its database setup step, so it declares where it wrote (#1424).
       printf 'sol-database-identity: target=%s resource=app_db namespace=%s ddl-creds=%s authority=%s ca-configmap=%s\n' \
         "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}" \
-        "${STUB_DDL_NAMESPACE:-pluto-comms}" \
+        "${STUB_DDL_NAMESPACE-pluto-comms}" \
         "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-ddl-creds" \
         "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-db-credentials" \
         "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-db-ca"
@@ -732,7 +732,7 @@ case "$*" in
   "get secret -A"*)
     printf '%s\n' \
       "${STUB_DML_NAMESPACE:-pluto-payments} ${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-dml-creds" \
-      "${STUB_DDL_NAMESPACE:-pluto-comms} ${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-ddl-creds"
+      "${STUB_DDL_NAMESPACE-pluto-comms} ${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-ddl-creds"
     exit 0 ;;
   "get secret orders-svc-secrets"*)
     exit 0 ;;
@@ -1667,6 +1667,19 @@ is "the app phase refuses a requirement set that omits the migration namespace" 
 has "and names the lifecycle/candidate disagreement" \
   "do not cover the deploy's migration namespace pluto-comms" \
   "$TMP/app-ca-requirements-drift.out"
+
+printf '\nscenario: the deploy declares no migration namespace\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-no-migration-namespace app \
+  STUB_DDL_NAMESPACE=
+is "the app phase refuses a missing migration namespace" \
+  "$(cat "$TMP/app-ca-no-migration-namespace.rc")" "1"
+has "and names the missing declaration" \
+  "the deploy declared no migration namespace" \
+  "$TMP/app-ca-no-migration-namespace.out"
+lacks "the migration phase never ran" "migration" \
+  "$TMP/app-ca-no-migration-namespace.logs/ca-phases.txt"
+not_exists "and the final deploy never ran" \
+  "$TMP/app-ca-no-migration-namespace.logs/app-deploy.log"
 
 printf '\nscenario: a stalled orders read-back fails the phase, so success cannot be manufactured\n'
 # The earlier app cases restored the DNS/identity curl stub; the transaction

@@ -70,6 +70,12 @@ exec, log and delete must answer no in every required namespace; and observation
 reads must answer no in an unbound namespace. This is a sample of the effective
 surface, not an exhaustive RBAC audit. It never falls back to the run kubeconfig.
 
+Live assumption: the private-gcloud-configuration binding is verified offline,
+including the authenticated principal, but the first live campaign must also
+confirm that later `gke-gcloud-auth-plugin` token refreshes continue to
+authenticate as the impersonated observer rather than only the initial
+`kubectl auth whoami`.
+
 The shared launcher validates the submission receipt against the recorded deploy
 authority and the independent observation context against the observer authority;
 they may be different principals but must address the same cluster. The GCP row

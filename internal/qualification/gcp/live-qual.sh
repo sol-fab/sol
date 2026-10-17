@@ -2272,8 +2272,11 @@ establish_gcp_ca_observer() {
     return 1
   fi
   migration_namespace="$(app_database_field namespace)"
-  if [ -n "$migration_namespace" ] \
-    && ! printf '%s\n' "$required_namespaces" | grep -qxF "$migration_namespace"; then
+  if [ -z "$migration_namespace" ]; then
+    say "app: the deploy declared no migration namespace; the CA family cannot be observed"
+    return 1
+  fi
+  if ! printf '%s\n' "$required_namespaces" | grep -qxF "$migration_namespace"; then
     say "app: the candidate's CA obligations do not cover the deploy's migration namespace $migration_namespace"
     return 1
   fi
