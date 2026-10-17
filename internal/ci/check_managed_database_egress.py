@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""A workload can reach the managed database Sol provisioned, and only on that path (FND-0075).
+"""A workload that declares the managed database Sol provisioned can reach it, and only it (FND-0075).
 
-The invariant, stated semantically: a workload whose target declares a Sol-managed database gets
+The invariant, stated semantically: a workload that **declared** the Sol-managed database gets
 egress to the network range required to reach that database, on the database port — derived from
-the placement Sol owns, never declared by an application author, and never widened beyond it.
+the placement Sol owns, never declared by an application author, and never widened beyond it. A
+workload that declared no database, or one bound externally, gets no allowance, and a target with
+no managed database publishes no range.
 
 That means, structurally: both providers enforce NetworkPolicy (otherwise the contract is not
 exercised at all, which is how the GCP row passed while AWS hung); each cluster root derives the
-range from the resource it created and publishes it; each platform root mirrors the variable; the
-shared module publishes it as a cluster fact with a read grant narrow enough to fetch that one
-object; and the deploy applies the allowance only when the fact carries ranges, only to those
-ranges, and only on the database port. A target that provisions a database but publishes no
-ranges is refused rather than deployed without egress: an absent or unreadable fact and a
-target with no managed database must not look alike.
+range from the resource it created and publishes it, and publishes none when it created no
+database; each platform root mirrors the variable; the shared module publishes it as a cluster
+fact with a read grant narrow enough to fetch that one object; and the deploy selects the units
+the plan marked as consumers of the provisioned database, applies the allowance only to those
+ranges and only on the database port, and refuses when such a consumer has no usable fact. An
+absent, unreadable, empty or malformed fact and a target with no managed database must not look
+alike.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ FILES = {
     "gcp_platform": "platform/cloud/gcp/platform/main.tf",
     "module_facts": "platform/cloud/modules/platform/platform_network_facts.tf",
     "substrate": "cli/lib/deploy/sol_cli_substrate.ml",
+    "deploy_run": "cli/lib/deploy/sol_cli_deploy_run.ml",
     "egress_doc": "cli/lib/workspace/sol_cli_manifest_yaml.ml",
 }
 
@@ -50,6 +54,7 @@ def check(root: pathlib.Path) -> list[str]:
     gcp_outputs = read(root, "gcp_outputs")
     facts = read(root, "module_facts")
     substrate = read(root, "substrate")
+    deploy_run = read(root, "deploy_run")
     egress_doc = read(root, "egress_doc")
 
     if 'enableNetworkPolicy = "true"' not in aws_cluster:
@@ -62,15 +67,26 @@ def check(root: pathlib.Path) -> list[str]:
             "platform/cloud/gcp/cluster/main.tf: enforcement is off, which is how a GCP row can "
             "pass the same contract while a workload cannot reach its database"
         )
-    if "module.vpc.private_subnets_cidr_blocks" not in aws_outputs:
+    if "var.create_rds ? module.vpc.private_subnets_cidr_blocks : []" not in aws_outputs:
         problems.append(
             "platform/cloud/aws/cluster/outputs.tf: the range the database lives in is not derived "
-            "from the subnets Sol placed it in"
+            "from the subnets Sol placed it in, or is published even when no database is created"
         )
-    if "sql_peering" not in gcp_outputs:
+    gcp_egress_start = gcp_outputs.find('output "database_egress_cidrs"')
+    gcp_egress = (
+        gcp_outputs[gcp_egress_start : gcp_outputs.find("\n}\n", gcp_egress_start)]
+        if gcp_egress_start != -1
+        else ""
+    )
+    if "sql_peering" not in gcp_egress:
         problems.append(
             "platform/cloud/gcp/cluster/outputs.tf: the range Cloud SQL's private address comes "
             "from is not derived from the peering range Sol created"
+        )
+    if "var.create_database ?" not in gcp_egress or ": []" not in gcp_egress:
+        problems.append(
+            "platform/cloud/gcp/cluster/outputs.tf: the range is published even when no database "
+            "is created, so a target without a managed database advertises an allowance"
         )
     for provider in ("aws", "gcp"):
         platform = read(root, f"{provider}_platform")
@@ -101,17 +117,42 @@ def check(root: pathlib.Path) -> list[str]:
             "cli/lib/deploy/sol_cli_substrate.ml: the deploy does not read the published fact, so "
             "no allowance is ever applied"
         )
-    if "if cidrs = [] then Ok None else" not in substrate:
+    if not re.search(r"if cidrs = \[\]\s*\n\s*then Ok None", substrate):
         problems.append(
             "cli/lib/deploy/sol_cli_substrate.ml: the fact is not treated as absent when it "
             "carries no ranges, which would apply an empty allowance where there is no database"
         )
-    if "manages_database" not in substrate or "no route to it" not in substrate:
+    if (
+        "managed_database_workloads" not in substrate
+        or "match spec.db_ca_target with" not in substrate
+    ):
         problems.append(
-            "cli/lib/deploy/sol_cli_substrate.ml: an absent or unreadable fact is not "
-            "distinguished from a target that provisions no database. A target with a managed "
-            "database must refuse the substrate rather than deploy the workloads with no route "
-            "to it (FND-0075)."
+            "cli/lib/deploy/sol_cli_substrate.ml: the allowance is not scoped to the units that "
+            "declared the Sol-provisioned database; every workload in the target would be widened"
+        )
+    if "manages_database" in substrate or "manages_database" in deploy_run:
+        problems.append(
+            "cli/lib/deploy/sol_cli_substrate.ml and sol_cli_deploy_run.ml: the old target-wide "
+            "ownership gate is still present, so a nonconsumer's deploy depends on a database "
+            "fact it does not use"
+        )
+    if (
+        "carries database-egress-cidrs but no" not in substrate
+        or "invalid database-port" not in substrate
+    ):
+        problems.append(
+            "cli/lib/deploy/sol_cli_substrate.ml: a fact that carries ranges but no usable port "
+            "is defaulted instead of refused, turning an incomplete fact into an allowance"
+        )
+    if "no route to it" not in substrate:
+        problems.append(
+            "cli/lib/deploy/sol_cli_substrate.ml: a consumer of the managed database must refuse "
+            "the substrate rather than deploy with no route to it (FND-0075)"
+        )
+    if "managed_database_workloads plan" not in deploy_run:
+        problems.append(
+            "cli/lib/deploy/sol_cli_deploy_run.ml: the substrate gate does not pass the plan's "
+            "declared consumers, so the allowance cannot be scoped per unit"
         )
 
     start = egress_doc.find("let managed_database_egress_doc")
@@ -162,8 +203,9 @@ def main() -> int:
 
     print(
         "check_managed_database_egress: both providers enforce policy, each derives the range it "
-        "provisioned and publishes it, the read grant is scoped to that one fact, and the deploy "
-        "allows exactly those ranges on the database port"
+        "provisioned (and publishes none without a database), the read grant is scoped to that "
+        "one fact, and the deploy allows exactly those ranges on the database port to exactly "
+        "the units that declared the managed database"
     )
     return 0
 

@@ -66,13 +66,7 @@ type verification =
   | Unavailable of string
 
 let read_status ~ctx ~dir ~table ~namespace ~ddl_creds_name ?ca_configmap () =
-  let* () =
-    Sol_cli_substrate.ensure
-      ~ctx
-      ~namespaces:[ namespace ]
-      ~workloads:[]
-      ~manages_database:false
-  in
+  let* () = Sol_cli_substrate.ensure ~ctx ~namespaces:[ namespace ] ~workloads:[] in
   let* image = Sol_cli_migration_job.runner_image () in
   let* files = migration_files dir in
   let* job =

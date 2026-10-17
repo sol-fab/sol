@@ -751,11 +751,7 @@ let run_database_setup_step
   let migration_namespace = Sol_cli_database_setup_render.database_namespace database in
   let establish () =
     let* () =
-      Sol_cli_substrate.ensure
-        ~ctx
-        ~namespaces:[ migration_namespace ]
-        ~workloads:[]
-        ~manages_database:false
+      Sol_cli_substrate.ensure ~ctx ~namespaces:[ migration_namespace ] ~workloads:[]
     in
     (* The deploy declares the identity it resolved, so a verifier reads the location instead of
        reproducing the naming rule. Stable fields; see database_identity_report. *)
