@@ -337,24 +337,111 @@ destroy_vars() {
 }
 
 
-provider_probe() {
-  local class="$1" expect="$2"; shift 2
-  local out="$LOG_DIR/inventory-$class.log" err="$LOG_DIR/inventory-$class.stderr" verdict
-  if "$@" >"$out" 2>"$err"; then
-    if [ -n "$(tr -d '[:space:]' <"$out")" ]; then verdict=PRESENT; else verdict=ABSENT; fi
-  elif grep -qiE '(not[_. -]?found|does not exist|404|No URLs matched)' "$err" "$out"; then
-    verdict=ABSENT
-  else
-    verdict=UNKNOWN
-  fi
-  printf '%s\t%s\t%s\t%s\n' \
-    "$class" "$verdict" "$expect" "$(head -1 "$err" "$out" 2>/dev/null | cut -c1-100)" >>"$INVENTORY_TSV"
-  say "    $class: $verdict"
+# The expected universe of the absence verdict: every class the inventory must
+# decide, and whether the target must leave it absent or leave it present.
+#
+# The probe calls in `inventory` declare the provider read; this table declares
+# the obligation. Keeping the two apart is what makes a skipped probe a failed
+# verdict instead of silence: `inventory_reconcile` requires exactly one row per
+# entry, and `verify_absent` refuses a row it cannot interpret. Adding a class
+# to the table without a probe, or a probe without the table, fails closed.
+#
+#   absent   the target must leave no attributable resource in the class
+#   present  a durable prerequisite that teardown must not remove
+INVENTORY_CLASSES=(
+  "gke-cluster|absent"
+  "sql-instance|absent"
+  "network|absent"
+  "subnetwork|absent"
+  "router|absent"
+  "nat|absent"
+  "address-regional|absent"
+  "address-global|absent"
+  "disks|absent"
+  "forwarding-rules|absent"
+  "artifact-registry|absent"
+  "service-account-provisioner|absent"
+  "service-account-loki|absent"
+  "service-account-thanos|absent"
+  "custom-role|absent"
+  "role-binding|absent"
+  "impersonator-binding|absent"
+  "peering|absent"
+  "state-bucket|present"
+  "dns-zone|present"
+)
+
+inventory_expectation() {
+  local wanted="$1" entry
+  for entry in "${INVENTORY_CLASSES[@]}"; do
+    if [ "${entry%%|*}" = "$wanted" ]; then
+      printf '%s\n' "${entry#*|}"
+      return 0
+    fi
+  done
+  return 1
 }
 
+# One evidence row per class. A diagnostic is collapsed to one clipped line so
+# the TSV stays a table: `head` over two files emits `==> file <==` headers and
+# blank lines, which is how a row used to spill across four lines.
+inventory_detail() {
+  printf '%s' "$1" | tr '\t\n' '  ' | cut -c1-140
+}
+
+provider_detail() {
+  local err="$1" out="$2"
+  if [ -s "$err" ]; then
+    head -n1 "$err"
+  elif [ -s "$out" ]; then
+    head -n1 "$out"
+  fi
+}
+
+# The only writer. The expectation comes from the declared universe, never from
+# the caller, so exactly one place answers "absent or present".
 verdict_row() {
-  printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >>"$INVENTORY_TSV"
-  say "    $1: $2${4:+ ($4)}"
+  local class="$1" state="$2" detail="${3:-}" expect
+  case "$state" in
+    PRESENT | ABSENT | UNKNOWN) ;;
+    *)
+      detail="the inventory produced '$state', which is not a class verdict"
+      state=UNKNOWN
+      ;;
+  esac
+  if ! expect="$(inventory_expectation "$class")"; then
+    detail="$(inventory_detail "not a class the inventory declares")"
+    printf '%s\tUNKNOWN\t-\t%s\n' "$class" "$detail" >>"$INVENTORY_TSV"
+    say "    $class: UNKNOWN ($detail)"
+    return 0
+  fi
+  detail="$(inventory_detail "$detail")"
+  printf '%s\t%s\t%s\t%s\n' "$class" "$state" "$expect" "$detail" >>"$INVENTORY_TSV"
+  say "    $class: $state${detail:+ ($detail)}"
+}
+
+# A provider read classified from its exit status and diagnostic text. The
+# absence rule is still shared across operations; PR 2 replaces it with one rule
+# per operation and binds the reads to a verified project, region and caller.
+provider_probe() {
+  local class="$1"; shift
+  local out="$LOG_DIR/inventory-$class.log" err="$LOG_DIR/inventory-$class.stderr" verdict detail
+  if "$@" >"$out" 2>"$err"; then
+    if [ -n "$(tr -d '[:space:]' <"$out")" ]; then
+      verdict=PRESENT
+      detail="the read returned a nonempty result"
+    else
+      verdict=ABSENT
+      detail="the read succeeded and returned no resource"
+    fi
+  elif grep -qiE '(not[_. -]?found|does not exist|404|No URLs matched)' "$err" "$out"; then
+    verdict=ABSENT
+    detail="the provider answered not-found: $(provider_detail "$err" "$out")"
+  else
+    verdict=UNKNOWN
+    detail="the read failed without answering not-found: $(provider_detail "$err" "$out")"
+  fi
+  verdict_row "$class" "$verdict" "$detail"
 }
 
 PROVISIONER_SA_VERDICT=""
@@ -380,7 +467,7 @@ probe_service_account() {
     verdict=UNKNOWN; detail="the authoritative service-account list could not be read"
   fi
   PROVISIONER_SA_VERDICT="$verdict"
-  verdict_row "$class" "$verdict" absent "$detail"
+  verdict_row "$class" "$verdict" "$detail"
 }
 
 probe_impersonator_binding() {
@@ -407,7 +494,7 @@ probe_impersonator_binding() {
   else
     verdict=UNKNOWN; detail="the identity's own state could not be determined"
   fi
-  verdict_row "$class" "$verdict" absent "$detail"
+  verdict_row "$class" "$verdict" "$detail"
 }
 
 probe_custom_role() {
@@ -426,7 +513,7 @@ probe_custom_role() {
   else
     verdict=UNKNOWN; detail="the role read failed without saying not-found"
   fi
-  verdict_row "$class" "$verdict" absent "$detail"
+  verdict_row "$class" "$verdict" "$detail"
 }
 
 GCP_ROLE_ID="sol_$(printf '%s' "$CLUSTER" | tr '-' '_')_cluster_access"
@@ -445,35 +532,70 @@ inventory() {
   } >"$LOG_DIR/inventory-$mode.identity" 2>/dev/null || true
   say "inventory ($mode): attempt ${ATTEMPT:--}, target $TARGET, state key $STATE_KEY, cluster $CLUSTER; provider reads only, no mutation"
 
-  provider_probe gke-cluster    absent  gcloud container clusters describe "$CLUSTER" --region "$REGION" --project "$PROJECT" --format='value(name)'
-  provider_probe sql-instance   absent  gcloud sql instances describe "$CLUSTER-postgres" --project "$PROJECT" --format='value(name)'
-  provider_probe network        absent  gcloud compute networks describe "$CLUSTER" --project "$PROJECT" --format='value(name)'
-  provider_probe subnetwork     absent  gcloud compute networks subnets describe "$CLUSTER-nodes" --region "$REGION" --project "$PROJECT" --format='value(name)'
-  provider_probe router         absent  gcloud compute routers describe "$CLUSTER-router" --region "$REGION" --project "$PROJECT" --format='value(name)'
-  provider_probe nat            absent  gcloud compute routers nats describe "$CLUSTER-nat" --router "$CLUSTER-router" --region "$REGION" --project "$PROJECT" --format='value(name)'
-  provider_probe address-regional absent gcloud compute addresses list --project "$PROJECT" --filter="name~$CLUSTER" --format='value(name)'
-  provider_probe address-global absent  gcloud compute addresses list --global --project "$PROJECT" --filter="name~$CLUSTER" --format='value(name)'
+  provider_probe gke-cluster    gcloud container clusters describe "$CLUSTER" --region "$REGION" --project "$PROJECT" --format='value(name)'
+  provider_probe sql-instance   gcloud sql instances describe "$CLUSTER-postgres" --project "$PROJECT" --format='value(name)'
+  provider_probe network        gcloud compute networks describe "$CLUSTER" --project "$PROJECT" --format='value(name)'
+  provider_probe subnetwork     gcloud compute networks subnets describe "$CLUSTER-nodes" --region "$REGION" --project "$PROJECT" --format='value(name)'
+  provider_probe router         gcloud compute routers describe "$CLUSTER-router" --region "$REGION" --project "$PROJECT" --format='value(name)'
+  provider_probe nat            gcloud compute routers nats describe "$CLUSTER-nat" --router "$CLUSTER-router" --region "$REGION" --project "$PROJECT" --format='value(name)'
+  provider_probe address-regional gcloud compute addresses list --project "$PROJECT" --filter="name~$CLUSTER" --format='value(name)'
+  provider_probe address-global gcloud compute addresses list --global --project "$PROJECT" --filter="name~$CLUSTER" --format='value(name)'
   # GKE's CSI disks are named `pvc-<uuid>`, so a `name` filter matches none of them and a
   # destroyed cluster's volumes read as absent while they survive. The GKE-managed cluster
   # label is what attributes a disk to this run.
-  provider_probe disks          absent  gcloud compute disks list --project "$PROJECT" --filter="labels.goog-k8s-cluster-name=$CLUSTER" --format='value(name)'
-  provider_probe forwarding-rules absent gcloud compute forwarding-rules list --project "$PROJECT" --filter="name~$CLUSTER" --format='value(name)'
-  provider_probe artifact-registry absent gcloud artifacts repositories describe "$CLUSTER" --location "$REGION" --project "$PROJECT" --format='value(name)'
+  provider_probe disks          gcloud compute disks list --project "$PROJECT" --filter="labels.goog-k8s-cluster-name=$CLUSTER" --format='value(name)'
+  provider_probe forwarding-rules gcloud compute forwarding-rules list --project "$PROJECT" --filter="name~$CLUSTER" --format='value(name)'
+  provider_probe artifact-registry gcloud artifacts repositories describe "$CLUSTER" --location "$REGION" --project "$PROJECT" --format='value(name)'
   probe_service_account service-account-provisioner "$GCP_PROVISIONER_SA"
-  provider_probe service-account-loki        absent gcloud iam service-accounts describe "$CLUSTER-loki@$PROJECT.iam.gserviceaccount.com" --project "$PROJECT" --format='value(email)'
-  provider_probe service-account-thanos      absent gcloud iam service-accounts describe "$CLUSTER-thanos@$PROJECT.iam.gserviceaccount.com" --project "$PROJECT" --format='value(email)'
+  provider_probe service-account-loki gcloud iam service-accounts describe "$CLUSTER-loki@$PROJECT.iam.gserviceaccount.com" --project "$PROJECT" --format='value(email)'
+  provider_probe service-account-thanos gcloud iam service-accounts describe "$CLUSTER-thanos@$PROJECT.iam.gserviceaccount.com" --project "$PROJECT" --format='value(email)'
   probe_custom_role custom-role "$GCP_ROLE_ID"
-  provider_probe role-binding   absent  gcloud projects get-iam-policy "$PROJECT" --flatten='bindings[].members' --filter="bindings.members=serviceAccount:$GCP_PROVISIONER_SA" --format='value(bindings.role)'
+  provider_probe role-binding   gcloud projects get-iam-policy "$PROJECT" --flatten='bindings[].members' --filter="bindings.members=serviceAccount:$GCP_PROVISIONER_SA" --format='value(bindings.role)'
   probe_impersonator_binding impersonator-binding "$PROVISIONER_SA_VERDICT" "$GCP_PROVISIONER_SA"
-  provider_probe peering        absent  gcloud compute networks peerings list --project "$PROJECT" --filter="name~servicenetworking" --format='value(name)'
-  provider_probe state-bucket   present gcloud storage buckets describe "gs://$STATE_BUCKET" --project "$PROJECT" --format='value(name)'
-  provider_probe dns-zone       present gcloud dns managed-zones describe "$ZONE_NAME" --project "$PROJECT" --format='value(name,dnsName)'
+  provider_probe peering        gcloud compute networks peerings list --project "$PROJECT" --filter="name~servicenetworking" --format='value(name)'
+  provider_probe state-bucket   gcloud storage buckets describe "gs://$STATE_BUCKET" --project "$PROJECT" --format='value(name)'
+  provider_probe dns-zone       gcloud dns managed-zones describe "$ZONE_NAME" --project "$PROJECT" --format='value(name,dnsName)'
 
+  inventory_reconcile
+}
+
+# The expected universe and the emitted rows must agree exactly. A class the
+# probes never wrote is an UNKNOWN row, not an omission: the verdict must fail
+# on it and the evidence must say which class was never observed.
+inventory_reconcile() {
+  local rc=0 entry class seen declared
+  for entry in "${INVENTORY_CLASSES[@]}"; do
+    class="${entry%%|*}"
+    seen="$(awk -F'\t' -v c="$class" '$1 == c { n++ } END { print n + 0 }' "$INVENTORY_TSV")"
+    case "$seen" in
+      1) ;;
+      0)
+        verdict_row "$class" UNKNOWN "the inventory never observed this class; its absence is not established"
+        say "  ✗ $class: the class was not observed"
+        rc=1
+        ;;
+      *)
+        say "  ✗ $class: observed $seen times; the inventory is not one observation per class"
+        rc=1
+        ;;
+    esac
+  done
+  while IFS= read -r class; do
+    [ -n "$class" ] || continue
+    if ! declared="$(inventory_expectation "$class")"; then
+      say "  ✗ $class: an inventory row for a class the verdict does not declare"
+      rc=1
+    fi
+  done < <(cut -f1 "$INVENTORY_TSV" | sort -u)
+  return "$rc"
 }
 
 verify_absent() {
   local rc=0 class verdict expect detail
-  inventory post
+  if ! inventory post; then
+    say "  ✗ the inventory did not produce one observation for every declared class"
+    rc=1
+  fi
   while IFS=$'\t' read -r class verdict expect detail; do
     case "$expect:$verdict" in
       absent:ABSENT)   say "  ✓ $class absent" ;;
@@ -482,6 +604,10 @@ verify_absent() {
       present:ABSENT)  say "  ✗ $class is MISSING — a disposable destroy removed a durable prerequisite"; rc=1 ;;
       absent:UNKNOWN)  say "  ✗ $class: could NOT determine absence (UNKNOWN) — $detail"; rc=1 ;;
       present:UNKNOWN) say "  ✗ $class: could NOT be read (UNKNOWN) — $detail"; rc=1 ;;
+      *)
+        say "  ✗ $class: the verdict cannot interpret '$verdict' against '$expect'${detail:+ — $detail}"
+        rc=1
+        ;;
     esac
   done <"$INVENTORY_TSV"
   return "$rc"
@@ -625,7 +751,11 @@ finalise_bundle() {
 
 capture_pre_teardown_inventory() {
   say "capturing the pre-teardown provider inventory (attribution evidence)"
-  inventory pre
+  # An incomplete pre-inventory must not block teardown: cleanup has to stay
+  # reachable, and the post-teardown verdict is what decides absence.
+  if ! inventory pre; then
+    say "  the pre-teardown inventory is incomplete; teardown still runs and the post-teardown verdict decides"
+  fi
   say "  pre-teardown inventory: $INVENTORY_TSV"
 }
 
