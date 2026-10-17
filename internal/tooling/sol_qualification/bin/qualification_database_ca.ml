@@ -42,6 +42,14 @@ let arg name =
 let field json name = Yojson.Safe.Util.member name json
 let text json name = field json name |> Yojson.Safe.Util.to_string
 
+(* The evidence store canonicalizes what it persists. Compare canonical forms so
+   a key ordering difference is never treated as a different run. *)
+let canonical json =
+  match Sol_cli_database_contract_data.canonical json with
+  | Ok value -> value
+  | Error _ -> json
+;;
+
 let scenario = function
   | "aws" -> D.Aws
   | "gcp" -> D.Gcp
@@ -251,10 +259,7 @@ let run_phase () =
    shape and rejects anything else. *)
 let verdict_keys = [ "decision"; "detail"; "evidence"; "instance"; "requirement"; "run" ]
 
-let decode_verdict ~directory ~run json =
-  let reference = E.reference_of_json json |> evidence in
-  let captured = E.read_capture ~directory ~run reference |> evidence in
-  let payload = captured.E.payload in
+let decode_verdict_payload ~run payload =
   let keys =
     match payload with
     | `Assoc fields -> List.map fst fields |> List.sort compare
@@ -265,7 +270,7 @@ let decode_verdict ~directory ~run json =
   else (
     let instance = text payload "instance" in
     let requirement = text payload "requirement" in
-    if field payload "run" <> D.run_json run
+    if canonical (field payload "run") <> canonical (D.run_json run)
     then failwith "a persisted verdict belongs to another assessment"
     else if field payload "decision" <> `String "PASS"
     then failwith (Printf.sprintf "verdict %s is not PASS" requirement)
@@ -280,7 +285,7 @@ let verify_binding_capture ~directory ~run json =
   let captured = E.read_capture ~directory ~run reference |> evidence in
   if captured.E.subject <> B.binding_subject
   then failwith "the phase binding capture is not the candidate binding"
-  else if captured.E.payload <> D.run_json run
+  else if canonical captured.E.payload <> canonical (D.run_json run)
   then failwith "the phase binding capture belongs to another candidate assessment"
 ;;
 
@@ -288,6 +293,15 @@ let run_report () =
   let request, prepared, _ = prepare_request () in
   let directory = text request "evidence" in
   let run = prepared.B.run in
+  let recorder = E.open_store ~directory ~run ~secrets:[] () |> evidence in
+  (* Reopen the same assessment so verdicts_for can check provenance. *)
+  ignore
+    (E.start_assessment
+       recorder
+       ~reason:"AWS database CA family"
+       ~previous:[]
+       ~required_captures:prepared.B.required_captures
+     |> evidence);
   let phase path =
     let payload = (captured_payload ~directory ~run path).E.payload in
     let verdicts =
@@ -296,7 +310,12 @@ let run_report () =
       | _ -> failwith "phase capture carries no verdict references"
     in
     verify_binding_capture ~directory ~run (field payload "binding");
-    List.map (decode_verdict ~directory ~run) verdicts
+    let references =
+      List.map (fun json -> E.reference_of_json json |> evidence) verdicts
+    in
+    E.verdicts_for recorder references
+    |> evidence
+    |> List.map (decode_verdict_payload ~run)
   in
   let observed =
     phase (text request "migration_capture") @ phase (text request "application_capture")
@@ -321,6 +340,7 @@ let run_report () =
                observed) )
       ]
   in
+  E.close recorder;
   write payload (text request "report");
   exit (if complete then 0 else 1)
 ;;

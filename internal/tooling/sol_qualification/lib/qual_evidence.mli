@@ -79,6 +79,10 @@ val record_verdict
   -> observations:reference list
   -> (reference, error) result
 
+(** Load persisted verdicts from an open store, verifying each graph and that
+    it belongs to the active assessment. Returns the verdict payloads. *)
+val verdicts_for : t -> reference list -> (Yojson.Safe.t list, error) result
+
 val seal
   :  t
   -> obligations:Qual_domain.obligations
