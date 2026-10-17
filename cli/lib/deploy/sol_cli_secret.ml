@@ -744,7 +744,7 @@ let json_string key fields =
 (* One interpreter for the ESO condition, shared by the deploy gate and `sol secret
    status`, so the two can never disagree. External Secrets Operator's
    ExternalSecretStatusCondition carries only type/status/reason/message/lastTransitionTime
-   (verified against the upstream API through v0.20 and the current v1 spec): it publishes no
+   (verified against the upstream v1 API through ESO v2.13.0, 2026-10-17): it publishes no
    observedGeneration, so freshness is established from status.syncedResourceVersion instead
    (see [synced_version_matches]). *)
 type eso_state =

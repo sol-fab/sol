@@ -249,8 +249,11 @@ production:
 The SecretStore and ExternalSecret are namespaced to the unit's domain. Sol does not install ESO or
 create the SecretStore; install the controller and configure its controller identity, provider
 permissions and namespaced SecretStore before deploying. Sol renders `external-secrets.io/v1`, so it
-requires External Secrets Operator v0.16 or later. Direct deploy waits for ESO to report
-`Ready=True` with reason `SecretSynced`, verifies that the sync names the current spec (below),
+requires an ESO release that serves that API: v0.16 or later (v0.17 stopped serving `v1beta1`).
+That is an API-compatibility floor, not a qualified upgrade range; see the
+[compatibility contract](../deployment/compatibility.md#operator-supplied-external-secrets-operator).
+Direct deploy waits for ESO to report `Ready=True` with reason `SecretSynced`, verifies that the sync
+names the current spec (below),
 checks the materialized Secret's key set, and then verifies rollout readiness. GitOps emits the same
 ExternalSecret and workload references; Argo CD and ESO reconcile after CI writes the manifests.
 `sol plan` reports declarations, not proof that provider credentials can read a value.

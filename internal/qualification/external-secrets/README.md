@@ -5,6 +5,18 @@ through ESO, into a Sol workload. Renderer and fake-kubectl tests establish only
 the modeled contract; they do not establish provider authentication or a running
 workload receiving the value.
 
+## Version and upgrade assumption
+
+Sol renders `external-secrets.io/v1`: ESO v0.16 introduced that API and v0.17
+stopped serving `v1beta1`. The floor is an API requirement, not a supported
+upgrade range; upstream ESO supports only its current minor release. Readiness
+assumes `status.syncedResourceVersion` is `"<metadata.generation>-<hash>"`,
+computed by upstream `pkg/controllers/util.GetResourceVersion`; the shape was
+checked against ESO v0.16.1 and v2.13.0 (2026-10-17). It is an implementation
+detail rather than a documented API guarantee. Every run records the
+ESO/controller version, and an upgrade that changes or omits the value must fail
+closed and be re-qualified; never fall back to `Ready` alone.
+
 ## Evidence required
 
 For each provider row, record the installed Sol revision, ESO/controller version,
