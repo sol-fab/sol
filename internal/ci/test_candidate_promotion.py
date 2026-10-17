@@ -5,11 +5,18 @@ The decision is what stops a release being published from its tag before the
 authorized AWS and GCP qualification exists, and what stops a verdict for one
 candidate promoting another. The failure modes are the point: no verdict, a
 verdict for a different candidate, a missing or failing required provider, an
-omitted or non-passing release-blocking row, a blocked or excluded row without a
-reason, and a teardown claim that is not backed by a verifiable attached
-evidence document must all refuse; a complete verdict that refers to the exact
-candidate and carries matching evidence must allow promotion. These tests
-establish the decision mechanics only -- they are not qualification evidence.
+omitted or non-passing release-blocking row, and a teardown claim that is not
+backed by a verifiable attached evidence document must all refuse; a complete
+verdict that refers to the exact candidate and carries matching evidence must
+allow promotion.
+
+The teardown checks are decided against the versioned release teardown policy,
+not against the evidence document's own declaration. The tests therefore build
+their valid fixture from the policy: a self-consistent document that omits
+policy classes, or reclassifies a disposable class as durable, must fail.
+
+These tests establish the decision mechanics only -- they are not qualification
+evidence.
 """
 
 from __future__ import annotations
@@ -32,6 +39,7 @@ import promotion  # noqa: E402
 checks = 0
 failures = 0
 EVIDENCE_DIR = ""
+POLICY = promotion.load_teardown_policy()
 
 CANDIDATE = {
     "version": "v0.1.0-alpha.9",
@@ -39,6 +47,15 @@ CANDIDATE = {
     "bundle": "sol-v0.1.0-alpha.9-linux-x86_64.tar.gz",
     "bundle_sha256": "b" * 64,
     "runner_image": "ghcr.io/example/sol-migration-runner@sha256:" + "c" * 64,
+}
+
+SCOPE = {
+    "cluster": "cluster-1",
+    "region": "us-east-1",
+    "account": "123456789012",
+    "project": "sol-qualification",
+    "caller": "operator@example.invalid",
+    "state_key": "sol/state",
 }
 
 
@@ -53,19 +70,24 @@ def check(label: str, condition: bool) -> None:
 
 
 def evidence_document(provider: str = "aws") -> dict:
+    classes = [
+        {
+            "class": row["class"],
+            "expectation": row["expectation"],
+            "state": "ABSENT" if row["expectation"] == "absent" else "PRESENT",
+        }
+        for row in POLICY["providers"][provider]["classes"]
+    ]
     return {
         "schema": 1,
+        "policy": POLICY["policy"],
         "provider": provider,
         "candidate": promotion.identity(CANDIDATE),
         "attempt": "attempt-1",
         "target": "target-1",
-        "scope": {"cluster": "cluster-1", "region": "us-east-1", "account": "123"},
-        "required_classes": ["class-a", "class-b", "durable-zone"],
-        "classes": [
-            {"class": "class-a", "expectation": "absent", "state": "ABSENT"},
-            {"class": "class-b", "expectation": "absent", "state": "ABSENT"},
-            {"class": "durable-zone", "expectation": "present", "state": "PRESENT"},
-        ],
+        "scope": dict(SCOPE),
+        "required_classes": [row["class"] for row in classes],
+        "classes": classes,
         "verdict": "ABSENT",
     }
 
@@ -75,7 +97,10 @@ def default_binding(provider: str) -> dict:
         "provider": provider,
         "attempt": "attempt-1",
         "target": "target-1",
-        "cluster": "cluster-1",
+        "cluster": SCOPE["cluster"],
+        "scope": {
+            field: SCOPE[field] for field in POLICY["providers"][provider]["scope_fields"]
+        },
     }
 
 
@@ -280,35 +305,104 @@ def test_teardown_evidence() -> None:
     document = verdict(aws=teardown("aws", document=changed_cluster))
     refuses_with("evidence from another cluster refuses", document, "binds cluster")
 
-    incomplete = evidence_document("aws")
-    incomplete["required_classes"].append("class-c")
-    document = verdict(aws=teardown("aws", document=incomplete))
-    refuses_with("incomplete class coverage refuses", document, "does not observe required class")
+    changed_account = evidence_document("aws")
+    changed_account["scope"]["account"] = "999999999999"
+    document = verdict(aws=teardown("aws", document=changed_account))
+    refuses_with("evidence from another account refuses", document, "binds account")
+
+    changed_project = evidence_document("gcp")
+    changed_project["scope"]["project"] = "another-project"
+    document = verdict(gcp=teardown("gcp", document=changed_project))
+    refuses_with("evidence from another project refuses", document, "binds project")
+
+    missing_region = evidence_document("aws")
+    del missing_region["scope"]["region"]
+    document = verdict(aws=teardown("aws", document=missing_region))
+    refuses_with("evidence without the policy scope refuses", document, "binds region")
+
+    binding = default_binding("aws")
+    del binding["scope"]["account"]
+    document = verdict(aws=teardown("aws", binding=binding))
+    refuses_with("a binding without the policy account scope refuses", document, "has no 'account' scope")
+
+    binding = default_binding("aws")
+    binding["scope"] = "us-east-1"
+    document = verdict(aws=teardown("aws", binding=binding))
+    refuses_with("a binding scope that is not an object refuses", document, "names no provider scope")
+
+    truncated = evidence_document("aws")
+    only = truncated["classes"][0]
+    truncated["required_classes"] = [only["class"]]
+    truncated["classes"] = [only]
+    document = verdict(aws=teardown("aws", document=truncated))
+    refuses_with(
+        "a self-consistent truncated evidence document refuses",
+        document,
+        "incomplete required class universe",
+    )
+
+    reclassified = evidence_document("aws")
+    disposable = next(row for row in reclassified["classes"] if row["expectation"] == "absent")
+    disposable["expectation"] = "present"
+    disposable["state"] = "PRESENT"
+    document = verdict(aws=teardown("aws", document=reclassified))
+    refuses_with(
+        "a disposable class reclassified as durable refuses",
+        document,
+        "declares expectation 'present'; the release policy requires 'absent'",
+    )
 
     duplicate = evidence_document("aws")
-    duplicate["classes"].append({"class": "class-a", "expectation": "absent", "state": "ABSENT"})
+    duplicate["classes"].append(dict(duplicate["classes"][0]))
     document = verdict(aws=teardown("aws", document=duplicate))
     refuses_with("a duplicated class refuses", document, "more than once")
 
     undeclared = evidence_document("aws")
     undeclared["classes"].append({"class": "class-c", "expectation": "absent", "state": "ABSENT"})
     document = verdict(aws=teardown("aws", document=undeclared))
-    refuses_with("an undeclared class refuses", document, "undeclared class")
+    refuses_with(
+        "an undeclared class refuses",
+        document,
+        "observes class(es) the release policy does not require",
+    )
 
     unknown = evidence_document("aws")
     unknown["classes"][0]["state"] = "UNKNOWN"
     document = verdict(aws=teardown("aws", document=unknown))
-    refuses_with("an UNKNOWN disposable class refuses", document, "is UNKNOWN, not ABSENT")
+    refuses_with(
+        "an UNKNOWN disposable class refuses",
+        document,
+        "is UNKNOWN; the release policy requires ABSENT",
+    )
 
     present = evidence_document("aws")
     present["classes"][0]["state"] = "PRESENT"
     document = verdict(aws=teardown("aws", document=present))
-    refuses_with("a PRESENT disposable class refuses", document, "is PRESENT, not ABSENT")
+    refuses_with(
+        "a PRESENT disposable class refuses",
+        document,
+        "is PRESENT; the release policy requires ABSENT",
+    )
 
     missing_durable = evidence_document("aws")
-    missing_durable["classes"][2]["state"] = "ABSENT"
+    durable = next(row for row in missing_durable["classes"] if row["expectation"] == "present")
+    durable["state"] = "ABSENT"
     document = verdict(aws=teardown("aws", document=missing_durable))
-    refuses_with("an absent durable prerequisite refuses", document, "is ABSENT, not PRESENT")
+    refuses_with(
+        "an absent durable prerequisite refuses",
+        document,
+        "is ABSENT; the release policy requires PRESENT",
+    )
+
+    unknown_policy = evidence_document("aws")
+    unknown_policy["policy"] = "sol-teardown-v999"
+    document = verdict(aws=teardown("aws", document=unknown_policy))
+    refuses_with("evidence under an unknown policy refuses", document, "not the release policy")
+
+    missing_policy = evidence_document("aws")
+    del missing_policy["policy"]
+    document = verdict(aws=teardown("aws", document=missing_policy))
+    refuses_with("evidence without a policy identity refuses", document, "names no teardown policy")
 
     not_absent = evidence_document("aws")
     not_absent["verdict"] = "NOT ABSENT"
@@ -328,7 +422,11 @@ def test_teardown_evidence() -> None:
     wrong_expectation = evidence_document("aws")
     wrong_expectation["classes"][0]["expectation"] = "maybe"
     document = verdict(aws=teardown("aws", document=wrong_expectation))
-    refuses_with("an invalid expectation refuses", document, "has expectation 'maybe'")
+    refuses_with(
+        "an invalid expectation refuses",
+        document,
+        "declares expectation 'maybe'; the release policy requires 'absent'",
+    )
 
     wrong_state = evidence_document("aws")
     wrong_state["classes"][0]["state"] = "GONE"
@@ -340,6 +438,24 @@ def test_teardown_evidence() -> None:
     with open(os.path.join(EVIDENCE_DIR, altered_entry["evidence"]["path"]), "wb") as handle:
         handle.write(b"{}")
     refuses_with("evidence altered after the claim was written refuses", altered_document, "has sha256:")
+
+
+def test_policy_file() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        bad = os.path.join(directory, "bad-policy.json")
+        with open(bad, "w", encoding="utf-8") as handle:
+            json.dump({"schema": 1}, handle)
+        reasons = promotion.decide(CANDIDATE, verdict(), EVIDENCE_DIR, policy_path=bad)
+        check(
+            "a malformed release policy refuses",
+            bool(reasons) and any("release teardown policy" in reason for reason in reasons),
+        )
+        missing = os.path.join(directory, "missing-policy.json")
+        reasons = promotion.decide(CANDIDATE, verdict(), EVIDENCE_DIR, policy_path=missing)
+        check(
+            "a missing release policy refuses",
+            bool(reasons) and any("release teardown policy" in reason for reason in reasons),
+        )
 
 
 def test_record() -> None:
@@ -502,6 +618,7 @@ def main() -> int:
         test_providers()
         test_rows()
         test_teardown_evidence()
+        test_policy_file()
         test_record()
         test_command_line()
     print(f"\n{checks - failures} passed, {failures} failed")

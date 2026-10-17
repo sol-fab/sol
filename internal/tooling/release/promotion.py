@@ -26,16 +26,23 @@ Qualification verdict:
                             "teardown": {
                               "absence_verdict": "pass",
                               "binding": {"provider": ..., "attempt": ...,
-                                          "target": ..., "cluster": ...},
+                                          "target": ..., "cluster": ...,
+                                          "scope": {"account": ..., "region": ...}},
                               "evidence": {"path": ..., "sha256": ...}}}}}
 
 Teardown evidence document (attached beside the verdict):
-  {"schema": 1, "provider": ..., "candidate": {...},
-   "attempt": ..., "target": ..., "scope": {"cluster": ..., ...},
+  {"schema": 1, "policy": "sol-teardown-v1", "provider": ..., "candidate": {...},
+   "attempt": ..., "target": ..., "scope": {"cluster": ..., "account": ...,
+   "region": ..., ...},
    "required_classes": [...],
    "classes": [{"class": ..., "expectation": "absent"|"present",
                 "state": "ABSENT"|"PRESENT"|"UNKNOWN", ...}],
    "verdict": "ABSENT"|"NOT ABSENT"}
+
+The required class set and each class's disposition come from
+`teardown-policy.v1.json`, not from the evidence document. The document's
+`policy` must name the policy this gate loads; a truncated or reclassified
+document is refused even when its digest and internal classes are consistent.
 
 Usage:
     promotion.py record --version V --revision R --bundle PATH
@@ -82,6 +89,64 @@ def load(path: str) -> object:
         raise InputError(f"{path}: not found") from exc
     except json.JSONDecodeError as exc:
         raise InputError(f"{path}: not JSON: {exc}") from exc
+
+
+TEARDOWN_POLICY_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "teardown-policy.v1.json"
+)
+
+
+def load_teardown_policy(path: str | None = None) -> dict:
+    """Load the versioned release teardown policy.
+
+    The policy, not the evidence document, decides which resource classes a
+    candidate's teardown must cover and whether each must be absent or present.
+    It is a reviewed release artefact; the producer only reports observations.
+    """
+    path = path or TEARDOWN_POLICY_PATH
+    document = load(path)
+    if not isinstance(document, dict):
+        raise InputError(f"{path}: the teardown policy is not a JSON object")
+    if document.get("schema") != 1:
+        raise InputError(f"{path}: the teardown policy schema is not 1")
+    if not nonempty(document.get("policy")):
+        raise InputError(f"{path}: the teardown policy has no name")
+    providers = document.get("providers")
+    if not isinstance(providers, dict):
+        raise InputError(f"{path}: the teardown policy names no providers")
+    for provider in REQUIRED_PROVIDERS:
+        entry = providers.get(provider)
+        if not isinstance(entry, dict):
+            raise InputError(f"{path}: the teardown policy has no {provider} entry")
+        fields = entry.get("scope_fields")
+        if (
+            not isinstance(fields, list)
+            or not fields
+            or not all(nonempty(field) for field in fields)
+            or len(set(fields)) != len(fields)
+        ):
+            raise InputError(f"{path}: the {provider} policy names no usable scope fields")
+        classes = entry.get("classes")
+        if not isinstance(classes, list) or not classes:
+            raise InputError(f"{path}: the {provider} policy names no classes")
+        seen: set[str] = set()
+        for row in classes:
+            if not isinstance(row, dict):
+                raise InputError(f"{path}: a {provider} class is not an object")
+            name = row.get("class")
+            expectation = row.get("expectation")
+            if not nonempty(name) or expectation not in EVIDENCE_EXPECTATIONS:
+                raise InputError(f"{path}: the {provider} policy has an invalid class row")
+            if name in seen:
+                raise InputError(f"{path}: the {provider} policy repeats class {name!r}")
+            seen.add(name)
+    return document
+
+
+def policy_provider(policy: dict, provider: str) -> tuple[dict[str, str], list[str]]:
+    entry = policy["providers"][provider]
+    classes = {row["class"]: row["expectation"] for row in entry["classes"]}
+    return classes, list(entry["scope_fields"])
 
 
 def record(version: str, revision: str, bundle: str, runner_image: str) -> dict:
@@ -146,13 +211,17 @@ def decide(
     verdict: object | None,
     directory: object,
     required_providers=REQUIRED_PROVIDERS,
+    policy_path: str | None = None,
 ) -> list[str]:
     """Return the reasons this candidate may not be promoted; empty means eligible.
 
     `directory` is where the evidence attached to the verdict lives. A teardown
     claim is promotion-eligible only when it names a file there whose bytes,
-    candidate/provider/attempt/target binding, class coverage and own verdict
-    all verify; `absence_verdict: "pass"` alone is not enough.
+    candidate/provider/attempt/target/scope binding, policy class coverage and
+    own verdict all verify; `absence_verdict: "pass"` alone is not enough.
+
+    The required class set and each class's expected disposition come from the
+    versioned release teardown policy, not from the evidence document.
     """
     if not isinstance(candidate, dict):
         return ["the candidate record is not a JSON object"]
@@ -186,9 +255,14 @@ def decide(
     if not isinstance(directory, str) or directory == "":
         reasons.append("no attached evidence directory was supplied")
         return reasons
+    try:
+        policy = load_teardown_policy(policy_path)
+    except InputError as error:
+        reasons.append(f"the release teardown policy is not usable: {error}")
+        return reasons
     for provider in required_providers:
         reasons.extend(
-            provider_reasons(provider, providers.get(provider), candidate, directory)
+            provider_reasons(provider, providers.get(provider), candidate, directory, policy)
         )
     return reasons
 
@@ -198,15 +272,15 @@ def nonempty(value: object) -> bool:
 
 
 def verify_teardown(
-    provider: str, entry: object, candidate: dict, directory: str
+    provider: str, entry: object, candidate: dict, directory: str, policy: dict
 ) -> list[str]:
     """Return the reasons this provider's teardown claim is not verified.
 
     Only the recorded evidence is read. This function never observes the
-    provider, and it does not reconstruct the provider's inventory: the
-    producer owns the class universe; this gate verifies that the document is
-    complete against the universe it declares and that every recorded state is
-    terminal.
+    provider. The release teardown policy decides the required class set and
+    each class's expected disposition; the evidence document only reports what
+    was observed. A self-consistent document that omits policy classes, or
+    reclassifies a disposable class as durable, is refused.
     """
     if not isinstance(entry, dict):
         return [f"no {provider} qualification verdict"]
@@ -215,6 +289,10 @@ def verify_teardown(
         return [f"the {provider} verdict has no teardown result"]
     if teardown.get("absence_verdict") != "pass":
         return [f"the {provider} verdict has no independently observed passing absence result"]
+    try:
+        expected, scope_fields = policy_provider(policy, provider)
+    except KeyError:
+        return [f"the release teardown policy has no {provider} class contract"]
 
     reasons: list[str] = []
     binding = teardown.get("binding")
@@ -228,6 +306,13 @@ def verify_teardown(
             f"the {provider} teardown binding names provider {binding.get('provider')!r}, "
             f"not {provider!r}"
         )
+    binding_scope = binding.get("scope")
+    if not isinstance(binding_scope, dict):
+        reasons.append(f"the {provider} teardown binding names no provider scope")
+        binding_scope = {}
+    for field in scope_fields:
+        if not nonempty(binding_scope.get(field)):
+            reasons.append(f"the {provider} teardown binding has no {field!r} scope")
 
     evidence = teardown.get("evidence")
     if not isinstance(evidence, dict):
@@ -299,8 +384,16 @@ def verify_teardown(
             f"the {provider} teardown evidence names provider "
             f"{document.get('provider')!r}, not {provider!r}"
         )
+    if not nonempty(document.get("policy")):
+        reasons.append(f"the {provider} teardown evidence names no teardown policy")
+    elif document.get("policy") != policy.get("policy"):
+        reasons.append(
+            f"the {provider} teardown evidence names policy {document.get('policy')!r}, "
+            f"not the release policy {policy.get('policy')!r}"
+        )
     scope = document.get("scope")
-    scope_cluster = scope.get("cluster") if isinstance(scope, dict) else None
+    evidence_scope = scope if isinstance(scope, dict) else {}
+    scope_cluster = evidence_scope.get("cluster")
     observed = {
         "attempt": document.get("attempt"),
         "target": document.get("target"),
@@ -314,6 +407,13 @@ def verify_teardown(
             )
     if not nonempty(scope_cluster):
         reasons.append(f"the {provider} teardown evidence records no cluster scope")
+    for field in scope_fields:
+        if evidence_scope.get(field) != binding_scope.get(field):
+            reasons.append(
+                f"the {provider} teardown evidence binds {field} "
+                f"{evidence_scope.get(field)!r}, not the claim's "
+                f"{binding_scope.get(field)!r}"
+            )
     claimed_candidate = document.get("candidate")
     if not isinstance(claimed_candidate, dict) or identity(claimed_candidate) != identity(
         candidate
@@ -330,6 +430,21 @@ def verify_teardown(
         required = []
     elif len(set(required)) != len(required):
         reasons.append(f"the {provider} teardown evidence repeats a required class")
+    if required:
+        declared = set(required)
+        missing_declared = [name for name in expected if name not in declared]
+        extra_declared = [name for name in required if name not in expected]
+        if missing_declared:
+            reasons.append(
+                f"the {provider} teardown evidence declares an incomplete required "
+                f"class universe; the release policy requires: "
+                f"{', '.join(missing_declared)}"
+            )
+        if extra_declared:
+            reasons.append(
+                f"the {provider} teardown evidence declares classes the release "
+                f"policy does not require: {', '.join(extra_declared)}"
+            )
 
     classes = document.get("classes")
     if not isinstance(classes, list) or not classes:
@@ -352,32 +467,41 @@ def verify_teardown(
             )
             continue
         seen[name] = row
+        if name not in expected:
+            continue
         expectation = row.get("expectation")
         state = row.get("state")
-        if expectation not in EVIDENCE_EXPECTATIONS:
+        policy_expectation = expected[name]
+        if expectation != policy_expectation:
             reasons.append(
-                f"the {provider} teardown class {name!r} has expectation {expectation!r}"
+                f"the {provider} teardown class {name!r} declares expectation "
+                f"{expectation!r}; the release policy requires {policy_expectation!r}"
             )
         if state not in EVIDENCE_STATES:
             reasons.append(f"the {provider} teardown class {name!r} has state {state!r}")
-        elif expectation == "absent" and state != "ABSENT":
-            reasons.append(f"the {provider} teardown class {name!r} is {state}, not ABSENT")
-        elif expectation == "present" and state != "PRESENT":
-            reasons.append(f"the {provider} teardown class {name!r} is {state}, not PRESENT")
+        elif policy_expectation == "absent" and state != "ABSENT":
+            reasons.append(
+                f"the {provider} teardown class {name!r} is {state}; "
+                f"the release policy requires ABSENT"
+            )
+        elif policy_expectation == "present" and state != "PRESENT":
+            reasons.append(
+                f"the {provider} teardown class {name!r} is {state}; "
+                f"the release policy requires PRESENT"
+            )
 
-    if isinstance(required, list) and isinstance(classes, list):
-        missing = [name for name in required if name not in seen]
-        extra = [name for name in seen if name not in required]
-        if missing:
-            reasons.append(
-                f"the {provider} teardown evidence does not observe required class(es): "
-                f"{', '.join(missing)}"
-            )
-        if extra:
-            reasons.append(
-                f"the {provider} teardown evidence observes undeclared class(es): "
-                f"{', '.join(extra)}"
-            )
+    missing = [name for name in expected if name not in seen]
+    extra = [name for name in seen if name not in expected]
+    if missing:
+        reasons.append(
+            f"the {provider} teardown evidence does not observe required class(es): "
+            f"{', '.join(missing)}"
+        )
+    if extra:
+        reasons.append(
+            f"the {provider} teardown evidence observes class(es) the release policy "
+            f"does not require: {', '.join(extra)}"
+        )
     if document.get("verdict") != "ABSENT":
         reasons.append(
             f"the {provider} teardown evidence records verdict "
@@ -387,14 +511,14 @@ def verify_teardown(
 
 
 def provider_reasons(
-    provider: str, entry: object, candidate: dict, directory: str
+    provider: str, entry: object, candidate: dict, directory: str, policy: dict
 ) -> list[str]:
     if not isinstance(entry, dict):
         return [f"no {provider} qualification verdict"]
     reasons = []
     if entry.get("verdict") != "pass":
         reasons.append(f"the {provider} verdict is {entry.get('verdict')!r}, not 'pass'")
-    reasons.extend(verify_teardown(provider, entry, candidate, directory))
+    reasons.extend(verify_teardown(provider, entry, candidate, directory, policy))
     required = entry.get("required_rows")
     if not isinstance(required, list) or not required:
         reasons.append(f"the {provider} verdict names no release-blocking row set")
