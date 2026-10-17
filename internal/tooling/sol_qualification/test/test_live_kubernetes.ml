@@ -657,6 +657,211 @@ let product_execution
          scan root))
 ;;
 
+(* The launcher asked for a receipt but supplied a descriptor the product refuses.
+   The product must still submit, wait and clean up, emit no execution locator, and
+   the qualification side must fail closed rather than evaluate the CA claim. *)
+let unusable_requested_channel_fails_closed () =
+  let mutate world =
+    set
+      "configmaps"
+      (str (Filename.concat (Sys.getcwd ()) "kubernetes/migration-configmap.json"))
+      world
+  in
+  with_fixture mutate (fun root ctx run _ obligations recorder ->
+    let parent, channel = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+    let refused_read, refused_write = Unix.pipe ~cloexec:true () in
+    let pid = Unix.fork () in
+    if pid = 0
+    then (
+      (* The launcher socket is never the product's stdin: the product is handed a
+         pipe, which [prepare] refuses before any capture is attempted. *)
+      Unix.close parent;
+      Unix.close channel;
+      Unix.dup2 refused_read Unix.stdin;
+      Unix.close refused_read;
+      Unix.close refused_write;
+      Unix.putenv M.environment (String.make 64 'b');
+      let code =
+        match
+          J.submit
+            ~ctx
+            ~namespace:"database-system"
+            ~name_prefix:"sol-migrate"
+            ~label:""
+            ~image:"fixture.invalid/migrate"
+            ~args:[ "migrate"; "apply" ]
+            ~files:[ "0001.sql", "select 1" ]
+            ~ddl_creds_name:"fixture-ddl"
+            ~ca_configmap:"declared-ledger-ca"
+            ~execution_target:"aws.staging"
+            ()
+        with
+        | Error _ -> 1
+        | Ok job ->
+          let outcome = J.wait ~ctx ~interval_s:0. ~attempts:1 job in
+          J.cleanup ~ctx job;
+          if outcome = J.Succeeded then 0 else 2
+      in
+      Unix._exit code);
+    Unix.close refused_read;
+    Unix.close refused_write;
+    Unix.close channel;
+    Fun.protect
+      ~finally:(fun () ->
+        try Unix.close parent with
+        | Unix.Unix_error _ -> ())
+      (fun () ->
+         check
+           (Result.is_error (M.receive ~timeout_s:5. parent))
+           "unusable channel produced an execution receipt";
+         let _, status = Unix.waitpid [] pid in
+         check
+           (status = Unix.WEXITED 0)
+           "unusable channel suppressed the ordinary migration lifecycle";
+         let calls = Yojson.Safe.to_string (json (root ^ "/calls.json")) in
+         check (Sol_cli_string.contains ~needle:"delete" calls) "cleanup skipped";
+         (* With no execution locator the migration obligation is accounted for but
+            cannot be evaluated, and the assessment cannot seal. *)
+         let outcomes =
+           C.observe_migrations
+             ~directory:(root ^ "/evidence")
+             ~run
+             ~obligations
+             ~recorder
+             ~read:(fun _ -> assert false)
+             ~execution:(fun _ ->
+               Error
+                 E.
+                   { stage = "migration execution"
+                   ; diagnostic = "no execution receipt established"
+                   })
+           |> get
+         in
+         check (List.length outcomes = 1) "migration obligation omitted";
+         List.iter
+           (fun (o : C.outcome) ->
+              match o.result with
+              | Error _ -> ()
+              | Ok recorded ->
+                check
+                  (not (pass recorded.verdict.decision))
+                  "missing execution receipt was evaluated as PASS")
+           outcomes;
+         (match
+            E.seal
+              recorder
+              ~obligations
+              ~requests:(List.map D.plan (D.instances obligations))
+              ~verdicts:[]
+              ~captures:[]
+          with
+          | Error _ -> ()
+          | Ok _ -> Alcotest.fail "assessment sealed without an execution receipt");
+         scan root))
+;;
+
+(* An interruption between submission and durable receipt capture leaves the
+   migration claim unestablished. A later assessment must not substitute an
+   execution identity inferred from the Job naming convention. *)
+let interrupted_receipt_rejects_reconstruction () =
+  let armed = ref false in
+  let fault boundary =
+    if !armed && boundary = E.Temp_written
+    then raise (Sys_error "migration receipt persistence interrupted")
+  in
+  let mutate world =
+    set
+      "configmaps"
+      (str (Filename.concat (Sys.getcwd ()) "kubernetes/migration-configmap.json"))
+      world
+  in
+  with_fixture ~fault mutate (fun root _ctx run _ obligations recorder ->
+    let requirement =
+      List.find_map
+        (fun i ->
+           match D.plan i with
+           | D.Migration_ca_delivery requirement -> Some requirement
+           | _ -> None)
+        (D.instances obligations)
+      |> Option.get
+    in
+    let now = int_of_float (Unix.gettimeofday ()) in
+    let context =
+      { D.target
+      ; verified_at = now
+      ; started_at = now
+      ; finished_at = now
+      ; expires_at = Some (now + 300)
+      }
+    in
+    armed := true;
+    let interrupted =
+      C.Fixture.capture_execution
+        recorder
+        requirement
+        ~context
+        { D.namespace = "database-system"
+        ; name = "sol-migrate-0000000000000"
+        ; uid = "execution-uid-42"
+        }
+    in
+    check (Result.is_error interrupted) "interrupted capture persisted a receipt";
+    armed := false;
+    let evaluated execution =
+      C.observe_migrations
+        ~directory:(root ^ "/evidence")
+        ~run
+        ~obligations
+        ~recorder
+        ~read:(fun _ -> assert false)
+        ~execution
+      |> get
+    in
+    let outcome_is_not_pass (o : C.outcome) =
+      match o.result with
+      | Error _ -> ()
+      | Ok recorded ->
+        check
+          (not (pass recorded.verdict.decision))
+          "an unestablished execution produced a PASS"
+    in
+    let without_receipt =
+      evaluated (fun _ ->
+        Error E.{ stage = "migration execution"; diagnostic = "no durable receipt" })
+    in
+    check (List.length without_receipt = 1) "migration obligation omitted";
+    List.iter outcome_is_not_pass without_receipt;
+    (* A locator reconstructed from the naming convention carries no submission UID,
+       so it cannot be decoded into a satisfying evaluation. *)
+    (match
+       C.Fixture.capture_execution
+         recorder
+         requirement
+         ~context
+         { D.namespace = "database-system"; name = "sol-migrate-0000000000000"; uid = "" }
+     with
+     | Error _ -> ()
+     | Ok reference -> List.iter outcome_is_not_pass (evaluated (fun _ -> Ok reference)));
+    E.close recorder;
+    let reopened =
+      E.open_store ~directory:(root ^ "/evidence") ~run ~secrets:[] () |> stored
+    in
+    Fun.protect
+      ~finally:(fun () -> E.close reopened)
+      (fun () ->
+         (match
+            E.seal
+              reopened
+              ~obligations
+              ~requests:(List.map D.plan (D.instances obligations))
+              ~verdicts:[]
+              ~captures:[]
+          with
+          | Error _ -> ()
+          | Ok _ -> Alcotest.fail "assessment sealed without a durable migration receipt");
+         scan root))
+;;
+
 let stalled_channel () =
   let left, right = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Fun.protect
@@ -843,6 +1048,12 @@ let () =
         ; ( "capture unavailable still permits normal cleanup"
           , `Quick
           , product_execution ~capture_failure:true Fun.id )
+        ; ( "unusable requested receipt channel fails closed"
+          , `Quick
+          , unusable_requested_channel_fails_closed )
+        ; ( "interrupted receipt rejects name reconstruction"
+          , `Quick
+          , interrupted_receipt_rejects_reconstruction )
         ; "stalled receipt peer respects deadline", `Quick, stalled_channel
         ; "private channel arming guards the descriptor", `Quick, channel_arming
         ; "Forbidden never absence", `Quick, test_auth_failure_classification
