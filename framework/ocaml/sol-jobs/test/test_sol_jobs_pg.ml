@@ -1117,11 +1117,219 @@ let test_renewal_error_does_not_mean_claim_loss () =
       (Sol_runtime.contains_substring ~needle:"lease lost" err))
 ;;
 
+let await_active_query env pool prefix =
+  let query =
+    Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.bool)
+      "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND \
+       state='active' AND query LIKE ? AND wait_event_type='Lock')"
+  in
+  let rec wait () =
+    match Pg_db.find pool query (prefix ^ "%") with
+    | Ok (Some true) -> ()
+    | Ok _ ->
+      Eio.Time.sleep env#clock 0.01;
+      wait ()
+    | Error e -> Windtrap.fail (Pg_error.to_string e)
+  in
+  wait ()
+;;
+
+let test_release_cannot_clear_a_newer_claim () =
+  with_pool ~pool_size:4 (fun env pool ->
+    List.iter (exec_sql pool) ddl;
+    enqueue_slow pool;
+    exec_sql
+      pool
+      "CREATE FUNCTION pause_first_claim() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN \
+       PERFORM pg_advisory_xact_lock(1518001); RETURN NEW; END $$";
+    exec_sql
+      pool
+      "CREATE TRIGGER pause_first_claim BEFORE UPDATE ON sol_jobs FOR EACH ROW WHEN \
+       (NEW.attempts=1) EXECUTE FUNCTION pause_first_claim()";
+    let stop, stop_r = Eio.Promise.create () in
+    let handled = ref false in
+    (Slow.on_handle
+     := fun () ->
+          handled := true;
+          Ok ());
+    Eio.Time.with_timeout_exn env#clock 5.0 (fun () ->
+      Eio.Switch.run (fun sw ->
+        let tasks =
+          Pg_db.transaction pool (fun tx ->
+            let query =
+              Caqti_request.Infix.(Caqti_type.unit ->? Caqti_type.int)
+                "SELECT 1 FROM pg_advisory_xact_lock(1518001)"
+            in
+            match Pg_db.find tx query () with
+            | Error e -> Error e
+            | Ok _ ->
+              let worker =
+                Eio.Fiber.fork_promise ~sw (fun () -> run_slow ~stop env pool)
+              in
+              await_active_query env pool "WITH candidate AS";
+              Eio.Promise.resolve stop_r ();
+              let newer =
+                Eio.Fiber.fork_promise ~sw (fun () ->
+                  exec_sql
+                    pool
+                    "UPDATE sol_jobs SET attempts=attempts+1, \
+                     locked_until=now()+interval '1 hour'")
+              in
+              await_active_query env pool "UPDATE sol_jobs SET attempts=attempts+1";
+              Ok (worker, newer))
+        in
+        match tasks with
+        | Error e -> Windtrap.fail (Pg_error.to_string e)
+        | Ok (worker, newer) ->
+          Eio.Promise.await_exn worker;
+          Eio.Promise.await_exn newer));
+    Windtrap.equal Windtrap.bool false !handled;
+    Windtrap.equal
+      (Windtrap.list
+         (Windtrap.pair
+            Windtrap.string
+            (Windtrap.triple Windtrap.int Windtrap.bool Windtrap.bool)))
+      ~msg:"fenced pre-start release preserved the newer generation and lease"
+      [ "pending", (2, true, false) ]
+      (lease_state pool))
+;;
+
+let test_repeated_prestart_release_exhausts_claim_budget () =
+  with_pool ~pool_size:3 (fun env pool ->
+    List.iter (exec_sql pool) ddl;
+    enqueue_slow pool;
+    exec_sql
+      pool
+      "CREATE FUNCTION pause_claim() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN \
+       PERFORM pg_advisory_xact_lock(1518002); RETURN NEW; END $$";
+    exec_sql
+      pool
+      "CREATE TRIGGER pause_claim BEFORE UPDATE ON sol_jobs FOR EACH ROW WHEN \
+       (NEW.attempts > OLD.attempts) EXECUTE FUNCTION pause_claim()";
+    let handled = ref 0 in
+    (Slow.on_handle
+     := fun () ->
+          incr handled;
+          Ok ());
+    let policy = { Sol_jobs.default_retry_policy with max_attempts = 2 } in
+    Eio.Time.with_timeout_exn env#clock 8.0 (fun () ->
+      List.iter
+        (fun expected ->
+           Eio.Switch.run (fun sw ->
+             let stop, stop_r = Eio.Promise.create () in
+             let worker =
+               Pg_db.transaction pool (fun tx ->
+                 let query =
+                   Caqti_request.Infix.(Caqti_type.unit ->? Caqti_type.int)
+                     "SELECT 1 FROM pg_advisory_xact_lock(1518002)"
+                 in
+                 match Pg_db.find tx query () with
+                 | Error e -> Error e
+                 | Ok _ ->
+                   let worker =
+                     Eio.Fiber.fork_promise ~sw (fun () ->
+                       run_slow ~retry_policy:policy ~stop env pool)
+                   in
+                   await_active_query env pool "WITH candidate AS";
+                   Eio.Promise.resolve stop_r ();
+                   Ok worker)
+             in
+             match worker with
+             | Error e -> Windtrap.fail (Pg_error.to_string e)
+             | Ok worker -> Eio.Promise.await_exn worker);
+           Windtrap.equal
+             (Windtrap.list
+                (Windtrap.pair
+                   Windtrap.string
+                   (Windtrap.triple Windtrap.int Windtrap.bool Windtrap.bool)))
+             [ "pending", (expected, false, true) ]
+             (lease_state pool))
+        [ 1; 2 ];
+      run_slow ~retry_policy:policy ~max_jobs:1 env pool);
+    Windtrap.equal
+      Windtrap.int
+      ~msg:"no released generation entered the handler"
+      0
+      !handled;
+    Windtrap.equal
+      (Windtrap.list (Windtrap.triple Windtrap.string Windtrap.string Windtrap.int))
+      [ "slow", "failed", 2 ]
+      (rows pool))
+;;
+
+let test_released_claim_is_immediately_reclaimable_with_larger_token () =
+  with_pool ~pool_size:3 (fun env pool ->
+    List.iter (exec_sql pool) ddl;
+    enqueue_slow pool;
+    exec_sql
+      pool
+      "CREATE FUNCTION pause_claim() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN \
+       PERFORM pg_advisory_xact_lock(1518003); RETURN NEW; END $$";
+    exec_sql
+      pool
+      "CREATE TRIGGER pause_claim BEFORE UPDATE ON sol_jobs FOR EACH ROW WHEN \
+       (NEW.attempts=1) EXECUTE FUNCTION pause_claim()";
+    let handled = ref 0 in
+    (Slow.on_handle
+     := fun () ->
+          incr handled;
+          Ok ());
+    Eio.Time.with_timeout_exn env#clock 5.0 (fun () ->
+      Eio.Switch.run (fun sw ->
+        let stop, stop_r = Eio.Promise.create () in
+        let worker =
+          Pg_db.transaction pool (fun tx ->
+            let query =
+              Caqti_request.Infix.(Caqti_type.unit ->? Caqti_type.int)
+                "SELECT 1 FROM pg_advisory_xact_lock(1518003)"
+            in
+            match Pg_db.find tx query () with
+            | Error e -> Error e
+            | Ok _ ->
+              let worker =
+                Eio.Fiber.fork_promise ~sw (fun () ->
+                  run_slow ~stop ~lease_s:300.0 env pool)
+              in
+              await_active_query env pool "WITH candidate AS";
+              Eio.Promise.resolve stop_r ();
+              Ok worker)
+        in
+        match worker with
+        | Error e -> Windtrap.fail (Pg_error.to_string e)
+        | Ok worker -> Eio.Promise.await_exn worker);
+      Windtrap.equal Windtrap.int 0 !handled;
+      Windtrap.equal
+        (Windtrap.list
+           (Windtrap.pair
+              Windtrap.string
+              (Windtrap.triple Windtrap.int Windtrap.bool Windtrap.bool)))
+        [ "pending", (1, false, true) ]
+        (lease_state pool);
+      run_slow ~max_jobs:1 env pool);
+    Windtrap.equal Windtrap.int 1 !handled;
+    Windtrap.equal
+      (Windtrap.list (Windtrap.triple Windtrap.string Windtrap.string Windtrap.int))
+      [ "slow", "completed", 2 ]
+      (rows pool))
+;;
+
 let () =
   Windtrap.run
     ~argv:[||]
     "sol_jobs_pg"
     [ Windtrap.group
+        "pre-handler shutdown release"
+        [ Windtrap.test
+            "release cannot clear newer claim"
+            test_release_cannot_clear_a_newer_claim
+        ; Windtrap.test
+            "repeated prestart releases exhaust budget"
+            test_repeated_prestart_release_exhausts_claim_budget
+        ; Windtrap.test
+            "released claim is immediately reclaimed with larger token"
+            test_released_claim_is_immediately_reclaimable_with_larger_token
+        ]
+    ; Windtrap.group
         "confirmed claim loss"
         [ Windtrap.test
             "loss cancels and joins even a handler returning late success"

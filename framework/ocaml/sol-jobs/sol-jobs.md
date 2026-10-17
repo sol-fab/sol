@@ -203,6 +203,14 @@ The same boundary validates every timing input before the first database read or
 
 Database trouble is loud (BUG-044). `run` reads the `sol_jobs` table before its first claim and returns `` Error (`Database msg) `` if it cannot — a missing migration is a startup error, not an idle-looking loop. A claim query that fails is logged (to `ot`, or to stderr without it) and retried every `poll_interval_s`; `max_claim_failures` consecutive failures (default `30`) end `run` with `` `Database ``, so a `-worker` whose database stays unreachable exits and is restarted visibly rather than polling in silence. Every other database failure the loop meets (a failed completion, retry or terminal mark) is logged the same way.
 
+## Shutdown at the pre-handler boundary
+
+The first SIGTERM/SIGINT or `stop` promise stops admission and drains an already active attempt with renewal. A second signal uses default process termination. If stop arrives while the claim query is in flight, the returned claim is checked again before decoding or handling. Only at this verified pre-handler boundary does the runner release the lease through the existing attempt-fenced retry statement, with zero delay and `worker stopped before starting handler`. It never begins executing that released attempt. Release failure leaves lease recovery in charge; a newer attempt makes release a no-op. This is a durable retry transition without a handler outcome.
+
+Attempt numbers are fencing generations, not handler-invocation counts. A pre-start release preserves the generation and consumes its attempt-budget slot. Never decrement the counter: reusing a token could authorize an older still-running holder. Repeated pre-start shutdowns can exhaust the budget and the next claim then marks the job failed without executing the handler. Avoiding that requires separate fencing and invocation counters; this library does not introduce those semantics.
+
+The default 300-second lease is a crash-recovery tradeoff. Choose leases with substantial headroom over expected event-loop stalls, database round trips and pool contention; renewal runs every third of the lease interval. Subsecond test leases are not practical production guidance. One local run with a 100ms test lease observed three executions and confirmed reclaims; why renewal missed that window was not instrumented. The regression now uses a 1.2-second lease and a 2-second handler, retaining a contender beyond the original expiry. That adjustment is test scheduling headroom, not a diagnosis or a universal safe minimum. Blocking handlers and prolonged database outages can lose ownership with any finite lease.
+
 ## Example: transactional enqueue
 
 ```ocaml

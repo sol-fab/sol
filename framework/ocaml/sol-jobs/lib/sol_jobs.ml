@@ -551,6 +551,22 @@ module Make (J : JOB) = struct
               count "failed" ~kind;
               record_terminal ();
               loop ~failures:0
+            | Ok (Some (id, kind, _payload, attempts, _)) when should_stop () ->
+              ignore
+                (transition
+                   ~id
+                   ~kind
+                   ~attempts
+                   ~action:"retry"
+                   (Pg_db.find
+                      pool
+                      retry_q
+                      ( 0.0
+                      , "worker stopped before starting handler"
+                      , id
+                      , attempts
+                      , J.workspace )));
+              loop ~failures:0
             | Ok (Some (id, kind, payload, attempts, _)) ->
               let t0 = Eio.Time.Mono.now env#mono_clock in
               let outcome =
