@@ -204,11 +204,12 @@ let renew_q =
 ;;
 
 let sweep_q =
-  Caqti_request.Infix.(Caqti_type.(t2 string float) ->. Caqti_type.unit)
+  Caqti_request.Infix.(Caqti_type.(t3 string string float) ->. Caqti_type.unit)
     (Printf.sprintf
        {|DELETE FROM %s
          WHERE status <> 'pending'
            AND workspace = ?
+           AND kind = ANY(string_to_array(?, ','))
            AND finished_at IS NOT NULL
            AND finished_at < now() - (?::float8 * interval '1 second')|}
        table)
@@ -327,7 +328,9 @@ module Make (J : JOB) = struct
               "sol-jobs: kind %S is not in J.kinds; nothing would claim it"
               kind))
     else (
-      match validate_workspace J.workspace with
+      match
+        Result.bind (validate_kinds J.kinds) (fun () -> validate_workspace J.workspace)
+      with
       | Error (`Config msg) -> Error (Pg_error.Query_error ("sol-jobs: " ^ msg))
       | Error (`Database msg) -> Error (Pg_error.Query_error ("sol-jobs: " ^ msg))
       | Ok () ->
@@ -450,7 +453,9 @@ module Make (J : JOB) = struct
           let now = Eio.Time.now env#clock in
           if now -. !last_sweep >= sweep_interval_s
           then (
-            (match Pg_db.exec pool sweep_q (J.workspace, terminal_retention_s) with
+            (match
+               Pg_db.exec pool sweep_q (J.workspace, kinds_param, terminal_retention_s)
+             with
              | Ok () -> ()
              | Error e ->
                log_warn
