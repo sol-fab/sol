@@ -6,12 +6,49 @@ module D = Qual_domain
 module M = Sol_cli_migration_execution
 module P = Sol_cli_process
 module J = Sol_cli_json
+module C = Qual_candidate
 
 type locator =
   { receipt : M.receipt
   ; context : D.read_context
   ; identity : D.job_identity
   }
+
+(* The product's claimed identity is not authority; it must agree with the
+   independently expected Kubernetes principal, cluster and endpoint, and the
+   locator must belong to this launcher and this requested target. *)
+let validate ~binding ~requested_target ~expected (receipt : M.receipt) =
+  if receipt.binding <> binding
+  then Error "execution receipt belongs to another launcher binding"
+  else if receipt.target <> requested_target
+  then Error "execution receipt names another requested target"
+  else if
+    receipt.principal <> expected.D.principal
+    || receipt.cluster <> expected.D.cluster
+    || receipt.endpoint <> expected.D.endpoint
+  then Error "execution receipt names another Kubernetes authority"
+  else Ok ()
+;;
+
+(* The launcher independently established [context] before handing the locator to
+   the consumer. It must describe the same authority and still be fresh; an
+   expired or unestablished context is refused here even though the downstream
+   evaluator also checks its own reads. *)
+let validate_context ~expected (context : D.read_context) =
+  let now = int_of_float (Unix.gettimeofday ()) in
+  if context.target <> expected
+  then Error "independent observation context names another Kubernetes authority"
+  else if context.verified_at < 0 || context.verified_at > now
+  then Error "independent observation context is not established"
+  else if context.finished_at < context.started_at
+  then Error "independent observation context timing is inconsistent"
+  else if now - context.verified_at > 300
+  then Error "independent observation context is stale"
+  else (
+    match context.expires_at with
+    | Some expires when expires > now -> Ok ()
+    | _ -> Error "independent observation context has expired")
+;;
 
 let canonical json =
   Sol_cli_database_contract_data.canonical json
@@ -34,9 +71,13 @@ let protocol_supported ~install =
   Ok (observed = expected)
 ;;
 
-(* Bounded reap. Only the launcher that spawned the product can reap it. A
-   completion timeout is reported by the caller's own supervision; it must exceed
-   the product's wait/cleanup window so an overdue kill cannot truncate cleanup. *)
+type completion =
+  | Completed
+  | Overdue
+
+(* Bounded reap. Only the launcher that spawned the product can reap it. An
+   overdue child is killed only as a last resort; the caller must report that
+   state as unestablished rather than as completed cleanup. *)
 let reap pid completion_timeout_s =
   let deadline = Unix.gettimeofday () +. completion_timeout_s in
   let rec loop () =
@@ -46,43 +87,94 @@ let reap pid completion_timeout_s =
       then (
         (try Unix.kill pid Sys.sigkill with
          | Unix.Unix_error _ -> ());
-        try ignore (Unix.waitpid [] pid) with
-        | Unix.Unix_error _ -> ())
+        (try ignore (Unix.waitpid [] pid) with
+         | Unix.Unix_error _ -> ());
+        Overdue)
       else (
         Unix.sleepf 0.05;
         loop ())
-    | _ -> ()
-    | exception Unix.Unix_error (Unix.ECHILD, _, _) -> ()
+    | _ -> Completed
+    | exception Unix.Unix_error (Unix.ECHILD, _, _) -> Completed
   in
   loop ()
 ;;
 
-let validate ~binding ~requested_target ~expected (receipt : M.receipt) =
-  if receipt.binding <> binding
-  then Error "execution receipt belongs to another launcher binding"
-  else if receipt.target <> requested_target
-  then Error "execution receipt names another requested target"
-  else if
-    receipt.principal <> expected.D.principal
-    || receipt.cluster <> expected.D.cluster
-    || receipt.endpoint <> expected.D.endpoint
-  then Error "execution receipt names another Kubernetes authority"
-  else Ok ()
-;;
+module Fixture = struct
+  (* Process boundary without candidate authority. Production callers must use
+     [run], which pins the verified candidate's own executable; this entry point
+     exists so the process/validation/timeout behaviour can be exercised
+     offline. *)
+  let run
+        ~program
+        ~workspace
+        ~requested_target
+        ~expected
+        ~binding
+        ~timeout_s
+        ~completion_timeout_s
+        ~establish
+        ~consume
+    =
+    let parent, channel = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+    let pid =
+      match Unix.fork () with
+      | 0 ->
+        (try
+           Unix.close parent;
+           Unix.dup2 channel Unix.stdin;
+           Unix.close channel;
+           Unix.putenv M.environment binding;
+           Unix.chdir workspace;
+           Unix.execv program [| program; "migrate"; "apply"; requested_target |]
+         with
+         | _ -> ());
+        Unix._exit 127
+      | pid -> pid
+    in
+    Unix.close channel;
+    let overdue = ref false in
+    let outcome =
+      Fun.protect
+        ~finally:(fun () ->
+          (* Release the product's existing wait/cleanup only after [consume] had
+             its observation window; never leave the child running. *)
+          ignore (M.acknowledge parent);
+          (try Unix.close parent with
+           | Unix.Unix_error _ -> ());
+          if reap pid completion_timeout_s = Overdue then overdue := true)
+        (fun () ->
+           let* message = M.receive ~timeout_s parent in
+           match message with
+           | M.Unavailable ->
+             Error "the launched candidate did not establish an execution receipt"
+           | M.Execution receipt ->
+             let* () = validate ~binding ~requested_target ~expected receipt in
+             let* context = establish () in
+             let* () = validate_context ~expected context in
+             consume
+               { receipt
+               ; context
+               ; identity =
+                   D.
+                     { namespace = receipt.namespace
+                     ; name = receipt.name
+                     ; uid = receipt.uid
+                     }
+               })
+    in
+    if !overdue
+    then
+      Error
+        (Printf.sprintf
+           "the launched migration execution did not finish within %.0fs; its cleanup is \
+            unestablished and remains the operator's responsibility"
+           completion_timeout_s)
+    else outcome
+  ;;
+end
 
-let run
-      ~install
-      ~workspace
-      ~requested_target
-      ~expected
-      ~binding
-      ~timeout_s
-      ~completion_timeout_s
-      ~establish
-      ~consume
-  =
-  (* A candidate that cannot produce the private receipt is refused before any
-     mutation, so an unlaunched execution can never be mistaken for a missing one. *)
+let run ~verified ~expected ~binding ~timeout_s ~completion_timeout_s ~establish ~consume =
+  let install = C.install verified in
   let* () =
     match protocol_supported ~install with
     | Ok true -> Ok ()
@@ -90,44 +182,14 @@ let run
       Error "the installed candidate does not advertise the execution-receipt protocol"
     | Error message -> Error message
   in
-  let program = Filename.concat install "bin/sol" in
-  let parent, channel = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
-  let pid =
-    match Unix.fork () with
-    | 0 ->
-      (try
-         Unix.close parent;
-         Unix.dup2 channel Unix.stdin;
-         Unix.close channel;
-         Unix.putenv M.environment binding;
-         Unix.chdir workspace;
-         Unix.execv program [| program; "migrate"; "apply"; requested_target |]
-       with
-       | _ -> ());
-      Unix._exit 127
-    | pid -> pid
-  in
-  Unix.close channel;
-  Fun.protect
-    ~finally:(fun () ->
-      (* Release the product's existing wait/cleanup only after [consume] had its
-         observation window; never leave the child running. *)
-      ignore (M.acknowledge parent);
-      (try Unix.close parent with
-       | Unix.Unix_error _ -> ());
-      reap pid completion_timeout_s)
-    (fun () ->
-       let* message = M.receive ~timeout_s parent in
-       match message with
-       | M.Unavailable ->
-         Error "the launched candidate did not establish an execution receipt"
-       | M.Execution receipt ->
-         let* () = validate ~binding ~requested_target ~expected receipt in
-         let* context = establish () in
-         consume
-           { receipt
-           ; context
-           ; identity =
-               D.{ namespace = receipt.namespace; name = receipt.name; uid = receipt.uid }
-           })
+  Fixture.run
+    ~program:(Filename.concat install "bin/sol")
+    ~workspace:(C.workspace verified)
+    ~requested_target:(C.expected verified).requested_target
+    ~expected
+    ~binding
+    ~timeout_s
+    ~completion_timeout_s
+    ~establish
+    ~consume
 ;;

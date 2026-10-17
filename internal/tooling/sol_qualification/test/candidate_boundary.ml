@@ -6,6 +6,7 @@ module B = Qual_candidate_obligations
 module E = Qual_evidence
 module K = Qual_kubernetes
 module CA = Qual_database_ca
+module MX = Qual_migration_execution
 
 let get = function
   | Ok x -> x
@@ -118,6 +119,46 @@ let read_good (prepared : B.t) (q : K.query) =
   { K.context
   ; result = K.Exited { code = 0; stdout = Yojson.Safe.to_string document; stderr = "" }
   }
+;;
+
+(* Offline launcher probe: uses the real verified-candidate handle so the
+   authority-bearing [Qual_migration_execution.run] path is exercised against the
+   candidate the Python fixture built, never an arbitrary installation path. *)
+let launcher_probe verified path =
+  let binding = String.make 64 'b' in
+  let now = int_of_float (Unix.gettimeofday ()) in
+  let context : D.read_context =
+    { target = kube
+    ; verified_at = now
+    ; started_at = now
+    ; finished_at = now
+    ; expires_at = Some (now + 300)
+    }
+  in
+  let outcome =
+    MX.run
+      ~verified
+      ~expected:kube
+      ~binding
+      ~timeout_s:10.
+      ~completion_timeout_s:10.
+      ~establish:(fun () -> Ok context)
+      ~consume:(fun locator ->
+        Ok (locator.MX.identity, locator.MX.receipt.Sol_cli_migration_execution.target))
+  in
+  let json =
+    match outcome with
+    | Error message -> obj [ "ok", `Bool false; "error", str message ]
+    | Ok (identity, target) ->
+      obj
+        [ "ok", `Bool true
+        ; "namespace", str identity.D.namespace
+        ; "name", str identity.D.name
+        ; "uid", str identity.D.uid
+        ; "target", str target
+        ]
+  in
+  Out_channel.with_open_text path (fun c -> output_string c (Yojson.Safe.to_string json))
 ;;
 
 let exercise ~scenario verified prepared directory =
@@ -372,6 +413,9 @@ let exercise ~scenario verified prepared directory =
        | Error _ -> ()
        | Ok r -> check (r.verdict.decision <> D.Pass) "failed provider command passed")
     bad;
+  (match Sys.getenv_opt "SOL_LAUNCHER_RESULT" with
+   | Some path -> launcher_probe verified path
+   | None -> ());
   E.close recorder
 ;;
 

@@ -1,7 +1,8 @@
 (* Qualification-owned launcher boundary. A fake installed candidate speaks the
    private receipt protocol so validation, the observation window and the release
-   of the product's own cleanup are exercised without a live provider. The real
-   product channel is covered by the CLI boundary in test_live_kubernetes.ml. *)
+   of the product's own cleanup are exercised without a live provider. The
+   authority-bearing [run] path is exercised against a real verified candidate in
+   test_candidate_boundary.py. *)
 module D = Qual_domain
 module Q = Qual_migration_execution
 
@@ -20,7 +21,7 @@ let write path text =
 
 let fake_sol =
   {|#!/usr/bin/env python3
-import json, os
+import json, os, time
 binding = os.environ["SOL_MIGRATION_EXECUTION_BINDING"]
 message = (
     {"schema": 1, "kind": "Unavailable"}
@@ -45,6 +46,8 @@ with open(os.environ["FAKE_BLOCKED_MARKER"], "w") as handle:
 ack = os.read(0, 64).decode().strip()
 with open(os.environ["FAKE_ACK_MARKER"], "w") as handle:
     handle.write(ack)
+if os.environ.get("FAKE_HANG_AFTER_ACK") == "1":
+    time.sleep(3600)
 |}
 ;;
 
@@ -78,6 +81,7 @@ let environment =
   ; "FAKE_ACK_MARKER"
   ; "FAKE_PROTOCOL"
   ; "FAKE_UNAVAILABLE"
+  ; "FAKE_HANG_AFTER_ACK"
   ; "SOL_MIGRATION_EXECUTION_BINDING"
   ]
 ;;
@@ -112,12 +116,13 @@ let with_install
        fn root)
 ;;
 
-let context : D.read_context =
-  { target = kube
-  ; verified_at = 1
-  ; started_at = 1
-  ; finished_at = 1
-  ; expires_at = Some 100
+let fresh_context () =
+  let now = int_of_float (Unix.gettimeofday ()) in
+  { D.target = kube
+  ; verified_at = now
+  ; started_at = now
+  ; finished_at = now
+  ; expires_at = Some (now + 300)
   }
 ;;
 
@@ -125,18 +130,20 @@ let launch
       ?(requested = target)
       ?(expected = kube)
       ?(launch_binding = binding)
+      ?context
+      ?(completion_timeout_s = 10.)
       root
       consume
   =
-  Q.run
-    ~install:(root ^ "/install")
+  Q.Fixture.run
+    ~program:(root ^ "/install/bin/sol")
     ~workspace:(root ^ "/workspace")
     ~requested_target:requested
     ~expected
     ~binding:launch_binding
     ~timeout_s:10.
-    ~completion_timeout_s:10.
-    ~establish:(fun () -> Ok context)
+    ~completion_timeout_s
+    ~establish:(fun () -> Ok (Option.value context ~default:(fresh_context ())))
     ~consume
 ;;
 
@@ -208,12 +215,75 @@ let rejects_other_authority () =
     acknowledged root)
 ;;
 
+let rejects_other_context_authority () =
+  with_install (fun root ->
+    let now = int_of_float (Unix.gettimeofday ()) in
+    let context =
+      { D.target = { kube with cluster = "another-cluster" }
+      ; verified_at = now
+      ; started_at = now
+      ; finished_at = now
+      ; expires_at = Some (now + 300)
+      }
+    in
+    let outcome = launch ~context root (fun _ -> Alcotest.fail "consume ran") in
+    check (Result.is_error outcome) "another observation authority was accepted";
+    acknowledged root)
+;;
+
+let rejects_expired_context () =
+  with_install (fun root ->
+    let now = int_of_float (Unix.gettimeofday ()) in
+    let context =
+      { D.target = kube
+      ; verified_at = now
+      ; started_at = now
+      ; finished_at = now
+      ; expires_at = Some (now - 1)
+      }
+    in
+    let outcome = launch ~context root (fun _ -> Alcotest.fail "consume ran") in
+    check (Result.is_error outcome) "an expired observation context was accepted";
+    acknowledged root)
+;;
+
+let rejects_stale_context () =
+  with_install (fun root ->
+    let now = int_of_float (Unix.gettimeofday ()) in
+    let context =
+      { D.target = kube
+      ; verified_at = now - 400
+      ; started_at = now - 400
+      ; finished_at = now - 400
+      ; expires_at = Some (now + 300)
+      }
+    in
+    let outcome = launch ~context root (fun _ -> Alcotest.fail "consume ran") in
+    check (Result.is_error outcome) "a stale observation context was accepted";
+    acknowledged root)
+;;
+
 let unavailable_is_not_a_receipt () =
   with_install (fun root ->
     Unix.putenv "FAKE_UNAVAILABLE" "1";
     let outcome = launch root (fun _ -> Alcotest.fail "consume ran") in
     check (Result.is_error outcome) "unavailable metadata was accepted as a receipt";
     acknowledged root)
+;;
+
+let overdue_child_is_unestablished () =
+  with_install (fun root ->
+    Unix.putenv "FAKE_HANG_AFTER_ACK" "1";
+    let outcome = launch ~completion_timeout_s:0.5 root (fun _ -> Ok 7) in
+    match outcome with
+    | Ok _ -> Alcotest.fail "an overdue child was reported as a completed capture"
+    | Error message ->
+      check
+        (Sol_cli_string.contains ~needle:"unestablished" message)
+        "overdue outcome is not explicitly unestablished";
+      check
+        (Sol_cli_string.contains ~needle:"cleanup" message)
+        "overdue outcome does not name the remaining cleanup responsibility")
 ;;
 
 let probes_the_bundled_protocol () =
@@ -229,17 +299,6 @@ let probes_the_bundled_protocol () =
     check
       (Result.is_error (Q.protocol_supported ~install:(root ^ "/install")))
       "a missing producer was accepted")
-;;
-
-let refuses_candidate_without_protocol () =
-  with_install ~producer:false (fun root ->
-    let outcome = launch root (fun _ -> Alcotest.fail "consume ran") in
-    check
-      (Result.is_error outcome)
-      "launched a candidate without the execution-receipt protocol";
-    check
-      (not (Sys.file_exists (root ^ "/blocked")))
-      "an unsupported candidate was still launched")
 ;;
 
 let () =
@@ -260,13 +319,25 @@ let () =
             `Quick
             rejects_other_authority
         ; Alcotest.test_case
+            "rejects another observation authority"
+            `Quick
+            rejects_other_context_authority
+        ; Alcotest.test_case
+            "rejects an expired observation context"
+            `Quick
+            rejects_expired_context
+        ; Alcotest.test_case
+            "rejects a stale observation context"
+            `Quick
+            rejects_stale_context
+        ; Alcotest.test_case
             "unavailable is not a receipt"
             `Quick
             unavailable_is_not_a_receipt
         ; Alcotest.test_case
-            "refuses a candidate without the protocol"
+            "an overdue child leaves the outcome unestablished"
             `Quick
-            refuses_candidate_without_protocol
+            overdue_child_is_unestablished
         ; Alcotest.test_case
             "probes the bundled protocol"
             `Quick
