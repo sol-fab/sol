@@ -660,9 +660,12 @@ aws_inventory() {
     --attempt "$ATTEMPT" \
     --target "$TARGET" \
     --state-key "$STATE_KEY" \
+    --candidate "$SOL_CANDIDATE" \
     >"$LOG_DIR/aws-inventory.stdout" 2>"$LOG_DIR/aws-inventory.err"; then
     say "the independent inventory does not read ABSENT; teardown is not complete"
     say "  evidence: $LOG_DIR/aws-inventory.txt and $LOG_DIR/aws-inventory-verdict.txt"
+    say "  structured verdict (promotion-eligible only with a candidate binding):"
+    say "    $LOG_DIR/aws-inventory-verdict.json"
     return 1
   fi
   say "the independent inventory reads ABSENT for every required disposable class"

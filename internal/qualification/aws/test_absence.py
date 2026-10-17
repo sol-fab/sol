@@ -26,6 +26,13 @@ CLUSTER = "qual-cluster"
 REGION = "us-east-1"
 ACCOUNT = "123456789012"
 
+CANDIDATE = {
+    "version": "v0.1.0-alpha.9",
+    "revision": "a" * 40,
+    "bundle_sha256": "b" * 64,
+    "runner_image": "ghcr.io/example/sol-migration-runner@sha256:" + "c" * 64,
+}
+
 RUNTIME = absence.Runtime(
     cluster=CLUSTER,
     region=REGION,
@@ -35,6 +42,7 @@ RUNTIME = absence.Runtime(
     attempt="attempt-1",
     target="qualreg/aws/us-east-1",
     state_key="sol/qualreg/aws/us-east-1/cloud.tfstate",
+    candidate=CANDIDATE,
 )
 
 CLUSTER_TAG = {"Key": f"kubernetes.io/cluster/{CLUSTER}", "Value": "owned"}
@@ -312,7 +320,15 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
         check("the verdict names every class", all(name in verdict for name in absence.RESIDUE_CLASSES))
         check("the verdict states absence", "verdict: ABSENT" in verdict)
         check("the inventory states its attribution limitations", "limitations:" in inventory and "attribution is by the target's declared identities" in inventory)
-        check("the structured verdict carries the same classes", [c["resource_class"] for c in document["classes"]] == absence.RESIDUE_CLASSES)
+        check("the structured verdict names its schema and provider", document["schema"] == 1 and document["provider"] == "aws")
+        check("the structured verdict names the candidate it was observed for", document["candidate"] == CANDIDATE)
+        check("the structured verdict binds the attempt and target", document["attempt"] == "attempt-1" and document["target"] == "qualreg/aws/us-east-1")
+        check("the structured verdict records the provider scope", document["scope"]["cluster"] == CLUSTER and document["scope"]["region"] == REGION and document["scope"]["account"] == ACCOUNT)
+        check("the structured verdict declares the required class universe", document["required_classes"] == absence.RESIDUE_CLASSES + ["durable-hosted-zone"])
+        check("the structured verdict carries the same disposable classes", [c["class"] for c in document["classes"] if c["expectation"] == "absent"] == absence.RESIDUE_CLASSES)
+        check("every disposable class expects absence", all(c["state"] == "ABSENT" for c in document["classes"] if c["expectation"] == "absent"))
+        check("the durable prerequisite expects presence", [c for c in document["classes"] if c["expectation"] == "present"][0]["state"] == "PRESENT")
+        check("the structured verdict states absence", document["verdict"] == "ABSENT")
 
     print("absence: the command runs end to end against a stub provider")
     with tempfile.TemporaryDirectory() as scratch:
@@ -349,6 +365,8 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
         )
         stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
         environment = dict(os.environ, PATH=f"{directory}:{os.environ['PATH']}", ACCOUNT=ACCOUNT)
+        candidate = directory / "candidate.json"
+        candidate.write_text(json.dumps(CANDIDATE))
         out = directory / "evidence"
         result = subprocess.run(
             [
@@ -365,6 +383,8 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
                 ACCOUNT,
                 "--registry-prefix",
                 "pluto",
+                "--candidate",
+                str(candidate),
             ],
             capture_output=True,
             text=True,
@@ -372,6 +392,11 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
         )
         check("a clean inventory exits 0", result.returncode == 0)
         check("and writes its verdict", (out / "aws-inventory-verdict.txt").is_file())
+        document = json.loads((out / "aws-inventory-verdict.json").read_text())
+        check(
+            "and its structured verdict names the candidate and provider",
+            document["candidate"] == CANDIDATE and document["provider"] == "aws",
+        )
 
         stub.write_text(
             "#!/bin/sh\n"
@@ -398,6 +423,8 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
                 ACCOUNT,
                 "--registry-prefix",
                 "pluto",
+                "--candidate",
+                str(candidate),
             ],
             capture_output=True,
             text=True,
@@ -405,6 +432,37 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
         )
         check("residue fails the command", result.returncode != 0)
         check("and the failing class is named", "rds-instance: PRESENT" in (out / "aws-inventory-verdict.txt").read_text())
+        document = json.loads((out / "aws-inventory-verdict.json").read_text())
+        check("and the structured verdict does not claim absence", document["verdict"] == "NOT ABSENT")
+        check(
+            "and the failing class is PRESENT in the structured verdict",
+            [c["state"] for c in document["classes"] if c["class"] == "rds-instance"] == ["PRESENT"],
+        )
+
+        bad_candidate = directory / "bad-candidate.json"
+        bad_candidate.write_text(json.dumps({"version": "v0.1.0-alpha.9"}))
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(pathlib.Path(__file__).resolve().parent / "absence.py"),
+                "collect",
+                "--dir",
+                str(directory / "bad-evidence"),
+                "--cluster",
+                CLUSTER,
+                "--region",
+                REGION,
+                "--account",
+                ACCOUNT,
+                "--candidate",
+                str(bad_candidate),
+            ],
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        check("a candidate without the full identity fails closed", result.returncode == 2)
+        check("and the error names the missing identity", "candidate document has no" in result.stderr)
 
     print(f"\n{checks - len(failures)} passed, {len(failures)} failed")
     return 1 if failures else 0
