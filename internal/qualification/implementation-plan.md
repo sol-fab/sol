@@ -176,8 +176,9 @@ the migration Job, or a neighbour's mount standing in for the workload's), #1424
 (target vs namespace), #1488 (UNKNOWN rendered as absence), #1499 (a recreated
 same-name Job satisfying the earlier execution) and #1469 (volume name standing in
 for the actual source). The shared volume/mount, absence, identity and legacy
-comparison fixtures already cover these; the adoption PR must point each one at the
-test that still fails when the guarantee is removed.
+comparison fixtures cover these. The legacy predicate is frozen at
+`internal/tooling/sol_qualification/test/comparison/legacy-aws-row.sh` as the
+offline comparison baseline only; the live row no longer contains it.
 
 
 The existing [migration submitter](../../cli/lib/deploy/sol_cli_migration_job.ml)

@@ -30,6 +30,7 @@
  (deps
   comparison/kubectl
   comparison/legacy.py
+  comparison/legacy-aws-row.sh
   ../../../qualification/aws/live-row.sh
   ../../../qualification/gcp/live-qual.sh
   ../../../../examples/pluto/sol.yml)
