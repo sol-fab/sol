@@ -80,6 +80,63 @@ let apply_doc ~ctx ~what doc =
   |> Result.join
 ;;
 
+(* This is the API submission response, not a later lookup of a potentially
+   replaced Job. Qualification separately observes its content and exact UID. *)
+let submitted_uid ~namespace ~name text =
+  let module J = Sol_cli_json in
+  let* json = J.decode ~what:"submitted migration Job" text in
+  let* json = Sol_cli_database_contract_data.canonical json in
+  let* uid = J.require ~what:"submitted Job" [ "metadata"; "uid" ] J.string json in
+  if
+    J.field [ "apiVersion" ] json <> `String "batch/v1"
+    || J.field [ "kind" ] json <> `String "Job"
+    || J.field [ "metadata"; "namespace" ] json <> `String namespace
+    || J.field [ "metadata"; "name" ] json <> `String name
+    || String.trim uid = ""
+  then Error "unestablished submitted migration Job identity"
+  else Ok uid
+;;
+
+let notify_execution message =
+  Sol_cli_migration_execution.notify message
+  |> Result.iter_error (fun _ ->
+    Sol_cli_report.warn
+      "Migration execution capture is unestablished; continuing normal Job wait and \
+       cleanup.")
+;;
+
+let record_submission ~ctx ~target ~binding ~before job output =
+  let receipt =
+    let* before =
+      before |> Result.map_error (fun _ -> "unestablished submission identity")
+    in
+    let* uid = submitted_uid ~namespace:job.namespace ~name:job.job_name output in
+    let* after =
+      Sol_cli_kube_identity.observe ~ctx
+      |> Result.map_error (fun _ -> "unestablished submission identity")
+    in
+    if not (Sol_cli_kube_identity.same before after)
+    then Error "submission authority changed"
+    else
+      Ok
+        Sol_cli_migration_execution.
+          { binding
+          ; target
+          ; namespace = job.namespace
+          ; name = job.job_name
+          ; uid
+          ; principal = after.principal
+          ; cluster = after.cluster
+          ; endpoint = after.endpoint
+          ; observed_at = int_of_float (Unix.gettimeofday ())
+          }
+  in
+  notify_execution
+    (match receipt with
+     | Ok receipt -> Sol_cli_migration_execution.Execution receipt
+     | Error _ -> Unavailable)
+;;
+
 let cleanup ~ctx job =
   let delete resource name =
     kubectl
@@ -126,6 +183,7 @@ let submit
       ~files
       ~ddl_creds_name
       ?ca_configmap
+      ?execution_target
       ()
   =
   let run_id = Printf.sprintf "%.0f" (Unix.gettimeofday () *. 1000.) in
@@ -142,20 +200,51 @@ let submit
       ~what:(label ^ "configmap")
       (Sol_cli_manifest.migration_configmap_doc ~name:configmap_name ~namespace files)
   in
-  match
-    apply_doc
-      ~ctx
-      ~what:(label ^ "job")
-      (Sol_cli_manifest.migration_job_doc
-         ~name:job.job_name
-         ~namespace
-         ~image
-         ~args
-         ~configmap_name
-         ~ddl_creds_name
-         ?ca_configmap
-         ())
-  with
+  let document =
+    Sol_cli_manifest.migration_job_doc
+      ~name:job.job_name
+      ~namespace
+      ~image
+      ~args
+      ~configmap_name
+      ~ddl_creds_name
+      ?ca_configmap
+      ()
+  in
+  let ordinary () = apply_doc ~ctx ~what:(label ^ "job") document in
+  let apply =
+    match execution_target with
+    | None -> ordinary ()
+    | Some target ->
+      (match Sol_cli_migration_execution.prepare () with
+       | Ok (Some binding) ->
+         let before = Sol_cli_kube_identity.observe ~ctx in
+         let result =
+           Sol_cli_fs.with_temp_file
+             ~prefix:"sol-migrate-"
+             ~suffix:".yaml"
+             (Sol_cli_yaml.render [ document ])
+             (fun file -> Sol_cli_kubectl.run ~ctx [ "apply"; "-f"; file; "-o"; "json" ])
+         in
+         (match result with
+          | Ok (Ok output) ->
+            record_submission ~ctx ~target ~binding ~before job output.stdout;
+            Ok ()
+          | Ok (Error error) ->
+            notify_execution Unavailable;
+            Error (Sol_cli_process.error_to_string error)
+          | Error error ->
+            notify_execution Unavailable;
+            Error error)
+       | Ok None -> ordinary ()
+       | Error message ->
+         Sol_cli_report.warn
+           "Migration execution capture is unestablished (%s); continuing normal Job \
+            wait and cleanup."
+           message;
+         ordinary ())
+  in
+  match apply with
   | Ok () -> Ok job
   | Error _ as e ->
     cleanup ~ctx job;

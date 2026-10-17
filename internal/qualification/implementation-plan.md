@@ -136,13 +136,14 @@ is changed by these offline prerequisites. #1505's original TypeScript smoke fai
 remains unresolved; a later passing run does not explain or fix it.
 
 The existing [migration submitter](../../cli/lib/deploy/sol_cli_migration_job.ml)
-owns the actual Job name and cleanup. Its returned handle currently has namespace,
-name and optional ConfigMap, but no UID or durable execution receipt. The separate
+owns the actual Job name and cleanup. Its ordinary wait/cleanup handle has
+namespace, name and optional ConfigMap. The opt-in metadata channel below reads
+UID from the actual submission response; a verified durable receipt consumer
+remains a separate prerequisite. The separate
 [database setup runner](../../cli/lib/deploy/sol_cli_database_setup_run.ml) reads its
 own setup Job UID; that is not the migration execution identity and must not be
-substituted. The next authority review should address the migration submitter's
-actual execution handle and independent observation while that ephemeral Job exists,
-without changing cleanup merely to accommodate qualification.
+substituted. Independent observation must occur while the ephemeral migration Job exists;
+no deterministic name or separate setup Job can substitute for its submission UID.
 
 ### Authenticated observation prerequisite
 
@@ -166,10 +167,48 @@ errors are available only through an explicit operator callback, never ordinary
 evidence capture; durable evidence uses the existing safe projections and I2
 recorder. No raw Kubernetes object, credential or provider diagnostic is persisted.
 
-Actual migration execution-receipt production remains the next prerequisite.
-Transport tests use explicitly fixture-bound execution locators and cannot qualify
+Verified-candidate launch and durable execution-receipt binding remain the next
+prerequisite. The product metadata channel below supplies the submission identity;
+transport tests still use explicitly fixture-bound locators and cannot qualify
 a release. The eventual adoption (#1510) must bind both application and migration
 observations to the verified candidate, assessment and independently established
 cluster, preserve explicit non-applicability for nonconsumers, and delete the old
 AWS predicate in the reviewed cutover. Runtime TLS and DML authority remain distinct,
 required future obligations. No consolidation is claimed by adding this transport.
+
+### Product migration submission metadata
+
+The opt-in `sol migrate apply TARGET` path can now report metadata from its actual
+`kubectl apply -o json` response through the bounded private
+`Sol_cli_migration_execution` channel. The full resolved target comes from the
+same loaded config; the Job namespace, name and UID are checked against that
+submission response. Fresh Kubernetes identity checks bracket submission. Status,
+dry-run, contract and database-setup Jobs do not emit apply-execution receipts.
+The candidate's bundled internal producer exposes the channel protocol version,
+so a future verified launcher can reject candidates that cannot produce it before
+starting mutations.
+
+The API response establishes which actual Job the submission selected; `apply`
+does not prove that a new execution was created. Neither that selection, the
+product exit status nor this event proves migration behavior or CA delivery.
+Qualification must independently read the exact Job UID and declared CA. Runtime
+migration success, TLS and DML authority remain separate claims.
+
+A launcher supplies a private duplex socket as stdin and an opaque per-launch
+binding. The product sends only bounded, closed-schema metadata, then waits for
+`capture-finished` before its existing wait/log/cleanup path. That acknowledgment
+is not PASS. EOF, capture failure or timeout cannot suppress normal wait/cleanup;
+channel writes are nonblocking with a deadline, and helper execs cannot retain the
+channel. Tests persist with I2 before acknowledgment and verify that evidence
+survives ephemeral Job cleanup and recorder restart. Interrupted capture cannot
+produce a persisted PASS.
+
+This product event is not yet a verified candidate execution receipt. The next
+focused increment must reverify the installed candidate, probe its bundled
+protocol, launch that exact product executable, bind the private channel to the
+complete candidate/definition/specimen/target/attempt/assessment/database scope,
+and persist through I2 only after validating that scope and observation authority.
+A saved event or fixture locator is not a constructor for a verified receipt.
+That consumer must arrange independent observation before releasing cleanup; it
+must not call the harness's newer product implementation to qualify an older
+candidate. No live harness or policy ownership changes in this prerequisite.

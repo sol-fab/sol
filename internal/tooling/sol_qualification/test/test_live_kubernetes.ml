@@ -148,7 +148,9 @@ let with_fixture ?fault mutate fn =
        in
        Out_channel.with_open_text (root ^ "/kubectl") (fun c -> output_string c script);
        Unix.chmod (root ^ "/kubectl") 0o755;
-       write (root ^ "/world.json") (mutate world);
+       write
+         (root ^ "/world.json")
+         (mutate (set "submitted_job" (str (root ^ "/submitted-job.json")) world));
        Unix.putenv "PATH" root;
        Unix.putenv "SOL_TEST_WORLD" (root ^ "/world.json");
        Unix.putenv "SOL_TEST_CALLS" (root ^ "/calls.json");
@@ -402,6 +404,561 @@ let interrupted_capture () =
     scan root)
 ;;
 
+module M = Sol_cli_migration_execution
+module J = Sol_cli_migration_job
+
+let product_execution
+      ?(cli = false)
+      ?(capture_failure = false)
+      ?(close_receiver = false)
+      ?(expect_event = true)
+      ?(expect_exit = 0)
+      mutate
+      ()
+  =
+  let mutate world =
+    set
+      "configmaps"
+      (str (Filename.concat (Sys.getcwd ()) "kubernetes/migration-configmap.json"))
+      (mutate world)
+  in
+  let armed = ref false in
+  let fault boundary =
+    if !armed && boundary = E.Temp_written
+    then raise (Sys_error "product execution capture interrupted")
+  in
+  with_fixture ~fault mutate (fun root ctx run _ obligations recorder ->
+    let expected_target = if cli then "dev/aws/us-east-1" else "aws.staging" in
+    let cli_binary =
+      if cli then Some (Unix.realpath (Sys.getenv "SOL_TEST_SOL")) else None
+    in
+    let workspace = root ^ "/specimen" in
+    if cli
+    then (
+      List.iter
+        (fun path -> Sol_cli_fs.mkdir_p (workspace ^ path) |> get)
+        [ "/sol"; "/app/payments/charge_svc"; "/db/migrations" ];
+      List.iter
+        (fun package ->
+           let directory = root ^ "/fixture-assets/framework/ocaml/" ^ package ^ "/lib" in
+           Sol_cli_fs.mkdir_p directory |> get;
+           Out_channel.with_open_text (directory ^ "/dune") (fun _ -> ()))
+        [ "sol-svc"; "kafka-eio-service" ];
+      let write_text path text =
+        Out_channel.with_open_text (workspace ^ path) (fun c -> output_string c text)
+      in
+      write_text
+        "/sol.yml"
+        "project: specimen\n\
+         resources:\n\
+        \  app_db:\n\
+        \    type: postgres\n\
+         services:\n\
+        \  charge_svc:\n\
+        \    type: http\n\
+        \    path: app/payments/charge_svc\n\
+        \    uses: [app_db]\n";
+      write_text "/app/payments/charge_svc/sol.toml" "";
+      write_text "/app/payments/charge_svc/Dockerfile" "FROM scratch\n";
+      write_text "/db/migrations/0001_initial.sql" "-- migrate:up\nselect 1;\n";
+      write_text
+        "/sol/environments.yml"
+        ("dev:\n\
+         \  shape: local\n\
+         \  targets:\n\
+         \    aws/us-east-1:\n\
+         \      registry: registry.invalid\n\
+         \      kube_context: explicit-observer\n\
+         \      kubeconfig: "
+         ^ root
+         ^ "/explicit.kubeconfig\n"));
+    let committed_execution = ref None in
+    let parent, child = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+    let binding = String.make 64 'b' in
+    let pid = Unix.fork () in
+    if pid = 0
+    then (
+      Unix.close parent;
+      Unix.dup2 child Unix.stdin;
+      Unix.close child;
+      Unix.putenv M.environment binding;
+      (match cli_binary with
+       | None -> ()
+       | Some program ->
+         Unix.putenv "SOL_HOME" (root ^ "/fixture-assets");
+         Unix.putenv
+           Sol_cli_platform_assets.runner_image_env
+           ("registry.invalid/runner@sha256:" ^ String.make 64 'b');
+         Unix.chdir workspace;
+         Unix.execv program [| program; "migrate"; "apply"; expected_target |]);
+      let result =
+        J.submit
+          ~ctx
+          ~namespace:"database-system"
+          ~name_prefix:"sol-migrate"
+          ~label:""
+          ~image:"fixture.invalid/migrate"
+          ~args:[ "migrate"; "apply" ]
+          ~files:[ "0001.sql", "select 1" ]
+          ~ddl_creds_name:"fixture-ddl"
+          ~ca_configmap:"declared-ledger-ca"
+          ~execution_target:"aws.staging"
+          ()
+      in
+      let code =
+        match result with
+        | Error _ -> 1
+        | Ok job ->
+          let outcome = J.wait ~ctx ~interval_s:0. ~attempts:1 job in
+          J.cleanup ~ctx job;
+          if outcome = J.Succeeded then 0 else 2
+      in
+      Unix._exit code);
+    Unix.close child;
+    let joined = ref false in
+    Fun.protect
+      ~finally:(fun () ->
+        (try Unix.close parent with
+         | Unix.Unix_error _ -> ());
+        if not !joined
+        then (
+          Unix.kill pid Sys.sigkill;
+          ignore (Unix.waitpid [] pid)))
+      (fun () ->
+         if close_receiver
+         then Unix.close parent
+         else (
+           let message = M.receive ~timeout_s:20. parent |> get in
+           if expect_event
+           then (
+             let receipt =
+               match message with
+               | M.Execution r -> r
+               | M.Unavailable -> Alcotest.fail "actual execution unavailable"
+             in
+             check
+               (receipt.binding = binding && receipt.target = expected_target)
+               "submission binding lost";
+             let observed = json (root ^ "/submitted-job.json") in
+             check
+               (Yojson.Safe.Util.member
+                  "uid"
+                  (Yojson.Safe.Util.member "metadata" observed)
+                = str receipt.uid)
+               "UID not from actual API response";
+             check
+               (Yojson.Safe.Util.member
+                  "name"
+                  (Yojson.Safe.Util.member "metadata" observed)
+                = str receipt.name)
+               "Job name reconstructed";
+             let calls = Yojson.Safe.to_string (json (root ^ "/calls.json")) in
+             check
+               (not (Sol_cli_string.contains ~needle:"delete" calls))
+               "cleanup raced capture";
+             if not cli
+             then (
+               let requirement =
+                 List.find_map
+                   (fun i ->
+                      match D.plan i with
+                      | D.Migration_ca_delivery r -> Some r
+                      | _ -> None)
+                   (D.instances obligations)
+                 |> Option.get
+               in
+               let context : D.read_context =
+                 { target =
+                     { principal = receipt.principal
+                     ; cluster = receipt.cluster
+                     ; endpoint = receipt.endpoint
+                     }
+                 ; verified_at = receipt.observed_at
+                 ; started_at = receipt.observed_at
+                 ; finished_at = receipt.observed_at
+                 ; expires_at = Some (receipt.observed_at + 300)
+                 }
+               in
+               let identity : D.job_identity =
+                 { namespace = receipt.namespace; name = receipt.name; uid = receipt.uid }
+               in
+               armed := capture_failure;
+               let capture =
+                 C.Fixture.capture_execution recorder requirement ~context identity
+               in
+               if capture_failure
+               then (
+                 match capture with
+                 | Error _ -> ()
+                 | Ok _ -> Alcotest.fail "capture fault bypassed")
+               else (
+                 let execution = stored capture in
+                 committed_execution := Some execution;
+                 let transport = L.create ~ctx ~expected:target () in
+                 let outcomes =
+                   C.observe_migrations
+                     ~directory:(root ^ "/evidence")
+                     ~run
+                     ~obligations
+                     ~recorder
+                     ~read:(L.read transport)
+                     ~execution:(fun _ -> Ok execution)
+                   |> get
+                 in
+                 check (List.length outcomes = 1) "migration omitted";
+                 List.iter
+                   (fun (o : C.outcome) ->
+                      check
+                        (pass (stored o.result).verdict.decision)
+                        "independent Job/CA observation failed")
+                   outcomes)))
+           else check (message = M.Unavailable) "unestablished submission emitted receipt";
+           M.acknowledge parent |> get);
+         let _, status = Unix.waitpid [] pid in
+         joined := true;
+         check
+           (status = Unix.WEXITED expect_exit)
+           "receipt failure prevented normal lifecycle";
+         let calls = Yojson.Safe.to_string (json (root ^ "/calls.json")) in
+         check (Sol_cli_string.contains ~needle:"delete" calls) "cleanup skipped";
+         check
+           (not (Sys.file_exists (root ^ "/submitted-job.json")))
+           "ephemeral Job survived fake cleanup";
+         E.close recorder;
+         let reopened =
+           E.open_store ~directory:(root ^ "/evidence") ~run ~secrets:[] () |> stored
+         in
+         Fun.protect
+           ~finally:(fun () -> E.close reopened)
+           (fun () ->
+              Option.iter
+                (fun reference ->
+                   let capture =
+                     E.read_capture ~directory:(root ^ "/evidence") ~run reference
+                     |> stored
+                   in
+                   check
+                     (Yojson.Safe.Util.member "uid" capture.payload
+                      = str "execution-uid-42")
+                     "receipt did not survive cleanup/restart")
+                !committed_execution;
+              if capture_failure || close_receiver || not expect_event
+              then (
+                match
+                  E.seal
+                    reopened
+                    ~obligations
+                    ~requests:(List.map D.plan (D.instances obligations))
+                    ~verdicts:[]
+                    ~captures:[]
+                with
+                | Error _ -> ()
+                | Ok _ -> Alcotest.fail "missing execution evidence sealed"));
+         scan root))
+;;
+
+(* The launcher asked for a receipt but supplied a descriptor the product refuses.
+   The product must still submit, wait and clean up, emit no execution locator, and
+   the qualification side must fail closed rather than evaluate the CA claim. *)
+let unusable_requested_channel_fails_closed () =
+  let mutate world =
+    set
+      "configmaps"
+      (str (Filename.concat (Sys.getcwd ()) "kubernetes/migration-configmap.json"))
+      world
+  in
+  with_fixture mutate (fun root ctx run _ obligations recorder ->
+    let parent, channel = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+    let refused_read, refused_write = Unix.pipe ~cloexec:true () in
+    let pid = Unix.fork () in
+    if pid = 0
+    then (
+      (* The launcher socket is never the product's stdin: the product is handed a
+         pipe, which [prepare] refuses before any capture is attempted. *)
+      Unix.close parent;
+      Unix.close channel;
+      Unix.dup2 refused_read Unix.stdin;
+      Unix.close refused_read;
+      Unix.close refused_write;
+      Unix.putenv M.environment (String.make 64 'b');
+      let code =
+        match
+          J.submit
+            ~ctx
+            ~namespace:"database-system"
+            ~name_prefix:"sol-migrate"
+            ~label:""
+            ~image:"fixture.invalid/migrate"
+            ~args:[ "migrate"; "apply" ]
+            ~files:[ "0001.sql", "select 1" ]
+            ~ddl_creds_name:"fixture-ddl"
+            ~ca_configmap:"declared-ledger-ca"
+            ~execution_target:"aws.staging"
+            ()
+        with
+        | Error _ -> 1
+        | Ok job ->
+          let outcome = J.wait ~ctx ~interval_s:0. ~attempts:1 job in
+          J.cleanup ~ctx job;
+          if outcome = J.Succeeded then 0 else 2
+      in
+      Unix._exit code);
+    Unix.close refused_read;
+    Unix.close refused_write;
+    Unix.close channel;
+    Fun.protect
+      ~finally:(fun () ->
+        try Unix.close parent with
+        | Unix.Unix_error _ -> ())
+      (fun () ->
+         check
+           (Result.is_error (M.receive ~timeout_s:5. parent))
+           "unusable channel produced an execution receipt";
+         let _, status = Unix.waitpid [] pid in
+         check
+           (status = Unix.WEXITED 0)
+           "unusable channel suppressed the ordinary migration lifecycle";
+         let calls = Yojson.Safe.to_string (json (root ^ "/calls.json")) in
+         check (Sol_cli_string.contains ~needle:"delete" calls) "cleanup skipped";
+         (* With no execution locator the migration obligation is accounted for but
+            cannot be evaluated, and the assessment cannot seal. *)
+         let outcomes =
+           C.observe_migrations
+             ~directory:(root ^ "/evidence")
+             ~run
+             ~obligations
+             ~recorder
+             ~read:(fun _ -> assert false)
+             ~execution:(fun _ ->
+               Error
+                 E.
+                   { stage = "migration execution"
+                   ; diagnostic = "no execution receipt established"
+                   })
+           |> get
+         in
+         check (List.length outcomes = 1) "migration obligation omitted";
+         List.iter
+           (fun (o : C.outcome) ->
+              match o.result with
+              | Error _ -> ()
+              | Ok recorded ->
+                check
+                  (not (pass recorded.verdict.decision))
+                  "missing execution receipt was evaluated as PASS")
+           outcomes;
+         (match
+            E.seal
+              recorder
+              ~obligations
+              ~requests:(List.map D.plan (D.instances obligations))
+              ~verdicts:[]
+              ~captures:[]
+          with
+          | Error _ -> ()
+          | Ok _ -> Alcotest.fail "assessment sealed without an execution receipt");
+         scan root))
+;;
+
+(* An interruption between submission and durable receipt capture leaves the
+   migration claim unestablished. A later assessment must not substitute an
+   execution identity inferred from the Job naming convention. *)
+let interrupted_receipt_rejects_reconstruction () =
+  let armed = ref false in
+  let fault boundary =
+    if !armed && boundary = E.Temp_written
+    then raise (Sys_error "migration receipt persistence interrupted")
+  in
+  let mutate world =
+    set
+      "configmaps"
+      (str (Filename.concat (Sys.getcwd ()) "kubernetes/migration-configmap.json"))
+      world
+  in
+  with_fixture ~fault mutate (fun root _ctx run _ obligations recorder ->
+    let requirement =
+      List.find_map
+        (fun i ->
+           match D.plan i with
+           | D.Migration_ca_delivery requirement -> Some requirement
+           | _ -> None)
+        (D.instances obligations)
+      |> Option.get
+    in
+    let now = int_of_float (Unix.gettimeofday ()) in
+    let context =
+      { D.target
+      ; verified_at = now
+      ; started_at = now
+      ; finished_at = now
+      ; expires_at = Some (now + 300)
+      }
+    in
+    armed := true;
+    let interrupted =
+      C.Fixture.capture_execution
+        recorder
+        requirement
+        ~context
+        { D.namespace = "database-system"
+        ; name = "sol-migrate-0000000000000"
+        ; uid = "execution-uid-42"
+        }
+    in
+    check (Result.is_error interrupted) "interrupted capture persisted a receipt";
+    armed := false;
+    let evaluated execution =
+      C.observe_migrations
+        ~directory:(root ^ "/evidence")
+        ~run
+        ~obligations
+        ~recorder
+        ~read:(fun _ -> assert false)
+        ~execution
+      |> get
+    in
+    let outcome_is_not_pass (o : C.outcome) =
+      match o.result with
+      | Error _ -> ()
+      | Ok recorded ->
+        check
+          (not (pass recorded.verdict.decision))
+          "an unestablished execution produced a PASS"
+    in
+    let without_receipt =
+      evaluated (fun _ ->
+        Error E.{ stage = "migration execution"; diagnostic = "no durable receipt" })
+    in
+    check (List.length without_receipt = 1) "migration obligation omitted";
+    List.iter outcome_is_not_pass without_receipt;
+    (* A locator reconstructed from the naming convention carries no submission UID,
+       so it cannot be decoded into a satisfying evaluation. *)
+    (match
+       C.Fixture.capture_execution
+         recorder
+         requirement
+         ~context
+         { D.namespace = "database-system"; name = "sol-migrate-0000000000000"; uid = "" }
+     with
+     | Error _ -> ()
+     | Ok reference -> List.iter outcome_is_not_pass (evaluated (fun _ -> Ok reference)));
+    E.close recorder;
+    let reopened =
+      E.open_store ~directory:(root ^ "/evidence") ~run ~secrets:[] () |> stored
+    in
+    Fun.protect
+      ~finally:(fun () -> E.close reopened)
+      (fun () ->
+         (match
+            E.seal
+              reopened
+              ~obligations
+              ~requests:(List.map D.plan (D.instances obligations))
+              ~verdicts:[]
+              ~captures:[]
+          with
+          | Error _ -> ()
+          | Ok _ -> Alcotest.fail "assessment sealed without a durable migration receipt");
+         scan root))
+;;
+
+let stalled_channel () =
+  let left, right = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.close left;
+      Unix.close right)
+    (fun () ->
+       Unix.setsockopt_int left Unix.SO_SNDBUF 1024;
+       let now = Unix.gettimeofday () in
+       let result =
+         M.send
+           left
+           (M.Execution
+              { binding = String.make 64 'b'
+              ; target = String.make 6000 't'
+              ; namespace = "db"
+              ; name = "job"
+              ; uid = "uid"
+              ; principal = "principal"
+              ; cluster = "uid"
+              ; endpoint = "https://cluster"
+              ; observed_at = 0
+              })
+       in
+       check (Unix.gettimeofday () -. now < 7.) "stalled peer blocked past deadline";
+       match result with
+       | Error _ -> ()
+       | Ok _ -> Alcotest.fail "stalled channel accepted full message")
+;;
+
+(* A launcher supplies a private duplex socket. A binding with any other kind of
+   descriptor must be refused, not written to, so exercise the guard in a forked
+   child that owns the descriptor as its stdin. *)
+let channel_arming () =
+  let binding = String.make 64 'b' in
+  let classify expected configure =
+    match Unix.fork () with
+    | 0 ->
+      configure ();
+      let actual =
+        match M.prepare () with
+        | Ok None -> "none"
+        | Ok (Some value) -> if value = binding then "armed" else "other"
+        | Error _ -> "refused"
+      in
+      Unix._exit (if actual = expected then 0 else 1)
+    | pid ->
+      let _, status = Unix.waitpid [] pid in
+      check
+        (status = Unix.WEXITED 0)
+        (Printf.sprintf "private channel arming expected %s" expected)
+  in
+  classify "armed" (fun () ->
+    Unix.putenv M.environment binding;
+    let channel, _peer = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+    Unix.dup2 channel Unix.stdin);
+  classify "refused" (fun () ->
+    Unix.putenv M.environment binding;
+    let read_end, write_end = Unix.pipe ~cloexec:true () in
+    Unix.close write_end;
+    Unix.dup2 read_end Unix.stdin);
+  classify "none" (fun () -> Unix.putenv M.environment "not-a-binding")
+;;
+
+let protocol_rejects_malformed () =
+  let receipt : M.receipt =
+    { binding = String.make 64 'b'
+    ; target = "aws.staging"
+    ; namespace = "db"
+    ; name = "job"
+    ; uid = "uid"
+    ; principal = "reader"
+    ; cluster = "cluster"
+    ; endpoint = "https://endpoint"
+    ; observed_at = 1
+    }
+  in
+  check
+    (M.decode (M.encode (M.Execution receipt)) = Ok (M.Execution receipt))
+    "receipt roundtrip";
+  check (M.decode (M.encode M.Unavailable) = Ok M.Unavailable) "unavailable roundtrip";
+  let valid = Yojson.Safe.from_string (M.encode (M.Execution receipt)) in
+  let reject input =
+    match M.decode input with
+    | Error _ -> ()
+    | Ok _ -> Alcotest.fail "malformed protocol accepted"
+  in
+  List.iter
+    (fun j -> reject (Yojson.Safe.to_string j))
+    [ set "schema" (`Int 2) valid
+    ; set "uid" (str "") valid
+    ; set "binding" (str "another-assessment") valid
+    ; set "secret" (str "PRIVATE") valid
+    ];
+  reject "{\"schema\":1,\"schema\":1,\"kind\":\"Unavailable\"}"
+;;
+
 let () =
   Alcotest.run
     "Authenticated Kubernetes process boundary"
@@ -468,6 +1025,37 @@ let () =
         ; ( "interrupted live capture cannot establish PASS after restart"
           , `Quick
           , interrupted_capture )
+        ; ( "product API receipt precedes independent capture and cleanup"
+          , `Quick
+          , product_execution Fun.id )
+        ; ( "missing API UID stays unestablished"
+          , `Quick
+          , product_execution ~expect_event:false (set "missing_uid" (`Bool true)) )
+        ; ( "wrong submission namespace stays unestablished"
+          , `Quick
+          , product_execution
+              ~expect_event:false
+              (set "wrong_submission_namespace" (`Bool true)) )
+        ; ( "failed submission permits cleanup without receipt"
+          , `Quick
+          , product_execution
+              ~expect_event:false
+              ~expect_exit:1
+              (set "apply_error" (`Bool true)) )
+        ; ( "closed receiver does not kill migration or cleanup"
+          , `Quick
+          , product_execution ~close_receiver:true Fun.id )
+        ; ( "capture unavailable still permits normal cleanup"
+          , `Quick
+          , product_execution ~capture_failure:true Fun.id )
+        ; ( "unusable requested receipt channel fails closed"
+          , `Quick
+          , unusable_requested_channel_fails_closed )
+        ; ( "interrupted receipt rejects name reconstruction"
+          , `Quick
+          , interrupted_receipt_rejects_reconstruction )
+        ; "stalled receipt peer respects deadline", `Quick, stalled_channel
+        ; "private channel arming guards the descriptor", `Quick, channel_arming
         ; "Forbidden never absence", `Quick, test_auth_failure_classification
         ; "unrelated transport authority", `Quick, test_query_mismatch
         ; ( "wrong identity is never a trusted Present"
@@ -511,6 +1099,20 @@ let () =
           , `Quick
           , fun () ->
               direct Fun.id (fun root -> Unix.unlink (root ^ "/kubectl")) unreadable )
+        ; ( "submission authority rotation cannot emit execution receipt"
+          , `Quick
+          , product_execution
+              ~expect_event:false
+              (set
+                 "after_whoami"
+                 (set
+                    "status"
+                    (obj [ "userInfo", obj [ "username", str "another" ] ])
+                    whoami)) )
+        ; ( "actual migrate CLI emits canonical full target"
+          , `Quick
+          , product_execution ~cli:true Fun.id )
+        ; "strict metadata protocol", `Quick, protocol_rejects_malformed
         ; ( "real process timeout"
           , `Quick
           , fun () -> direct (set "sleep" (`Bool true)) ignore unreadable )

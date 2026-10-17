@@ -78,8 +78,14 @@
 (test
  (name test_live_kubernetes)
  (modules test_live_kubernetes)
- (libraries sol_qualification alcotest yojson unix)
+ (libraries sol_qualification sol_cli_deploy alcotest yojson unix)
  (deps
+  ../../../../cli/bin/main.exe
   intent.json
   fixture_live_kubectl.py
-  (glob_files kubernetes/*.json)))
+  (glob_files kubernetes/*.json))
+ (action
+  (setenv
+   SOL_TEST_SOL
+   %{dep:../../../../cli/bin/main.exe}
+   (run %{test}))))
