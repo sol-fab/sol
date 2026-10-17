@@ -176,6 +176,15 @@ it. Prefer a simpler design or a test at the failure boundary over turning an in
 permanent global rule. Historical state belongs in Git and pull requests unless it is a current
 product, architecture, or qualification authority.
 
+Prefer contract-driven tests over simulations of dependencies. Test documented behavior at its
+owning boundary, mock external interfaces minimally, and exercise real Sol components wherever
+practical. Use live qualification for claims that require real provider behavior. Before adding
+test infrastructure, evidence machinery, validation, recovery, or another abstraction, identify
+the concrete failure it detects, whether existing mechanisms already detect it, and whether the
+assurance justifies the maintenance cost. Do not build a second implementation of Sol or its
+dependencies merely to test the first. When simplifying, preserve meaningful regression coverage
+rather than historical test machinery.
+
 Preserve the original diagnostics Terraform, Kubernetes and cloud providers emit, including error
 codes and messages. Add concise Sol context when it helps, but do not replace, obscure or
 speculatively reinterpret the underlying error, and redact sensitive values where necessary.
