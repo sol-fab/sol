@@ -181,6 +181,7 @@ type failure =
   | Platform_destroy_failed of string
   | Substrate_destroy_failed of string
   | Verification_failed of string
+  | Authorization_not_removed of string
   | Elevated_access_not_removed of string
   | Release_unestablished of string
 
@@ -217,6 +218,12 @@ let failure_message = function
   | Platform_destroy_failed message -> message
   | Substrate_destroy_failed message -> message
   | Verification_failed message -> message
+  | Authorization_not_removed message ->
+    Printf.sprintf
+      "the cloud substrate is absent and verified, but the authorization reconciler \
+       identity and its fence were not torn down, so destruction did not reach its \
+       postcondition: %s"
+      message
   | Elevated_access_not_removed message -> message
   | Release_unestablished message ->
     Printf.sprintf
@@ -288,6 +295,7 @@ type deps =
   ; release_workloads : unit -> Sol_cli_workload_scope.release
   ; accept_unreleased : bool
   ; destroy_substrate : unit -> (unit, string) result
+  ; destroy_authorization : unit -> (string, string) result
   ; verify_destruction :
       pre_destroy:state_read
       -> preparation:preparation
@@ -446,7 +454,13 @@ let execute ~deps =
       let observation = deps.verify_destruction ~pre_destroy:!state ~preparation in
       let verdict = Sol_cli_destroy_verification.classify observation in
       if Sol_cli_destroy_verification.is_verified verdict
-      then succeed ~cleanup ~verification:observation preparation
+      then (
+        match deps.destroy_authorization () with
+        | Error message ->
+          fail ~cleanup ~verification:observation (Authorization_not_removed message)
+        | Ok evidence ->
+          deps.report ("  " ^ evidence);
+          succeed ~cleanup ~verification:observation preparation)
       else
         fail
           ~cleanup

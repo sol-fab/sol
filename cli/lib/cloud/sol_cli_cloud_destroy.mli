@@ -61,6 +61,7 @@ type failure =
   | Platform_destroy_failed of string
   | Substrate_destroy_failed of string
   | Verification_failed of string
+  | Authorization_not_removed of string
   | Elevated_access_not_removed of string
   | Release_unestablished of string
 
@@ -101,6 +102,7 @@ type deps =
   ; release_workloads : unit -> Sol_cli_workload_scope.release
   ; accept_unreleased : bool
   ; destroy_substrate : unit -> (unit, string) result
+  ; destroy_authorization : unit -> (string, string) result
   ; verify_destruction :
       pre_destroy:state_read
       -> preparation:preparation
