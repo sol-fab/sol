@@ -146,7 +146,33 @@ let test_location_is_explicit_on_every_regional_check () =
       true
       (List.for_all
          (fun call -> Sol_cli_string.contains ~needle:"--regions us-central1" call)
-         regional))
+         regional);
+    let clusters = arguments_of ~log ~contains:"clusters list" in
+    Windtrap.equal Windtrap.int ~msg:"one cluster check" 1 (List.length clusters);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:
+        "the cluster check is scoped to the target's region, so a same-named cluster \
+         elsewhere is not this target's"
+      true
+      (Sol_cli_string.contains ~needle:"--region us-central1" (List.hd clusters));
+    let sql = arguments_of ~log ~contains:"sql instances list" in
+    Windtrap.equal Windtrap.int ~msg:"one Cloud SQL check" 1 (List.length sql);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:
+        "the Cloud SQL check is scoped to the target's region, so a same-named instance \
+         elsewhere is not this target's"
+      true
+      (Sol_cli_string.contains ~needle:"--filter region:us-central1" (List.hd sql));
+    let artifacts = arguments_of ~log ~contains:"repositories list" in
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the registry check is scoped to the target's region"
+      true
+      (List.exists
+         (fun call -> Sol_cli_string.contains ~needle:"--location us-central1" call)
+         artifacts))
 ;;
 
 let test_the_target_region_beats_the_configured_default () =

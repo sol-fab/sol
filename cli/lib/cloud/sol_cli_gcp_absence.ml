@@ -90,13 +90,22 @@ let names_the_cluster cluster_name =
     cluster_name
 ;;
 
-let cluster_check ~project ~cluster_name =
+let cluster_check ~project ~region ~cluster_name =
   identity_check
     ~resource_class:"GKE cluster"
     ~identity:cluster_name
     ~attribution:(Named_for_target (names_the_cluster cluster_name))
     ~attributable:(fun line -> line = cluster_name)
-    [ "--project"; project; "container"; "clusters"; "list"; "--format"; "value(name)" ]
+    [ "--project"
+    ; project
+    ; "container"
+    ; "clusters"
+    ; "list"
+    ; "--region"
+    ; region
+    ; "--format"
+    ; "value(name)"
+    ]
 ;;
 
 let checks ~project ~region ~cluster_name =
@@ -111,7 +120,7 @@ let checks ~project ~region ~cluster_name =
         || (prefix <> "" && Sol_cli_string.contains ~needle:prefix line))
       argv
   in
-  [ cluster_check ~project ~cluster_name
+  [ cluster_check ~project ~region ~cluster_name
   ; identity_check
       ~resource_class:"GKE node pool"
       ~identity:(cluster_name ^ "-*")
@@ -168,7 +177,15 @@ let checks ~project ~region ~cluster_name =
   ; named
       ~resource_class:"Cloud SQL instance"
       ~identity:(cluster_name ^ "-postgres")
-      (p [ "sql"; "instances"; "list"; "--format"; "value(name)" ])
+      (p
+         [ "sql"
+         ; "instances"
+         ; "list"
+         ; "--filter"
+         ; "region:" ^ region
+         ; "--format"
+         ; "value(name)"
+         ])
   ; named
       ~resource_class:"reserved global address"
       ~identity:(cluster_name ^ "-sql-peering")
@@ -365,7 +382,8 @@ let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
       ; reason = unlistable
       ; checked_with = "gcloud (not run)"
       }
-  | Some project -> run ~check:(cluster_check ~project ~cluster_name)
+  | Some project ->
+    run ~check:(cluster_check ~project ~region:target.region ~cluster_name)
 ;;
 
 let unresolved = Sol_cli_absence.unresolved

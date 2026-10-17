@@ -42,6 +42,23 @@ val reconcile_ownership
   -> act:bool
   -> (reconciliation, string) result
 
+(** Forget cloud-root and platform-root state only when the substrate is positively absent
+    at the provider, and only when the cluster identity in that state agrees with the
+    target. Exposed so the destroy path's no-unsafe-[state rm] property is exercised
+    directly; it is not a second entry point. *)
+val provable_absence_reconciliation
+  :  assets:Sol_cli_platform_assets.t
+  -> run_log:Sol_cli_run_log.t
+  -> provider:Sol_cli_provider.t
+  -> target_cfg:Sol_cli_config.target
+  -> infra_dir:string
+  -> platform_dir:string
+  -> platform_backend:string list
+  -> var_files:string list
+  -> vars:string list
+  -> state:Sol_cli_cloud_destroy.state_read
+  -> (Sol_cli_cloud_destroy.reconciliation, string) result
+
 val credentials_result
   :  provider:Sol_cli_provider.t
   -> operation:string
