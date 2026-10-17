@@ -1,11 +1,16 @@
 (** Offline boundary only. No release verdict or live transport. *)
 type t = private
-  { run : Qual_domain.run
+  { verified : Qual_candidate.t
+  ; run : Qual_domain.run
   ; intent : Qual_domain.intent
   ; obligations : Qual_domain.obligations
   ; requests : Qual_domain.request list
   ; required_captures : (string * string) list
   }
+
+(** The exact verified candidate these obligations were bound to. A launcher uses
+    this handle instead of accepting a later, possibly unrelated installation. *)
+val verified : t -> Qual_candidate.t
 
 val prepare
   :  verified:Qual_candidate.t

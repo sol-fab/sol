@@ -220,9 +220,21 @@ If the child outlives the caller's completion budget it is supervised away, but 
 outcome is then explicitly unestablished and the remaining cleanup responsibility is
 named.
 
-Still missing before adoption: an end-to-end harness wiring that runs the shared
-application and migration observers against the verified candidate's obligations,
-and the reviewed matrix policy transfer. A saved event or fixture locator is not
+`Qual_path` composes those owners into one candidate-bound path: the verified
+candidate's complete obligations, application CA observation through an injected
+authenticated reader, exactly one launcher-driven migration execution whose
+locator is captured before the Job cleanup, and the durable recorder. It refuses a
+recorder bound to another assessment, a missing or ambiguous migration obligation,
+and an unreadable/expired transport; per-obligation failures remain visible in the
+returned outcomes and never become PASS. An offline integration fixture (real
+candidate verification plus controlled Kubernetes reads and the candidate's own
+receipt protocol) exercises missing mounts, wrong ConfigMaps, renamed volumes,
+replaced Job UIDs, changed Kubernetes authority and interrupted capture, and
+confirms that CA-only success cannot accept a release while DML/TLS remain
+unestablished.
+
+Still missing before adoption: wiring this path into the concrete AWS row and the
+reviewed matrix policy transfer. A saved event or fixture locator is not
 a constructor for a verified receipt. That consumer must not call the harness's
 newer product implementation to qualify an older candidate. No live harness or
 policy ownership changes in this prerequisite.

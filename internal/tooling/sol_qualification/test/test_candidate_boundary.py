@@ -33,9 +33,9 @@ if sys.argv[1:3] == ["migrate", "apply"]:
         "kind": "MigrationExecution",
         "binding": os.environ["SOL_MIGRATION_EXECUTION_BINDING"],
         "target": sys.argv[3],
-        "namespace": "database-system",
-        "name": "boundary-migration",
-        "uid": "boundary-submission-uid",
+        "namespace": os.environ.get("FAKE_MIGRATION_NAMESPACE", "database-system"),
+        "name": os.environ.get("FAKE_MIGRATION_NAME", "boundary-migration"),
+        "uid": os.environ.get("FAKE_MIGRATION_UID", "boundary-submission-uid"),
         "principal": "offline-reader",
         "cluster": "offline-cluster",
         "endpoint": "https://offline.invalid",
@@ -250,6 +250,101 @@ class Boundary(fixture.Binding):
         self.assertEqual(value["name"], "boundary-migration")
         self.assertEqual(value["namespace"], "database-system")
         self.assertEqual(value["target"], pins["requested_target"])
+
+    def integration_environment(self):
+        root = self.root / "integration"
+        root.mkdir()
+        # The evidence store creates and restricts its own directory; a
+        # pre-created empty directory is treated as an existing store.
+        evidence = self.root / "integration-evidence"
+        kubeconfig = root / "explicit.kubeconfig"
+        kubeconfig.write_text("")
+        # The controlled Kubernetes fixture replaces the provider guard for this
+        # test: the live transport is expected to read, but only locally.
+        kubectl = self.private_bin / "kubectl"
+        kubectl.write_text(Path(__file__).with_name("fixture_live_kubectl.py").read_text())
+        kubectl.chmod(0o755)
+        env = {
+            "SOL_TEST_WORLD": str(root / "world.json"),
+            "SOL_TEST_CALLS": str(root / "calls.json"),
+            "SOL_TEST_KUBECONFIG": str(kubeconfig),
+            "KUBECONFIG": str(kubeconfig),
+            "SOL_INTEGRATION_ROOT": str(root),
+            "SOL_INTEGRATION_EVIDENCE": str(evidence),
+            "SOL_INTEGRATION_RESULT": str(root / "result.json"),
+        }
+        return root, env
+
+    def run_integrated_path(self, mutation=None, fault=False):
+        # The integrated path verifies the candidate, observes every declared
+        # consumer through the authenticated transport, launches the candidate's
+        # own migration execution, captures its Job UID and observes its CA.
+        sol = self.install / "bin/sol"
+        sol.write_text(PROTOCOL_SOL.replace("__VERSION__", fixture.VERSION))
+        sol.chmod(0o755)
+        self.archive()
+        bound = self.run_binding(True)
+        pins = self.expected(bound)
+        root, env = self.integration_environment()
+        if mutation is not None:
+            env["SOL_INTEGRATION_MUTATION"] = mutation
+        if fault:
+            env["SOL_INTEGRATION_FAULT"] = "1"
+        previous = {key: os.environ.get(key) for key in env}
+        os.environ.update(env)
+        try:
+            self.invoke(True, pins)
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        return json.loads((root / "result.json").read_text())
+
+    def test_boundary_integrated_path(self):
+        value = self.run_integrated_path()
+        self.assertTrue(value["ok"], value)
+        self.assertTrue(value["application"], value)
+        self.assertEqual(len(value["application"]), 2, value)  # consumers only
+        self.assertTrue(all(item["decision"] == "pass" for item in value["application"]), value)
+        self.assertTrue(all(item["decision"] == "pass" for item in value["migration"]), value)
+        self.assertFalse(value["accept_mechanism"], "CA-only evidence accepted a release")
+
+    def test_boundary_integrated_path_missing_mount_fails(self):
+        value = self.run_integrated_path("missing_mount")
+        self.assertTrue(value["ok"], value)
+        self.assertIn("fail", [item["decision"] for item in value["application"]], value)
+        self.assertFalse(value["accept_mechanism"])
+
+    def test_boundary_integrated_path_wrong_configmap_fails(self):
+        value = self.run_integrated_path("wrong_configmap")
+        self.assertTrue(value["ok"], value)
+        self.assertIn("fail", [item["decision"] for item in value["application"]], value)
+        self.assertFalse(value["accept_mechanism"])
+
+    def test_boundary_integrated_path_renamed_volume_passes(self):
+        # Volume names are internal linkage; a consistently renamed volume keeps
+        # the source, delivered path and consuming-container guarantees.
+        value = self.run_integrated_path("renamed_volume")
+        self.assertTrue(value["ok"], value)
+        self.assertTrue(all(item["decision"] == "pass" for item in value["application"]), value)
+
+    def test_boundary_integrated_path_changed_authority_is_unestablished(self):
+        value = self.run_integrated_path("changed_authority")
+        self.assertFalse(value["ok"], value)
+
+    def test_boundary_integrated_path_replaced_job_uid_fails(self):
+        value = self.run_integrated_path("wrong_job_uid")
+        self.assertTrue(value["ok"], value)
+        # A same-name Job with another UID is the wrong identity, so it is UNKNOWN
+        # rather than a positive-absence FAIL; either way it is never a PASS.
+        self.assertNotIn("pass", [item["decision"] for item in value["migration"]], value)
+        self.assertFalse(value["accept_mechanism"])
+
+    def test_boundary_integrated_path_interrupted_capture(self):
+        value = self.run_integrated_path(fault=True)
+        self.assertFalse(value["ok"], value)
 
 if __name__ == "__main__":
     suite = unittest.TestSuite(Boundary(name) for name in dir(Boundary) if name.startswith("test_boundary_"))

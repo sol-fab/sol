@@ -7,6 +7,8 @@ module E = Qual_evidence
 module K = Qual_kubernetes
 module CA = Qual_database_ca
 module MX = Qual_migration_execution
+module L = Qual_kubernetes_live
+module P = Qual_path
 
 let get = function
   | Ok x -> x
@@ -47,7 +49,7 @@ let obj xs = `Assoc xs
 let str s = `String s
 let strings xs = `List (List.map str xs)
 
-let read_good (prepared : B.t) (q : K.query) =
+let good_document (prepared : B.t) ~uid (q : K.query) =
   let ca_key, ca_path, configmap, containers =
     D.instances prepared.obligations
     |> List.find_map (fun i ->
@@ -68,7 +70,7 @@ let read_good (prepared : B.t) (q : K.query) =
     obj
       [ "namespace", str q.namespace
       ; "name", str q.name
-      ; "uid", str "object-uid"
+      ; "uid", str uid
       ; "resourceVersion", str "1"
       ]
   in
@@ -116,8 +118,17 @@ let read_good (prepared : B.t) (q : K.query) =
               ] )
         ]
   in
+  document
+;;
+
+let read_good prepared q =
   { K.context
-  ; result = K.Exited { code = 0; stdout = Yojson.Safe.to_string document; stderr = "" }
+  ; result =
+      K.Exited
+        { code = 0
+        ; stdout = Yojson.Safe.to_string (good_document prepared ~uid:"object-uid" q)
+        ; stderr = ""
+        }
   }
 ;;
 
@@ -159,6 +170,334 @@ let launcher_probe verified path =
         ]
   in
   Out_channel.with_open_text path (fun c -> output_string c (Yojson.Safe.to_string json))
+;;
+
+let env name =
+  match Sys.getenv_opt name with
+  | Some value -> value
+  | None -> failwith ("missing integration environment " ^ name)
+;;
+
+let update key change = function
+  | `Assoc fields ->
+    `Assoc (List.map (fun (k, v) -> if k = key then k, change v else k, v) fields)
+  | other -> other
+;;
+
+let decision_name = function
+  | D.Pass -> "pass"
+  | D.Fail _ -> "fail"
+  | D.Unknown _ -> "unknown"
+  | D.Not_run _ -> "not_run"
+;;
+
+let outcome_json (outcome : CA.outcome) =
+  let identity = D.instance_identity outcome.instance in
+  match outcome.result with
+  | Error error ->
+    obj [ "identity", str identity; "decision", `Null; "error", str error.E.stage ]
+  | Ok recorded ->
+    obj
+      [ "identity", str identity
+      ; "decision", str (decision_name recorded.verdict.decision)
+      ; "error", `Null
+      ]
+;;
+
+let integration_config =
+  obj
+    [ "current-context", str "explicit-observer"
+    ; ( "contexts"
+      , `List
+          [ obj
+              [ "name", str "explicit-observer"
+              ; ( "context"
+                , obj
+                    [ "cluster", str "local-cluster-alias"
+                    ; "user", str "untrusted-label"
+                    ] )
+              ]
+          ] )
+    ; ( "clusters"
+      , `List
+          [ obj
+              [ "name", str "local-cluster-alias"
+              ; "cluster", obj [ "server", str kube.endpoint ]
+              ]
+          ] )
+    ; "users", `List [ obj [ "name", str "untrusted-label"; "user", obj [] ] ]
+    ]
+;;
+
+let integration_whoami =
+  obj
+    [ "apiVersion", str "authentication.k8s.io/v1"
+    ; "kind", str "SelfSubjectReview"
+    ; "status", obj [ "userInfo", obj [ "username", str kube.principal ] ]
+    ]
+;;
+
+let integration_cluster =
+  obj
+    [ "apiVersion", str "v1"
+    ; "kind", str "Namespace"
+    ; "metadata", obj [ "name", str "kube-system"; "uid", str kube.cluster ]
+    ]
+;;
+
+(* Mutations exercise the shared evaluator through the actual observation path. *)
+let integration_mutate mutation documents =
+  let first kind change =
+    let rec loop = function
+      | [] -> []
+      | document :: rest when field "kind" document = str kind -> change document :: rest
+      | document :: rest -> document :: loop rest
+    in
+    loop documents
+  in
+  match mutation with
+  | Some "missing_mount" ->
+    first "Deployment" (fun document ->
+      update
+        "spec"
+        (update
+           "template"
+           (update
+              "spec"
+              (update "containers" (function
+                 | `List containers ->
+                   `List (List.map (update "volumeMounts" (fun _ -> `List [])) containers)
+                 | other -> other))))
+        document)
+  | Some "wrong_configmap" ->
+    first "Deployment" (fun document ->
+      update
+        "spec"
+        (update
+           "template"
+           (update
+              "spec"
+              (update "volumes" (function
+                 | `List volumes ->
+                   `List
+                     (List.map
+                        (update "configMap" (update "name" (fun _ -> str "another-ca")))
+                        volumes)
+                 | other -> other))))
+        document)
+  | Some "wrong_job_uid" ->
+    first "Job" (fun document ->
+      update "metadata" (update "uid" (fun _ -> str "replaced-execution-uid")) document)
+  | Some "renamed_volume" ->
+    (* Volume names are internal linkage: a consistently renamed volume must still
+       satisfy the source, mount path and consuming-container guarantees. *)
+    first "Deployment" (fun document ->
+      let rename = update "name" (fun _ -> str "renamed-volume") in
+      let containers = function
+        | `List values ->
+          `List
+            (List.map
+               (update "volumeMounts" (function
+                  | `List mounts -> `List (List.map rename mounts)
+                  | other -> other))
+               values)
+        | other -> other
+      in
+      let volumes = function
+        | `List values -> `List (List.map rename values)
+        | other -> other
+      in
+      update
+        "spec"
+        (update
+           "template"
+           (update "spec" (fun spec ->
+              update "containers" containers (update "volumes" volumes spec))))
+        document)
+  | _ -> documents
+;;
+
+let integration_world prepared ~name ~uid ~mutation root =
+  let documents =
+    D.instances prepared.B.obligations
+    |> List.concat_map (fun instance ->
+      match D.plan instance with
+      | D.Ca_delivery requirement ->
+        let deployment, configmap = K.queries requirement in
+        [ deployment; configmap ]
+      | D.Migration_ca_delivery requirement ->
+        let binding = D.migration_ca_binding requirement in
+        let job, configmap =
+          K.migration_queries requirement D.{ namespace = binding.namespace; name; uid }
+        in
+        [ job; configmap ]
+      | _ -> [])
+    |> List.map (good_document prepared ~uid)
+    |> List.fold_left
+         (fun seen document ->
+            let key =
+              ( field "kind" document |> Yojson.Safe.Util.to_string
+              , field "metadata" document
+                |> field "namespace"
+                |> Yojson.Safe.Util.to_string
+              , field "metadata" document |> field "name" |> Yojson.Safe.Util.to_string )
+            in
+            if List.mem_assoc key seen then seen else (key, document) :: seen)
+         []
+    |> List.rev_map snd
+    |> integration_mutate mutation
+  in
+  let list api kind items =
+    obj
+      [ "apiVersion", str api
+      ; "kind", str kind
+      ; "metadata", obj [ "resourceVersion", str "1" ]
+      ; "items", `List items
+      ]
+  in
+  let write name json =
+    Out_channel.with_open_text (Filename.concat root name) (fun channel ->
+      output_string channel (Yojson.Safe.to_string json))
+  in
+  write
+    "deployments.json"
+    (list
+       "apps/v1"
+       "DeploymentList"
+       (List.filter (fun document -> field "kind" document = str "Deployment") documents));
+  write
+    "configmaps.json"
+    (list
+       "v1"
+       "ConfigMapList"
+       (List.filter (fun document -> field "kind" document = str "ConfigMap") documents));
+  write
+    "jobs.json"
+    (list
+       "batch/v1"
+       "JobList"
+       (List.filter (fun document -> field "kind" document = str "Job") documents));
+  write
+    "world.json"
+    (obj
+       [ "config", integration_config
+       ; "whoami", integration_whoami
+       ; ( "cluster"
+         , match mutation with
+           | Some "changed_authority" ->
+             obj
+               [ "apiVersion", str "v1"
+               ; "kind", str "Namespace"
+               ; ( "metadata"
+                 , obj [ "name", str "kube-system"; "uid", str "another-cluster" ] )
+               ]
+           | _ -> integration_cluster )
+       ; "deployments", str (Filename.concat root "deployments.json")
+       ; "configmaps", str (Filename.concat root "configmaps.json")
+       ; "jobs", str (Filename.concat root "jobs.json")
+       ; "submitted_job", str (Filename.concat root "submitted-job.json")
+       ])
+;;
+
+(* The integrated path: verified candidate + complete obligations + authenticated
+   reads + migration execution receipt + durable evidence, composed once. *)
+let integration_probe prepared =
+  let root = env "SOL_INTEGRATION_ROOT" in
+  let evidence_dir = env "SOL_INTEGRATION_EVIDENCE" in
+  let result_path = env "SOL_INTEGRATION_RESULT" in
+  let uid = "boundary-submission-uid" in
+  let name = "boundary-migration" in
+  let namespace =
+    D.instances prepared.B.obligations
+    |> List.find_map (fun instance ->
+      match D.plan instance with
+      | D.Migration_ca_delivery requirement ->
+        Some (D.migration_ca_binding requirement).namespace
+      | _ -> None)
+    |> function
+    | Some namespace -> namespace
+    | None -> failwith "the integrated path requires a migration obligation"
+  in
+  Unix.putenv "FAKE_MIGRATION_NAMESPACE" namespace;
+  Unix.putenv "FAKE_MIGRATION_NAME" name;
+  Unix.putenv "FAKE_MIGRATION_UID" uid;
+  integration_world
+    prepared
+    ~name
+    ~uid
+    ~mutation:(Sys.getenv_opt "SOL_INTEGRATION_MUTATION")
+    root;
+  let kubeconfig = env "SOL_TEST_KUBECONFIG" in
+  Unix.putenv "KUBECONFIG" kubeconfig;
+  let ctx =
+    Sol_cli_kube_destination.of_context ~kubeconfig "explicit-observer"
+    |> get
+    |> Sol_cli_kube_destination.context_of_destination
+  in
+  let transport = L.create ~ctx ~expected:kube () in
+  let armed = ref false in
+  let fault boundary =
+    if !armed && boundary = E.Temp_written
+    then raise (Sys_error "integration capture interrupted")
+  in
+  let recorder =
+    E.open_store
+      ~directory:evidence_dir
+      ~run:prepared.B.run
+      ~secrets:[ "DISTINCTIVE_PROCESS_SECRET" ]
+      ~fault
+      ()
+    |> evidence
+  in
+  ignore
+    (E.start_assessment
+       recorder
+       ~reason:"integrated qualification path"
+       ~previous:[]
+       ~required_captures:prepared.B.required_captures
+     |> evidence);
+  ignore (B.capture_binding prepared recorder |> evidence);
+  armed := Sys.getenv_opt "SOL_INTEGRATION_FAULT" = Some "1";
+  let outcome =
+    P.run
+      ~directory:evidence_dir
+      ~prepared
+      ~recorder
+      ~read:(L.read transport)
+      ~establish:(fun () -> L.establish transport)
+      ~expected:kube
+      ~binding:(String.make 64 'b')
+      ~timeout_s:10.
+      ~completion_timeout_s:10.
+  in
+  let json =
+    match outcome with
+    | Error message -> obj [ "ok", `Bool false; "error", str message ]
+    | Ok path ->
+      let outcomes = path.P.application @ path.P.migration in
+      let verdicts =
+        List.filter_map
+          (fun (outcome : CA.outcome) ->
+             match outcome.result with
+             | Ok recorded -> Some recorded.verdict
+             | Error _ -> None)
+          outcomes
+      in
+      let accepted =
+        match D.accept_mechanism prepared.B.obligations prepared.B.requests verdicts with
+        | Ok _ -> true
+        | Error _ -> false
+      in
+      obj
+        [ "ok", `Bool true
+        ; "application", `List (List.map outcome_json path.P.application)
+        ; "migration", `List (List.map outcome_json path.P.migration)
+        ; "accept_mechanism", `Bool accepted
+        ]
+  in
+  Out_channel.with_open_text result_path (fun channel ->
+    output_string channel (Yojson.Safe.to_string json));
+  E.close recorder
 ;;
 
 let exercise ~scenario verified prepared directory =
@@ -448,7 +787,9 @@ let () =
       B.prepare ~verified ~scenario ~attempt:"offline" ~assessment:"a1" ~kubernetes:kube
       |> get
     in
-    if directory <> "-" then exercise ~scenario verified prepared directory;
+    (match Sys.getenv_opt "SOL_INTEGRATION_RESULT" with
+     | Some _ -> integration_probe prepared
+     | None -> if directory <> "-" then exercise ~scenario verified prepared directory);
     let selection = D.select prepared.run prepared.intent |> get in
     print_endline
       (Yojson.Safe.to_string

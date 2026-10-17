@@ -67,6 +67,7 @@
   ../../../qualification/database-contract-binding.py
   ../../../qualification/sol-under-test.sh
   ../../scripts/build-release-bundle.sh
+  fixture_live_kubectl.py
   candidate-obligations.golden)
  (action
   (run

@@ -319,3 +319,29 @@ Tests cover wrong digests/targets, forged/rehashed declarations, schema mismatch
 omitted or duplicated members, altered container/database/CA identities, required
 capture failure/restart, cross-assessment and identity substitution, and CA evidence
 that cannot complete the remaining obligations. All results remain MECHANISM-only.
+
+## Integrated candidate-bound path, offline
+
+`Qual_path.run` composes the existing owners into one candidate-bound,
+independently observed, durably evidenced path:
+
+1. the verified candidate and its complete qualification-owned obligations;
+2. application CA observation for every declared consumer through an injected
+   authenticated reader;
+3. exactly one launcher-driven migration execution whose actual Job locator is
+   captured and observed before the product's cleanup is released;
+4. outcomes persisted under the same assessment by the existing recorder.
+
+It refuses a recorder bound to another assessment, a missing or ambiguous
+migration obligation, an unusable candidate/protocol, and an unreadable or
+expired transport. Per-obligation failures stay in the returned outcomes; they are
+never turned into PASS, and a successful path is not itself a release verdict.
+
+The offline integration fixture combines the real installed-candidate verifier
+with controlled Kubernetes reads and a candidate whose own `sol` speaks the receipt
+protocol. It establishes that missing consumer mounts, wrong ConfigMaps and a
+replaced Job UID do not pass; that a consistently renamed CA volume still passes
+(volume names are internal linkage); that a changed Kubernetes authority leaves
+the claim unestablished; and that interrupted capture cannot seal. It also
+confirms that a complete application+migration CA PASS cannot accept a release
+while DML, TLS and other required claims remain unestablished.

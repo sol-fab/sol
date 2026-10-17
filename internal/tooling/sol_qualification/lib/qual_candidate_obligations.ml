@@ -3,12 +3,15 @@ module D = Qual_domain
 module E = Qual_evidence
 
 type t =
-  { run : D.run
+  { verified : Qual_candidate.t
+  ; run : D.run
   ; intent : D.intent
   ; obligations : D.obligations
   ; requests : D.request list
   ; required_captures : (string * string) list
   }
+
+let verified t = t.verified
 
 let binding_id run =
   "candidate-contract/" ^ D.sha256 (Yojson.Safe.to_string (D.run_json run))
@@ -25,7 +28,8 @@ let prepare ~verified ~scenario ~attempt ~assessment ~kubernetes =
   let requests = List.map D.plan (D.instances obligations) in
   let* () = D.reconcile_plan obligations requests in
   Ok
-    { run
+    { verified
+    ; run
     ; intent
     ; obligations
     ; requests
