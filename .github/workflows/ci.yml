@@ -276,6 +276,25 @@ jobs:
           bash platform/local/scripts/ensure-loki.sh
           opam exec -- dune build @ci-e2e
 
+      # Dune keeps a failing test's detailed output under `_build/_tests/` (and
+      # its command log, when written, at `_build/log`) instead of only in the
+      # step log. The runner is destroyed with the job, so preserve exactly that
+      # evidence on failure and nothing else: the narrow path list keeps
+      # kubeconfigs, environment files and workspace material out of the
+      # artifact. The step is skipped on a successful run, so it costs nothing
+      # there, and the attempt in the name keeps a re-run from colliding with the
+      # original failure's artifact.
+      - name: Upload Dune test failure output
+        if: failure() && needs.classify.outputs.kind != 'docs-only'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dune-test-output-${{ github.job }}-${{ github.run_attempt }}
+          path: |
+            _build/_tests/**
+            _build/log
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Install formatter
         if: needs.classify.outputs.kind != 'docs-only'
         run: opam install ocamlformat.0.29.0 -y
