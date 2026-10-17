@@ -101,9 +101,11 @@ Existing live entry points and matrices retain their current authority.
   evidence. Local evidence never promotes a provider claim.
 - `aws/live-row.sh` — AWS lifecycle/application qualification; its `verify` phase runs
   `aws/absence.py`, the read-only tri-state absence inventory that decides teardown.
-- `transaction.py` — the structural predicate both transaction execution paths share: an
-  operation response must carry a typed nonempty identity and a read-back must contain an
-  exact matching effect. Textual substring matching cannot establish a worker effect.
+- `transaction.py` — the structural predicate every transaction execution path shares (the
+  AWS in-cluster Job log, the AWS qualification transport, and the GCP port-forward
+  scenario): an operation response must carry a typed nonempty identity and a read-back
+  must contain an exact matching effect. Textual substring matching cannot establish a
+  worker effect.
 - `gcp/live-qual.sh` — GCP lifecycle/application qualification and provider-backed absence
   inventory.
 - provider matrices — claims, required evidence class, scenario, pass condition, and current

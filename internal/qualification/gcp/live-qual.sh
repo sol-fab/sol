@@ -6,6 +6,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 WORKSPACE="${WORKSPACE:-$ROOT/examples/pluto}"
 TFVARS="$ROOT/internal/qualification/gcp/qual-gcp.tfvars"
 OBSERVER="${OBSERVER:-$ROOT/internal/qualification/gcp/observer.py}"
+# The structural transaction predicate shared with the AWS application rows. The
+# harness owns the transport (port-forward, HTTP exchange, polling, evidence);
+# transaction.py owns every predicate over the response bodies.
+TRANSACTION="$ROOT/internal/qualification/transaction.py"
+export TRANSACTION
 
 TARGET_FILE="$WORKSPACE/sol/environments.local.yml"
 
@@ -1519,7 +1524,7 @@ app_services() { printf '%s\n' orders_svc fulfilment_worker order_svc fulfillmen
 app_helpers() {
   printf '%s\n' say app_registry app_kube_context app_services app_k8s_name app_context_path \
     app_image_ref build_app_images push_app_images app_image_ref_args app_ingress_summary \
-    app_load_balancer_address app_orders_transaction
+    app_load_balancer_address app_stop_port_forward app_wait_port_forward app_orders_transaction
 }
 
 app_postgres_url() {
@@ -1880,69 +1885,183 @@ app_load_balancer_address() {
     -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true
 }
 
+APP_FORWARD_PID=""
+app_stop_port_forward() {
+  if [ -n "${APP_FORWARD_PID:-}" ]; then
+    kill "$APP_FORWARD_PID" 2>/dev/null || true
+    wait "$APP_FORWARD_PID" 2>/dev/null || true
+    APP_FORWARD_PID=""
+  fi
+}
+
+# A port-forward that never announces an endpoint cannot carry the transaction.
+# Waiting for the announcement is deterministic in a way that probing a just
+# exited child is not: bash may not have reaped it yet, so `kill -0` can still
+# succeed for a zombie.
+app_wait_port_forward() {
+  local log="$1" attempt=0 limit="${APP_PORT_FORWARD_WAIT_ATTEMPTS:-50}"
+  while [ "$attempt" -lt "$limit" ]; do
+    if grep -q 'Forwarding from ' "$log" 2>/dev/null; then
+      return 0
+    fi
+    if ! kill -0 "$APP_FORWARD_PID" 2>/dev/null; then
+      return 1
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.2
+  done
+  return 1
+}
+
 app_orders_transaction() {
   local ns="$1" service="$2" label="$3" port="$4"
   local transcript="$LOG_DIR/app-transaction-$label.txt"
   local status_file="$LOG_DIR/app-order-status-$label.txt"
+  local status_err="$LOG_DIR/app-order-status-$label.err"
+  local order_file="$LOG_DIR/app-order-$label.txt"
+  local order_err="$LOG_DIR/app-order-$label.err"
   local order_id="ord-$label-$(date -u +%s)-$$"
+  local attempts="${APP_READBACK_ATTEMPTS:-12}" interval="${APP_READBACK_INTERVAL:-5}"
+  local attempt=0 curl_rc=0 effect_rc=0 served="" last_kind="none"
+
   kubectl -n "$ns" get pods -o wide >"$LOG_DIR/app-pods-$label.txt" 2>&1 || return 1
   kubectl -n "$ns" get events --sort-by=.lastTimestamp >"$LOG_DIR/app-events-$label.txt" 2>&1 || true
   kubectl -n "$ns" logs -l app.kubernetes.io/component=svc --tail=80 --all-containers=true \
     >"$LOG_DIR/app-svc-$label.log" 2>&1 || true
   kubectl -n "$ns" logs -l app.kubernetes.io/component=worker --tail=80 --all-containers=true \
     >"$LOG_DIR/app-worker-$label.log" 2>&1 || true
+
   kubectl -n "$ns" port-forward "svc/$service" "$port:80" \
     >"$LOG_DIR/app-port-forward-$label.log" 2>&1 &
-  local forwarder=$!
-  local attempts="${APP_READBACK_ATTEMPTS:-12}" interval="${APP_READBACK_INTERVAL:-5}"
-  local attempt=0
-  until curl -fsS -m 5 "localhost:$port/healthz" >"$LOG_DIR/app-health-$label.txt" 2>&1; do
-    attempt=$((attempt + 1))
-    if [ "$attempt" -ge "$attempts" ]; then
-      say "  $label: the service never answered /healthz over the port-forward"
-      kill "$forwarder" 2>/dev/null || true
-      return 1
+  APP_FORWARD_PID=$!
+  # The transport process must not outlive this function on any ordinary exit:
+  # a failure before the success path used to leave it running.
+  trap app_stop_port_forward EXIT
+  trap 'app_stop_port_forward; exit 130' INT
+  trap 'app_stop_port_forward; exit 143' TERM
+
+  if ! app_wait_port_forward "$LOG_DIR/app-port-forward-$label.log"; then
+    if kill -0 "$APP_FORWARD_PID" 2>/dev/null; then
+      say "  $label: the port-forward did not report a forwarding endpoint in time"
+    else
+      say "  $label: the port-forward exited before reporting a forwarding endpoint"
     fi
-    sleep "$interval"
-  done
-  {
-    printf 'namespace: %s  service: %s  language: %s\n' "$ns" "$service" "$label"
-    printf 'health: %s\n' "$(cat "$LOG_DIR/app-health-$label.txt")"
-    printf 'order: '
-    curl -fsS -m 30 -X POST "localhost:$port/orders" \
-      -H 'Content-Type: application/json' \
-      -d "{\"order_id\":\"$order_id\",\"item\":\"widget\",\"quantity\":1}" \
-      >"$LOG_DIR/app-order-$label.txt" 2>&1 && cat "$LOG_DIR/app-order-$label.txt" || printf 'FAILED\n'
-    printf '\n'
-  } >"$transcript" 2>&1
-  if ! grep -qF "$order_id" "$LOG_DIR/app-order-$label.txt" 2>/dev/null; then
-    say "  $label: the order response did not carry the submitted order id ($order_id)"
-    kill "$forwarder" 2>/dev/null || true
+    cat "$LOG_DIR/app-port-forward-$label.log" >&2 2>/dev/null || true
     return 1
   fi
-  rm -f "$status_file"
-  attempt=0
-  until grep -qE '"status":"(fulfilled|confirmed)"' "$status_file" 2>/dev/null; do
+
+  until curl -fsS -m 5 "localhost:$port/healthz" >"$LOG_DIR/app-health-$label.txt" 2>&1; do
     attempt=$((attempt + 1))
+    if ! kill -0 "$APP_FORWARD_PID" 2>/dev/null; then
+      say "  $label: the port-forward exited before the service answered /healthz"
+      cat "$LOG_DIR/app-port-forward-$label.log" >&2 2>/dev/null || true
+      return 1
+    fi
     if [ "$attempt" -ge "$attempts" ]; then
-      say "  $label: the order never reached fulfilled or confirmed in time: $order_id"
-      curl -sS -m 20 "localhost:$port/orders/$order_id" >"$status_file" 2>&1 || true
-      printf 'final read-back: %s\n' "$(cat "$status_file" 2>/dev/null)" >>"$transcript"
-      kill "$forwarder" 2>/dev/null || true
+      say "  $label: the service never answered /healthz over the port-forward"
       return 1
     fi
     sleep "$interval"
-    curl -fsS -m 20 "localhost:$port/orders/$order_id" >"$status_file" 2>&1 || true
   done
+  if ! kill -0 "$APP_FORWARD_PID" 2>/dev/null; then
+    say "  $label: the port-forward exited before the order was submitted"
+    cat "$LOG_DIR/app-port-forward-$label.log" >&2 2>/dev/null || true
+    return 1
+  fi
+
+  curl_rc=0
+  curl -fsS -m 30 -X POST "localhost:$port/orders" \
+    -H 'Content-Type: application/json' \
+    -d "{\"order_id\":\"$order_id\",\"item\":\"widget\",\"quantity\":1}" \
+    >"$order_file" 2>"$order_err" || curl_rc=$?
   {
-    printf 'read-back: %s\n' "$(cat "$status_file")"
-    printf 'the worker effect is visible to the service: %s reached fulfilled or confirmed\n' "$order_id"
-  } >>"$transcript" 2>&1
-  kill "$forwarder" 2>/dev/null || true
-  wait "$forwarder" 2>/dev/null || true
-  app_ingress_summary
-  app_load_balancer_address >"$LOG_DIR/app-load-balancer.txt" 2>&1 || true
-  return 0
+    printf 'namespace: %s  service: %s  language: %s\n' "$ns" "$service" "$label"
+    printf 'health: %s\n' "$(cat "$LOG_DIR/app-health-$label.txt" 2>/dev/null || true)"
+    printf 'order (curl exit %s): %s\n' "$curl_rc" "$(cat "$order_file" 2>/dev/null || true)"
+    [ "$curl_rc" = 0 ] || printf 'order transport error: %s\n' "$(cat "$order_err" 2>/dev/null || true)"
+  } >"$transcript" 2>&1
+  if [ "$curl_rc" != 0 ]; then
+    say "  $label: POST /orders failed at the transport (curl exit $curl_rc); evidence in $transcript"
+    return 1
+  fi
+
+  # The response predicate belongs to transaction.py: the body must decode to a
+  # JSON object with a nonempty order_id. The equality below binds that identity
+  # to the order this harness submitted; it is not a textual substring search.
+  if ! served="$(printf '%s' "$(cat "$order_file")" | python3 "$TRANSACTION" order-id 2>>"$transcript")"; then
+    say "  $label: the order response was not a usable order identity; evidence in $transcript"
+    return 1
+  fi
+  if [ "$served" != "$order_id" ]; then
+    say "  $label: the order response identified $served, not the submitted $order_id"
+    return 1
+  fi
+  printf 'order id: %s\n' "$served" >>"$transcript"
+
+  rm -f "$status_file" "$status_err"
+  attempt=0
+  while [ "$attempt" -lt "$attempts" ]; do
+    attempt=$((attempt + 1))
+    curl_rc=0
+    curl -fsS -m 20 "localhost:$port/orders/$order_id" >"$status_file" 2>"$status_err" || curl_rc=$?
+    printf 'read-back attempt %s (curl exit %s): %s\n' "$attempt" "$curl_rc" \
+      "$(cat "$status_file" 2>/dev/null || true)" >>"$transcript"
+    if [ "$curl_rc" = 0 ]; then
+      effect_rc=0
+      printf '%s' "$(cat "$status_file")" | python3 "$TRANSACTION" order-effect "$order_id" \
+        2>>"$transcript" || effect_rc=$?
+      case "$effect_rc" in
+        0)
+          {
+            printf 'read-back: %s\n' "$(cat "$status_file")"
+            printf 'the worker effect is visible to the service: %s reached fulfilled or confirmed\n' "$order_id"
+          } >>"$transcript" 2>&1
+          app_stop_port_forward
+          app_ingress_summary
+          app_load_balancer_address >"$LOG_DIR/app-load-balancer.txt" 2>&1 || true
+          return 0
+          ;;
+        1) last_kind="unmet" ;;
+        *)
+          last_kind="malformed"
+          ;;
+      esac
+    else
+      last_kind="transport"
+      printf 'read-back transport error: %s\n' \
+        "$(cat "$status_err" 2>/dev/null || true)" >>"$transcript"
+    fi
+
+    if ! kill -0 "$APP_FORWARD_PID" 2>/dev/null; then
+      say "  $label: the port-forward exited before the order read-back completed"
+      cat "$LOG_DIR/app-port-forward-$label.log" >&2 2>/dev/null || true
+      return 1
+    fi
+    if [ "$attempt" -lt "$attempts" ]; then
+      sleep "$interval"
+    fi
+  done
+
+  # Timed out. One final read-back is kept for diagnosis, and the failure names
+  # whether the bodies were semantic negatives or unusable evidence. An empty,
+  # malformed or HTTP-error body is never read as a completed order.
+  curl_rc=0
+  curl -sS -m 20 "localhost:$port/orders/$order_id" >"$status_file" 2>"$status_err" || curl_rc=$?
+  printf 'final read-back (curl exit %s): %s\n' "$curl_rc" \
+    "$(cat "$status_file" 2>/dev/null || true)" >>"$transcript"
+  case "$last_kind" in
+    malformed)
+      say "  $label: the order read-back never produced usable JSON evidence: $order_id"
+      ;;
+    transport)
+      say "  $label: the order read-back could not be completed through the transport (curl exit $curl_rc): $order_id"
+      ;;
+    *)
+      say "  $label: the order never reached fulfilled or confirmed in time: $order_id"
+      ;;
+  esac
+  cat "$transcript" >&2 2>/dev/null || true
+  return 1
 }
 
 capture_app_evidence() {

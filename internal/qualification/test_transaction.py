@@ -96,6 +96,14 @@ def test_order_identity() -> None:
         "order id is read from a typed object",
         transaction.order_id('{"order_id":"ord-1","status":"pending"}') == "ord-1",
     )
+    check(
+        "order id is read from a differently ordered object",
+        transaction.order_id('{"status":"pending","order_id":"ord-1"}') == "ord-1",
+    )
+    check(
+        "order id is read from an object with alternate whitespace",
+        transaction.order_id('{ "order_id" : "ord-1" , "status" : "pending" }') == "ord-1",
+    )
     refuses("an empty order id is refused", transaction.order_id, '{"order_id":""}')
     refuses("a missing order id is refused", transaction.order_id, '{"status":"pending"}')
     refuses("malformed order JSON is refused", transaction.order_id, "{")
@@ -107,12 +115,28 @@ def test_order_effect() -> None:
 
     check("fulfilled is a success status", visible('{"order_id":"ord-1","status":"fulfilled"}'))
     check("confirmed is a success status", visible('{"order_id":"ord-1","status":"confirmed"}'))
+    check(
+        "alternate JSON whitespace still matches",
+        visible('{ "status" : "confirmed" , "order_id" : "ord-1" }'),
+    )
+    check(
+        "differently ordered fields still match",
+        visible('{"status":"fulfilled","order_id":"ord-1"}'),
+    )
     check("pending is not a success status", not visible('{"order_id":"ord-1","status":"pending"}'))
     check("a different order is not the effect", not visible('{"order_id":"ord-2","status":"fulfilled"}'))
+    check("a longer order id is not a substring match", not visible('{"order_id":"ord-10","status":"fulfilled"}'))
     check("a missing order id is not the effect", not visible('{"status":"fulfilled"}'))
+    check("an order id only in an error field is not the effect", not visible('{"error":"order ord-1 rejected"}'))
     check("a missing status is not the effect", not visible('{"order_id":"ord-1"}'))
     check("a non-string status is not the effect", not visible('{"order_id":"ord-1","status":5}'))
     refuses("malformed order read-back is refused", transaction.order_effect_visible, "nope", "ord-1")
+    refuses(
+        "a non-object order read-back is refused",
+        transaction.order_effect_visible,
+        '["ord-1"]',
+        "ord-1",
+    )
 
 
 def test_command_line_contract() -> None:
@@ -132,6 +156,16 @@ def test_command_line_contract() -> None:
         "charge-effect refuses malformed evidence",
         run("charge-effect", "ch_9", body="no").returncode == 2,
     )
+    result = run("order-id", body='{"status":"pending","order_id":"ord-9"}')
+    check(
+        "order-id succeeds on a typed identity",
+        result.returncode == 0 and result.stdout.strip() == "ord-9",
+    )
+    check("order-id fails on malformed JSON", run("order-id", body="{").returncode == 2)
+    check(
+        "order-id refuses a response whose id is only in an error message",
+        run("order-id", body='{"error":"order ord-9 was rejected"}').returncode == 2,
+    )
     check(
         "order-effect succeeds on a matching success status",
         run("order-effect", "ord-9", body='{"order_id":"ord-9","status":"confirmed"}').returncode == 0,
@@ -139,6 +173,10 @@ def test_command_line_contract() -> None:
     check(
         "order-effect reports an unmet effect distinctly",
         run("order-effect", "ord-9", body='{"order_id":"ord-9","status":"pending"}').returncode == 1,
+    )
+    check(
+        "order-effect refuses malformed evidence",
+        run("order-effect", "ord-9", body="not-json").returncode == 2,
     )
     check("an unknown command fails", run("nonsense").returncode == 2)
 
