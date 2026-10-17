@@ -35,6 +35,9 @@ CANDIDATE_REVISION="$(git -C "$SCRATCH_WS" rev-parse HEAD)"
 cleanup() {
   rm -f "$TARGET_FILE"
   rmdir "$(dirname "$TARGET_FILE")" 2>/dev/null || true
+  # Mutation copies live beside the harness so the script still resolves the
+  # repository root from its own path; they are test artifacts, never tracked.
+  rm -f "$HERE"/.live-qual-mutated-*.sh
   [ "${KEEP_TMP:-0}" = "1" ] && { echo "kept: $TMP"; return; }
   rm -rf "$TMP"
 }
@@ -659,13 +662,32 @@ run_case() {
     : >"$LOG_DIR/inventory-pre.tsv"
     [ -s "$LOG_DIR/attempt.txt" ] || printf 'attempt=%s\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
   fi
+  local harness="${HARNESS_UNDER_TEST:-$HARNESS}"
   env ALLOW_CANONICAL=1 SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" CLUSTER=test-cluster \
     IMPERSONATOR=user:test@example.com LE_EMAIL=test@example.com \
     PROJECT=sol-qualification REGION=us-central1 \
     PATH="$TMP/bin:$PATH" "$@" \
-    "$HARNESS" "$sub" >"$TMP/$name.out" 2>&1
+    "$harness" "$sub" >"$TMP/$name.out" 2>&1
   echo "$? " >"$TMP/$name.rc"
   sed -i 's/ //' "$TMP/$name.rc"
+}
+
+# Run a *mutated* copy of the harness. The copy sits beside the real one so the
+# script resolves the repository root from its own path; a copy anywhere else
+# would fail its environment check instead of exercising the code under test.
+# The mutation is a sed expression, so the regression is demonstrated against
+# the shipped control flow rather than against a test-only hook.
+run_mutated_case() {
+  local name="$1" sub="$2" mutation="$3"
+  shift 3
+  local mutated="$HERE/.live-qual-mutated-$name.sh"
+  sed "$mutation" "$HARNESS" >"$mutated"
+  chmod +x "$mutated"
+  HARNESS_UNDER_TEST="$mutated"
+  run_case "$name" "$sub" "$@"
+  local rc=$?
+  unset HARNESS_UNDER_TEST
+  return "$rc"
 }
 
 run_case_without_a_phase() {
@@ -1204,6 +1226,53 @@ for mode in permission transport invalid; do
     no "the target is retained ($mode)" "present" "removed"
   fi
 done
+
+printf '\nscenario: every inventory row is one tab-separated line per declared class\n'
+run_case inventory-row-shape destroy
+shape="$TMP/inventory-row-shape.logs/inventory-post.tsv"
+bad_rows="$(awk -F'\t' 'NF != 4 { n++ } END { print n + 0 }' "$shape")"
+is "every row has exactly four fields" "$bad_rows" "0"
+if grep -qF -- '==>' "$shape"; then
+  no "no multi-file head header reaches the evidence" "no '==>' header" "present"
+else
+  ok "no multi-file head header reaches the evidence"
+fi
+dupes="$(cut -f1 "$shape" | sort | uniq -d)"
+is "no class is observed twice" "$dupes" ""
+declared="$(sed -n '/^INVENTORY_CLASSES=(/,/^)/p' "$HARNESS" \
+  | sed -n 's/^  "\([^|]*\)|.*/\1/p' | sort)"
+observed="$(cut -f1 "$shape" | sort)"
+if [ "$declared" = "$observed" ]; then
+  ok "the emitted classes are exactly the declared universe"
+else
+  no "the emitted classes are exactly the declared universe" "$declared" "$observed"
+fi
+
+printf '\nscenario: the verdict needs every declared class, not just the rows that happened\n'
+run_mutated_case inventory-missing-class verify '/provider_probe disks /d'
+is "an inventory that never observed a declared class does not verify" \
+  "$(cat "$TMP/inventory-missing-class.rc")" "1"
+has "it names the class that was never observed" \
+  "disks: the class was not observed" "$TMP/inventory-missing-class.out"
+has "and the verdict says absence was not established" \
+  "disks: could NOT determine absence" "$TMP/inventory-missing-class.out"
+
+printf '\nscenario: a row for a class the verdict does not declare is rejected\n'
+run_mutated_case inventory-undeclared-class verify \
+  's/provider_probe disks          /provider_probe disks-undeclared /'
+is "an undeclared class fails the verification" \
+  "$(cat "$TMP/inventory-undeclared-class.rc")" "1"
+has "it names the undeclared row" \
+  "disks-undeclared: an inventory row for a class the verdict does not declare" \
+  "$TMP/inventory-undeclared-class.out"
+
+printf '\nscenario: a class observed twice is not one observation\n'
+run_mutated_case inventory-duplicate-class verify \
+  's/^\(  provider_probe disks .*\)$/\1\n\1/'
+is "a duplicated class fails the verification" \
+  "$(cat "$TMP/inventory-duplicate-class.rc")" "1"
+has "it names the duplicated class" \
+  "disks: observed 2 times" "$TMP/inventory-duplicate-class.out"
 
 printf '\nscenario: no contradictory configuration is ever rendered\n'
 if cat "$TMP"/*.argv | grep -qE 'create_dns_zone=true'; then
