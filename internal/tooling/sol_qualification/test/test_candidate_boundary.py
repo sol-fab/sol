@@ -442,9 +442,11 @@ class Boundary(fixture.Binding):
         self.assertEqual(value["ca_family"], "pass", value)
         self.assertTrue(value["complete"], value)
         self.assertFalse(value["release_accepted"], value)
-        # Only the two declared database consumers; the Kafka-only nonconsumer is
-        # not required to carry the CA.
-        self.assertEqual(len(value["outcomes"]), 2, value)
+        # Two declared database consumers and one migration context; the
+        # Kafka-only nonconsumer is not required to carry the CA.
+        self.assertEqual(len(value["outcomes"]), 3, value)
+        self.assertFalse(
+            any("checkout" in item["instance"] for item in value["outcomes"]), value)
 
     def test_boundary_real_driver_missing_mount_fails(self):
         run = self.run_real_driver(mutation="missing_mount")
