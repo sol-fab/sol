@@ -488,18 +488,18 @@ let test_long_handler_renews_lease () =
      := fun () ->
           incr handled;
           ignore (Eio.Promise.try_resolve started_r ());
-          Eio.Time.sleep env#clock 0.5;
+          Eio.Time.sleep env#clock 2.0;
           Ok ());
     (match
-       Eio.Time.with_timeout env#clock 5.0 (fun () ->
+       Eio.Time.with_timeout env#clock 10.0 (fun () ->
          Eio.Fiber.both
-           (fun () -> run_slow ~lease_s:0.1 ~max_jobs:1 env pool)
+           (fun () -> run_slow ~lease_s:1.2 ~max_jobs:1 env pool)
            (fun () ->
               Eio.Promise.await started;
               Eio.Fiber.both
-                (fun () -> run_slow ~lease_s:0.1 ~stop env pool)
+                (fun () -> run_slow ~lease_s:1.2 ~stop env pool)
                 (fun () ->
-                   Eio.Time.sleep env#clock 0.35;
+                   Eio.Time.sleep env#clock 1.7;
                    ignore (Eio.Promise.try_resolve stop_r ())));
          Ok ())
      with
@@ -558,10 +558,12 @@ let test_lost_renewal_is_logged () =
     let stop, stop_r = Eio.Promise.create () in
     (Slow.on_handle
      := fun () ->
-          reclaim_now pool;
-          Eio.Time.sleep env#clock 0.15;
-          Eio.Promise.resolve stop_r ();
-          Ok ());
+          Fun.protect
+            ~finally:(fun () -> Eio.Promise.resolve stop_r ())
+            (fun () ->
+               reclaim_now pool;
+               Eio.Time.sleep env#clock 1.0;
+               Ok ()));
     let (), err = capture_stderr (fun () -> run_slow ~lease_s:0.1 ~stop env pool) in
     Windtrap.equal
       Windtrap.bool
@@ -995,11 +997,140 @@ let test_max_jobs_counts_confirmed_terminal_transitions () =
       (rows pool))
 ;;
 
+let test_confirmed_loss_cancels_and_joins_handler () =
+  with_pool ~pool_size:2 (fun env pool ->
+    List.iter (exec_sql pool) ddl;
+    enqueue_slow pool;
+    let started, started_r = Eio.Promise.create () in
+    let second, second_r = Eio.Promise.create () in
+    let old_stop, old_stop_r = Eio.Promise.create () in
+    let calls = ref 0 in
+    let cancelled = ref false in
+    let cleaned = ref false in
+    let stale_returned = ref false in
+    (Slow.on_handle
+     := fun () ->
+          incr calls;
+          if !calls = 1
+          then (
+            exec_sql pool "UPDATE sol_jobs SET locked_until = now() - interval '1 second'";
+            Eio.Promise.resolve started_r ();
+            try
+              Eio.Promise.await second;
+              Eio.Time.sleep env#clock 10.0;
+              Windtrap.fail "stale handler was not cancelled"
+            with
+            | Eio.Cancel.Cancelled _ ->
+              cancelled := true;
+              Eio.Cancel.protect (fun () ->
+                Eio.Time.sleep env#clock 0.15;
+                cleaned := true);
+              Eio.Promise.resolve old_stop_r ();
+              Ok ())
+          else (
+            Eio.Promise.resolve second_r ();
+            Eio.Time.sleep env#clock 0.3;
+            Ok ()));
+    Eio.Switch.run (fun sw ->
+      let obs =
+        Sol_obs.of_env
+          ~sw
+          ~net:env#net
+          ~clock:env#clock
+          ~mono_clock:env#mono_clock
+          ~service:"claim-loss-test"
+          ()
+      in
+      Eio.Time.with_timeout_exn env#clock 5.0 (fun () ->
+        Eio.Fiber.both
+          (fun () ->
+             (match
+                Slows.run
+                  ~env
+                  ~pool
+                  ~lease_s:0.3
+                  ~stop:old_stop
+                  ~ot:obs
+                  ~metrics_port:0
+                  ()
+              with
+              | Ok () -> ()
+              | Error e -> Windtrap.fail (Sol_jobs.run_error_to_string e));
+             stale_returned := true;
+             Windtrap.equal
+               Windtrap.bool
+               ~msg:"run joined cancellation cleanup"
+               true
+               !cleaned)
+          (fun () ->
+             Eio.Promise.await started;
+             run_slow ~lease_s:0.3 ~max_jobs:1 env pool));
+      let metrics = Sol_obs.metrics_renderer obs () in
+      Windtrap.equal
+        (Windtrap.float 0.0)
+        1.0
+        (metric_sum
+           metrics
+           "sol_jobs_queue_errors_total"
+           [ "action", "renew"; "reason", "lease_lost" ]);
+      Windtrap.equal
+        (Windtrap.float 0.0)
+        ~msg:"late success never attempted finalization"
+        0.0
+        (metric_sum metrics "sol_jobs_queue_errors_total" [ "action", "complete" ]);
+      Windtrap.equal
+        (Windtrap.float 0.0)
+        0.0
+        (metric_sum metrics "sol_jobs_processed_total" []));
+    Windtrap.equal Windtrap.bool true !cancelled;
+    Windtrap.equal Windtrap.bool true !stale_returned;
+    Windtrap.equal Windtrap.int 2 !calls;
+    Windtrap.equal
+      (Windtrap.list (Windtrap.triple Windtrap.string Windtrap.string Windtrap.int))
+      [ "slow", "completed", 2 ]
+      (rows pool))
+;;
+
+let test_renewal_error_does_not_mean_claim_loss () =
+  with_pool (fun env pool ->
+    List.iter (exec_sql pool) ddl;
+    enqueue_slow pool;
+    let finished = ref false in
+    (Slow.on_handle
+     := fun () ->
+          exec_sql pool "ALTER TABLE sol_jobs RENAME TO unavailable_jobs";
+          Eio.Time.sleep env#clock 0.15;
+          exec_sql pool "ALTER TABLE unavailable_jobs RENAME TO sol_jobs";
+          finished := true;
+          Ok ());
+    let (), err =
+      capture_stderr (fun () -> run_slow ~lease_s:0.09 ~max_jobs:1 env pool)
+    in
+    Windtrap.equal Windtrap.bool true !finished;
+    Windtrap.equal
+      Windtrap.bool
+      true
+      (Sol_runtime.contains_substring ~needle:"lease renewal failed" err);
+    Windtrap.equal
+      Windtrap.bool
+      false
+      (Sol_runtime.contains_substring ~needle:"lease lost" err))
+;;
+
 let () =
   Windtrap.run
     ~argv:[||]
     "sol_jobs_pg"
     [ Windtrap.group
+        "confirmed claim loss"
+        [ Windtrap.test
+            "loss cancels and joins even a handler returning late success"
+            test_confirmed_loss_cancels_and_joins_handler
+        ; Windtrap.test
+            "renewal errors preserve unknown ownership"
+            test_renewal_error_does_not_mean_claim_loss
+        ]
+    ; Windtrap.group
         "durable outcome accounting"
         [ Windtrap.test
             "handler outcomes differ from durable transitions"
