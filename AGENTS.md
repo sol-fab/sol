@@ -185,6 +185,15 @@ assurance justifies the maintenance cost. Do not build a second implementation o
 dependencies merely to test the first. When simplifying, preserve meaningful regression coverage
 rather than historical test machinery.
 
+Enforcement machinery must buy a guarantee, not restate a shape. A small regression test that
+refuses an unsafe Terraform import, or proves that a failed run still exposes its diagnostic
+output, is valuable. A source-shape guard that only asserts a workflow, file or function contains
+expected names or fields is not evidence of the behavior it stands for, and testing the guard's own
+mutations does not add behavioral evidence. Add such a guard only when it catches a concrete
+failure that CI review and a test at the failure boundary cannot reasonably detect; state the
+failure and the evidence that justifies the machinery. We want better guarantees, not a growing
+collection of systems that assert them.
+
 Preserve the original diagnostics Terraform, Kubernetes and cloud providers emit, including error
 codes and messages. Add concise Sol context when it helps, but do not replace, obscure or
 speculatively reinterpret the underlying error, and redact sensitive values where necessary.
