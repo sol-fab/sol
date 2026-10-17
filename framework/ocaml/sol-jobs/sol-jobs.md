@@ -180,6 +180,7 @@ module Make (J : JOB) : sig
     -> ?retry_policy:retry_policy
     -> ?poll_interval_s:float
     -> ?lease_s:float
+    -> ?execution_timeout_s:float
     -> ?ot:Sol_obs.t
     -> ?metrics_port:int
     -> ?on_ready:(unit -> unit)
@@ -202,6 +203,16 @@ Metrics distinguish handler outcomes from durable transitions. `sol_jobs_handler
 The same boundary validates every timing input before the first database read or signal registration (CODEX_STYLE_AUDIT-079): `lease_s` and `poll_interval_s` must be finite and greater than zero (a nonpositive lease would let a second poller reclaim a job immediately; a nonpositive interval reaches `Eio.Time.sleep`), and `retry_policy`'s `base_delay_s`/`max_delay_s` must be finite and non-negative while `jitter_ratio` must be finite and within `[0, 1]`. `0` retry delays stay valid (an app may want immediate retries), negative `max_attempts` stays valid (unlimited), and non-finite values (`nan`/`infinity`) are refused rather than reaching a sleep, `Random` or the claim SQL.
 
 Database trouble is loud (BUG-044). `run` reads the `sol_jobs` table before its first claim and returns `` Error (`Database msg) `` if it cannot — a missing migration is a startup error, not an idle-looking loop. A claim query that fails is logged (to `ot`, or to stderr without it) and retried every `poll_interval_s`; `max_claim_failures` consecutive failures (default `30`) end `run` with `` `Database ``, so a `-worker` whose database stays unreachable exits and is restarted visibly rather than polling in silence. Every other database failure the loop meets (a failed completion, retry or terminal mark) is logged the same way.
+
+## Cooperative execution deadlines and shutdown
+
+`?execution_timeout_s` is optional, absent by default, and must be finite and greater than zero. It is a cooperative execution deadline measured with the monotonic clock from before decoding, not a hard execution limit. Deadline expiry requests handler cancellation and waits for the handler and its cleanup to exit. Renewal remains active in a separate cancellation scope during timeout cleanup while the attempt is still owned. A handler that ignores cancellation or blocks its Eio domain can monopolize the loop indefinitely. Use a separately supervised process when a workload requires hard isolation; this library does not supply it.
+
+After timeout cleanup exits, the normal attempt-fenced retry/failure transition records `cooperative execution deadline exceeded`. Catching cancellation and returning success does not erase timeout. A handler returning after the elapsed deadline is also a timeout even if scheduling delayed the timer. Handler-return metrics describe that actual return; durable metrics describe the eventual retry/failure. Claim and finalization query time are outside the execution deadline, and query/pool stalls remain unbounded here.
+
+Race decisions follow observed completion of the structured races: confirmed loss cancels and joins execution, skips finalization, and takes precedence over a timeout whose cleanup has not exited. If execution exits first, finalization still requires the attempt fence; a concurrent newer claim makes the update a no-op. External/parent cancellation propagates, joins cooperative work, and never converts into a timeout failure or an eager retry. No timeout or cancellation retracts external effects already accepted.
+
+The first SIGTERM/SIGINT or `stop` promise drains active execution with renewal; its configured deadline still applies. Parent cancellation cancels both execution and renewal, performs no eager queue transition, and may let the last lease expire during protected cleanup. Keep external side effects idempotent in both cases. Pre-handler shutdown release remains the separate boundary described below.
 
 ## Shutdown at the pre-handler boundary
 

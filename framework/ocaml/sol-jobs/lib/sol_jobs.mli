@@ -39,6 +39,7 @@ module Make (J : JOB) : sig
     -> ?retry_policy:retry_policy
     -> ?poll_interval_s:float
     -> ?lease_s:float
+    -> ?execution_timeout_s:float
     -> ?ot:Sol_obs.t
     -> ?metrics_port:int
     -> ?on_ready:(unit -> unit)
