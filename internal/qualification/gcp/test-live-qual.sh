@@ -487,6 +487,18 @@ kubectl_log_to="$ARGV_LOG"
 case " $* " in *"get --raw /readyz"*) kubectl_log_to="${API_PROBE_LOG:-$ARGV_LOG}" ;; esac
 printf 'kubectl %s [kubeconfig=%s]\n' "$*" "${KUBECONFIG:-none}" >>"$kubectl_log_to"
 case "$*" in
+  *" port-forward "*)
+    # The application transaction owns a real port-forward's lifecycle, so the
+    # stub must stay alive until the harness stops it. A separate mode models a
+    # forwarder that exits before any request reaches the service.
+    if [ "${STUB_PORT_FORWARD_EXITS:-0}" = "1" ]; then
+      printf 'error: lost connection to pod\n' >&2
+      exit 1
+    fi
+    printf '%s\n' "$$" >>"${STUB_PORT_FORWARD_PIDS:-/dev/null}"
+    printf 'Forwarding from 127.0.0.1:18080 -> 80\n'
+    exec sleep 3600
+    ;;
   "create secret generic"*)
     if [ "${STUB_SECRET_CREATE_FAILS:-0}" = "1" ]; then
       printf 'Error from server (Forbidden): secrets "redpanda-users" is forbidden\n' >&2
@@ -972,20 +984,79 @@ mv "$TMP/bin/curl" "$TMP/bin/curl.delegation"
 cat >"$TMP/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 printf 'curl %s\n' "$*" >>"${CURL_LOG:-/dev/null}"
+
+submitted_id() {
+  local body="" prev=""
+  for arg in "$@"; do
+    [ "$prev" = "-d" ] && body="$arg"
+    prev="$arg"
+  done
+  printf '%s' "$body" | sed -n 's/.*"order_id":"\([^"]*\)".*/\1/p'
+}
+
+readback_sequence() {
+  # A per-case counter lets a case model "pending, then confirmed" without
+  # making the server's answer depend on wall-clock time.
+  local counter="${STUB_TX_COUNTER:-}" n=1
+  if [ -n "$counter" ]; then
+    n="$(cat "$counter" 2>/dev/null || echo 0)"
+    n=$((n + 1))
+    printf '%s\n' "$n" >"$counter"
+  fi
+  printf '%s' "$n"
+}
+
 case " $* " in
+  *"/healthz"*)
+    if [ "${STUB_TX_HEALTH:-ok}" = fail ]; then
+      printf 'unhealthy\n' >&2
+      exit 22
+    fi
+    printf '%s\n' "${STUB_TX_HEALTH:-ok}"
+    ;;
   *"/orders/"*)
-    id="${!#}"
-    printf '{"order_id":"%s","status":"confirmed"}' "$id"
+    url="${!#}"
+    id="${url##*/}"
+    mode="${STUB_TX_READBACK:-confirmed}"
+    if [ "$mode" = eventually ]; then
+      if [ "$(readback_sequence)" -ge 2 ]; then mode=confirmed; else mode=pending; fi
+    fi
+    case "$mode" in
+      confirmed) printf '{"order_id":"%s","status":"confirmed"}\n' "$id" ;;
+      fulfilled) printf '{"order_id":"%s","status":"fulfilled"}\n' "$id" ;;
+      whitespace) printf '{ "status" : "confirmed" , "order_id" : "%s" }\n' "$id" ;;
+      field-order) printf '{"status":"confirmed","order_id":"%s"}\n' "$id" ;;
+      pending) printf '{"order_id":"%s","status":"pending"}\n' "$id" ;;
+      wrong-id) printf '{"order_id":"ord-somebody-else","status":"fulfilled"}\n' ;;
+      status-only) printf '{"status":"fulfilled"}\n' ;;
+      missing-status) printf '{"order_id":"%s"}\n' "$id" ;;
+      invalid-json) printf '{"order_id":\n' ;;
+      http-error)
+        # Worst case: an HTTP error body that would satisfy a textual status
+        # predicate. curl's exit status must keep it from being evaluated.
+        printf '{"order_id":"%s","status":"fulfilled"}\n' "$id"
+        exit 22
+        ;;
+      *) printf '{"order_id":"%s","status":"pending"}\n' "$id" ;;
+    esac
     ;;
   *"/orders"*)
-    body=""
-    prev=""
-    for arg in "$@"; do
-      [ "$prev" = "-d" ] && body="$arg"
-      prev="$arg"
-    done
-    id="$(printf '%s' "$body" | sed -n 's/.*"order_id":"\([^"]*\)".*/\1/p')"
-    printf '{"order_id":"%s","status":"accepted"}' "$id"
+    id="$(submitted_id "$@")"
+    mode="${STUB_TX_SUBMIT:-accepted}"
+    case "$mode" in
+      accepted) printf '{"order_id":"%s","status":"accepted"}\n' "$id" ;;
+      whitespace) printf '{ "status" : "accepted" , "order_id" : "%s" }\n' "$id" ;;
+      field-order) printf '{"status":"accepted","order_id":"%s"}\n' "$id" ;;
+      wrong-id) printf '{"order_id":"ord-somebody-else","status":"accepted"}\n' ;;
+      missing-id) printf '{"status":"accepted"}\n' ;;
+      id-in-error) printf '{"error":"order %s was rejected"}\n' "$id" ;;
+      invalid-json) printf '{"order_id":\n' ;;
+      http-error)
+        printf '{"order_id":"%s","status":"accepted"}\n' "$id"
+        exit 22
+        ;;
+      *) printf '{"order_id":"%s","status":"accepted"}\n' "$id" ;;
+    esac
     ;;
   *) printf 'ok' ;;
 esac
@@ -1026,7 +1097,9 @@ has "and records the read as unobservable, not absent" \
   "$TMP/app-broker-unreadable.logs/prerequisites.txt"
 lacks "and does not report absence it did not establish" \
   "redpanda/redpanda-users is absent" "$TMP/app-broker-unreadable.logs/prerequisites.txt"
+cp "$TMP/bin/curl" "$TMP/bin/curl.transaction"
 mv "$TMP/bin/curl.delegation" "$TMP/bin/curl"
+cp "$TMP/bin/curl" "$TMP/bin/curl.delegation"
 has "it builds each image from that service's own Dockerfile" \
   "docker build -f $TMP/app-ok.logs/app-build-context/app/payments/orders_svc/Dockerfile" "$DOCKER_LOG"
 has "including the TypeScript namespace's service from its own Dockerfile" \
@@ -1138,39 +1211,160 @@ lacks "only a unit that protects /metrics declares the API key, so it is not a w
   "$TMP/app-ok.logs/app-runtime-secrets.txt"
 
 printf '\nscenario: a stalled orders read-back fails the phase, so success cannot be manufactured\n'
+# The earlier app cases restored the DNS/identity curl stub; the transaction
+# cases exercise the configurable application stub.
+cp "$TMP/bin/curl.transaction" "$TMP/bin/curl"
 export CURL_LOG="$TMP/app-stall.curl"
 : >"$CURL_LOG"
-mv "$TMP/bin/curl" "$TMP/bin/curl.orders"
-cat >"$TMP/bin/curl" <<'STUB'
-#!/usr/bin/env bash
-printf 'curl %s\n' "$*" >>"${CURL_LOG:-/dev/null}"
-case " $* " in
-  *"/orders/"*) printf '{"status":"pending"}' ;;
-  *"/orders"*)
-    body=""
-    prev=""
-    for arg in "$@"; do
-      [ "$prev" = "-d" ] && body="$arg"
-      prev="$arg"
-    done
-    id="$(printf '%s' "$body" | sed -n 's/.*"order_id":"\([^"]*\)".*/\1/p')"
-    printf '{"order_id":"%s","status":"accepted"}' "$id"
-    ;;
-  *) printf 'ok' ;;
-esac
-STUB
-chmod +x "$TMP/bin/curl"
 export DOCKER_LOG="$TMP/app-stall.docker"
 : >"$DOCKER_LOG"
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-stall app \
-  APP_READBACK_ATTEMPTS=2 APP_READBACK_INTERVAL=1
-mv "$TMP/bin/curl.orders" "$TMP/bin/curl"
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_TX_READBACK=pending \
+  run_case app-stall app APP_READBACK_ATTEMPTS=2 APP_READBACK_INTERVAL=1
 is "a read-back that never reaches fulfilled fails the phase" \
   "$(cat "$TMP/app-stall.rc")" 1
 lacks "and no alpha row is recorded as run" "$(printf 'B1\trun')" \
   "$TMP/app-stall.logs/alpha-rows.txt"
 has "the failure names the order that never completed" "never reached fulfilled or confirmed" \
   "$TMP/app-stall.logs/app-transaction-ocaml.log"
+
+printf '\nscenario: adversarial — the shared transaction predicate decides every order body\n'
+# The two predicates this change removed were textual. Demonstrate that each
+# would have accepted a body the shared evaluator refuses, then drive the real
+# harness against the same bodies.
+old_status="$TMP/old-status-only.json"
+printf '{"status":"fulfilled"}' >"$old_status"
+if grep -qE '"status":"(fulfilled|confirmed)"' "$old_status"; then
+  ok "the removed status grep accepts a body with no order identity"
+else
+  no "the removed status grep accepts a body with no order identity" "match" "no match"
+fi
+old_error="$TMP/old-id-in-error.json"
+printf '{"error":"order %s was rejected"}' "ord-old" >"$old_error"
+if grep -qF "ord-old" "$old_error"; then
+  ok "the removed order-id grep accepts an error message that merely names the id"
+else
+  no "the removed order-id grep accepts an error message that merely names the id" "match" "no match"
+fi
+lacks "the harness no longer greps the submitted id out of the response" \
+  'grep -qF "$order_id" "$LOG_DIR/app-order' "$HARNESS"
+lacks "and no longer greps the terminal status" \
+  'grep -qE '\''"status":"(fulfilled|confirmed)"'\'' "$status_file"' "$HARNESS"
+
+run_transaction_case() {
+  local name="$1"
+  shift
+  export DOCKER_LOG="$TMP/$name.docker"
+  : >"$DOCKER_LOG"
+  export CURL_LOG="$TMP/$name.curl"
+  : >"$CURL_LOG"
+  STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 \
+    run_case "$name" app APP_READBACK_ATTEMPTS="${TX_ATTEMPTS:-2}" APP_READBACK_INTERVAL=1 "$@"
+}
+
+export STUB_PORT_FORWARD_PIDS="$TMP/tx-port-forward-pids"
+: >"$STUB_PORT_FORWARD_PIDS"
+
+# Positive: alternate JSON serialization must still establish the effect.
+for mode in accepted whitespace field-order; do
+  run_transaction_case "tx-submit-$mode" STUB_TX_SUBMIT="$mode"
+  is "submit $mode: the phase exits 0" "$(cat "$TMP/tx-submit-$mode.rc")" 0
+  has "submit $mode: the OCaml effect is recorded" "the worker effect is visible" \
+    "$TMP/tx-submit-$mode.logs/app-transaction-ocaml.txt"
+  has "submit $mode: the TypeScript effect is recorded" "the worker effect is visible" \
+    "$TMP/tx-submit-$mode.logs/app-transaction-ts.txt"
+done
+
+for mode in confirmed fulfilled whitespace field-order; do
+  run_transaction_case "tx-readback-$mode" STUB_TX_READBACK="$mode"
+  is "read-back $mode: the phase exits 0" "$(cat "$TMP/tx-readback-$mode.rc")" 0
+  has "read-back $mode: the OCaml effect is recorded" "the worker effect is visible" \
+    "$TMP/tx-readback-$mode.logs/app-transaction-ocaml.txt"
+  has "read-back $mode: the TypeScript effect is recorded" "the worker effect is visible" \
+    "$TMP/tx-readback-$mode.logs/app-transaction-ts.txt"
+done
+
+# Positive: polling is bounded but a pending first read-back may still complete.
+rm -f "$TMP/tx-eventually.counter"
+run_transaction_case tx-readback-eventually STUB_TX_READBACK=eventually \
+  STUB_TX_COUNTER="$TMP/tx-eventually.counter"
+is "a pending first read-back that later completes exits 0" \
+  "$(cat "$TMP/tx-readback-eventually.rc")" 0
+has "and the first response was recorded as pending" '"status":"pending"' \
+  "$TMP/tx-readback-eventually.logs/app-transaction-ocaml.txt"
+has "and the completed effect is recorded" "the worker effect is visible" \
+  "$TMP/tx-readback-eventually.logs/app-transaction-ocaml.txt"
+
+# Negative submission bodies: none may be read as the submitted order.
+for mode in wrong-id missing-id id-in-error invalid-json http-error; do
+  run_transaction_case "tx-submit-$mode" STUB_TX_SUBMIT="$mode"
+  [ "$(cat "$TMP/tx-submit-$mode.rc")" != "0" ] \
+    && ok "submit $mode: the phase fails" \
+    || no "submit $mode: the phase fails" "non-zero" "0"
+  lacks "submit $mode: no OCaml row is recorded" "$(printf 'OCaml\tB1\trun')" \
+    "$TMP/tx-submit-$mode.logs/alpha-rows.txt"
+done
+has "a different returned id is named" "identified ord-somebody-else, not the submitted" \
+  "$TMP/tx-submit-wrong-id.logs/app-transaction-ocaml.log"
+has "a missing id is not a usable identity" "not a usable order identity" \
+  "$TMP/tx-submit-missing-id.logs/app-transaction-ocaml.log"
+has "an id only in an error message is not a usable identity" "not a usable order identity" \
+  "$TMP/tx-submit-id-in-error.logs/app-transaction-ocaml.log"
+has "malformed submission JSON is not a usable identity" "not a usable order identity" \
+  "$TMP/tx-submit-invalid-json.logs/app-transaction-ocaml.log"
+has "an HTTP failure is reported as a transport failure" "failed at the transport (curl exit 22)" \
+  "$TMP/tx-submit-http-error.logs/app-transaction-ocaml.log"
+
+# Negative read-backs: every body is evaluated structurally, and the failure
+# names whether the evidence was an unmet effect, unreadable, or unreachable.
+for mode in pending wrong-id status-only missing-status invalid-json http-error; do
+  run_transaction_case "tx-readback-$mode" STUB_TX_READBACK="$mode"
+  [ "$(cat "$TMP/tx-readback-$mode.rc")" != "0" ] \
+    && ok "read-back $mode: the phase fails" \
+    || no "read-back $mode: the phase fails" "non-zero" "0"
+  lacks "read-back $mode: no OCaml row is recorded" "$(printf 'OCaml\tB1\trun')" \
+    "$TMP/tx-readback-$mode.logs/alpha-rows.txt"
+done
+for mode in pending wrong-id status-only missing-status; do
+  has "read-back $mode: the semantic negative is named" "never reached fulfilled or confirmed" \
+    "$TMP/tx-readback-$mode.logs/app-transaction-ocaml.log"
+done
+has "a malformed read-back is not a semantic negative" "never produced usable JSON evidence" \
+  "$TMP/tx-readback-invalid-json.logs/app-transaction-ocaml.log"
+has "an HTTP read-back failure is named as transport" "could not be completed through the transport" \
+  "$TMP/tx-readback-http-error.logs/app-transaction-ocaml.log"
+
+# A forwarder that dies before the request cannot establish the transaction, and
+# the failure names the transport rather than the order.
+run_transaction_case tx-port-forward-exit STUB_PORT_FORWARD_EXITS=1
+[ "$(cat "$TMP/tx-port-forward-exit.rc")" != "0" ] \
+  && ok "a port-forward that exits before the request fails the phase" \
+  || no "a port-forward that exits before the request fails the phase" "non-zero" "0"
+has "and the failure names the forwarder" "forwarding endpoint" \
+  "$TMP/tx-port-forward-exit.logs/app-transaction-ocaml.log"
+
+run_transaction_case tx-health-fails STUB_TX_HEALTH=fail
+[ "$(cat "$TMP/tx-health-fails.rc")" != "0" ] \
+  && ok "an unhealthy service fails before any order is submitted" \
+  || no "an unhealthy service fails before any order is submitted" "non-zero" "0"
+has "and the failure names the health endpoint" "never answered /healthz" \
+  "$TMP/tx-health-fails.logs/app-transaction-ocaml.log"
+
+# The forwarder is stopped on success and on every failure above. The stub
+# records its own pid before sleeping, so a leaked process is observable.
+leftover_forwarders=""
+while IFS= read -r forwarder_pid; do
+  [ -n "$forwarder_pid" ] || continue
+  if kill -0 "$forwarder_pid" 2>/dev/null; then
+    leftover_forwarders="$leftover_forwarders $forwarder_pid"
+  fi
+done <"$STUB_PORT_FORWARD_PIDS"
+if [ -z "$leftover_forwarders" ]; then
+  ok "every port-forward was stopped, including the failure paths"
+else
+  no "every port-forward was stopped, including the failure paths" "no live forwarder" \
+    "still running:$leftover_forwarders"
+fi
+cp "$TMP/bin/curl.delegation" "$TMP/bin/curl"
 
 printf '\nscenario: adversarial — a bundle that cannot pin Sol stops the run before Sol is asked to move anything\n'
 export DOCKER_LOG="$TMP/app-runner-tag.docker"
