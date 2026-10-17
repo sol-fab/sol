@@ -42,9 +42,10 @@ val reconcile_ownership
   -> act:bool
   -> (reconciliation, string) result
 
-(** Forget state only when the substrate is positively absent at the provider. Exposed so the
-    destroy path's no-unsafe-[state rm] property is exercised directly; it is not a second
-    entry point. *)
+(** Forget cloud-root and platform-root state only when the substrate is positively absent
+    at the provider, and only when the cluster identity in that state agrees with the
+    target. Exposed so the destroy path's no-unsafe-[state rm] property is exercised
+    directly; it is not a second entry point. *)
 val provable_absence_reconciliation
   :  assets:Sol_cli_platform_assets.t
   -> run_log:Sol_cli_run_log.t

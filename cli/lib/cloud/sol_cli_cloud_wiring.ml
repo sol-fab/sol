@@ -265,6 +265,61 @@ let adopt
                  candidate.import_identity)))
 ;;
 
+(* The cluster identity the state actually represents. A provider observation is scoped by a
+   name; if that name is not the one this state holds, the observation says nothing about
+   these resources, and reading it as either presence or absence would be an attribution
+   error. A state that represents a cluster without recording its name is refused rather
+   than treated as "no cluster in state". *)
+type state_cluster_identity =
+  | Cluster_not_in_state
+  | Cluster_named of string
+  | Cluster_unnamed
+  | Cluster_ambiguous of string list
+
+let state_cluster_identity ~provider state =
+  let prefixes = Sol_cli_provider_registry.substrate_addresses provider in
+  let substrates =
+    List.filter
+      (fun (resource : Sol_cli_cloud_destroy.resource) ->
+         List.exists (fun prefix -> String.starts_with ~prefix resource.address) prefixes)
+      (Sol_cli_cloud_destroy.resources state)
+  in
+  match substrates with
+  | [] -> Cluster_not_in_state
+  | substrates ->
+    let names =
+      List.map
+        (fun (resource : Sol_cli_cloud_destroy.resource) -> resource.name)
+        substrates
+    in
+    if
+      List.exists
+        (function
+          | Some name when not (Sol_cli_string.is_blank name) -> false
+          | Some _ | None -> true)
+        names
+    then Cluster_unnamed
+    else (
+      match
+        names
+        |> List.filter_map (function
+          | Some name -> Some name
+          | None -> None)
+        |> List.sort_uniq String.compare
+      with
+      | [ name ] -> Cluster_named name
+      | names -> Cluster_ambiguous names)
+;;
+
+let cluster_identity_mismatch ~state_name ~declared =
+  Printf.sprintf
+    "the Terraform state represents cluster %S, but this target resolves cluster_name \
+     %S. Nothing is imported or forgotten while those identities disagree: an \
+     observation for one cluster name is not evidence about the other."
+    state_name
+    declared
+;;
+
 let reconcile_ownership
       ~provider
       ~(target_cfg : Sol_cli_config.target)
@@ -293,6 +348,24 @@ let reconcile_ownership
           state is not an empty one -- nothing is imported while ownership is unknown"
          reason)
   | Sol_cli_cloud_destroy.State_empty | Sol_cli_cloud_destroy.State_represented _ ->
+    let* cluster_name =
+      match state_cluster_identity ~provider state with
+      | Cluster_named state_name when not (String.equal state_name cluster_name) ->
+        Error (cluster_identity_mismatch ~state_name ~declared:cluster_name)
+      | Cluster_named _ | Cluster_not_in_state -> Ok cluster_name
+      | Cluster_unnamed ->
+        Error
+          "the Terraform state represents a cluster but records no name, so its identity \
+           cannot be compared with this target. Nothing is imported while that is \
+           unknown."
+      | Cluster_ambiguous names ->
+        Error
+          (Printf.sprintf
+             "the Terraform state represents more than one cluster identity (%s), so the \
+              observation cannot be attributed to one of them. Nothing is imported while \
+              that is unknown."
+             (String.concat ", " names))
+    in
     let observations =
       Sol_cli_provider_registry.observations provider target_cfg ~cluster_name
     in
@@ -940,54 +1013,83 @@ let provable_absence_reconciliation
   match stale, substrate_presence state with
   | [], Substrate_present | [], Substrate_unknown -> Ok Nothing_to_reconcile
   | stale, _ ->
-    (match Sol_cli_terraform_vars.resolved "cluster_name" ~var_files ~vars with
-     | None ->
-       Sol_cli_report.warn
-         "warning: this target's cloud root still represents a substrate, or resources \
-          that live inside one, whose existence the provider was never asked about: its \
-          cluster name is neither declared nor resolved, so nothing was forgotten (a \
-          state entry is only forgotten on a positively established absence).";
-       Ok Nothing_to_reconcile
-     | Some cluster_name ->
-       (match
-          Sol_cli_provider_registry.substrate_absence provider target_cfg ~cluster_name
-        with
-        | Sol_cli_absence.Absent _ as observation ->
-          let evidence = Sol_cli_absence.summary observation in
+    let probe cluster_name =
+      match
+        Sol_cli_provider_registry.substrate_absence provider target_cfg ~cluster_name
+      with
+      | Sol_cli_absence.Absent _ as observation ->
+        let evidence = Sol_cli_absence.summary observation in
+        Sol_cli_report.app
+          "  the substrate's absence is positively established at the provider: %s"
+          evidence;
+        if stale <> []
+        then
           Sol_cli_report.app
-            "  the substrate's absence is positively established at the provider: %s"
-            evidence;
-          if stale <> []
-          then
-            Sol_cli_report.app
-              "  this target's cloud state still represents %d resource(s) that live \
-               inside the cluster, which cannot exist once the cluster does not"
-              (List.length stale);
-          let* forgotten_cloud =
-            forget_addresses
-              ~run_log
-              ~phase:"destroy-forget-absent-substrate"
-              ~chdir:infra_dir
-              (List.map (fun (resource : resource) -> resource.address) stale)
-          in
-          let* forgotten_platform =
-            platform_state_reconciliation
-              ~assets
-              ~run_log
-              ~provider
-              ~platform_dir
-              ~platform_backend
-          in
-          (match forgotten_cloud @ forgotten_platform with
-           | [] -> Ok Nothing_to_reconcile
-           | forgotten -> Ok (Reconciled { evidence; forgotten }))
-        | observation ->
+            "  this target's cloud state still represents %d resource(s) that live \
+             inside the cluster, which cannot exist once the cluster does not"
+            (List.length stale);
+        let* forgotten_cloud =
+          forget_addresses
+            ~run_log
+            ~phase:"destroy-forget-absent-substrate"
+            ~chdir:infra_dir
+            (List.map (fun (resource : resource) -> resource.address) stale)
+        in
+        let* forgotten_platform =
+          platform_state_reconciliation
+            ~assets
+            ~run_log
+            ~provider
+            ~platform_dir
+            ~platform_backend
+        in
+        (match forgotten_cloud @ forgotten_platform with
+         | [] -> Ok Nothing_to_reconcile
+         | forgotten -> Ok (Reconciled { evidence; forgotten }))
+      | observation ->
+        Sol_cli_report.warn
+          "warning: the state a provably absent substrate leaves behind was not \
+           reconciled: the substrate's absence could not be established at the provider, \
+           and only a positively established absence permits forgetting what state \
+           represents (%s)."
+          (Sol_cli_absence.summary observation);
+        Ok Nothing_to_reconcile
+    in
+    let resolved = Sol_cli_terraform_vars.resolved "cluster_name" ~var_files ~vars in
+    (match state_cluster_identity ~provider state with
+     | Cluster_named state_name ->
+       (match resolved with
+        | Some declared when not (String.equal state_name declared) ->
           Sol_cli_report.warn
             "warning: the state a provably absent substrate leaves behind was not \
-             reconciled: the substrate's absence could not be established at the \
-             provider, and only a positively established absence permits forgetting what \
-             state represents (%s)."
-            (Sol_cli_absence.summary observation);
+             reconciled: %s. Nothing was forgotten."
+            (cluster_identity_mismatch ~state_name ~declared);
+          Ok Nothing_to_reconcile
+        | _ -> probe state_name)
+     | Cluster_unnamed ->
+       Sol_cli_report.warn
+         "warning: the state a provably absent substrate leaves behind was not \
+          reconciled: it represents a cluster but records no name, so the provider \
+          observation cannot be attributed to it. Nothing was forgotten (a state entry \
+          is only forgotten on a positively established absence).";
+       Ok Nothing_to_reconcile
+     | Cluster_ambiguous names ->
+       Sol_cli_report.warn
+         "warning: the state a provably absent substrate leaves behind was not \
+          reconciled: it represents more than one cluster identity (%s), so the provider \
+          observation cannot be attributed to one of them. Nothing was forgotten."
+         (String.concat ", " names);
+       Ok Nothing_to_reconcile
+     | Cluster_not_in_state ->
+       (match resolved with
+        | Some cluster_name -> probe cluster_name
+        | None ->
+          Sol_cli_report.warn
+            "warning: this target's cloud root still represents a substrate, or \
+             resources that live inside one, whose existence the provider was never \
+             asked about: its cluster name is neither represented in the state nor \
+             resolved, so nothing was forgotten (a state entry is only forgotten on a \
+             positively established absence).";
           Ok Nothing_to_reconcile))
 ;;
 

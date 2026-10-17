@@ -182,3 +182,313 @@ let%test "unreadable state: a malformed state refuses before importing" =
 let%test "unreadable state: a readable empty state is not refused" =
   readable_empty_state_is_not_refused ()
 ;;
+
+(* Recovery is destructive authority. The inventories deliberately report every candidate
+   their attribution rule finds, but only an exact provider name may be adopted; a name that
+   merely contains the registry's prefix belongs to some other resource. *)
+let present ~resource_class ~found =
+  Sol_cli_absence.Present
+    { resource_class
+    ; identity = "test identity"
+    ; found = [ found ]
+    ; attribution = Sol_cli_absence.Named_for_target "test rule"
+    ; checked_with = "test"
+    }
+;;
+
+let gcp_disposition ~resource_class ~found =
+  Sol_cli_ownership_reconciliation.dispositions
+    ~entries:(Sol_cli_resource_identity.gcp ~cluster_name:"acme-prod")
+    ~state_addresses:[]
+    [ present ~resource_class ~found ]
+  |> List.hd
+;;
+
+let recovered address disposition =
+  match disposition with
+  | Sol_cli_ownership_reconciliation.Recover candidate ->
+    Windtrap.equal Windtrap.string ~msg:"the recovered address" address candidate.address
+  | Sol_cli_ownership_reconciliation.Unmapped _ ->
+    Windtrap.fail "an exact provider name was not mapped to its Terraform address"
+  | _ -> Windtrap.fail "the observation did not produce a recovery or an unmapped refusal"
+;;
+
+let test_recovery_requires_an_exact_observed_name () =
+  recovered
+    "google_sql_database_instance.postgres[0]"
+    (gcp_disposition ~resource_class:"Cloud SQL instance" ~found:"acme-prod-postgres");
+  (match
+     gcp_disposition
+       ~resource_class:"Cloud SQL instance"
+       ~found:"acme-prod-postgres-replica"
+   with
+   | Sol_cli_ownership_reconciliation.Unmapped _ -> ()
+   | Sol_cli_ownership_reconciliation.Recover candidate ->
+     Windtrap.failf
+       "a longer SQL name was imported as %s; it belongs to another resource"
+       candidate.address
+   | _ -> Windtrap.fail "an unknown SQL name must be Unmapped");
+  recovered
+    "google_container_cluster.main"
+    (gcp_disposition ~resource_class:"GKE cluster" ~found:"acme-prod");
+  (match gcp_disposition ~resource_class:"GKE cluster" ~found:"acme-prod-old" with
+   | Sol_cli_ownership_reconciliation.Unmapped _ -> ()
+   | Sol_cli_ownership_reconciliation.Recover candidate ->
+     Windtrap.failf "a longer cluster name was imported as %s" candidate.address
+   | _ -> Windtrap.fail "an unknown cluster name must be Unmapped");
+  (* The two genuinely qualified forms keep working: a service account's email and a
+     project-qualified custom role name. *)
+  recovered
+    "google_service_account.provisioner"
+    (gcp_disposition
+       ~resource_class:"service account"
+       ~found:"acme-prod-provisioner@acme-project.iam.gserviceaccount.com");
+  recovered
+    "google_project_iam_custom_role.provisioner_cluster_access"
+    (gcp_disposition
+       ~resource_class:"custom role"
+       ~found:"projects/acme-project/roles/sol_acme_prod_cluster_access");
+  match
+    gcp_disposition
+      ~resource_class:"custom role"
+      ~found:"projects/acme-project/roles/sol_acme_prod_cluster_access_v2"
+  with
+  | Sol_cli_ownership_reconciliation.Unmapped _ -> ()
+  | Sol_cli_ownership_reconciliation.Recover candidate ->
+    Windtrap.failf "a longer custom-role name was imported as %s" candidate.address
+  | _ -> Windtrap.fail "an unknown custom-role name must be Unmapped"
+;;
+
+let%test "recovery: only an exact observed name becomes Terraform authority" =
+  test_recovery_requires_an_exact_observed_name ()
+;;
+
+let state_with_cluster ~name =
+  Printf.sprintf
+    {|{"values":{"root_module":{"resources":[{"address":"module.eks.aws_eks_cluster.this[0]","type":"aws_eks_cluster","values":{"name":%S}}]}}}|}
+    name
+;;
+
+let state_with_clusters names =
+  let resources =
+    names
+    |> List.mapi (fun index name ->
+      Printf.sprintf
+        {|{"address":"module.eks.aws_eks_cluster.this[%d]","type":"aws_eks_cluster","values":{"name":%S}}|}
+        index
+        name)
+    |> String.concat ","
+  in
+  Printf.sprintf {|{"values":{"root_module":{"resources":[%s]}}}|} resources
+;;
+
+let with_fake_aws_script script f =
+  let dir = Filename.temp_file "sol-fake-aws-" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o755;
+  let bin = Filename.concat dir "aws" in
+  Out_channel.with_open_text bin (fun oc -> output_string oc script);
+  Unix.chmod bin 0o755;
+  let old_path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+  Unix.putenv "PATH" (dir ^ ":" ^ old_path);
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" old_path;
+      (try Sys.remove bin with
+       | _ -> ());
+      try Unix.rmdir dir with
+      | _ -> ())
+    f
+;;
+
+let aws_reporting_an_rds_instance =
+  {|#!/bin/sh
+case " $* " in
+  *" rds describe-db-instances "*) printf 'acme-prod-postgres\n' ;;
+esac
+exit 0
+|}
+;;
+
+(* The state, not the target name, is what Terraform will act on. If they disagree, an
+   observation for the target's name cannot authorize importing a resource into this state,
+   and it cannot authorize forgetting the state's cluster either. *)
+let test_cluster_identity_mismatch_refuses_before_import () =
+  with_fake_aws_script aws_reporting_an_rds_instance
+  @@ fun () ->
+  with_fake_terraform
+    ~stdout:(state_with_cluster ~name:"other-cluster")
+    ~exit_code:0
+    (fun ~log ~infra ->
+       match reconcile ~infra ~act:true with
+       | Ok _ ->
+         Windtrap.fail
+           "a state whose cluster identity disagrees with the target must not reconcile"
+       | Error message ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the refusal names the state's cluster"
+           true
+           (Sol_cli_string.contains ~needle:"other-cluster" message);
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"and the target's cluster"
+           true
+           (Sol_cli_string.contains ~needle:"acme-prod" message);
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"no import was attempted"
+           []
+           (imports log))
+;;
+
+let%test "recovery: a state/target cluster identity mismatch refuses before importing" =
+  test_cluster_identity_mismatch_refuses_before_import ()
+;;
+
+let aws_saying_nothing = "#!/bin/sh\nexit 0\n"
+
+let assets () =
+  match Sol_cli_platform_assets.resolve () with
+  | Ok assets -> assets
+  | Error error -> Windtrap.fail (Sol_cli_platform_assets.error_to_string error)
+;;
+
+(* The destroy-side counterpart of the import check: a provider observation for one
+   cluster name must not authorize forgetting state that holds another. *)
+let test_cluster_identity_mismatch_never_forgets_state () =
+  let state =
+    Sol_cli_cloud_destroy.inventory_of_show_json
+      (state_with_cluster ~name:"other-cluster")
+  in
+  with_fake_aws_script aws_saying_nothing
+  @@ fun () ->
+  with_fake_terraform
+    ~stdout:(state_with_cluster ~name:"other-cluster")
+    ~exit_code:0
+    (fun ~log ~infra ->
+       let base = Filename.concat infra "run-log" in
+       Unix.mkdir base 0o755;
+       let run_log = Sol_cli_run_log.create ~base ~prefix:"test" () in
+       match
+         Sol_cli_cloud_wiring.provable_absence_reconciliation
+           ~assets:(assets ())
+           ~run_log
+           ~provider:Sol_cli_provider.Aws
+           ~target_cfg:target
+           ~infra_dir:infra
+           ~platform_dir:infra
+           ~platform_backend:[]
+           ~var_files:[]
+           ~vars:[ "cluster_name=acme-prod" ]
+           ~state
+       with
+       | Ok Sol_cli_cloud_destroy.Nothing_to_reconcile ->
+         let calls =
+           try In_channel.with_open_text log In_channel.input_all with
+           | Sys_error _ -> ""
+         in
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"no state entry was forgotten while the cluster identities disagree"
+           false
+           (Sol_cli_string.contains ~needle:"state rm" calls)
+       | Ok (Sol_cli_cloud_destroy.Reconciled _) ->
+         Windtrap.fail
+           "the state's cluster identity disagrees with the target, so nothing may be \
+            forgotten"
+       | Error message ->
+         Windtrap.failf
+           "an identity mismatch is a refusal to forget, not a failed run: %s"
+           message)
+;;
+
+let%test "destroy: a state/target cluster identity mismatch never runs state rm" =
+  test_cluster_identity_mismatch_never_forgets_state ()
+;;
+
+let state_cluster_without_name =
+  {|{"values":{"root_module":{"resources":[{"address":"module.eks.aws_eks_cluster.this[0]","type":"aws_eks_cluster","values":{}}]}}}|}
+;;
+
+let%test "recovery: a state cluster without a name refuses before importing" =
+  with_unobservable_provider
+  @@ fun () ->
+  with_fake_terraform ~stdout:state_cluster_without_name ~exit_code:0 (fun ~log ~infra ->
+    match reconcile ~infra ~act:true with
+    | Ok _ ->
+      Windtrap.fail
+        "a state cluster with no name cannot be attributed, so it must not reconcile"
+    | Error message ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the refusal says the state records no name"
+        true
+        (Sol_cli_string.contains ~needle:"records no name" message);
+      Windtrap.equal
+        (Windtrap.list Windtrap.string)
+        ~msg:"no import was attempted"
+        []
+        (imports log))
+;;
+
+let%test "recovery: an ambiguous state cluster identity refuses before importing" =
+  let state = state_with_clusters [ "acme-prod"; "other-cluster" ] in
+  with_fake_aws_script aws_saying_nothing
+  @@ fun () ->
+  with_fake_terraform ~stdout:state ~exit_code:0 (fun ~log ~infra ->
+    match reconcile ~infra ~act:true with
+    | Ok _ ->
+      Windtrap.fail "a state representing more than one cluster must not reconcile"
+    | Error message ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the refusal names both state clusters"
+        true
+        (Sol_cli_string.contains ~needle:"acme-prod" message
+         && Sol_cli_string.contains ~needle:"other-cluster" message);
+      Windtrap.equal
+        (Windtrap.list Windtrap.string)
+        ~msg:"no import was attempted"
+        []
+        (imports log))
+;;
+
+let%test "destroy: an ambiguous state cluster identity never runs state rm" =
+  let state = state_with_clusters [ "acme-prod"; "other-cluster" ] in
+  with_fake_aws_script aws_saying_nothing
+  @@ fun () ->
+  with_fake_terraform ~stdout:state ~exit_code:0 (fun ~log ~infra ->
+    let base = Filename.concat infra "run-log" in
+    Unix.mkdir base 0o755;
+    let run_log = Sol_cli_run_log.create ~base ~prefix:"test" () in
+    match
+      Sol_cli_cloud_wiring.provable_absence_reconciliation
+        ~assets:(assets ())
+        ~run_log
+        ~provider:Sol_cli_provider.Aws
+        ~target_cfg:target
+        ~infra_dir:infra
+        ~platform_dir:infra
+        ~platform_backend:[]
+        ~var_files:[]
+        ~vars:[ "cluster_name=acme-prod" ]
+        ~state:(Sol_cli_cloud_destroy.inventory_of_show_json state)
+    with
+    | Ok Sol_cli_cloud_destroy.Nothing_to_reconcile ->
+      let calls =
+        try In_channel.with_open_text log In_channel.input_all with
+        | Sys_error _ -> ""
+      in
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"no state entry was forgotten while the cluster identity was ambiguous"
+        false
+        (Sol_cli_string.contains ~needle:"state rm" calls)
+    | Ok (Sol_cli_cloud_destroy.Reconciled _) ->
+      Windtrap.fail "an ambiguous state cluster identity authorized state removal"
+    | Error message ->
+      Windtrap.failf
+        "an ambiguous identity is a refusal to forget, not a failed run: %s"
+        message)
+;;
