@@ -554,7 +554,6 @@ module Make (J : JOB) = struct
             | Ok (Some (id, kind, payload, attempts, _)) ->
               let t0 = Eio.Time.Mono.now env#mono_clock in
               let outcome =
-                let never, _ = Eio.Promise.create () in
                 Eio.Fiber.first
                   (fun () ->
                      let outcome =
@@ -580,7 +579,7 @@ module Make (J : JOB) = struct
                                (Mtime.span t0 (Eio.Time.Mono.now env#mono_clock))
                              /. 1e9))
                        job_duration;
-                     outcome)
+                     `Handled outcome)
                   (fun () ->
                      let rec renew () =
                        Eio.Time.sleep env#clock (lease_s /. 3.0);
@@ -590,7 +589,7 @@ module Make (J : JOB) = struct
                        | Ok (Some _) -> renew ()
                        | Ok None ->
                          lease_lost id ~kind ~attempts ~action:"renew";
-                         Eio.Promise.await never
+                         `Lost_claim
                        | Error e ->
                          queue_error ~kind ~action:"renew" ~reason:"database_error";
                          log_warn
@@ -601,8 +600,9 @@ module Make (J : JOB) = struct
                      renew ())
               in
               (match outcome with
-               | Ok () -> finalize_success id ~kind ~attempts
-               | Error msg -> finalize_failure id ~kind ~attempts ~msg);
+               | `Lost_claim -> ()
+               | `Handled (Ok ()) -> finalize_success id ~kind ~attempts
+               | `Handled (Error msg) -> finalize_failure id ~kind ~attempts ~msg);
               loop ~failures:0)
         in
         loop ~failures:0)
