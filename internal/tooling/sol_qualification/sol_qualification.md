@@ -195,9 +195,9 @@ with AWS/GCP context records. Hostile cases cover the previous `ca.pem`/`ca.crt`
 namespace/consumer mismatch, absent objects, failed commands (#1497), missing and
 redirected mounts, sidecar-only delivery, shadowing, projected key paths, identity
 expiry, malformed/incomplete discovery, foreign receipts, persistence failure and
-safe diagnostics. The [I4 offline comparison](../../qualification/database-ca-comparison.md)
-runs the current Bash predicates against shared hostile scenarios and retains explicit AWS
-adoption gaps. No live predicate has been consolidated or removed.
+safe diagnostics. The [CA regression coverage map](../../qualification/database-ca-comparison.md)
+names the retained tests after retirement of the temporary legacy comparison.
+Both live provider rows use the shared CA evaluator.
 
 Schema semantics follow the Kubernetes documentation for
 [ConfigMaps](https://kubernetes.io/docs/concepts/configuration/configmap/) and
@@ -266,9 +266,8 @@ and retained by the verdict. Capture failure never manufactures a verdict. A Job
 does not prove that a running Pod mounted the file or used TLS.
 
 This closes the **offline mechanism** gap found by I4: healthy application CA delivery
-cannot cover a missing migration CA. The original I4 comparison still exercises the
-application-only I3 entry point; its historical migration discrepancy remains accurate
-for that entry point. No live assertion is replaced here. A reviewed adapter from real
+cannot cover a missing migration CA. The retained migration regressions exercise this distinction without maintaining
+the former application-only shell comparison. A reviewed adapter from real
 product execution receipts, installed-candidate/specimen authority, other workload kinds,
 DML privilege verification and TLS behavior remain prerequisites for live adoption.
 
