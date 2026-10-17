@@ -65,8 +65,8 @@ behind when it cannot show the declared one:
 - `auth can-i create pods/portforward -n <namespace>` answers `yes`;
 - `auth can-i get namespaces` answers `yes` — the cluster-scoped identity read;
 - for each declared observation namespace, `auth can-i get deployments.apps`,
-  `list deployments.apps`, `get jobs.batch` and `list configmaps` answer `yes` — the
-  CA observations' reads are effective where they are needed;
+  `list deployments.apps`, `get jobs.batch`, `list configmaps` and `get configmaps`
+  answer `yes` — the CA observations' reads are effective where they are needed;
 - `get secrets -n <namespace>` is **denied** by a real call — the strongest single negative,
   because cluster-admin answers it;
 - `auth can-i` answers `no` for `*/*`, `create pods/exec`, `get pods/log`, `delete pods` and
@@ -77,10 +77,13 @@ behind when it cannot show the declared one:
   (`sol-qualifier-unbound` by default), so an accidental cluster-wide observation grant
   fails establishment.
 
-This is a *sample* of the declared surface, not a rule-set comparison: a grant that is
-neither `*/*` nor one of the sampled denials — `get configmaps`, say — would still pass. What
-the probe establishes is that the principal is this mapping, that the addressing and transport
-grants are effective, and that the decisive broad grants are refused.
+The probe is a *sample* of the effective surface, not an exhaustive RBAC audit. It
+positively checks every observation read the driver performs (including
+`get configmaps`) in each bound namespace and denies those reads in an unbound one,
+but a grant on a resource or verb outside the sampled set — `get events`, say — would
+still pass. What it establishes is that the principal is this mapping, that the
+addressing, transport and observation grants are effective where required and denied
+outside them, and that the decisive broad grants are refused.
 
 A failure at any of those leaves **no** access entry rather than a broad one, and the script
 says so: it reports the removal only after `describe-access-entry` agrees the entry is gone,
