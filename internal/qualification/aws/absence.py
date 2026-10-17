@@ -39,7 +39,14 @@ Usage:
                        [--registry-prefix P] [--base-domain B]
                        [--retention none|final-snapshot]
                        [--attempt A] [--target T] [--state-key K]
+                       [--candidate FILE]
                        [--bound 30] [--aws-command aws]
+
+The structured verdict (``aws-inventory-verdict.json``) names the candidate it
+was observed for when ``--candidate`` is supplied. Release promotion accepts
+only a document that names the candidate, provider, attempt and target it is
+attached to; a document without that binding is diagnostic evidence, not
+promotion-eligible teardown evidence.
 """
 
 from __future__ import annotations
@@ -97,6 +104,18 @@ LIMITATIONS = [
 ]
 
 
+IDENTITY_FIELDS = ("version", "revision", "bundle_sha256", "runner_image")
+REVISION = re.compile(r"[0-9a-f]{40}")
+HEX64 = re.compile(r"[0-9a-f]{64}")
+RUNNER_DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
+
+# The release teardown policy this document is eligible under. The promotion
+# gate loads `internal/tooling/release/teardown-policy.v1.json`; a document
+# naming another policy is not promotion-eligible. Keep this value in sync with
+# that file; `internal/ci/test_teardown_policy.py` guards the class universe.
+POLICY_NAME = "sol-teardown-v1"
+
+
 @dataclass(frozen=True)
 class Runtime:
     cluster: str
@@ -108,6 +127,33 @@ class Runtime:
     attempt: str = ""
     target: str = ""
     state_key: str = ""
+    candidate: dict[str, str] | None = None
+
+
+def load_candidate(path: str) -> dict[str, str]:
+    """Read the four-field candidate identity the run is qualifying.
+
+    The fields are the identity `promotion.py` compares. A document that cannot
+    name all four is not promotion-eligible evidence, so this fails closed
+    rather than writing a partially bound verdict.
+    """
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: the candidate document is not a JSON object")
+    candidate: dict[str, str] = {}
+    for field in IDENTITY_FIELDS:
+        value = data.get(field)
+        if not isinstance(value, str) or value == "":
+            raise ValueError(f"{path}: the candidate document has no {field!r}")
+        candidate[field] = value
+    if not REVISION.fullmatch(candidate["revision"]):
+        raise ValueError(f"{path}: revision {candidate['revision']!r} is not a 40-hex commit")
+    if not HEX64.fullmatch(candidate["bundle_sha256"]):
+        raise ValueError(f"{path}: bundle_sha256 is not a 64-hex digest")
+    if not RUNNER_DIGEST.search(candidate["runner_image"]):
+        raise ValueError(f"{path}: runner_image is not an <image>@sha256:<64 hex> reference")
+    return candidate
 
 
 @dataclass
@@ -859,31 +905,50 @@ def render_verdict(runtime: Runtime, report: Report) -> str:
     return "\n".join(lines) + "\n"
 
 
+def observation_json(observation: Observation, expectation: str) -> dict[str, Any]:
+    """One class row in the promotion-verifiable verdict document.
+
+    `expectation` is the durable/residue distinction: a disposable class must
+    be ABSENT, a durable prerequisite must be PRESENT. The release gate reads
+    the class, expectation and state; it never re-derives them.
+    """
+    return {
+        "class": observation.resource_class,
+        "expectation": expectation,
+        "state": observation.state,
+        "identity": observation.identity,
+        "attribution": observation.attribution,
+        "detail": observation.detail,
+        "queries": [" ".join(query) for query in observation.queries],
+    }
+
+
 def render_json(runtime: Runtime, report: Report) -> str:
-    def obs(o: Observation) -> dict[str, Any]:
-        return {
-            "resource_class": o.resource_class,
-            "state": o.state,
-            "identity": o.identity,
-            "attribution": o.attribution,
-            "detail": o.detail,
-            "queries": [" ".join(q) for q in o.queries],
-        }
+    classes = [observation_json(observation, "absent") for observation in report.observations]
+    classes.extend(observation_json(observation, "present") for observation in report.durable)
 
     document = {
+        "schema": 1,
+        "policy": POLICY_NAME,
+        "provider": "aws",
+        "candidate": runtime.candidate,
         "attempt": runtime.attempt,
         "target": runtime.target,
+        "scope": {
+            "cluster": runtime.cluster,
+            "region": runtime.region,
+            "account": runtime.account,
+            "caller_arn": report.identity.arn,
+        },
+        "required_classes": [row["class"] for row in classes],
+        "classes": classes,
         "state_key": runtime.state_key,
-        "cluster": runtime.cluster,
-        "region": runtime.region,
         "caller_identity": {
             "ok": report.identity.ok,
             "account": report.identity.account,
             "arn": report.identity.arn,
             "detail": report.identity.detail,
         },
-        "classes": [obs(o) for o in report.observations],
-        "durable": [obs(o) for o in report.durable],
         "verdict": "ABSENT" if report.ok else "NOT ABSENT",
     }
     return json.dumps(document, indent=2, sort_keys=True) + "\n"
@@ -921,9 +986,18 @@ def add_runtime_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--attempt", default="")
     parser.add_argument("--target", default="")
     parser.add_argument("--state-key", default="")
+    parser.add_argument(
+        "--candidate",
+        default=None,
+        help="the candidate document this run qualifies; without it the structured "
+        "verdict is diagnostic and cannot satisfy promotion",
+    )
 
 
 def runtime_of(arguments: argparse.Namespace) -> Runtime:
+    candidate = None
+    if getattr(arguments, "candidate", None):
+        candidate = load_candidate(arguments.candidate)
     return Runtime(
         cluster=arguments.cluster,
         region=arguments.region,
@@ -934,6 +1008,7 @@ def runtime_of(arguments: argparse.Namespace) -> Runtime:
         attempt=arguments.attempt,
         target=arguments.target,
         state_key=arguments.state_key,
+        candidate=candidate,
     )
 
 
@@ -949,7 +1024,11 @@ def main(argv: list[str]) -> int:
 
     arguments = parser.parse_args(argv)
 
-    runtime = runtime_of(arguments)
+    try:
+        runtime = runtime_of(arguments)
+    except (OSError, ValueError) as error:
+        print(f"absence: {error}", file=sys.stderr)
+        return 2
     report = collect(runtime, subprocess_runner(arguments.bound, arguments.aws_command), arguments.dir)
     for observation in report.observations:
         print(f"  {observation.resource_class}: {observation.state} ({observation.detail})", flush=True)
