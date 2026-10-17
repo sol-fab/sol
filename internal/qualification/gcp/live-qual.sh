@@ -380,6 +380,12 @@ INVENTORY_CLASSES=(
   "dns-zone|present"
 )
 
+# The release teardown policy this document is eligible under. The promotion
+# gate loads `internal/tooling/release/teardown-policy.v1.json`; a document
+# naming another policy is not promotion-eligible. Keep this value in sync with
+# that file; `internal/ci/test_teardown_policy.py` guards the class universe.
+TEARDOWN_POLICY_NAME="sol-teardown-v1"
+
 inventory_expectation() {
   local wanted="$1" entry
   for entry in "${INVENTORY_CLASSES[@]}"; do
@@ -1051,6 +1057,7 @@ write_inventory_verdict() {
   if [ "$rc" = "0" ]; then verdict_word="ABSENT"; else verdict_word="NOT ABSENT"; fi
   if ! jq -n \
     --argjson schema 1 \
+    --arg policy "$TEARDOWN_POLICY_NAME" \
     --arg provider gcp \
     --argjson candidate "$candidate_json" \
     --arg attempt "${ATTEMPT:-}" \
@@ -1061,6 +1068,7 @@ write_inventory_verdict() {
     --arg verdict "$verdict_word" \
     '{
       schema: $schema,
+      policy: $policy,
       provider: $provider,
       candidate: $candidate,
       attempt: $attempt,
@@ -1083,6 +1091,7 @@ write_inventory_verdict() {
     printf 'region=%s\n' "${REGION:-}"
     printf 'caller=%s\n' "${caller:--}"
     printf 'provider=gcp\n'
+    printf 'policy=%s\n' "$TEARDOWN_POLICY_NAME"
     while IFS=$'\t' read -r class verdict expect detail; do
       [ -n "$class" ] || continue
       printf '%s: %s (%s)\n' "$class" "$verdict" "${detail:-no detail}"

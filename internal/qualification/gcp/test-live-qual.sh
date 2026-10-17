@@ -1462,6 +1462,8 @@ present "$TMP/destroy-ok.logs/inventory-post.tsv" "the post-teardown inventory i
 verdict_json="$TMP/destroy-ok.logs/gcp-inventory-verdict.json"
 present "$verdict_json" "the promotion-verifiable teardown verdict is captured"
 is "the teardown verdict names the gcp provider" "$(jq -r .provider "$verdict_json")" "gcp"
+policy_name="$(sed -n 's/^TEARDOWN_POLICY_NAME="\([^"]*\)"/\1/p' "$HARNESS" | head -1)"
+is "the teardown verdict names the release policy" "$(jq -r .policy "$verdict_json")" "$policy_name"
 is "the teardown verdict names the candidate it observed" "$(jq -r '.candidate.revision' "$verdict_json")" "$CANDIDATE_REVISION"
 is "the teardown verdict binds the attempt" "$(jq -r .attempt "$verdict_json")" "$ATTEMPT"
 is "the teardown verdict binds the target" "$(jq -r .target "$verdict_json")" "$TARGET"
