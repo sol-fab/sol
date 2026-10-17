@@ -203,12 +203,20 @@ channel. Tests persist with I2 before acknowledgment and verify that evidence
 survives ephemeral Job cleanup and recorder restart. Interrupted capture cannot
 produce a persisted PASS.
 
-This product event is not yet a verified candidate execution receipt. The next
-focused increment must reverify the installed candidate, probe its bundled
-protocol, launch that exact product executable, bind the private channel to the
-complete candidate/definition/specimen/target/attempt/assessment/database scope,
-and persist through I2 only after validating that scope and observation authority.
-A saved event or fixture locator is not a constructor for a verified receipt.
-That consumer must arrange independent observation before releasing cleanup; it
-must not call the harness's newer product implementation to qualify an older
-candidate. No live harness or policy ownership changes in this prerequisite.
+This product event is not yet a verified candidate execution receipt. A
+qualification-owned launcher (`Qual_migration_execution`) now probes the bundled
+protocol, launches the verified candidate's own `sol migrate apply`, and accepts
+the locator only when it matches the launcher binding, the requested target and
+the independently expected Kubernetes principal, cluster and endpoint. It calls
+the caller's durable-capture-and-observe step before acknowledging, so the
+ephemeral Job still exists; a failed channel, validation or observation never
+suppresses the product's own wait and cleanup, and the product's exit status is
+never a verdict. The submission's observation context comes from an independent
+transport observation, not the product's reported timestamp.
+
+Still missing before adoption: an end-to-end harness wiring that runs the shared
+application and migration observers against the verified candidate's obligations,
+and the reviewed matrix policy transfer. A saved event or fixture locator is not
+a constructor for a verified receipt. That consumer must not call the harness's
+newer product implementation to qualify an older candidate. No live harness or
+policy ownership changes in this prerequisite.

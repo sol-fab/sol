@@ -11,5 +11,11 @@ val create
 
 val read : t -> Qual_kubernetes.query -> Qual_kubernetes.reply
 
+(** Independently establish the current Kubernetes authority for the expected
+    target without a resource read. The returned context is what the caller
+    persists as the submission's observation context; it never copies a
+    product-reported identity or timestamp. *)
+val establish : t -> (Qual_domain.read_context, string) result
+
 (* Raw provider errors are available only through the explicit operator callback;
     that callback must never write ordinary qualification evidence. *)
