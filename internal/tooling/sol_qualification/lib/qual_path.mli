@@ -23,7 +23,9 @@ val observe_application
 (** Run the verified candidate's own `migrate apply` at the lifecycle point the
     product performs it, capture the actual Job locator and observe its CA before
     cleanup. A reported skip is an unestablished migration family, never a
-    satisfied execution. *)
+    satisfied execution. [submission_authority] is the product's Kubernetes
+    identity for the submission and defaults to [expected]; [expected] is the
+    independent observer that establishes the observation context. *)
 val migration
   :  directory:string
   -> prepared:Qual_candidate_obligations.t
@@ -31,6 +33,7 @@ val migration
   -> read:(Qual_kubernetes.query -> Qual_kubernetes.reply)
   -> establish:(unit -> (Qual_domain.read_context, string) result)
   -> expected:Qual_domain.kube_target
+  -> submission_authority:Qual_domain.kube_target
   -> binding:string
   -> timeout_s:float
   -> completion_timeout_s:float
@@ -52,6 +55,7 @@ val run
   -> read:(Qual_kubernetes.query -> Qual_kubernetes.reply)
   -> establish:(unit -> (Qual_domain.read_context, string) result)
   -> expected:Qual_domain.kube_target
+  -> submission_authority:Qual_domain.kube_target
   -> binding:string
   -> timeout_s:float
   -> completion_timeout_s:float

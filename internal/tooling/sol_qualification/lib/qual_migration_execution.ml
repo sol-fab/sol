@@ -15,18 +15,32 @@ type locator =
   }
 
 (* The product's claimed identity is not authority; it must agree with the
-   independently expected Kubernetes principal, cluster and endpoint, and the
-   locator must belong to this launcher and this requested target. *)
-let validate ~binding ~requested_target ~expected (receipt : M.receipt) =
+   independently expected submission principal, cluster and endpoint, and the
+   locator must belong to this launcher and this requested target. The principal
+   that submitted the Job need not be the independent observer: one is the
+   product's Kubernetes identity, the other is the read-only observation identity.
+   Both must address the same cluster, which [run] checks separately. *)
+let validate ~binding ~requested_target ~submission_authority (receipt : M.receipt) =
   if receipt.binding <> binding
   then Error "execution receipt belongs to another launcher binding"
   else if receipt.target <> requested_target
   then Error "execution receipt names another requested target"
   else if
-    receipt.principal <> expected.D.principal
-    || receipt.cluster <> expected.D.cluster
-    || receipt.endpoint <> expected.D.endpoint
+    receipt.principal <> submission_authority.D.principal
+    || receipt.cluster <> submission_authority.D.cluster
+    || receipt.endpoint <> submission_authority.D.endpoint
   then Error "execution receipt names another Kubernetes authority"
+  else Ok ()
+;;
+
+(* A submission identity and an observation identity are different roles, but a
+   receipt from one cluster cannot be observed in another. *)
+let same_cluster (submission : D.kube_target) (observation : D.kube_target) =
+  if
+    submission.D.cluster <> observation.D.cluster
+    || submission.D.endpoint <> observation.D.endpoint
+  then
+    Error "submission and observation authorities address different Kubernetes clusters"
   else Ok ()
 ;;
 
@@ -116,12 +130,14 @@ module Fixture = struct
         ~workspace
         ~requested_target
         ~expected
+        ~submission_authority
         ~binding
         ~timeout_s
         ~completion_timeout_s
         ~establish
         ~consume
     =
+    let* () = same_cluster submission_authority expected in
     let parent, channel = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
     let pid =
       match Unix.fork () with
@@ -156,7 +172,9 @@ module Fixture = struct
              Error "the launched candidate did not establish an execution receipt"
            | M.No_execution reason -> Ok (Skipped reason)
            | M.Execution receipt ->
-             let* () = validate ~binding ~requested_target ~expected receipt in
+             let* () =
+               validate ~binding ~requested_target ~submission_authority receipt
+             in
              let* context = establish () in
              let* () = validate_context ~expected context in
              let* result =
@@ -184,7 +202,16 @@ module Fixture = struct
   ;;
 end
 
-let run ~verified ~expected ~binding ~timeout_s ~completion_timeout_s ~establish ~consume =
+let run
+      ~verified
+      ~expected
+      ~submission_authority
+      ~binding
+      ~timeout_s
+      ~completion_timeout_s
+      ~establish
+      ~consume
+  =
   let install = C.install verified in
   let* () =
     match protocol_supported ~install with
@@ -198,6 +225,7 @@ let run ~verified ~expected ~binding ~timeout_s ~completion_timeout_s ~establish
     ~workspace:(C.workspace verified)
     ~requested_target:(C.expected verified).requested_target
     ~expected
+    ~submission_authority
     ~binding
     ~timeout_s
     ~completion_timeout_s

@@ -1,4 +1,4 @@
-(* AWS database-CA family driver for the live qualification row.
+(* AWS/GCP database-CA family driver for the live qualification rows.
 
    The live row calls it in phases at the lifecycle points where each observation
    is valid:
@@ -8,7 +8,10 @@
    - [application] observes the declared consumers after the final deploy;
    - [report] re-reads the persisted verdicts and candidate-binding captures and
      decides the family from those verdicts, never from summary fields copied into
-     a phase capture. A successful phase exit is not a family pass.
+     a phase capture. A successful phase exit is not a family pass;
+   - [requirements] prints the candidate-bound observation universe (namespaces,
+     reads and instance keys) so a harness can drive its effective-permission
+     checks from the same authority the phases observe.
 
    It never decides the overall release: a CA-family pass is reported separately
    from DML, TLS and the other required claims. *)
@@ -56,10 +59,22 @@ let scenario = function
   | value -> failwith ("unsupported scenario " ^ value)
 ;;
 
+let scenario_label = function
+  | "aws" -> "AWS"
+  | "gcp" -> "GCP"
+  | value -> failwith ("unsupported scenario " ^ value)
+;;
+
+let authority_of_json json : D.kube_target =
+  { principal = text json "principal"
+  ; cluster = text json "cluster"
+  ; endpoint = text json "endpoint"
+  }
+;;
+
 let prepare_request () =
   let request = Yojson.Safe.from_file (arg "--request") in
   let pins = field request "pins" in
-  let authority_json = field request "authority" in
   let expected : C.expected =
     { revision = text pins "revision"
     ; bundle_digest = text pins "bundle_digest"
@@ -69,11 +84,17 @@ let prepare_request () =
     ; target = text pins "target"
     }
   in
-  let authority : D.kube_target =
-    { principal = text authority_json "principal"
-    ; cluster = text authority_json "cluster"
-    ; endpoint = text authority_json "endpoint"
-    }
+  let scenario_name = text request "scenario" in
+  let authority = authority_of_json (field request "authority") in
+  (* The product submits the migration Job as a different Kubernetes identity
+     from the read-only observer on providers where Sol cannot hand its write
+     credential to qualification. The observation authority remains [authority];
+     only the submission receipt is checked against this one. Absent means the
+     same identity, which preserves the AWS row's existing binding. *)
+  let submission_authority =
+    match field request "submission_authority" with
+    | `Null -> authority
+    | json -> authority_of_json json
   in
   let verified =
     C.verify
@@ -87,7 +108,7 @@ let prepare_request () =
   let prepared =
     B.prepare
       ~verified
-      ~scenario:(scenario (text request "scenario"))
+      ~scenario:(scenario scenario_name)
       ~attempt:(text request "attempt")
       ~assessment:(text request "assessment")
       ~kubernetes:authority
@@ -99,7 +120,7 @@ let prepare_request () =
     | "deploy" -> "deploy"
     | other -> failwith ("unsupported observation identity scope " ^ other)
   in
-  request, prepared, authority, identity_scope
+  request, prepared, authority, submission_authority, identity_scope, scenario_name
 ;;
 
 (* Every CA-family claim this path owns, from the verified candidate's complete
@@ -116,22 +137,25 @@ let expected_family prepared =
 ;;
 
 (* Read authority for the exact resources the observations need, in every
-   namespace they need. The selected identity must answer `yes`; a failure is
-   unestablished, never a fallback to a more privileged identity. *)
+   namespace they need. This is the same obligation-derived set the evaluator
+   observes; the harness uses the `requirements` phase to drive its own security
+   checks rather than maintaining a second namespace authority. *)
+let required_reads prepared =
+  D.instances prepared.B.obligations
+  |> List.concat_map (fun instance ->
+    match D.plan instance with
+    | D.Ca_delivery requirement ->
+      let binding = D.ca_binding requirement in
+      [ binding.namespace, "deployments.apps"; binding.namespace, "configmaps" ]
+    | D.Migration_ca_delivery requirement ->
+      let binding = D.migration_ca_binding requirement in
+      [ binding.namespace, "jobs.batch"; binding.namespace, "configmaps" ]
+    | _ -> [])
+  |> List.sort_uniq compare
+;;
+
 let check_read_authority ~ctx prepared =
-  let reads =
-    D.instances prepared.B.obligations
-    |> List.concat_map (fun instance ->
-      match D.plan instance with
-      | D.Ca_delivery requirement ->
-        let binding = D.ca_binding requirement in
-        [ binding.namespace, "deployments.apps"; binding.namespace, "configmaps" ]
-      | D.Migration_ca_delivery requirement ->
-        let binding = D.migration_ca_binding requirement in
-        [ binding.namespace, "jobs.batch"; binding.namespace, "configmaps" ]
-      | _ -> [])
-    |> List.sort_uniq compare
-  in
+  let reads = required_reads prepared in
   List.iter
     (fun (namespace, resource) ->
        match
@@ -174,8 +198,54 @@ let captured_payload ~directory ~run reference_path =
   E.read_capture ~directory ~run reference |> evidence
 ;;
 
+let kube_json (target : D.kube_target) =
+  `Assoc
+    [ "principal", `String target.principal
+    ; "cluster", `String target.cluster
+    ; "endpoint", `String target.endpoint
+    ]
+;;
+
+(* The candidate-bound observation universe, exposed for the harness's own
+   effective-permission checks. It is derived from the same obligations the
+   phases observe; it is not a second policy or namespace rule. *)
+let run_requirements () =
+  let _request, prepared, authority, submission_authority, _identity_scope, scenario_name =
+    prepare_request ()
+  in
+  let reads = required_reads prepared in
+  let namespaces = List.map fst reads |> List.sort_uniq compare in
+  let observations =
+    D.instances prepared.B.obligations
+    |> List.filter_map (fun instance ->
+      match D.plan instance with
+      | D.Ca_delivery _ | D.Migration_ca_delivery _ -> Some (D.instance_key instance)
+      | _ -> None)
+  in
+  let payload =
+    `Assoc
+      [ "phase", `String "requirements"
+      ; "scenario", `String scenario_name
+      ; "namespaces", `List (List.map (fun name -> `String name) namespaces)
+      ; ( "reads"
+        , `List
+            (List.map
+               (fun (namespace, resource) ->
+                  `Assoc [ "namespace", `String namespace; "resource", `String resource ])
+               reads) )
+      ; "observations", `List (List.map (fun key -> `String key) observations)
+      ; "authority", kube_json authority
+      ; "submission_authority", kube_json submission_authority
+      ]
+  in
+  print_endline (Yojson.Safe.to_string payload);
+  exit 0
+;;
+
 let run_phase () =
-  let request, prepared, authority, identity_scope = prepare_request () in
+  let request, prepared, authority, submission_authority, identity_scope, scenario_name =
+    prepare_request ()
+  in
   let phase = text request "phase" in
   let directory = text request "evidence" in
   let ctx =
@@ -193,7 +263,7 @@ let run_phase () =
   ignore
     (E.start_assessment
        recorder
-       ~reason:"AWS database CA family"
+       ~reason:(scenario_label scenario_name ^ " database CA family")
        ~previous:[]
        ~required_captures:prepared.B.required_captures
      |> evidence);
@@ -210,6 +280,7 @@ let run_phase () =
         ~read
         ~establish
         ~expected:authority
+        ~submission_authority
         ~binding:(text request "binding")
         ~timeout_s:30.
         ~completion_timeout_s:600.
@@ -240,12 +311,16 @@ let run_phase () =
         outcomes
   in
   (* A phase capture is only a pointer list: the binding slot and the persisted
-     verdict references. It carries no decision of its own. *)
+     verdict references. It carries no decision of its own. The submission and
+     observation authorities are recorded separately so the report cannot later
+     collapse the two roles into one. *)
   let payload =
     `Assoc
       [ "phase", `String phase
       ; "ok", `Bool passed
       ; "identity_scope", `String identity_scope
+      ; "authority", kube_json authority
+      ; "submission_authority", kube_json submission_authority
       ; "binding", E.reference_json binding_capture
       ; "verdicts", `List verdicts
       ]
@@ -297,7 +372,9 @@ let verify_binding_capture ~directory ~run json =
 ;;
 
 let run_report () =
-  let request, prepared, _, identity_scope = prepare_request () in
+  let request, prepared, authority, submission_authority, identity_scope, scenario_name =
+    prepare_request ()
+  in
   let directory = text request "evidence" in
   let run = prepared.B.run in
   let recorder = E.open_store ~directory ~run ~secrets:[] () |> evidence in
@@ -305,7 +382,7 @@ let run_report () =
   ignore
     (E.start_assessment
        recorder
-       ~reason:"AWS database CA family"
+       ~reason:(scenario_label scenario_name ^ " database CA family")
        ~previous:[]
        ~required_captures:prepared.B.required_captures
      |> evidence);
@@ -318,6 +395,12 @@ let run_report () =
     in
     if text payload "identity_scope" <> identity_scope
     then failwith "phase identity scope does not match the report";
+    if canonical (field payload "authority") <> canonical (kube_json authority)
+    then failwith "phase observation authority does not match the report";
+    if
+      canonical (field payload "submission_authority")
+      <> canonical (kube_json submission_authority)
+    then failwith "phase submission authority does not match the report";
     verify_binding_capture ~directory ~run (field payload "binding");
     let references =
       List.map (fun json -> E.reference_of_json json |> evidence) verdicts
@@ -338,6 +421,8 @@ let run_report () =
       ; "complete", `Bool complete
       ; "identity_scope", `String identity_scope
       ; "independent_qualifier", `Bool (identity_scope = "qualifier")
+      ; "authority", kube_json authority
+      ; "submission_authority", kube_json submission_authority
       ; "release_accepted", `Bool false
       ; ( "outcomes"
         , `List
@@ -360,6 +445,7 @@ let () =
   try
     match arg "--phase" with
     | "report" -> run_report ()
+    | "requirements" -> run_requirements ()
     | "migration" | "application" -> run_phase ()
     | value -> failwith ("unsupported phase " ^ value)
   with

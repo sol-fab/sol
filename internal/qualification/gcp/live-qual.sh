@@ -11,6 +11,9 @@ OBSERVER="${OBSERVER:-$ROOT/internal/qualification/gcp/observer.py}"
 # transaction.py owns every predicate over the response bodies.
 TRANSACTION="$ROOT/internal/qualification/transaction.py"
 export TRANSACTION
+# The shared candidate-bound database-CA family owner (#1510). It is a harness
+# executable, distinct from the installed candidate's own sol.
+SOL_QUALIFICATION_CA="${SOL_QUALIFICATION_CA:-$ROOT/_build/default/internal/tooling/sol_qualification/bin/qualification_database_ca.exe}"
 
 TARGET_FILE="$WORKSPACE/sol/environments.local.yml"
 
@@ -145,6 +148,9 @@ APP_STATE=none
 CLOUD_APPLIED=0
 TEARDOWN_ATTEMPTED=0
 TERMINATION_SIGNAL=""
+# A private gcloud configuration carries the observed impersonation setting into
+# every gke-gcloud-auth-plugin invocation; cleanup removes it.
+CA_GCLOUD_CONFIG_NAME=""
 
 run() {
   local name="$1"; local rc=0; shift
@@ -1304,8 +1310,17 @@ destroy() {
   verify_bundle || true
 }
 
+cleanup_ca_observer() {
+  if [ -n "${CA_GCLOUD_CONFIG_NAME:-}" ]; then
+    gcloud config configurations delete "$CA_GCLOUD_CONFIG_NAME" --quiet \
+      >"$LOG_DIR/ca-observer-gcloud-config.log" 2>&1 || true
+    CA_GCLOUD_CONFIG_NAME=""
+  fi
+}
+
 cleanup() {
   local rc=$?
+  cleanup_ca_observer
   stop_cluster_kubeconfig_waiter
   if [ "$KEEP" = "1" ]; then
     say "not tearing down: ${KEEP_REASON:-the delegation boundary is deliberate, not a leak}"
@@ -1678,9 +1693,12 @@ app_class_credential_name() { printf '%s' "$TARGET" | tr '[:upper:]/' '[:lower:]
 # <target>-dml-creds, both written by the deploy's database setup step. Assert the delivered
 # form exists and that the consumer did not also receive an operator's master copy.
 # **Read where the deploy says it wrote** (sol-database-identity: ...), rather than
-# reproducing the naming rule here (#1424).
+# reproducing the naming rule here (#1424). The bootstrap deploy declares the same
+# identity before the migration step, so the migration namespace is known then too;
+# the final deploy's declaration wins when both exist.
 app_database_declaration() {
-  grep -h 'sol-database-identity:' "$LOG_DIR"/app-deploy.log 2>/dev/null | tail -1
+  grep -h 'sol-database-identity:' \
+    "$LOG_DIR"/app-deploy-bootstrap.log "$LOG_DIR"/app-deploy.log 2>/dev/null | tail -1
 }
 
 app_database_field() {
@@ -2034,6 +2052,445 @@ app_wait_port_forward() {
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# database CA family: shared candidate-bound owner
+#
+# The application and migration CA predicates are not answered here. They are
+# owned by the shared OCaml observer, which reads the candidate's declared
+# workload/ConfigMap bindings and the actual migration Job under an independently
+# established, read-only Kubernetes identity. This harness owns only lifecycle
+# placement, the observation identity, request construction and diagnostic
+# capture. A phase exit status is not the family verdict; the report phase
+# re-reads the durable captures and verdicts.
+# ---------------------------------------------------------------------------
+
+# The database-contract pins the shared driver re-verifies. Recorded from the
+# immutable install and candidate-bound workspace; no provider state.
+record_database_contract_pins() {
+  mkdir -p "$LOG_DIR"
+  if ! python3 "$ROOT/internal/qualification/database-contract-binding.py" \
+      --candidate "$SOL_CANDIDATE" --install "$SOL_INSTALL" --workspace "$WORKSPACE" \
+      --target "$TARGET" \
+    | python3 -c 'import json,sys
+bound=json.load(sys.stdin); s=bound["specimen"]["declaration"]
+json.dump({"revision":bound["candidate"]["revision"],
+           "bundle_digest":bound["candidate"]["bundle_sha256"],
+           "definition_digest":bound["definition"]["digest"],
+           "specimen_digest":bound["specimen"]["digest"],
+           "requested_target":s["requested_target"],
+           "target":s["target"]}, sys.stdout)' \
+    >"$LOG_DIR/database-contract-pins.json"; then
+    say "app: could not bind the candidate's database contract; the CA family cannot be qualified"
+    return 1
+  fi
+  say "app: recorded the candidate's database-contract pins for the shared CA family"
+}
+
+# Read one Kubernetes authority through an explicit kubeconfig/context. The
+# principal is Kubernetes' authenticated answer, and the cluster identity is the
+# server-returned kube-system UID, not a name or a context alias.
+kube_authority_json() {
+  local kubeconfig="$1" context="$2" out="$3" principal cluster endpoint err
+  err="$LOG_DIR/$(basename "$out").stderr"
+  mkdir -p "$LOG_DIR"
+  if ! principal="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
+      auth whoami -o jsonpath='{.status.userInfo.username}' 2>"$err")"; then
+    say "  could not read the Kubernetes principal through $kubeconfig (context $context); the CA family is unestablished"
+    return 1
+  fi
+  if ! cluster="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
+      get namespace kube-system -o jsonpath='{.metadata.uid}' 2>>"$err")"; then
+    say "  could not read the Kubernetes cluster identity through $kubeconfig (context $context); the CA family is unestablished"
+    return 1
+  fi
+  if ! endpoint="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
+      config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>>"$err")"; then
+    say "  could not read the Kubernetes endpoint through $kubeconfig (context $context); the CA family is unestablished"
+    return 1
+  fi
+  if [ -z "$principal" ] || [ -z "$cluster" ] || [ -z "$endpoint" ]; then
+    say "  the Kubernetes authority through $kubeconfig (context $context) is incomplete; the CA family is unestablished"
+    return 1
+  fi
+  python3 - "$out" "$principal" "$cluster" "$endpoint" <<'PY'
+import json, sys
+json.dump({"principal": sys.argv[2], "cluster": sys.argv[3], "endpoint": sys.argv[4]},
+          open(sys.argv[1], "w"))
+PY
+}
+
+# The product submits the migration Job as the deploy identity. Record that
+# separately from the observation identity so the shared launcher can validate
+# the submission receipt without pretending the observer created the Job.
+record_gcp_deploy_authority() {
+  local endpoint
+  endpoint="$(current_endpoint)"
+  if [ -n "$endpoint" ] && ! kubeconfig_has_cluster "$RUN_KUBECONFIG" "$CLUSTER" "$endpoint"; then
+    say "app: the run kubeconfig does not address $CLUSTER at its current endpoint ($endpoint); the deploy authority is unestablished"
+    return 1
+  fi
+  kube_authority_json "$RUN_KUBECONFIG" "$(app_kube_context)" \
+    "$LOG_DIR/ca-deploy-authority.json"
+}
+
+authority_field() {
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"
+}
+
+gcp_context_for() {
+  kubectl --kubeconfig "$1" config get-contexts -o name 2>/dev/null \
+    | grep -F -- "$CLUSTER" | head -1 || true
+}
+
+# Establish the read-only identity that independently observes the CA claim.
+#
+# GCP has no equivalent of the AWS qualification transport's role mapping. The
+# operator must provide either a dedicated service account to impersonate (the
+# recommended, provider-native mechanism) or a ready read-only kubeconfig. The
+# run kubeconfig is never used as a fallback: it is the deploy identity, and a
+# claim observed by the identity that deployed it is not independent.
+establish_gcp_ca_observer() {
+  local source="${GCP_CA_OBSERVER_SERVICE_ACCOUNT:-}"
+  local supplied="${GCP_CA_OBSERVER_SOURCE_KUBECONFIG:-}"
+  local expected_observer="${GCP_CA_OBSERVER_PRINCIPAL:-}"
+  local caller_account config_name observer_auth
+  local context observer_principal deploy_principal observer_cluster observer_endpoint
+  local deploy_cluster deploy_endpoint namespace resource verb namespaces
+  local migration_namespace unbound
+  CA_OBSERVER_KUBECONFIG="$LOG_DIR/kubeconfig-ca-observer.yaml"
+
+  if [ -n "$supplied" ]; then
+    if [ ! -s "$supplied" ]; then
+      say "app: GCP_CA_OBSERVER_SOURCE_KUBECONFIG=$supplied is not a readable kubeconfig; the CA family is unestablished"
+      return 1
+    fi
+    if [ -z "$expected_observer" ]; then
+      say "app: GCP_CA_OBSERVER_PRINCIPAL is required with GCP_CA_OBSERVER_SOURCE_KUBECONFIG, so the observed identity is declared rather than inferred"
+      return 1
+    fi
+    install -m 600 "$supplied" "$CA_OBSERVER_KUBECONFIG" || return 1
+    observer_auth="operator-supplied kubeconfig"
+    say "app: using the operator-supplied read-only CA observation kubeconfig"
+  elif [ -n "$source" ]; then
+    if [ -z "$expected_observer" ]; then expected_observer="$source"; fi
+    caller_account="$(gcloud config get-value core/account 2>/dev/null || true)"
+    case "$caller_account" in
+      "" | "(unset)")
+        caller_account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -1 || true)"
+        ;;
+    esac
+    if [ -z "$caller_account" ]; then
+      say "app: could not establish the caller account that impersonates $source; the CA family is unestablished"
+      return 1
+    fi
+    config_name="sol-ca-observer-${ATTEMPT:-attempt}-$$"
+    # A private gcloud configuration is the only reliable way to persist the
+    # impersonation into every later gke-gcloud-auth-plugin token refresh. The
+    # kubeconfig below names it explicitly; the default gcloud configuration is
+    # never changed.
+    gcloud config configurations delete "$config_name" --quiet >/dev/null 2>&1 || true
+    if ! gcloud config configurations create "$config_name" --quiet \
+        >"$LOG_DIR/ca-observer-gcloud-config.log" 2>&1; then
+      say "app: could not create a private gcloud configuration for the CA observer; the CA family is unestablished"
+      tail -n 20 "$LOG_DIR/ca-observer-gcloud-config.log" || true
+      return 1
+    fi
+    CA_GCLOUD_CONFIG_NAME="$config_name"
+    if ! gcloud config set core/account "$caller_account" --configuration "$config_name" --quiet \
+        >>"$LOG_DIR/ca-observer-gcloud-config.log" 2>&1; then
+      say "app: could not bind the private gcloud configuration to $caller_account; the CA family is unestablished"
+      return 1
+    fi
+    if ! gcloud config set auth/impersonate_service_account "$source" \
+        --configuration "$config_name" --quiet >>"$LOG_DIR/ca-observer-gcloud-config.log" 2>&1; then
+      say "app: could not configure impersonation of $source; the CA family is unestablished"
+      return 1
+    fi
+    rm -f "$CA_OBSERVER_KUBECONFIG"
+    if ! KUBECONFIG="$CA_OBSERVER_KUBECONFIG" timeout "$PHASE_TIMEOUT" \
+        gcloud container clusters get-credentials "$CLUSTER" --region "$REGION" \
+          --project "$PROJECT" --configuration "$config_name" \
+        >"$LOG_DIR/ca-observer-kubeconfig.log" 2>&1; then
+      say "app: could not establish the CA observation credential by impersonating $source; the CA family is unestablished"
+      tail -n 20 "$LOG_DIR/ca-observer-kubeconfig.log" || true
+      return 1
+    fi
+    chmod 600 "$CA_OBSERVER_KUBECONFIG" 2>/dev/null || true
+    if ! bind_observer_kubeconfig "$CA_OBSERVER_KUBECONFIG" "$config_name"; then
+      say "app: the generated observer kubeconfig does not persist impersonation through gke-gcloud-auth-plugin; the CA family is unestablished"
+      return 1
+    fi
+    observer_auth="gke-gcloud-auth-plugin with gcloud configuration $config_name impersonating $source"
+    say "app: established the CA observation credential by impersonating $source"
+  else
+    say "app: refusing: no independent GCP database-CA observation identity is configured."
+    say "     Set GCP_CA_OBSERVER_SERVICE_ACCOUNT to a read-only service account to impersonate,"
+    say "     or GCP_CA_OBSERVER_SOURCE_KUBECONFIG to a read-only kubeconfig. The deploy kubeconfig"
+    say "     is the identity that deployed the workloads, so it is never used as a fallback."
+    return 1
+  fi
+
+  context="$(gcp_context_for "$CA_OBSERVER_KUBECONFIG")"
+  if [ -z "$context" ]; then
+    say "app: the CA observation kubeconfig names no context for $CLUSTER; the CA family is unestablished"
+    return 1
+  fi
+  CA_OBSERVER_CONTEXT="$context"
+  if ! kube_authority_json "$CA_OBSERVER_KUBECONFIG" "$context" "$LOG_DIR/ca-authority.json"; then
+    return 1
+  fi
+  if [ ! -s "$LOG_DIR/ca-deploy-authority.json" ]; then
+    say "app: the deploy authority was not recorded, so the observation identity cannot be shown to be separate"
+    return 1
+  fi
+  observer_principal="$(authority_field "$LOG_DIR/ca-authority.json" principal)"
+  deploy_principal="$(authority_field "$LOG_DIR/ca-deploy-authority.json" principal)"
+  observer_cluster="$(authority_field "$LOG_DIR/ca-authority.json" cluster)"
+  observer_endpoint="$(authority_field "$LOG_DIR/ca-authority.json" endpoint)"
+  deploy_cluster="$(authority_field "$LOG_DIR/ca-deploy-authority.json" cluster)"
+  deploy_endpoint="$(authority_field "$LOG_DIR/ca-deploy-authority.json" endpoint)"
+  if [ "$observer_principal" != "$expected_observer" ]; then
+    say "app: the CA observation identity authenticated as $observer_principal, not the configured observer $expected_observer; the CA family is unestablished"
+    return 1
+  fi
+  if [ "$observer_principal" = "$deploy_principal" ]; then
+    say "app: the CA observation identity is the deploy identity ($observer_principal); the claim would not be independent"
+    return 1
+  fi
+  if [ "$observer_cluster" != "$deploy_cluster" ] || [ "$observer_endpoint" != "$deploy_endpoint" ]; then
+    say "app: the CA observation identity addresses another Kubernetes cluster or endpoint; the claim would not describe this deployment"
+    return 1
+  fi
+
+  # The candidate-bound obligation set is the only namespace authority for these
+  # checks. A separate app namespace list would let the security checks drift from
+  # what the compiled observer actually reads.
+  if ! ca_requirements; then return 1; fi
+  required_namespaces="$(ca_requirement_namespaces)"
+  if [ -z "$required_namespaces" ]; then
+    say "app: the candidate-bound obligations name no observation namespace; the CA family is unestablished"
+    return 1
+  fi
+  migration_namespace="$(app_database_field namespace)"
+  if [ -z "$migration_namespace" ]; then
+    say "app: the deploy declared no migration namespace; the CA family cannot be observed"
+    return 1
+  fi
+  if ! printf '%s\n' "$required_namespaces" | grep -qxF "$migration_namespace"; then
+    say "app: the candidate's CA obligations do not cover the deploy's migration namespace $migration_namespace"
+    return 1
+  fi
+
+  ca_requirement_reads >"$LOG_DIR/ca-required-reads.tsv"
+  while IFS=$'\t' read -r namespace resource; do
+    [ -n "$namespace" ] || continue
+    if ! expect_allowed "$CA_OBSERVER_KUBECONFIG" "$CA_OBSERVER_CONTEXT" "$namespace" "get $resource"; then
+      return 1
+    fi
+  done <"$LOG_DIR/ca-required-reads.tsv"
+
+  for namespace in $required_namespaces; do
+    # Sample the effective authorization surface, not an exhaustive RBAC audit.
+    # Wildcard and representative mutation grants are the decisive broad failures.
+    for verb in \
+      "* *" \
+      "update deployments.apps" "patch deployments.apps" "delete deployments.apps" \
+      "create jobs.batch" "update jobs.batch" "delete jobs.batch" \
+      "update configmaps" "patch configmaps" "delete configmaps" \
+      "create pods" "update pods" "delete pods" \
+      "create pods/exec" "get pods/log" \
+      "get secrets" "list secrets" "watch secrets" \
+      "create rolebindings" "create clusterrolebindings" \
+      "create customresourcedefinitions"; do
+      if ! expect_denied "$CA_OBSERVER_KUBECONFIG" "$CA_OBSERVER_CONTEXT" "$namespace" "$verb"; then
+        return 1
+      fi
+    done
+  done
+
+  # A grant in a namespace the candidate never bound is broader than the declared
+  # observation surface, even if every required read happens to work.
+  unbound="${GCP_CA_OBSERVER_UNBOUND_NAMESPACE:-sol-qualifier-unbound}"
+  for resource in deployments.apps configmaps jobs.batch; do
+    if ! expect_denied "$CA_OBSERVER_KUBECONFIG" "$CA_OBSERVER_CONTEXT" "$unbound" "get $resource"; then
+      return 1
+    fi
+  done
+
+  {
+    printf 'observation_identity: %s\n' "$observer_principal"
+    printf 'configured_observer_principal: %s\n' "$expected_observer"
+    printf 'deployment_identity: %s\n' "$deploy_principal"
+    printf 'cluster: %s\n' "$observer_cluster"
+    printf 'endpoint: %s\n' "$observer_endpoint"
+    printf 'namespaces: %s\n' "$(printf '%s' "$required_namespaces" | tr '\n' ' ')"
+    printf 'requirement_source: candidate-bound obligations\n'
+    printf 'read_authority: every obligation-derived read answered yes\n'
+    printf 'forbidden_authority: wildcard, mutation, Secrets, exec, log and delete answered no in every required namespace\n'
+    printf 'unbound_namespace: %s (observation reads answered no)\n' "$unbound"
+    printf 'auth: %s\n' "$observer_auth"
+  } >"$LOG_DIR/ca-observer.txt"
+  say "app: CA observation identity $observer_principal is the configured, read-only observer and is separate from the deploy identity"
+}
+
+# The compiled owner exposes the candidate-bound observation universe. The harness
+# uses this exact set for its positive and negative authorization checks.
+ca_requirements() {
+  local status=0
+  if ! ca_request requirements "" "" ""; then
+    say "app: could not build the CA requirements request"
+    return 1
+  fi
+  timeout "$PHASE_TIMEOUT" "$SOL_QUALIFICATION_CA" --phase requirements \
+    --request "$LOG_DIR/ca-request-requirements.json" \
+    >"$LOG_DIR/ca-requirements.json" 2>"$LOG_DIR/ca-requirements.log" || status=$?
+  if [ "$status" != 0 ]; then
+    say "app: the shared database-CA owner could not establish the candidate-bound requirements"
+    tail -n 20 "$LOG_DIR/ca-requirements.log" || true
+    if [ -s "$LOG_DIR/ca-requirements.json" ]; then
+      tail -n 20 "$LOG_DIR/ca-requirements.json" || true
+    fi
+    return 1
+  fi
+}
+
+ca_requirement_namespaces() {
+  python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["namespaces"]))' \
+    "$LOG_DIR/ca-requirements.json"
+}
+
+ca_requirement_reads() {
+  python3 -c 'import json,sys
+for read in json.load(open(sys.argv[1]))["reads"]:
+    print(read["namespace"] + "\t" + read["resource"])' \
+    "$LOG_DIR/ca-requirements.json"
+}
+
+expect_allowed() {
+  local kubeconfig="$1" context="$2" namespace="$3" verb="$4" answer
+  local -a verb_args
+  read -r -a verb_args <<<"$verb"
+  answer="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
+    auth can-i "${verb_args[@]}" -n "$namespace" 2>/dev/null || true)"
+  answer="$(printf '%s' "$answer" | tr -d '[:space:]')"
+  case "$answer" in
+    yes) return 0 ;;
+    *)
+      say "app: the CA observation identity cannot perform '$verb' in $namespace; the CA family is unestablished"
+      return 1
+      ;;
+  esac
+}
+
+expect_denied() {
+  local kubeconfig="$1" context="$2" namespace="$3" verb="$4" answer
+  local -a verb_args
+  read -r -a verb_args <<<"$verb"
+  answer="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
+    auth can-i "${verb_args[@]}" -n "$namespace" 2>/dev/null || true)"
+  answer="$(printf '%s' "$answer" | tr -d '[:space:]')"
+  case "$answer" in
+    no) return 0 ;;
+    yes)
+      say "app: the CA observation identity holds '$verb' in $namespace, which the read-only observation boundary forbids"
+      return 1
+      ;;
+    *)
+      say "app: could not establish that '$verb' is denied to the CA observation identity in $namespace"
+      return 1
+      ;;
+  esac
+}
+
+# Make the kubeconfig's exec plugin use the private gcloud configuration. Without
+# this, gke-gcloud-auth-plugin refreshes through the ambient gcloud identity and
+# the service-account impersonation used for get-credentials would not persist.
+bind_observer_kubeconfig() {
+  local kubeconfig="$1" config_name="$2" user command observed
+  user="$(kubectl --kubeconfig "$kubeconfig" config view --minify \
+    -o jsonpath='{.contexts[0].context.user}' 2>/dev/null || true)"
+  command="$(kubectl --kubeconfig "$kubeconfig" config view --minify \
+    -o jsonpath='{.users[0].user.exec.command}' 2>/dev/null || true)"
+  if [ -z "$user" ] || [ "$command" != "gke-gcloud-auth-plugin" ]; then
+    say "app: the observer kubeconfig does not use gke-gcloud-auth-plugin; the CA family is unestablished"
+    return 1
+  fi
+  if ! kubectl --kubeconfig "$kubeconfig" config set-credentials "$user" \
+      --exec-env="CLOUDSDK_ACTIVE_CONFIG_NAME=$config_name" >/dev/null 2>&1; then
+    say "app: could not persist the private gcloud configuration into the observer kubeconfig"
+    return 1
+  fi
+  observed="$(kubectl --kubeconfig "$kubeconfig" config view --minify \
+    -o jsonpath='{.users[0].user.exec.env[?(@.name=="CLOUDSDK_ACTIVE_CONFIG_NAME")].value}' \
+    2>/dev/null || true)"
+  if [ "$observed" != "$config_name" ]; then
+    say "app: the observer kubeconfig did not retain the private gcloud configuration"
+    return 1
+  fi
+}
+
+# Build the shared driver's request from inputs this row recorded. Nothing here
+# is taken from the product's own report.
+ca_request() {
+  local phase="$1" capture="${2:-}" report="${3:-}" binding="${4:-}"
+  python3 - "$ROOT" "$SOL_CANDIDATE" "$SOL_INSTALL" "$WORKSPACE" "$LOG_DIR" \
+    "$CA_OBSERVER_KUBECONFIG" "$CA_OBSERVER_CONTEXT" "$ATTEMPT" "$phase" "$capture" "$report" "$binding" <<'PY'
+import json, os, sys
+(root, candidate, install, workspace, log, observer_kubeconfig, observer_context,
+ attempt, phase, capture, report, binding) = sys.argv[1:13]
+request = {
+    "repository": root,
+    "candidate": candidate,
+    "install": install,
+    "workspace": workspace,
+    "pins": json.load(open(os.path.join(log, "database-contract-pins.json"))),
+    "authority": json.load(open(os.path.join(log, "ca-authority.json"))),
+    "submission_authority": json.load(open(os.path.join(log, "ca-deploy-authority.json"))),
+    "kubeconfig": observer_kubeconfig,
+    "context": observer_context,
+    "identity_scope": "qualifier",
+    "attempt": attempt,
+    "assessment": "database-ca",
+    "scenario": "gcp",
+    "evidence": os.path.join(log, "ca-evidence"),
+    "phase": phase,
+    "capture": capture,
+    "report": report,
+    "binding": binding,
+    "migration_capture": os.path.join(log, "ca-migration-capture.json"),
+    "application_capture": os.path.join(log, "ca-application-capture.json"),
+}
+json.dump(request, open(os.path.join(log, "ca-request-" + phase + ".json"), "w"))
+PY
+}
+
+# Invoke the shared owner for one phase. A phase's exit status is not evidence:
+# the report phase re-reads the recorded captures and verdicts.
+ca_qualify() {
+  local phase="$1" capture="${2:-}" report="${3:-}" binding="${4:-}" status=0
+  if [ ! -x "$SOL_QUALIFICATION_CA" ]; then
+    say "app: the shared database-CA qualifier is not built at $SOL_QUALIFICATION_CA"
+    return 1
+  fi
+  if ! ca_request "$phase" "$capture" "$report" "$binding"; then
+    say "app: could not build the database-CA $phase request"
+    return 1
+  fi
+  timeout "$PHASE_TIMEOUT" "$SOL_QUALIFICATION_CA" --phase "$phase" \
+    --request "$LOG_DIR/ca-request-$phase.json" >"$LOG_DIR/ca-$phase.log" 2>&1 || status=$?
+  if [ "$status" != 0 ]; then
+    say "app: the shared database-CA $phase phase did not pass; see $LOG_DIR/ca-$phase.log"
+    if [ "$status" = 124 ]; then
+      say "     the $phase phase exceeded ${PHASE_TIMEOUT}s; its cleanup is unestablished and remains the operator's responsibility"
+    fi
+    tail -n 20 "$LOG_DIR/ca-$phase.log" || true
+    if [ -n "$report" ] && [ -s "$report" ]; then
+      tail -n 20 "$report" || true
+    fi
+    return 1
+  fi
+}
+
 app_orders_transaction() {
   local ns="$1" service="$2" label="$3" port="$4"
   local transcript="$LOG_DIR/app-transaction-$label.txt"
@@ -2212,6 +2669,12 @@ phase_app() {
   APP_BUILD_CONTEXT="$LOG_DIR/app-build-context"
   export APP_BUILD_CONTEXT
   sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$APP_BUILD_CONTEXT" "$pins" "$(git -C "$WORKSPACE" rev-parse HEAD)"
+  if ! record_database_contract_pins; then
+    capture_app_evidence
+    freeze_evidence
+    finalise_bundle
+    return 1
+  fi
   say "app images build from candidate $SOL_REVISION ($WORKSPACE at that revision, framework pinned to it)"
   if ! run app-build bash -c "$(declare -f $(app_helpers)); build_app_images"; then
     capture_app_evidence
@@ -2254,7 +2717,26 @@ phase_app() {
     finalise_bundle
     return 1
   fi
-  if ! run migrate-apply "$SOL" migrate apply "$TARGET"; then
+  # The migration Job is submitted by the deploy identity, but its CA is read by
+  # a separate read-only identity. Record both authorities before the migration
+  # step so the shared launcher can validate the receipt without conflating them.
+  if ! record_gcp_deploy_authority; then
+    capture_app_evidence
+    freeze_evidence
+    finalise_bundle
+    return 1
+  fi
+  if ! establish_gcp_ca_observer; then
+    capture_app_evidence
+    freeze_evidence
+    finalise_bundle
+    return 1
+  fi
+  # The shared owner runs the candidate's own `migrate apply` and observes the
+  # actual Job's CA before the product's cleanup. A reported skip is
+  # unestablished, never a satisfied migration.
+  if ! ca_qualify migration "$LOG_DIR/ca-migration-capture.json" "$LOG_DIR/ca-migration.json" \
+      "$(python3 -c 'import secrets; print(secrets.token_hex(32))')"; then
     capture_app_evidence
     freeze_evidence
     finalise_bundle
@@ -2266,12 +2748,34 @@ phase_app() {
     finalise_bundle
     return 1
   fi
+  # The workloads exist now; observe every declared consumer's CA delivery in the
+  # same assessment as the migration phase.
+  if ! ca_qualify application "$LOG_DIR/ca-application-capture.json" "$LOG_DIR/ca-application.json"; then
+    capture_app_evidence
+    freeze_evidence
+    finalise_bundle
+    return 1
+  fi
   if ! app_verify_database_delivery; then
     capture_app_evidence
     freeze_evidence
     finalise_bundle
     return 1
   fi
+  # The report re-reads the durable phase captures, candidate binding and
+  # recorded verdicts. A successful phase exit is not a family pass.
+  if ! ca_qualify report "" "$LOG_DIR/ca-report.json"; then
+    capture_app_evidence
+    freeze_evidence
+    finalise_bundle
+    return 1
+  fi
+  {
+    printf 'database_ca: the shared candidate-bound observer established the GCP application and migration CA family\n'
+    printf 'database_ca_report: %s\n' "$LOG_DIR/ca-report.json"
+    printf 'database_ca_observation_identity: %s\n' "$(authority_field "$LOG_DIR/ca-authority.json" principal)"
+    printf 'database_ca_submission_identity: %s\n' "$(authority_field "$LOG_DIR/ca-deploy-authority.json" principal)"
+  } >>"$LOG_DIR/prerequisites.txt"
   local rows="$LOG_DIR/alpha-rows.txt"
   : >"$rows"
   if ! run app-transaction-ocaml bash -c \
@@ -2454,8 +2958,8 @@ phases
             Kubernetes evidence, the cert-manager discriminator and the provider
             inventory before any teardown. On success it continues to the delegation
             hand-off and keeps the substrate for the TLS rows.
-  app       build and push this row's two images into the target's Artifact Registry, apply the
-            workspace's migrations, run `sol
+  app       build and push this row's two images into the target's Artifact Registry, run the
+            shared database-CA owner over the workspace's own `migrate apply`, run `sol
             deploy`, and verify the application transaction
             (a charge accepted, the worker consuming it, and the service reading the worker's
             row back out of PostgreSQL) with the pods, events and logs captured either way.
@@ -2467,7 +2971,10 @@ phases
             workspace's own images. The database connection is not an operator input: the
             deploy reads the cluster root's postgres_url output and delivers
             `<target>-ddl-creds` to the migration Job and `<target>-dml-creds` to a consuming
-            unit, which the row asserts before the transaction.
+            unit, which the row asserts before the transaction. The migration and application
+            CA claims are observed and decided by the shared OCaml owner under a separate
+            read-only Kubernetes identity (GCP_CA_OBSERVER_SERVICE_ACCOUNT or
+            GCP_CA_OBSERVER_SOURCE_KUBECONFIG); the deploy kubeconfig is never that observer.
             The target it writes selects no profile: this row qualifies the application path,
             and claims nothing the production profile's guarantees would promise.
   identity  capture the managed-secret and projected-token mechanism facts the VERIF-021 and
@@ -2500,6 +3007,27 @@ optional (defaults shown)
   PHASE_TIMEOUT=2700          how long one phase may take before the harness ends it
   WORKSPACE=examples/pluto    TFVARS=internal/qualification/gcp/qual-gcp.tfvars
   LOG_DIR=/tmp/sol-gcp-qual-<attempt>   XDG_DATA_HOME
+  GCP_CA_OBSERVER_SERVICE_ACCOUNT          service account to impersonate for the read-only
+                                           database-CA observation (recommended). The caller needs
+                                           roles/iam.serviceAccountTokenCreator on it; it needs
+                                           container.clusters.getCredentials and Kubernetes get
+                                           on deployments, configmaps and jobs in the observed
+                                           namespaces, without Secrets/exec/log/delete. The
+                                           harness creates a private gcloud configuration, persists
+                                           it into the kubeconfig's gke-gcloud-auth-plugin exec
+                                           environment, and verifies the authenticated principal.
+  GCP_CA_OBSERVER_PRINCIPAL                the principal the observer must authenticate as. It
+                                           defaults to GCP_CA_OBSERVER_SERVICE_ACCOUNT; it is
+                                           required with GCP_CA_OBSERVER_SOURCE_KUBECONFIG.
+  GCP_CA_OBSERVER_SOURCE_KUBECONFIG        an existing read-only kubeconfig, when the operator
+                                           established the credential out of band
+  SOL_QUALIFICATION_CA=_build/default/internal/tooling/sol_qualification/bin/qualification_database_ca.exe
+
+The CA effective-surface checks are a sample, not an exhaustive RBAC audit: every
+candidate-bound read must answer yes; wildcard, representative mutation, Secrets,
+exec, log and delete must answer no in every obligation-derived namespace; and
+the observation reads must answer no in an unbound namespace. The namespace set
+comes from the shared owner's `requirements` phase, not a separate app list.
 
 The bundle is LOG_DIR: the harness's own narrative (harness.log), phase transcripts,
 the run kubeconfig and the waiter journal, the API-readiness samples, the failure

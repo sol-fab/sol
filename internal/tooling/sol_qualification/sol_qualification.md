@@ -364,3 +364,23 @@ recorded verdict, and requires exactly the candidate's complete CA-family instan
 set with every decision passing. A successful phase exit is not a family pass, and
 a CA-family pass is never an overall release pass while DML/TLS remain
 unestablished.
+
+The GCP row uses the same driver and phases. Because Sol's deploy runs the
+migration as an operator identity, the driver receives two authorities: the
+`submission_authority` that the product's execution receipt must name, and the
+read-only `authority` that independently observes the Job's CA. They may be
+different principals but must name the same cluster UID and endpoint; the phase
+captures record both and the report rejects a capture from either one's
+substitution.
+
+GCP establishes the observer explicitly. With a service account, the harness
+creates a private gcloud configuration, persists it into the generated
+kubeconfig's `gke-gcloud-auth-plugin` exec environment so token refresh retains
+the impersonation, and requires the authenticated principal to equal the declared
+observer; with an operator-supplied kubeconfig, `GCP_CA_OBSERVER_PRINCIPAL` is
+mandatory. The driver's `requirements` phase exposes the candidate-bound namespace
+and read set, which the harness uses for its positive and negative authorization
+checks (wildcard, representative mutation, Secrets, exec, log, delete and an
+unbound namespace). This is a sampled effective-surface check, not an exhaustive
+RBAC audit. There is no fallback to the deploy kubeconfig. A missing observer is
+an unestablished CA family, not a skipped check.

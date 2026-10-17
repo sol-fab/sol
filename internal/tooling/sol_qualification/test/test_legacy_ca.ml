@@ -831,8 +831,12 @@ let compare provider test () =
     assert_transport observed;
     if provider = "gcp"
     then
+      (* This compares only the legacy delivery predicate. The live GCP row now
+         calls the shared candidate-bound owner separately for application and
+         migration CA delivery; that authority is exercised by the GCP harness
+         test and the compiled-driver tests, not claimed here. *)
       Alcotest.(check bool)
-        "GCP credential gate has no CA observation"
+        "legacy GCP credential gate has no CA observation"
         false
         (List.exists
            (fun q ->

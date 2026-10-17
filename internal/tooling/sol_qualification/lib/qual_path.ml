@@ -56,6 +56,7 @@ let migration
       ~read
       ~establish
       ~expected
+      ~submission_authority
       ~binding
       ~timeout_s
       ~completion_timeout_s
@@ -66,6 +67,7 @@ let migration
     QME.run
       ~verified:prepared.B.verified
       ~expected
+      ~submission_authority
       ~binding
       ~timeout_s
       ~completion_timeout_s
@@ -106,6 +108,7 @@ let run
       ~read
       ~establish
       ~expected
+      ~submission_authority
       ~binding
       ~timeout_s
       ~completion_timeout_s
@@ -119,6 +122,7 @@ let run
       ~read
       ~establish
       ~expected
+      ~submission_authority
       ~binding
       ~timeout_s
       ~completion_timeout_s

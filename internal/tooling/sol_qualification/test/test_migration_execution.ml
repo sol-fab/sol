@@ -111,6 +111,7 @@ let with_install
        if producer then write (root ^ "/install/bin/sol-database-contract") fake_producer;
        Sol_cli_fs.mkdir_p (root ^ "/workspace") |> get;
        Unix.putenv "FAKE_TARGET" target;
+       Unix.putenv "FAKE_BINDING" binding;
        Unix.putenv "FAKE_PRINCIPAL" kube.principal;
        Unix.putenv "FAKE_CLUSTER" kube.cluster;
        Unix.putenv "FAKE_ENDPOINT" kube.endpoint;
@@ -134,6 +135,7 @@ let fresh_context () =
 let launch_outcome
       ?(requested = target)
       ?(expected = kube)
+      ?(submission_authority = kube)
       ?(launch_binding = binding)
       ?context
       ?(completion_timeout_s = 10.)
@@ -145,6 +147,7 @@ let launch_outcome
     ~workspace:(root ^ "/workspace")
     ~requested_target:requested
     ~expected
+    ~submission_authority
     ~binding:launch_binding
     ~timeout_s:10.
     ~completion_timeout_s
@@ -157,6 +160,7 @@ let launch_outcome
 let launch
       ?requested
       ?expected
+      ?submission_authority
       ?launch_binding
       ?context
       ?completion_timeout_s
@@ -167,6 +171,7 @@ let launch
     launch_outcome
       ?requested
       ?expected
+      ?submission_authority
       ?launch_binding
       ?context
       ?completion_timeout_s
@@ -219,6 +224,54 @@ let launches_and_binds () =
     check (outcome = Ok 42) "a valid submission locator was rejected";
     check (Option.is_some !observed) "consume never ran";
     acknowledged root)
+;;
+
+(* A product that submits as one Kubernetes identity can be observed by a
+   different read-only identity on the same cluster. The receipt proves the
+   submission identity; the observation context proves the observer. *)
+let separates_submission_from_observation () =
+  with_install (fun root ->
+    Unix.putenv "FAKE_PRINCIPAL" "offline-writer";
+    let writer = { kube with principal = "offline-writer" } in
+    let observed = ref None in
+    let outcome =
+      launch ~submission_authority:writer root (fun locator ->
+        check
+          (locator.receipt.principal = "offline-writer")
+          "the submission principal was lost";
+        check (locator.context.target = kube) "the observer was not the expected identity";
+        observed := Some locator;
+        Ok 11)
+    in
+    check
+      (outcome = Ok 11)
+      (match outcome with
+       | Ok _ -> "a distinct submission identity was rejected"
+       | Error message -> "a distinct submission identity was rejected: " ^ message);
+    check (Option.is_some !observed) "consume never ran";
+    acknowledged root)
+;;
+
+let rejects_a_receipt_from_another_submission_identity () =
+  with_install (fun root ->
+    Unix.putenv "FAKE_PRINCIPAL" kube.principal;
+    let writer = { kube with principal = "offline-writer" } in
+    let outcome =
+      launch ~submission_authority:writer root (fun _ -> Alcotest.fail "consume ran")
+    in
+    check
+      (Result.is_error outcome)
+      "a receipt naming the observer instead of the submission identity was accepted";
+    acknowledged root)
+;;
+
+let rejects_a_submission_on_another_cluster () =
+  with_install (fun root ->
+    let writer = { kube with cluster = "another-cluster" } in
+    let outcome =
+      launch ~submission_authority:writer root (fun _ -> Alcotest.fail "consume ran")
+    in
+    check (Result.is_error outcome) "a cross-cluster submission was accepted")
 ;;
 
 let rejects_wrong_target () =
@@ -349,6 +402,18 @@ let () =
     "Qualification-owned migration execution launcher"
     [ ( "migration execution"
       , [ Alcotest.test_case "launches and binds the submission" `Quick launches_and_binds
+        ; Alcotest.test_case
+            "separates the submission identity from the observer"
+            `Quick
+            separates_submission_from_observation
+        ; Alcotest.test_case
+            "rejects a receipt from another submission identity"
+            `Quick
+            rejects_a_receipt_from_another_submission_identity
+        ; Alcotest.test_case
+            "rejects a submission on another cluster"
+            `Quick
+            rejects_a_submission_on_another_cluster
         ; Alcotest.test_case
             "rejects another requested target"
             `Quick
