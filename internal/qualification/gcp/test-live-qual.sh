@@ -215,10 +215,31 @@ cat >"$TMP/bin/gcloud" <<'STUB'
 case "${1:-} ${2:-}" in
   "auth configure-docker") exit 0 ;;
 esac
+if [ "${STUB_DESCRIBE_EMPTY:-0}" = "1" ]; then
+  case "$*" in
+    *"container clusters describe"*) exit 0 ;;
+  esac
+fi
 gcloud_log_to="$ARGV_LOG"
 case " $* " in *"value(endpoint)"*) gcloud_log_to="${API_PROBE_LOG:-$ARGV_LOG}" ;; esac
 printf "gcloud %s" "$*" >>"$gcloud_log_to"; printf "\n" >>"$gcloud_log_to"
 case "$*" in
+  *"auth list"*)
+    if [ "${STUB_CALLER_UNKNOWN:-0}" = "1" ]; then
+      printf 'ERROR: (gcloud.auth.list) There is no active account\n' >&2
+      exit 1
+    fi
+    printf 'test@example.com\n'; exit 0 ;;
+  # A project the run cannot read as itself is a scope failure, not the absence
+  # of every resource class inside it.
+  *"projects describe"*)
+    if [ "${STUB_PROJECT_UNKNOWN:-0}" = "1" ]; then
+      printf 'ERROR: (gcloud.projects.describe) NOT_FOUND: Project sol-qualification was not found.\n' >&2
+      exit 1
+    fi
+    printf 'sol-qualification\n'; exit 0 ;;
+  *"projects get-iam-policy"*)
+    printf '{"bindings":[]}\n'; exit 0 ;;
   *"storage objects describe"*)
     if [ "${STUB_STATE_PRESENT:-0}" = "1" ]; then printf 'gs://sol-qualification-tfstate/state\n'; exit 0; fi
     printf 'ERROR: (gcloud.storage.objects.describe) NOT_FOUND: The specified object was not found.\n' >&2
@@ -235,6 +256,12 @@ case "$*" in
       exit 0
     fi
     printf '{"version":4,"serial":7,"resources":[]}\n'; exit 0 ;;
+  *"compute regions describe"*"value(name)"*|*"value(name)"*"compute regions describe"*)
+    if [ "${STUB_REGION_UNKNOWN:-0}" = "1" ]; then
+      printf 'ERROR: (gcloud.compute.regions.describe) NOT_FOUND: The resource us-central1 was not found\n' >&2
+      exit 1
+    fi
+    printf 'us-central1\n'; exit 0 ;;
   *"compute regions describe"*"--format=json"*|*"--format=json"*"compute regions describe"*)
     printf '{"name":"us-central1","quotas":[{"metric":"CPUS","limit":200.0,"usage":22.0},'
     printf '{"metric":"DISKS_TOTAL_GB","limit":4096.0,"usage":0.0},'
@@ -248,22 +275,44 @@ case "$*" in
     if [ "${STUB_FILTER_WARNING:-0}" = "1" ]; then
       printf "WARNING: The following filter keys were not present in any resource : name\n" >&2
     fi
-    exit 0 ;;
+    if [ "${STUB_ADDRESS_RESIDUE:-0}" = "1" ]; then
+      printf '[{"name":"sol-qualification-residue","address":"203.0.113.9"}]\n'; exit 0
+    fi
+    if [ "${STUB_LB_ADDRESS:-0}" = "1" ]; then
+      # GKE names an L4 forwarding rule's address `a<hex>`: it carries no
+      # cluster name and is attributable only by the address the run observed.
+      printf '[{"name":"a1b2c3d4","address":"34.0.0.1"}]\n'; exit 0
+    fi
+    printf '[]\n'; exit 0 ;;
+  *"compute forwarding-rules list"*)
+    if [ "${STUB_FORWARDING_RESIDUE:-0}" = "1" ]; then
+      printf '[{"name":"k8s2-residue","IPAddress":"34.0.0.1","network":"https://www.googleapis.com/compute/v1/projects/sol-qualification/global/networks/test-cluster"}]\n'; exit 0
+    fi
+    if [ "${STUB_LB_ADDRESS:-0}" = "1" ]; then
+      printf '[{"name":"a1b2c3d4","IPAddress":"34.0.0.1","network":"https://www.googleapis.com/compute/v1/projects/sol-qualification/global/networks/other"}]\n'; exit 0
+    fi
+    printf '[]\n'; exit 0 ;;
+  *"compute networks peerings list"*)
+    if [ "${STUB_PEERING_RESIDUE:-0}" = "1" ]; then
+      printf '[{"name":"servicenetworking-google","network":"https://www.googleapis.com/compute/v1/projects/sol-qualification/global/networks/test-cluster"}]\n'; exit 0
+    fi
+    printf '[]\n'; exit 0 ;;
   *"compute regions describe"*)
     if [ "${STUB_QUOTA_GARBAGE:-0}" = "1" ]; then printf "not a quota document\n"; exit 0; fi
     if [ "${STUB_QUOTA_BUSY:-0}" = "1" ]; then printf "CPUS;IN_USE_ADDRESSES;SSD_TOTAL_GB;DISKS_TOTAL_GB;INSTANCES,4;0;0;0;1\n"; exit 0; fi
     printf "CPUS;IN_USE_ADDRESSES;SSD_TOTAL_GB;DISKS_TOTAL_GB;INSTANCES,0;0;0;0;0\n"; exit 0 ;;
-  # A GKE CSI disk is named `pvc-<uuid>`, so it is attributable only by the cluster label.
-  # The stub honors that filter, so the disk-absence scenario below fails against a `name`
-  # filter and passes against the label one.
+  # A GKE CSI disk is named `pvc-<uuid>`, so it is attributable only by the
+  # GKE cluster label; the harness enumerates the class and applies the label
+  # itself rather than asking the provider to filter.
   *"compute disks list"*)
-    case " $* " in
-      *"labels.goog-k8s-cluster-name=$CLUSTER"*)
-        if [ "${STUB_DISK_RESIDUE:-0}" = "1" ]; then printf 'pvc-residue\n'; fi
-        exit 0 ;;
-    esac
-    exit 0 ;;
-  *"compute instances list"*|*"compute disks list"*|*"compute snapshots list"*)
+    if [ "${STUB_DISK_RESIDUE:-0}" = "1" ]; then
+      printf '[{"name":"pvc-residue","labels":{"goog-k8s-cluster-name":"%s"}}]\n' "$CLUSTER"; exit 0
+    fi
+    if [ "${STUB_DISK_HASHED:-0}" = "1" ]; then
+      printf '[{"name":"pvc-unrelated","labels":{}}]\n'; exit 0
+    fi
+    printf '[]\n'; exit 0 ;;
+  *"compute instances list"*|*"compute snapshots list"*)
     case "$*" in
       *"--format=json"*)
         if [ "${STUB_RESIDUE_OWNER:-0}" = "1" ]; then
@@ -315,8 +364,8 @@ case "$*" in
     exit 0 ;;
   *"iam service-accounts get-iam-policy"*)
     case "${STUB_SA_POLICY:-denied}" in
-      binding) printf "roles/iam.serviceAccountTokenCreator\n"; exit 0 ;;
-      empty)   exit 0 ;;
+      binding) printf '{"bindings":[{"role":"roles/iam.serviceAccountTokenCreator","members":["user:test@example.com"]}]}\n'; exit 0 ;;
+      empty)   printf '{"bindings":[]}\n'; exit 0 ;;
       *)
         printf "ERROR: (gcloud.iam.service-accounts.get-iam-policy) PERMISSION_DENIED: Permission 'iam.serviceAccounts.getIamPolicy' denied on resource (or it may not exist). This command is authenticated as test@example.com which is the active account specified by the [core/account] property.\n" >&2
         exit 1 ;;
@@ -378,6 +427,11 @@ case "${STUB_PROBE_MODE:-notfound}" in
     exit 1 ;;
   invalid)
     printf 'ERROR: (gcloud.iam.roles.describe) INVALID_ARGUMENT: The role name must be in the form "roles/{role}", "organizations/{organization_id}/roles/{role}", or "projects/{project_id}/roles/{role}".\n' >&2
+    exit 1 ;;
+  permission-not-found)
+    # A denied read that happens to contain 404 and "was not found": the
+    # resource's own absence is not what this answer establishes.
+    printf 'ERROR: (gcloud.compute.networks.describe) PERMISSION_DENIED: Permission denied on resource; 404 or it may not exist: The resource projects/sol-qualification/global/networks/test-cluster was not found\n' >&2
     exit 1 ;;
   compute-notfound)
     printf "ERROR: (gcloud.compute.networks.describe) Could not fetch resource:\n - The resource 'projects/sol-qualification/global/networks/test-cluster' was not found\n" >&2
@@ -639,6 +693,16 @@ run_case() {
     printf '# Written by internal/qualification/gcp/live-qual.sh (test preseed)\nqual:\n  targets:\n    gcp/us-central1:\n      cluster_name: test-cluster\n      base_domain: qual-gcp.sol-fab.dev\n' >"$TARGET_FILE"
   fi
   rm -rf "$LOG_DIR"
+  if [ -n "${PRESEED_LB_ADDRESS:-}" ]; then
+    mkdir -p "$LOG_DIR"
+    printf '%s\n' "$PRESEED_LB_ADDRESS" >"$LOG_DIR/app-load-balancer.txt"
+    [ -s "$LOG_DIR/attempt.txt" ] || printf 'attempt=%s\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
+  fi
+  if [ -n "${PRESEED_PRIOR_IDENTITIES:-}" ]; then
+    mkdir -p "$LOG_DIR"
+    printf '%s\n' "$PRESEED_PRIOR_IDENTITIES" >"$LOG_DIR/inventory-pre.identities.tsv"
+    [ -s "$LOG_DIR/attempt.txt" ] || printf 'attempt=%s\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
+  fi
   if [ -n "${PRESEED_FOREIGN_ATTEMPT:-}" ]; then
     mkdir -p "$LOG_DIR"
     printf 'attempt=%s\n' "$PRESEED_FOREIGN_ATTEMPT" >"$LOG_DIR/attempt.txt"
@@ -1249,32 +1313,119 @@ else
 fi
 
 printf '\nscenario: the verdict needs every declared class, not just the rows that happened\n'
-run_mutated_case inventory-missing-class verify '/provider_probe disks /d'
+run_mutated_case inventory-missing-class verify \
+  '/provider_describe gke-cluster /,/gcloud container clusters describe/d'
 is "an inventory that never observed a declared class does not verify" \
   "$(cat "$TMP/inventory-missing-class.rc")" "1"
 has "it names the class that was never observed" \
-  "disks: the class was not observed" "$TMP/inventory-missing-class.out"
+  "gke-cluster: the class was not observed" "$TMP/inventory-missing-class.out"
 has "and the verdict says absence was not established" \
-  "disks: could NOT determine absence" "$TMP/inventory-missing-class.out"
+  "gke-cluster: could NOT determine absence" "$TMP/inventory-missing-class.out"
 
 printf '\nscenario: a row for a class the verdict does not declare is rejected\n'
 run_mutated_case inventory-undeclared-class verify \
-  's/provider_probe disks          /provider_probe disks-undeclared /'
+  's/^    provider_describe gke-cluster /    provider_describe gke-cluster-undeclared /'
 is "an undeclared class fails the verification" \
   "$(cat "$TMP/inventory-undeclared-class.rc")" "1"
 has "it names the undeclared row" \
-  "disks-undeclared: an inventory row for a class the verdict does not declare" \
+  "gke-cluster-undeclared: an inventory row for a class the verdict does not declare" \
   "$TMP/inventory-undeclared-class.out"
 
 printf '\nscenario: a class observed twice is not one observation\n'
 run_mutated_case inventory-duplicate-class verify \
-  's/^\(  provider_probe disks .*\)$/\1\n\1/'
+  's/^\(    verdict_row scope-caller PRESENT .*\)$/\1\n\1/'
 is "a duplicated class fails the verification" \
   "$(cat "$TMP/inventory-duplicate-class.rc")" "1"
 has "it names the duplicated class" \
-  "disks: observed 2 times" "$TMP/inventory-duplicate-class.out"
+  "scope-caller: observed 2 times" "$TMP/inventory-duplicate-class.out"
 
-printf '\nscenario: no contradictory configuration is ever rendered\n'
+printf '\nscenario: a provider read is bound to one project, region and caller\n'
+for scope in project caller region; do
+  case "$scope" in
+    project) stub=STUB_PROJECT_UNKNOWN=1 ;;
+    caller)  stub=STUB_CALLER_UNKNOWN=1 ;;
+    region)  stub=STUB_REGION_UNKNOWN=1 ;;
+  esac
+  run_case "scope-$scope-unknown" destroy "$stub"
+  is "an unestablished $scope scope fails the verification" \
+    "$(cat "$TMP/scope-$scope-unknown.rc")" "1"
+  has "it names the $scope class" "scope-$scope: UNKNOWN" "$TMP/scope-$scope-unknown.out"
+  has "and says no class was read under it" \
+    "the project, region or caller scope was not established" "$TMP/scope-$scope-unknown.out"
+  has "so a disposable class is UNKNOWN, not absent" \
+    "gke-cluster: UNKNOWN" "$TMP/scope-$scope-unknown.out"
+  if [ -f "$TARGET_FILE" ]; then
+    ok "the target is retained when the scope is unestablished ($scope)"
+  else
+    no "the target is retained when the scope is unestablished ($scope)" "present" "removed"
+  fi
+done
+
+printf '\nscenario: a successful read with an empty projection is not an absence\n'
+run_case describe-empty destroy STUB_DESCRIBE_EMPTY=1
+has "the named read is UNKNOWN, not absent" "gke-cluster: UNKNOWN" "$TMP/describe-empty.out"
+if [ "$(cat "$TMP/describe-empty.rc")" = "0" ]; then
+  no "an empty projection does not verify" "non-zero" "0"
+else
+  ok "an empty projection does not verify"
+fi
+
+printf '\nscenario: a denied read that also says not-found is UNKNOWN\n'
+run_case permission-not-found destroy STUB_PROBE_MODE=permission-not-found
+has "authority outranks a not-found token" "gke-cluster: UNKNOWN" "$TMP/permission-not-found.out"
+has "and the report names the authority failure" \
+  "failed on authority or availability" "$TMP/permission-not-found.out"
+if grep -q 'gke-cluster: ABSENT' "$TMP/permission-not-found.out"; then
+  no "a denied read is never reported absent" "UNKNOWN" "ABSENT"
+else
+  ok "a denied read is never reported absent"
+fi
+
+printf '\nscenario: attribution is applied here, not delegated to a provider filter\n'
+for attribution_filter in 'name~' 'bindings.members=' 'labels.goog-k8s-cluster-name'; do
+  if grep -qF -- "$attribution_filter" "$TMP/inventory-row-shape.argv"; then
+    no "attribution is not delegated to a provider filter ($attribution_filter)" \
+      "no attribution filter" "present in the argv"
+  else
+    ok "attribution is not delegated to a provider filter ($attribution_filter)"
+  fi
+done
+has "the enumeration asks for the whole class" \
+  "compute forwarding-rules list --project sol-qualification --format=json" \
+  "$TMP/inventory-row-shape.argv"
+
+printf '\nscenario: a GKE-named load-balancer resource is attributable by its address\n'
+PRESEED_LB_ADDRESS=34.0.0.1 run_case lb-address-attribution destroy STUB_LB_ADDRESS=1
+has "the hashed forwarding rule is attributable by its address" \
+  "forwarding-rules: PRESENT (a1b2c3d4" "$TMP/lb-address-attribution.out"
+if [ "$(cat "$TMP/lb-address-attribution.rc")" = "0" ]; then
+  no "residue with a hashed name fails the verification" "non-zero" "0"
+else
+  ok "residue with a hashed name fails the verification"
+fi
+
+printf '\nscenario: an unrelated resource in the class is not the target residue\n'
+run_case disk-unrelated verify STUB_DISK_HASHED=1
+has "an unattributable disk reads ABSENT" "disks: ABSENT" "$TMP/disk-unrelated.out"
+is "and the verification passes" "$(cat "$TMP/disk-unrelated.rc")" "0"
+
+printf '\nscenario: the post inventory accounts for what the pre inventory attributed\n'
+PRESEED_PRIOR_IDENTITIES=$'forwarding-rules\ta1b2c3d4' run_case prior-identity-residue verify STUB_LB_ADDRESS=1
+has "a rule that no longer matches by name is still residue" \
+  "forwarding-rules: PRESENT (a1b2c3d4" "$TMP/prior-identity-residue.out"
+if [ "$(cat "$TMP/prior-identity-residue.rc")" = "0" ]; then
+  no "the surviving recorded identity fails the verification" "non-zero" "0"
+else
+  ok "the surviving recorded identity fails the verification"
+fi
+
+printf '\nscenario: a complete post inventory that no longer holds the record is clean\n'
+PRESEED_PRIOR_IDENTITIES=$'forwarding-rules\ta1b2c3d4' run_case prior-identity-cleared verify
+has "the recorded identity is gone" "forwarding-rules: ABSENT" "$TMP/prior-identity-cleared.out"
+is "and a complete, same-scope post inventory passes" \
+  "$(cat "$TMP/prior-identity-cleared.rc")" "0"
+
+printf '\nscenario: no contradictory configuration is ever rendered\n\'
 if cat "$TMP"/*.argv | grep -qE 'create_dns_zone=true'; then
   no "no invocation asks for the durable zone to be created" "no create_dns_zone=true" "rendered somewhere"
 else

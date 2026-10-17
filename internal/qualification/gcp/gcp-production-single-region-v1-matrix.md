@@ -118,11 +118,20 @@ AWS-only.
 
 ### Collision inspection
 
-Give the run a fresh `ATTEMPT` and `CLUSTER`. The harness records the provider inventory before
-teardown (`inventory pre`) and after (`verify`), so a pre-existing name is attributed rather
-than silently read as this run's. Before provisioning, the read-only `inventory` probes (or the
-console) confirm no resource in the target's class set already carries the chosen `CLUSTER`
-name.
+Give the run a fresh `ATTEMPT` and `CLUSTER`. Every provider read first binds one caller, one
+project and one region, and the inventory records them; a scope that cannot be established makes
+every class UNKNOWN rather than absent. Each class is then observed by its own operation: a named
+resource is decided by the provider's own not-found answer for that name, and a class is
+enumerated in full and attributed in this process (the GKE cluster label, the cluster name as a
+name component, a load balancer address the run observed, or the target VPC's self-link). No
+absence is decided from a server-side filtered projection.
+
+The harness records the identities it attributes before teardown (`inventory pre`) and requires
+the post-teardown observation to account for them (`verify`): a resource whose name no longer
+matches after destruction is still residue if the pre-inventory recorded it. That supplements
+discovery; it does not replace it, because a controller can create resources after the snapshot.
+Before provisioning, the same read-only probes (or the console) confirm no resource in the target's
+class set already carries the chosen `CLUSTER` name.
 
 ### Phases and stopping conditions
 
