@@ -135,6 +135,52 @@ No live harness, qualification matrix, existing release record or provider resou
 is changed by these offline prerequisites. #1505's original TypeScript smoke failure
 remains unresolved; a later passing run does not explain or fix it.
 
+### Adoption decision and wiring
+
+The deploy's migration gate **verifies** that the required migrations are applied
+and refuses otherwise; it does not submit them. The AWS row's normal lifecycle runs
+`sol migrate apply` as its own migration step before the final deploy. The adoption
+therefore brackets **that actual step** with the verified candidate's own command —
+it does not add a second migration, and it does not pretend the deploy performs one.
+
+The row records the database-contract pins in `prepare` and the read-only qualifier
+authority in `transport`, then calls the shared owner at three points:
+
+1. `migration` at the row's `migrate apply` step, capturing the actual Job locator
+   and observing its CA before cleanup (a reported skip is unestablished);
+2. `application` after the final deploy, observing every declared consumer;
+3. `report`, which re-reads the durable phase captures, binding slots and recorded
+   verdicts and requires the candidate's complete CA-family instance set to pass.
+
+`app_verify_database_ca` and its CA-specific Bash body are deleted. The DDL/DML
+Secret, `POSTGRES_URL`, transaction, transport and RBAC checks remain.
+
+### Legacy assertion inventory
+
+Every assertion in `app_verify_database_ca` must survive the cutover:
+
+| Legacy assertion | Shared owner |
+| --- | --- |
+| a declared `ca-configmap` is required | `D.bind_obligations` refuses an undeclared CA |
+| the CA ConfigMap exists in every consuming namespace and the declared namespace | one ConfigMap observation per declared consumer, by namespace and name |
+| each selected workload mounts it through `db-ca` | source, mount path, consuming-container membership and shadowing; volume names are internal linkage |
+| at least one workload was read (non-vacuous) | `observe_family` refuses an empty expected set |
+| a missing object fails; an unreadable one is UNKNOWN | positive absence vs `Forbidden`/timeout/`Spawn_failed` |
+| — (not in the predicate) the migration CA | `capture_execution` + `observe_migrations`, observed before cleanup |
+
+Retained outside the CA family: DDL/DML Secret presence, the consumer's missing
+`POSTGRES_URL`, the transaction, transport separation and deploy RBAC.
+
+Historical failures the adoption must keep detectable: #1481 (CA written only beside
+the migration Job, or a neighbour's mount standing in for the workload's), #1424
+(target vs namespace), #1488 (UNKNOWN rendered as absence), #1499 (a recreated
+same-name Job satisfying the earlier execution) and #1469 (volume name standing in
+for the actual source). The shared volume/mount, absence, identity and legacy
+comparison fixtures cover these. The legacy predicate is frozen at
+`internal/tooling/sol_qualification/test/comparison/legacy-aws-row.sh` as the
+offline comparison baseline only; the live row no longer contains it.
+
+
 The existing [migration submitter](../../cli/lib/deploy/sol_cli_migration_job.ml)
 owns the actual Job name and cleanup. Its ordinary wait/cleanup handle has
 namespace, name and optional ConfigMap. The opt-in metadata channel below reads

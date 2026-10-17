@@ -13,13 +13,19 @@ model.
 
 ## What it grants
 
-| Resource | Verbs | Why |
-|---|---|---|
-| `pods`, `services` | `get`, `list` | resolve a service's selector to a pod to attach to |
-| `pods/portforward` | `create` | the transport |
+| Resource | Verbs | Scope | Why |
+|---|---|---|---|
+| `pods`, `services` | `get`, `list` | cluster | resolve a service's selector to a pod to attach to |
+| `pods/portforward` | `create` | cluster | the transport |
+| `namespaces` | `get` | cluster | read the server-returned `kube-system` UID for the observation identity |
+| `deployments`, `jobs`, `configmaps` | `get`, `list` | per namespace | the application and migration CA observations |
 
-Nothing else. No mutating verb, no `pods/exec`, no `pods/log`, no `events`, no
-`secrets`. Diagnosis stays the operator's job.
+The identity read is the only cluster-scoped addition. The observation reads are a
+separate `sol-qualifier-observe` ClusterRole bound by **RoleBindings** in the
+namespaces `establish.sh` is told to observe (the app and worker namespaces the row
+passes); there is no cluster-wide binding for them. Nothing else: no mutating verb,
+no `pods/exec`, no `pods/log`, no `events`, no `secrets`. Diagnosis stays the
+operator's job.
 
 The principal's **AWS** authority is the other half, and it is checked before the window
 opens: the role must carry no attached policy beside the script's own inline one (an
@@ -57,17 +63,27 @@ behind when it cannot show the declared one:
 - `get pods -n <namespace>` succeeds, and `auth can-i list services` answers `yes` — the
   addressing grant is effective;
 - `auth can-i create pods/portforward -n <namespace>` answers `yes`;
+- `auth can-i get namespaces` answers `yes` — the cluster-scoped identity read;
+- for each declared observation namespace, `auth can-i get deployments.apps`,
+  `list deployments.apps`, `get jobs.batch`, `list configmaps` and `get configmaps`
+  answer `yes` — the CA observations' reads are effective where they are needed;
 - `get secrets -n <namespace>` is **denied** by a real call — the strongest single negative,
   because cluster-admin answers it;
-- `auth can-i` answers `no` for `*/*`, `create pods/exec`, `get pods/log` and `delete pods` —
-  a sample of the contract's deliberate absences, and the verbs by which a broader grant
-  would be usable rather than merely visible. `*/*` is the catch-all: a grant of any verb on
-  any resource fails it.
+- `auth can-i` answers `no` for `*/*`, `create pods/exec`, `get pods/log`, `delete pods` and
+  `get secrets` — **in every observation namespace** — a sample of the contract's deliberate
+  absences, and the verbs by which a broader grant would be usable rather than merely
+  visible. `*/*` is the catch-all: a grant of any verb on any resource fails it;
+- the observation reads answer `no` in a namespace that was never bound
+  (`sol-qualifier-unbound` by default), so an accidental cluster-wide observation grant
+  fails establishment.
 
-This is a *sample* of the declared surface, not a rule-set comparison: a grant that is
-neither `*/*` nor one of the sampled denials — `get configmaps`, say — would still pass. What
-the probe establishes is that the principal is this mapping, that the addressing and transport
-grants are effective, and that the decisive broad grants are refused.
+The probe is a *sample* of the effective surface, not an exhaustive RBAC audit. It
+positively checks every observation read the driver performs (including
+`get configmaps`) in each bound namespace and denies those reads in an unbound one,
+but a grant on a resource or verb outside the sampled set — `get events`, say — would
+still pass. What it establishes is that the principal is this mapping, that the
+addressing, transport and observation grants are effective where required and denied
+outside them, and that the decisive broad grants are refused.
 
 A failure at any of those leaves **no** access entry rather than a broad one, and the script
 says so: it reports the removal only after `describe-access-entry` agrees the entry is gone,

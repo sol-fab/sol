@@ -14,7 +14,7 @@ import subprocess
 import sys
 import unittest
 
-DRIVER, PRODUCER, BINDER, BUILDER, HELPER, REPOSITORY, GOLDEN = map(lambda x: Path(x).resolve(), sys.argv[1:])
+DRIVER, PRODUCER, BINDER, BUILDER, HELPER, REPOSITORY, GOLDEN, CA_DRIVER = map(lambda x: Path(x).resolve(), sys.argv[1:])
 sys.argv = [str(HELPER), str(PRODUCER), str(BINDER), str(BUILDER)]
 spec = importlib.util.spec_from_file_location("binding_fixture", HELPER)
 fixture = importlib.util.module_from_spec(spec)
@@ -345,6 +345,146 @@ class Boundary(fixture.Binding):
     def test_boundary_integrated_path_interrupted_capture(self):
         value = self.run_integrated_path(fault=True)
         self.assertFalse(value["ok"], value)
+
+    # --- the actual compiled driver through the row's request/phase interface ---
+
+    def ca_request(self, root, pins, phase, capture, report, binding, evidence):
+        request = {
+            "repository": str(REPOSITORY),
+            "candidate": str(self.candidate),
+            "install": str(self.install),
+            "workspace": str(self.workspace),
+            "pins": pins,
+            "authority": {"principal": "offline-reader", "cluster": "offline-cluster",
+                          "endpoint": "https://offline.invalid"},
+            "kubeconfig": str(root / "explicit.kubeconfig"),
+            "context": "explicit-observer",
+            "identity_scope": "qualifier",
+            "attempt": "offline",
+            "assessment": "a1",
+            "scenario": "aws",
+            "evidence": str(evidence),
+            "phase": phase,
+            "capture": str(capture),
+            "report": str(report),
+            "binding": binding,
+            "migration_capture": str(root / "ca-migration-capture.json"),
+            "application_capture": str(root / "ca-application-capture.json"),
+        }
+        path = root / f"ca-request-{phase}.json"
+        path.write_text(json.dumps(request))
+        return path
+
+    def invoke_ca_driver(self, phase, request, env):
+        result = subprocess.run(
+            [str(CA_DRIVER), "--phase", phase, "--request", str(request)],
+            env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+        self.assertFalse((self.root / "provider-called").exists(),
+                         "the real driver attempted provider execution")
+        return result
+
+    def run_real_driver(self, mutation=None, deny_reads=False):
+        sol = self.install / "bin/sol"
+        sol.write_text(PROTOCOL_SOL.replace("__VERSION__", fixture.VERSION))
+        sol.chmod(0o755)
+        self.archive()
+        bound = self.run_binding(True)
+        pins = self.expected(bound)
+        self.pin_path.write_text(json.dumps(pins))
+        root, env = self.integration_environment()
+        if mutation is not None:
+            env["SOL_INTEGRATION_MUTATION"] = mutation
+        previous = {key: os.environ.get(key) for key in env}
+        os.environ.update(env)
+        try:
+            os.environ["SOL_WORLD_ONLY"] = "1"
+            try:
+                self.invoke(True, pins, exercise=False)
+            finally:
+                os.environ.pop("SOL_WORLD_ONLY", None)
+            migration = json.loads((root / "migration.json").read_text())
+            if deny_reads:
+                world = json.loads((root / "world.json").read_text())
+                world["deny_reads"] = True
+                (root / "world.json").write_text(json.dumps(world))
+            driver_env = dict(
+                os.environ, PATH=str(self.private_bin),
+                PROVIDER_MARKER=str(self.root / "provider-called"),
+                SOL_HOME=str(self.root / "wrong-assets"),
+                FAKE_MIGRATION_NAMESPACE=migration["namespace"],
+                FAKE_MIGRATION_NAME=migration["name"],
+                FAKE_MIGRATION_UID=migration["uid"])
+            evidence = root / "ca-evidence"
+            results = {}
+            for phase in ("migration", "application"):
+                capture = root / f"ca-{phase}-capture.json"
+                request = self.ca_request(root, pins, phase, capture,
+                                          root / f"ca-{phase}.json", "b" * 64, evidence)
+                results[phase] = self.invoke_ca_driver(phase, request, driver_env)
+            report_path = root / "ca-report.json"
+            request = self.ca_request(root, pins, "report", "", report_path, "", evidence)
+            results["report"] = self.invoke_ca_driver("report", request, driver_env)
+            value = json.loads(report_path.read_text()) if report_path.exists() else None
+            return {"root": root, "env": driver_env, "pins": pins, "migration": migration,
+                    "results": results, "report": value, "evidence": evidence}
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    def test_boundary_real_driver_report(self):
+        run = self.run_real_driver()
+        for phase in ("migration", "application", "report"):
+            result = run["results"][phase]
+            self.assertEqual(result.returncode, 0, phase + ": " + result.stderr)
+        value = run["report"]
+        self.assertEqual(value["ca_family"], "pass", value)
+        self.assertTrue(value["complete"], value)
+        self.assertFalse(value["release_accepted"], value)
+        self.assertEqual(value["identity_scope"], "qualifier", value)
+        self.assertTrue(value["independent_qualifier"], value)
+        # Two declared database consumers and one migration context; the
+        # Kafka-only nonconsumer is not required to carry the CA.
+        self.assertEqual(len(value["outcomes"]), 3, value)
+        self.assertFalse(
+            any("checkout" in item["instance"] for item in value["outcomes"]), value)
+
+    def test_boundary_real_driver_missing_mount_fails(self):
+        run = self.run_real_driver(mutation="missing_mount")
+        self.assertEqual(run["results"]["migration"].returncode, 0,
+                         run["results"]["migration"].stderr)
+        self.assertNotEqual(run["results"]["application"].returncode, 0)
+
+    def test_boundary_real_driver_read_authority_denied(self):
+        run = self.run_real_driver(deny_reads=True)
+        self.assertNotEqual(run["results"]["migration"].returncode, 0)
+        self.assertIn("cannot read", run["results"]["migration"].stderr)
+
+    def test_boundary_real_driver_rejects_mismatched_evidence(self):
+        run = self.run_real_driver()
+        self.assertEqual(run["results"]["report"].returncode, 0)
+        evidence = run["evidence"]
+        root = run["root"]
+        for direction in ("verdicts", "binding"):
+            tampered = root / f"ca-tampered-{direction}.json"
+            env = dict(run["env"], SOL_TAMPER=direction,
+                       SOL_TAMPER_EVIDENCE=str(evidence),
+                       SOL_TAMPER_SOURCE=str(root / "ca-application-capture.json"),
+                       SOL_TAMPER_OUT=str(tampered))
+            probe = subprocess.run(
+                [str(DRIVER), str(REPOSITORY), str(self.candidate), str(self.install),
+                 str(self.workspace), str(self.pin_path), "-", "aws"],
+                env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+            report_path = root / f"ca-report-tampered-{direction}.json"
+            request = self.ca_request(root, run["pins"], "report", "", report_path, "", evidence)
+            data = json.loads(request.read_text())
+            data["migration_capture"] = str(tampered)
+            request.write_text(json.dumps(data))
+            result = self.invoke_ca_driver("report", request, run["env"])
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
 if __name__ == "__main__":
     suite = unittest.TestSuite(Boundary(name) for name in dir(Boundary) if name.startswith("test_boundary_"))

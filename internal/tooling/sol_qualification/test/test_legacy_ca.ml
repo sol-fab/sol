@@ -787,7 +787,7 @@ let compare provider test () =
     let source =
       path
         (if provider = "aws"
-         then "internal/qualification/aws/live-row.sh"
+         then "internal/tooling/sol_qualification/test/comparison/legacy-aws-row.sh"
          else "internal/qualification/gcp/live-qual.sh")
     in
     let status, stdout, stderr =
