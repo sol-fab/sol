@@ -44,6 +44,17 @@ cp "$REPO/internal/qualification/aws/absence.py" "$ROOT/internal/qualification/a
 cp "$REPO/internal/qualification/sol-under-test.sh" "$ROOT/internal/qualification/"
 cp "$REPO/internal/qualification/candidate-binding.sh" "$ROOT/internal/qualification/"
 cp "$REPO/internal/qualification/attempt.sh" "$ROOT/internal/qualification/"
+cat >"$ROOT/internal/qualification/database-contract-binding.py" <<'STUB'
+#!/usr/bin/env python3
+import json, sys
+# Test stub: the row's pins recorder only needs the canonical shape.
+print(json.dumps({
+    "candidate": {"revision": "0" * 40, "bundle_sha256": "0" * 64},
+    "definition": {"digest": "0" * 64},
+    "specimen": {"digest": "0" * 64,
+                 "declaration": {"requested_target": sys.argv[-1], "target": sys.argv[-1]}},
+}))
+STUB
 
 bundle() {
   local dir="$1"
@@ -649,6 +660,10 @@ case " $* " in
           "${STUB_QUALIFIER_ROLE:-qualifier}"
         exit 0
         ;;
+      *kubeconfig-deploy.yaml*)
+        printf '{"status":{"userInfo":{"username":"arn:aws:sts::123456789012:assumed-role/deploy/session"}}}\n'
+        exit 0
+        ;;
       *) exit 1 ;;
     esac
     ;;
@@ -672,6 +687,49 @@ esac
 exit 0
 STUB
 chmod +x "$TMP/bin/kubectl"
+
+# Stub for the shared CA-family driver. The row calls it at the documented phase
+# points; the observer's own semantics are covered by the offline qualification
+# suite. This harness checks the wiring, phase ordering and failure propagation.
+cat >"$TMP/bin/qualification_database_ca" <<'STUB'
+#!/usr/bin/env bash
+set -uo pipefail
+phase="" request=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --phase) phase="$2"; shift 2 ;;
+    --request) request="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$request" ] || { echo "stub CA driver: no --request" >&2; exit 2; }
+[ -n "${LOG_DIR:-}" ] && printf '%s\n' "$phase" >>"$LOG_DIR/ca-phases.txt"
+if [ "$phase" = "application" ]; then
+  case "${STUB_CA_ABSENT:-0}:${STUB_CA_UNREADABLE:-0}:${STUB_CA_UNMOUNTED:-}" in
+    1:*:*) echo "the shared database-CA observer found the declared CA ConfigMap absent from a consuming namespace" >&2; exit 1 ;;
+    *:1:*) echo "the shared database-CA observer could not read the CA, so its presence is UNKNOWN" >&2; exit 1 ;;
+    *:*:?*) echo "the shared database-CA observer found pluto-payments/$STUB_CA_UNMOUNTED does not mount the CA" >&2; exit 1 ;;
+  esac
+fi
+if [ "$phase" = "migration" ] && [ -n "${STUB_APP_MARKER_DIR:-}" ]; then
+  : >"$STUB_APP_MARKER_DIR/migrated"
+fi
+capture="$(python3 - "$request" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1])).get("capture",""))
+PY
+)"
+report="$(python3 - "$request" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1])).get("report",""))
+PY
+)"
+[ -n "$capture" ] && : >"$capture"
+[ -n "$report" ] && : >"$report"
+exit 0
+STUB
+chmod +x "$TMP/bin/qualification_database_ca"
+
 
 cat >"$TMP/bin/curl" <<'STUB'
 #!/usr/bin/env bash
@@ -810,6 +868,18 @@ run_row() {
   : >"$ESTABLISH_LOG"
   : >"$TERRAFORM_LOG"
   rm -rf "$LOG_DIR"
+  # The app phase reuses the database-contract pins `prepare` recorded; a scenario
+  # that runs `app` alone seeds them exactly as `prepare` would.
+  mkdir -p "$LOG_DIR"
+  python3 - "$LOG_DIR/database-contract-pins.json" "qualreg/aws/us-east-1" <<'PY'
+import json, sys
+json.dump({"revision": "0" * 40,
+           "bundle_digest": "0" * 64,
+           "definition_digest": "0" * 64,
+           "specimen_digest": "0" * 64,
+           "requested_target": sys.argv[2],
+           "target": sys.argv[2]}, open(sys.argv[1], "w"))
+PY
   # The app phase reuses the digests `cloud` published into Sol's repositories; a scenario that
   # runs `app` alone seeds them exactly as a publish would have.
   stub_published_refs
@@ -827,7 +897,8 @@ run_row() {
     CLUSTER_ACCESS_ROLE_ARN=arn:aws:iam::1:role/access \
     PUBLISHER_ROLE_ARN="$PUBLISHER_ROLE_ARN" \
     STUB_APP_REFUSALS=1 STUB_APP_MARKER_DIR="$STUB_APP_MARKER_DIR" \
-    SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" PHASE_TIMEOUT=60 "$@" \
+    SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
+    SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
     "$ROOT/internal/qualification/aws/live-row.sh" app >"$TMP/$name.out" 2>&1
   echo "$?" >"$TMP/$name.rc"
 }
@@ -860,7 +931,20 @@ run_phase() {
   if [ "$phase" = cloud ] && [ "${SKIP_PREPARE:-0}" != 1 ]; then stub_prepare "$name"; fi
   # A scenario that runs `app` alone is running after a `cloud` that published the digests, so seed
   # them (the app phase reuses the cloud phase's and never publishes its own).
-  if [ "$phase" = app ]; then stub_published_refs; fi
+  if [ "$phase" = app ]; then
+    stub_published_refs
+    # The app phase reuses the database-contract pins `prepare` recorded.
+    mkdir -p "$LOG_DIR"
+    python3 - "$LOG_DIR/database-contract-pins.json" "qualreg/aws/us-east-1" <<'PY'
+import json, sys
+json.dump({"revision": "0" * 40,
+           "bundle_digest": "0" * 64,
+           "definition_digest": "0" * 64,
+           "specimen_digest": "0" * 64,
+           "requested_target": sys.argv[2],
+           "target": sys.argv[2]}, open(sys.argv[1], "w"))
+PY
+  fi
   case "$phase" in
     prepare | cloud | app | destroy) STUB_ECR_LIFECYCLE=1 ;;
     *) STUB_ECR_LIFECYCLE=0 ;;
@@ -876,7 +960,8 @@ run_phase() {
     CLUSTER_ACCESS_ROLE_ARN=arn:aws:iam::1:role/access \
     PUBLISHER_ROLE_ARN="$PUBLISHER_ROLE_ARN" \
     OPERATOR_ROLE_ARN=arn:aws:iam::1:role/operator QUALIFIER_ROLE=qualifier \
-    SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" PHASE_TIMEOUT=60 "$@" \
+    SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
+    SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
     "$ROOT/internal/qualification/aws/live-row.sh" "$phase" >"$TMP/$name.out" 2>&1
   echo "$?" >"$TMP/$name.rc"
 }
@@ -906,7 +991,8 @@ run_phase_closed_stdout() {
     CLUSTER_ACCESS_ROLE_ARN=arn:aws:iam::1:role/access \
     PUBLISHER_ROLE_ARN="$PUBLISHER_ROLE_ARN" \
     OPERATOR_ROLE_ARN=arn:aws:iam::1:role/operator QUALIFIER_ROLE=qualifier \
-    SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" PHASE_TIMEOUT=60 "$@" \
+    SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
+    SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
     "$ROOT/internal/qualification/aws/live-row.sh" "$phase" 2>"$TMP/$name.err" | true
   local -a codes=("${PIPESTATUS[@]}")
   printf '%s\n' "${codes[0]}" >"$TMP/$name.rc"
@@ -940,7 +1026,8 @@ run_phase_sigterm() {
     CLUSTER_ACCESS_ROLE_ARN=arn:aws:iam::1:role/access \
     PUBLISHER_ROLE_ARN="$PUBLISHER_ROLE_ARN" \
     OPERATOR_ROLE_ARN=arn:aws:iam::1:role/operator QUALIFIER_ROLE=qualifier \
-    SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" PHASE_TIMEOUT=60 "$@" \
+    SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
+    SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
     "$ROOT/internal/qualification/aws/live-row.sh" "$phase" >"$TMP/$name.out" 2>&1 &
   local harness_pid=$! waited=0
   while [ ! -e "$LOG_DIR/cloud-apply.log" ] && [ "$waited" -lt 100 ]; do
@@ -994,8 +1081,6 @@ lacks "and the app phase never builds or pushes an image itself" \
   "docker push" "$TMP/ok.docker"
 lacks "but the harness publishes no migration runner" \
   "sol-migration-runner" "$TMP/ok.docker"
-has "Sol applies the workspace's migrations" \
-  "sol migrate apply qualreg/aws/us-east-1 [runner=unset] [home=unset]" "$TMP/ok.sol"
 lacks "without being asked to publish or name a runner" \
   "migrate apply qualreg/aws/us-east-1 --registry" "$TMP/ok.sol"
 has "the deploy resolves the workspace's own images from the target's registry" \
@@ -1033,26 +1118,25 @@ has "the supplied keys are recorded without their values" \
 has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
   "database_delivery: qualreg-aws-us-east-1-ddl-creds@pluto-comms (migration Job, as the deploy declared it), qualreg-aws-us-east-1-dml-creds@pluto-payments (unit consumer)" \
   "$TMP/ok.logs/prerequisites.txt"
-has "and the database CA is asserted at each consuming namespace (#1481)" \
-  "database_ca: qualreg-aws-us-east-1-db-ca present at every consuming namespace and the declared location, and mounted through the db-ca volume by 5 selected workload(s)" \
-  "$TMP/ok.logs/prerequisites.txt"
-has "with the declared ConfigMap read from a consuming namespace" \
-  "get configmap qualreg-aws-us-east-1-db-ca -n pluto-payments" "$TMP/ok.kubectl"
-has "and with every selected workload's own pod template read" \
-  "get deploy orders-svc -n pluto-payments -o json" "$TMP/ok.kubectl"
+has "the shared CA family owner ran the migration phase at the row's migration step" \
+  "migration" "$TMP/ok.logs/ca-phases.txt"
+has "and the application phase after the final deploy" \
+  "application" "$TMP/ok.logs/ca-phases.txt"
+has "and the report phase that re-reads durable evidence" \
+  "report" "$TMP/ok.logs/ca-phases.txt"
 
 printf '\nscenario: a database CA the deploy declared but did not write to the consumer is caught (#1481)\n'
 run_row caabsent TRANSPORT=0 STUB_CA_ABSENT=1
 refused caabsent "a CA absent from a consuming namespace fails the app phase"
-has "and names the namespace where it is missing" \
-  "where the workloads read it" "$TMP/caabsent.out"
+has "and says the declared CA is absent from a consuming namespace" \
+  "absent from a consuming namespace" "$TMP/caabsent.out"
 
 printf '\nscenario: an unreadable CA is UNKNOWN, not absence (#1481)\n'
 run_row caunreadable TRANSPORT=0 STUB_CA_UNREADABLE=1
 refused caunreadable "an unreadable CA fails the phase rather than passing it"
 has "and says the presence is UNKNOWN, not that it is absent" \
-  "so its presence is UNKNOWN" "$TMP/caunreadable.out"
-lacks "and never calls an unreadable CA absent" "and it is absent from" "$TMP/caunreadable.out"
+  "presence is UNKNOWN" "$TMP/caunreadable.out"
+lacks "and never calls an unreadable CA absent" "declared CA ConfigMap absent" "$TMP/caunreadable.out"
 
 printf '\nscenario: one workload of several missing the CA mount is caught (#1481)\n'
 # The other selected workloads in the namespace mount the declared CA correctly; only `orders-svc`
@@ -1060,7 +1144,7 @@ printf '\nscenario: one workload of several missing the CA mount is caught (#148
 run_row caunmounted TRANSPORT=0 STUB_CA_UNMOUNTED=orders-svc
 refused caunmounted "a workload missing the mount fails even when its neighbours mount it"
 has "and names the workload that does not mount it" \
-  "pluto-payments/orders-svc does not mount the declared CA" "$TMP/caunmounted.out"
+  "pluto-payments/orders-svc does not mount the CA" "$TMP/caunmounted.out"
 has "the run identity records the bundle version" \
   "sol_version: $VERSION" "$TMP/ok.logs/sol-identity.txt"
 has "and the bundle's digest-pinned migration runner" \

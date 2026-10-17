@@ -135,25 +135,25 @@ No live harness, qualification matrix, existing release record or provider resou
 is changed by these offline prerequisites. #1505's original TypeScript smoke failure
 remains unresolved; a later passing run does not explain or fix it.
 
-### Adoption gate: who owns the AWS migration execution
+### Adoption decision and wiring
 
-The CA-family cutover is not a mechanical `app_verify_database_ca` deletion. The AWS
-row's `sol deploy` already applies migrations through `Sol_cli_migration_gate`, while
-`Qual_path.run` launches the verified candidate's own `sol migrate apply`. Wiring the
-second without deciding the first would either apply migrations twice or observe a
-redundant execution instead of the one the deploy performed.
+The deploy's migration gate **verifies** that the required migrations are applied
+and refuses otherwise; it does not submit them. The AWS row's normal lifecycle runs
+`sol migrate apply` as its own migration step before the final deploy. The adoption
+therefore brackets **that actual step** with the verified candidate's own command —
+it does not add a second migration, and it does not pretend the deploy performs one.
 
-The adoption must record one of these before the predicate is removed:
+The row records the database-contract pins in `prepare` and the read-only qualifier
+authority in `transport`, then calls the shared owner at three points:
 
-1. the deploy's migration submission opens the qualification execution channel, and
-   the shared path consumes that actual locator and observes the CA before cleanup; or
-2. the row runs `migrate apply` through the qualification launcher before deploy, and
-   the deploy gate observes the already-applied state.
+1. `migration` at the row's `migrate apply` step, capturing the actual Job locator
+   and observing its CA before cleanup (a reported skip is unestablished);
+2. `application` after the final deploy, observing every declared consumer;
+3. `report`, which re-reads the durable phase captures, binding slots and recorded
+   verdicts and requires the candidate's complete CA-family instance set to pass.
 
-Until that decision is recorded, the live row deliberately keeps its predicate. The
-replacement owner (`qualification_database_ca` over `Qual_path`) is compiled over
-the offline-tested path, but it is not wired into the row; deleting the predicate
-now would guess at the execution flow.
+`app_verify_database_ca` and its CA-specific Bash body are deleted. The DDL/DML
+Secret, `POSTGRES_URL`, transaction, transport and RBAC checks remain.
 
 ### Legacy assertion inventory
 

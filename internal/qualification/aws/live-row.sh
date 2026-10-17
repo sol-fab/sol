@@ -212,6 +212,115 @@ run() {
   fi
 }
 
+# The shared database-CA family owner (#1510). It is a harness executable,
+# distinct from the installed candidate's own sol.
+SOL_QUALIFICATION_CA="${SOL_QUALIFICATION_CA:-$ROOT/_build/default/internal/tooling/sol_qualification/bin/qualification_database_ca.exe}"
+
+# The database-contract pins the assessment re-verifies. Recorded in `prepare`
+# from the immutable install and the candidate-bound workspace; no provider state.
+record_database_contract_pins() {
+  mkdir -p "$LOG_DIR"
+  if ! python3 "$ROOT/internal/qualification/database-contract-binding.py" \
+      --candidate "$SOL_CANDIDATE" --install "$SOL_INSTALL" --workspace "$WORKSPACE" \
+      --target "$TARGET" \
+    | python3 -c 'import json,sys
+bound=json.load(sys.stdin); s=bound["specimen"]["declaration"]
+json.dump({"revision":bound["candidate"]["revision"],
+           "bundle_digest":bound["candidate"]["bundle_sha256"],
+           "definition_digest":bound["definition"]["digest"],
+           "specimen_digest":bound["specimen"]["digest"],
+           "requested_target":s["requested_target"],
+           "target":s["target"]}, sys.stdout)' \
+    >"$LOG_DIR/database-contract-pins.json"; then
+    say "could not bind the candidate's database contract; the CA family cannot be qualified"
+    return 1
+  fi
+}
+
+# The expected Kubernetes authority the CA observations must match. Recorded from
+# the read-only qualifier transport, never from the product's own report.
+record_ca_authority() {
+  local principal cluster endpoint err kubeconfig context
+  err="$LOG_DIR/ca-authority.err"
+  # `transport` records from the qualifier; the app phase overrides CA_* when a
+  # TRANSPORT=0 run observes through the deploy identity.
+  kubeconfig="${CA_KUBECONFIG:-$QUALIFIER_KUBECONFIG}"
+  context="${CA_CONTEXT:-$CLUSTER-qualifier}"
+  if ! principal="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
+      auth whoami -o jsonpath='{.status.userInfo.username}' 2>"$err")"; then
+    say "could not read the qualifier principal: $(cat "$err" 2>/dev/null)"
+    return 1
+  fi
+  if ! cluster="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
+      get namespace kube-system -o jsonpath='{.metadata.uid}' 2>>"$err")"; then
+    say "could not read the qualifier cluster identity: $(cat "$err" 2>/dev/null)"
+    return 1
+  fi
+  if ! endpoint="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
+      config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>>"$err")"; then
+    say "could not read the qualifier endpoint: $(cat "$err" 2>/dev/null)"
+    return 1
+  fi
+  python3 - "$LOG_DIR/ca-authority.json" "$principal" "$cluster" "$endpoint" <<'PY'
+import json, sys
+json.dump({"principal": sys.argv[2], "cluster": sys.argv[3], "endpoint": sys.argv[4]},
+          open(sys.argv[1], "w"))
+PY
+}
+
+# Build the driver request for one phase from inputs the row recorded earlier.
+# Nothing here is read from the product's own report.
+ca_request() {
+  local phase="$1" capture="${2:-}" report="${3:-}" binding="${4:-}"
+  python3 - "$ROOT" "$SOL_CANDIDATE" "$SOL_INSTALL" "$WORKSPACE" "$LOG_DIR" \
+    "$CA_KUBECONFIG" "$CA_CONTEXT" "$ATTEMPT" "$phase" "$capture" "$report" "$binding" <<'PY'
+import json, os, sys
+(root, candidate, install, workspace, log, kubeconfig, context, attempt,
+ phase, capture, report, binding) = sys.argv[1:13]
+request = {
+    "repository": root,
+    "candidate": candidate,
+    "install": install,
+    "workspace": workspace,
+    "pins": json.load(open(os.path.join(log, "database-contract-pins.json"))),
+    "authority": json.load(open(os.path.join(log, "ca-authority.json"))),
+    "kubeconfig": kubeconfig,
+    "context": context,
+    "attempt": attempt,
+    "assessment": "database-ca",
+    "scenario": "aws",
+    "evidence": os.path.join(log, "ca-evidence"),
+    "phase": phase,
+    "capture": capture,
+    "report": report,
+    "binding": binding,
+    "migration_capture": os.path.join(log, "ca-migration-capture.json"),
+    "application_capture": os.path.join(log, "ca-application-capture.json"),
+}
+json.dump(request, open(os.path.join(log, "ca-request-" + phase + ".json"), "w"))
+PY
+}
+
+# Invoke the shared owner for one phase. A phase's exit status is not evidence:
+# the report phase re-reads the recorded captures and verdicts.
+ca_qualify() {
+  local phase="$1" capture="${2:-}" report="${3:-}" binding="${4:-}"
+  if [ ! -x "$SOL_QUALIFICATION_CA" ]; then
+    say "the shared database-CA qualifier is not built at $SOL_QUALIFICATION_CA"
+    return 1
+  fi
+  if ! ca_request "$phase" "$capture" "$report" "$binding"; then
+    say "could not build the database-CA $phase request"
+    return 1
+  fi
+  if ! "$SOL_QUALIFICATION_CA" --phase "$phase" \
+      --request "$LOG_DIR/ca-request-$phase.json" >"$LOG_DIR/ca-$phase.log" 2>&1; then
+    say "the shared database-CA $phase phase did not pass; see $LOG_DIR/ca-$phase.log"
+    tail -n 20 "$LOG_DIR/ca-$phase.log"
+    return 1
+  fi
+}
+
 # The whole-target deploy reconciles the durable installation inline (DEC-057 §2), and on an
 # account whose installation is not established it offers to set it up through one
 # interactive confirmation. The run drives that confirmation through a pty with a single
@@ -671,6 +780,9 @@ phase_transport() {
   fi
   say "transport-verify"
   probe_qualifier_identity || return 1
+  # The CA observations must match an authority established independently of the
+  # product's report; record it from the read-only transport now.
+  record_ca_authority || return 1
   say "transport-separation-post"
   probe_production_separation post || return 1
   local pf
@@ -788,6 +900,9 @@ app_build_images() {
     return 1
   fi
   sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$context" "$pins" "$(git -C "$WORKSPACE" rev-parse HEAD)"
+  # Record the database-contract pins the app phase re-verifies. This reads the
+  # immutable install and the candidate-bound workspace only.
+  record_database_contract_pins || return 1
   say "app images build from candidate $SOL_REVISION ($WORKSPACE at that revision, framework pinned to it)"
   for unit in $APP_UNITS; do
     if ! dir="$(unit_dir "$unit")"; then
@@ -1114,9 +1229,11 @@ app_verify_database_delivery() {
     say "$consumer still carries POSTGRES_URL; the unit is not reading the class Secret"
     return 1
   fi
-  # The CA is a **mount**, read from the workload's own namespace, not a value routed like the
-  # class Secret. Verified per selected workload, from its own pod template (#1481).
-  app_verify_database_ca "$declared_ns" || return 1
+  # The database CA family is owned by the shared candidate-bound observer. The
+  # migration phase already ran at the row's migration step; the application
+  # phase ran after the final deploy. This report re-reads their durable evidence
+  # and refuses an incomplete or non-passing family.
+  ca_qualify report "" "$LOG_DIR/ca-report.json" || return 1
   {
     printf 'database_delivery: %s@%s (migration Job, as the deploy declared it), %s@%s (unit consumer)\n' \
       "$ddl_name" "$declared_ns" "$name-dml-creds" "$dml"
@@ -1125,65 +1242,25 @@ app_verify_database_delivery() {
   say "the deploy delivered the database as $name-ddl-creds / $name-dml-creds; the consumer's unit Secret carries no master copy"
 }
 
-# The database CA is a mount, so its verification is per workload and reads the pod template — not
-# the rendered object's text: a name appearing somewhere in an object proves neither that the pod
-# template mounts it nor that a neighbour does, and a CA written only beside the migration Job
-# leaves a pod in ContainerCreating (#1481). Every read distinguishes a **missing object** from an
-# **unreadable one**: an authorization failure or an API outage is UNKNOWN, never absence.
-app_verify_database_ca() {
-  local declared_ns="$1"
-  local ca namespace mount workload address err mounted=0
-  ca="$(app_database_field ca-configmap)"
-  if [ -z "$ca" ]; then
-    say "the deploy declared no ca-configmap, so the database CA mount cannot be verified"
-    return 1
-  fi
-  # Where the workloads read it: each consuming namespace, and the location the deploy declared.
-  for namespace in $(app_namespaces) "$declared_ns"; do
-    err="$LOG_DIR/db-ca-$namespace.err"
-    if ! mount="$(kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get configmap "$ca" -n "$namespace" \
-      -o name 2>"$err")"; then
-      if grep -qi 'not found' "$err" 2>/dev/null; then
-        say "the deploy declared CA ConfigMap $ca and it is absent from $namespace, where the workloads read it"
-      else
-        say "could not read CA ConfigMap $ca in $namespace, so its presence is UNKNOWN (see $err)"
-      fi
-      return 1
-    fi
-  done
-  # One read per selected workload, from its own pod template. A workload missing the mount fails
-  # even when another workload in the same namespace mounts the CA correctly.
-  for address in $(app_unit_addresses); do
-    namespace="${APP_NS%-*}-${address%%/*}"
-    workload="$(k8s_name "${address##*/}")"
-    err="$LOG_DIR/db-ca-volume-$workload.err"
-    if ! mount="$(kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get deploy "$workload" -n "$namespace" \
-      -o json 2>"$err" \
-      | jq -r --arg ca "$ca" \
-        '[.spec.template.spec.volumes[]? | select(.name == "db-ca") | .configMap.name]
-         | if index($ca) then "yes" else "no" end' 2>>"$err")"; then
-      say "could not read $namespace/$workload, so whether it mounts $ca is UNKNOWN (see $err)"
-      return 1
-    fi
-    if [ "$mount" != "yes" ]; then
-      say "$namespace/$workload does not mount the declared CA $ca through its db-ca volume"
-      return 1
-    fi
-    mounted=$((mounted + 1))
-  done
-  if [ "$mounted" = 0 ]; then
-    say "no selected workload was read for the database CA mount, so the assertion would be vacuous"
-    return 1
-  fi
-  printf 'database_ca: %s present at every consuming namespace and the declared location, and mounted through the db-ca volume by %s selected workload(s)\n' \
-    "$ca" "$mounted" >>"$LOG_DIR/prerequisites.txt"
-  say "$mounted selected workload(s) mount the declared database CA $ca through their db-ca volume"
-}
-
 phase_app() {
   require_target_terraform_var_file || return 1
   ensure_contexts || return 1
   verify_identity_boundary || return 1
+  # The CA family records an independent observation authority before the
+  # migration step. With the read-only transport it uses the qualifier identity;
+  # a TRANSPORT=0 run observes through the deploy identity, never the product's
+  # own report.
+  if [ "$TRANSPORT" = 1 ] && [ ! -f "$QUALIFIER_KUBECONFIG" ]; then
+    phase_transport || return 1
+  fi
+  if [ "$TRANSPORT" = 1 ]; then
+    CA_KUBECONFIG="$QUALIFIER_KUBECONFIG"
+    CA_CONTEXT="$CLUSTER-qualifier"
+  else
+    CA_KUBECONFIG="$DEPLOY_KUBECONFIG"
+    CA_CONTEXT="$CLUSTER-deploy"
+  fi
+  record_ca_authority || return 1
   app_require_published_images || return 1
   say "runner: release $SOL_BUNDLE_VERSION names $SOL_RUNNER_IMAGE; the publisher publishes nothing"
   capture_state
@@ -1232,7 +1309,11 @@ phase_app() {
     fi
   fi
   say "app-deploy-migrate"
-  run migrate-apply bash -c "cd '$WORKSPACE' && exec '$SOL' migrate apply '$TARGET'" || return 1
+  # The qualifier brackets the row's normal migration step: it runs the verified
+  # candidate's own `migrate apply`, captures the actual Job and observes its CA
+  # before cleanup. It does not add a second migration.
+  ca_qualify migration "$LOG_DIR/ca-migration-capture.json" "$LOG_DIR/ca-migration.json" \
+    "$(python3 -c 'import secrets; print(secrets.token_hex(32))')" || return 1
   say "app-deploy-secrets"
   if ! run app-deploy-secrets bash -c "cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args"; then
     if app_secret_failure "$LOG_DIR/app-deploy-secrets.log"; then
@@ -1244,6 +1325,9 @@ phase_app() {
   fi
   app_supply_secrets || return 1
   run app-deploy bash -c "cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args" || return 1
+  # The workloads exist now; observe the application CA delivery in the same
+  # assessment as the migration phase.
+  ca_qualify application "$LOG_DIR/ca-application-capture.json" "$LOG_DIR/ca-application.json" || return 1
   app_verify_database_delivery || return 1
   # ADR 0004: destruction removes what the lifecycle created, and the images this run published
   # live in the `pluto/<unit>` repositories Sol's own deploy created (#1413). The destroy phase's
