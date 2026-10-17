@@ -70,9 +70,12 @@ behind when it cannot show the declared one:
 - `get secrets -n <namespace>` is **denied** by a real call — the strongest single negative,
   because cluster-admin answers it;
 - `auth can-i` answers `no` for `*/*`, `create pods/exec`, `get pods/log`, `delete pods` and
-  `get secrets` — a sample of the contract's deliberate absences, and the verbs by which a
-  broader grant would be usable rather than merely visible. `*/*` is the catch-all: a grant
-  of any verb on any resource fails it.
+  `get secrets` — **in every observation namespace** — a sample of the contract's deliberate
+  absences, and the verbs by which a broader grant would be usable rather than merely
+  visible. `*/*` is the catch-all: a grant of any verb on any resource fails it;
+- the observation reads answer `no` in a namespace that was never bound
+  (`sol-qualifier-unbound` by default), so an accidental cluster-wide observation grant
+  fails establishment.
 
 This is a *sample* of the declared surface, not a rule-set comparison: a grant that is
 neither `*/*` nor one of the sampled denials — `get configmaps`, say — would still pass. What

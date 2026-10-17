@@ -277,11 +277,18 @@ probe_effective_surface() {
       return 1
     fi
   }
-  deny '*' '*' || return 1
-  deny create pods exec || return 1
-  deny get pods log || return 1
-  deny delete pods || return 1
-  deny get secrets || return 1
+  deny_in() {
+    local ns="$1" verb="$2" resource="$3" subresource="${4:-}" verdict
+    if [ -n "$subresource" ]; then
+      verdict="$(kubectl --context "$alias" auth can-i "$verb" "$resource" --subresource="$subresource" -n "$ns" 2>/dev/null)"
+    else
+      verdict="$(kubectl --context "$alias" auth can-i "$verb" "$resource" -n "$ns" 2>/dev/null)"
+    fi
+    if [ "$verdict" != no ]; then
+      echo "  the grant is broader than declared in ${ns}: auth can-i ${verb} ${resource}${subresource:+ --subresource=$subresource} did not answer no" >&2
+      return 1
+    fi
+  }
   allow list services || return 1
   allow create pods portforward || return 1
   allow get namespaces || return 1
@@ -290,7 +297,19 @@ probe_effective_surface() {
     allow_in "$ns" list deployments.apps || return 1
     allow_in "$ns" get jobs.batch || return 1
     allow_in "$ns" list configmaps || return 1
+    allow_in "$ns" get configmaps || return 1
+    deny_in "$ns" '*' '*' || return 1
+    deny_in "$ns" create pods exec || return 1
+    deny_in "$ns" get pods log || return 1
+    deny_in "$ns" delete pods || return 1
+    deny_in "$ns" get secrets || return 1
   done
+  # A cluster-wide observation grant would answer yes here. It must not: the
+  # observation reads are RoleBound only in the declared namespaces.
+  local unbound="${SOL_QUALIFIER_UNBOUND_NS:-sol-qualifier-unbound}"
+  deny_in "$unbound" get deployments.apps || return 1
+  deny_in "$unbound" get jobs.batch || return 1
+  deny_in "$unbound" get configmaps || return 1
   return 0
 }
 
@@ -332,7 +351,7 @@ fi
 
 end_state=narrow
 trap - EXIT
-echo "  verified the effective surface as ${role} in ${verify_ns}: pods and services readable, namespaces readable, deployments/jobs/configmaps readable in ${observe_ns[*]}, secrets denied, pods/portforward permitted, pods/exec, pods/log, delete pods and */* denied"
+echo "  verified the effective surface as ${role} in ${verify_ns}: pods and services readable, namespaces readable, deployments/jobs/configmaps readable in ${observe_ns[*]}, observation reads denied outside them, secrets denied, pods/portforward permitted, pods/exec, pods/log, delete pods and */* denied in every observation namespace"
 
 echo "qualification transport established. Verify with:"
 echo "  aws eks update-kubeconfig --name ${cluster} --alias ${alias} --role-arn ${arn}"

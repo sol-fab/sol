@@ -96,7 +96,13 @@ case "$1" in
         case "$*" in
           *"list services"* | *"create pods --subresource=portforward"*) echo yes ;;
           *"get namespaces"*) echo yes ;;
-          *"get deployments.apps"* | *"list deployments.apps"* | *"get jobs.batch"* | *"list configmaps"*) echo yes ;;
+          *"get deployments.apps"* | *"list deployments.apps"* | *"get jobs.batch"* | *"list configmaps"* | *"get configmaps"*)
+            if [ -f "$state/observe-wide" ]; then echo yes; exit 0; fi
+            case "$*" in
+              *"-n pluto-payments"* | *"-n pluto-comms"*) echo yes ;;
+              *) echo no ;;
+            esac
+            ;;
           *"create pods --subresource=exec"*)
             if [ -f "$state/exec" ]; then echo yes; else echo no; fi
             ;;
@@ -172,6 +178,16 @@ expect_no_file "the cluster-admin window is closed" "$work/state/wide"
 expect_no_file "the window is never closed by a disassociation" "$work/state/disassociated"
 expect_text "verified the effective surface" "the verification is the reported evidence"
 expect_text "deployments/jobs/configmaps readable" "the observation grants are part of the verified surface"
+expect_text "observation reads denied outside them" "the unbound-namespace denial is part of the verified surface"
+
+echo
+echo "establish: an observation read outside the declared namespaces is refused"
+reset_state
+touch "$work/state/observe-wide"
+run_establish
+expect_exit 1 "a cluster-wide observation grant fails establishment"
+expect_text "broader than declared in sol-qualifier-unbound" "the refusal names the unbound namespace"
+expect_text "get deployments.apps" "the refusal names the observation read"
 
 echo
 echo "establish: a surface broader than declared is refused, and nothing broad is left behind"
