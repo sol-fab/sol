@@ -80,6 +80,7 @@
   (dune (>= 3.0))
   caqti
   eio
+  mtime
   obs-eio
   obs-prometheus-eio
   pg-eio

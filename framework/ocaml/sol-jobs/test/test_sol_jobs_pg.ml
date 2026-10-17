@@ -406,11 +406,13 @@ let test_stale_complete_is_a_no_op () =
   with_pool (fun env pool ->
     List.iter (exec_sql pool) ddl;
     enqueue_slow pool;
+    let stop, stop_r = Eio.Promise.create () in
     (Slow.on_handle
      := fun () ->
           reclaim_now pool;
+          Eio.Promise.resolve stop_r ();
           Ok ());
-    let (), err = capture_stderr (fun () -> run_slow ~max_jobs:1 env pool) in
+    let (), err = capture_stderr (fun () -> run_slow ~stop env pool) in
     Windtrap.equal
       (Windtrap.list
          (Windtrap.pair
@@ -430,9 +432,11 @@ let test_stale_fail_is_a_no_op () =
   with_pool (fun env pool ->
     List.iter (exec_sql pool) ddl;
     enqueue_slow pool;
+    let stop, stop_r = Eio.Promise.create () in
     (Slow.on_handle
      := fun () ->
           reclaim_now pool;
+          Eio.Promise.resolve stop_r ();
           Error "boom");
     let retry_policy =
       { Sol_jobs.base_delay_s = 0.0
@@ -441,7 +445,7 @@ let test_stale_fail_is_a_no_op () =
       ; jitter_ratio = 0.0
       }
     in
-    let (), _ = capture_stderr (fun () -> run_slow ~retry_policy ~max_jobs:1 env pool) in
+    let (), _ = capture_stderr (fun () -> run_slow ~retry_policy ~stop env pool) in
     Windtrap.equal
       (Windtrap.list
          (Windtrap.pair
@@ -551,12 +555,14 @@ let test_lost_renewal_is_logged () =
   with_pool (fun env pool ->
     List.iter (exec_sql pool) ddl;
     enqueue_slow pool;
+    let stop, stop_r = Eio.Promise.create () in
     (Slow.on_handle
      := fun () ->
           reclaim_now pool;
           Eio.Time.sleep env#clock 0.15;
+          Eio.Promise.resolve stop_r ();
           Ok ());
-    let (), err = capture_stderr (fun () -> run_slow ~lease_s:0.1 ~max_jobs:1 env pool) in
+    let (), err = capture_stderr (fun () -> run_slow ~lease_s:0.1 ~stop env pool) in
     Windtrap.equal
       Windtrap.bool
       ~msg:"lost renewal logged"
@@ -648,16 +654,18 @@ let test_expired_holder_cannot_complete_terminal_row () =
   with_pool (fun env pool ->
     List.iter (exec_sql pool) ddl;
     enqueue_slow pool;
+    let stop, stop_r = Eio.Promise.create () in
     (Slow.on_handle
      := fun () ->
           exec_sql
             pool
             "UPDATE sol_jobs SET status = 'failed', locked_until = NULL, last_error = \
              'worker stopped before finishing the previous attempt'";
+          Eio.Promise.resolve stop_r ();
           Ok ());
     let retry_policy = { Sol_jobs.default_retry_policy with max_attempts = 1 } in
     let (), err =
-      capture_stderr (fun () -> run_slow ~retry_policy ~lease_s:0.1 ~max_jobs:1 env pool)
+      capture_stderr (fun () -> run_slow ~retry_policy ~lease_s:0.1 ~stop env pool)
     in
     Windtrap.equal
       (Windtrap.list (Windtrap.triple Windtrap.string Windtrap.string Windtrap.int))
@@ -867,11 +875,140 @@ let test_enqueue_and_domain_write_share_commit_and_rollback () =
     | Error e -> Windtrap.fail (Pg_error.to_string e))
 ;;
 
+let metric_sum text name labels =
+  String.split_on_char '\n' text
+  |> List.fold_left
+       (fun total line ->
+          if
+            String.starts_with ~prefix:(name ^ "{") line
+            && List.for_all
+                 (fun (key, value) ->
+                    Sol_runtime.contains_substring
+                      ~needle:(key ^ "=\"" ^ value ^ "\"")
+                      line)
+                 labels
+          then
+            total +. float_of_string (List.hd (List.rev (String.split_on_char ' ' line)))
+          else total)
+       0.0
+;;
+
+let test_metrics_distinguish_handler_and_queue_outcomes () =
+  List.iter
+    (fun (action, handler_result, attempts) ->
+       List.iter
+         (fun failure ->
+            let stale = failure = Some true in
+            with_pool (fun env pool ->
+              List.iter (exec_sql pool) ddl;
+              enqueue_slow pool;
+              if failure = Some false
+              then
+                exec_sql
+                  pool
+                  "CREATE FUNCTION reject_finalize() RETURNS trigger LANGUAGE plpgsql AS \
+                   $$ BEGIN RAISE EXCEPTION 'deliberate finalize rejection'; END $$";
+              if failure = Some false
+              then
+                exec_sql
+                  pool
+                  "CREATE TRIGGER reject_finalize BEFORE UPDATE ON sol_jobs FOR EACH ROW \
+                   WHEN (NEW.locked_until IS NULL) EXECUTE FUNCTION reject_finalize()";
+              let stop, stop_r = Eio.Promise.create () in
+              (Slow.on_handle
+               := fun () ->
+                    if stale then reclaim_now pool;
+                    Eio.Promise.resolve stop_r ();
+                    handler_result);
+              Eio.Switch.run (fun sw ->
+                let obs =
+                  Sol_obs.of_env
+                    ~sw
+                    ~net:env#net
+                    ~clock:env#clock
+                    ~mono_clock:env#mono_clock
+                    ~service:"jobs-metrics-test"
+                    ()
+                in
+                (match
+                   Slows.run
+                     ~env
+                     ~pool
+                     ~ot:obs
+                     ~metrics_port:0
+                     ~stop
+                     ~retry_policy:
+                       { Sol_jobs.default_retry_policy with max_attempts = attempts }
+                     ()
+                 with
+                 | Ok () -> ()
+                 | Error e -> Windtrap.fail (Sol_jobs.run_error_to_string e));
+                let metrics = Sol_obs.metrics_renderer obs () in
+                let value name labels =
+                  metric_sum metrics name (("kind", "slow") :: labels)
+                in
+                Windtrap.equal
+                  (Windtrap.float 0.0)
+                  1.0
+                  (value
+                     "sol_jobs_handler_outcomes_total"
+                     [ ("status", if Result.is_ok handler_result then "ok" else "error") ]);
+                Windtrap.equal
+                  (Windtrap.float 0.0)
+                  ~msg:"only confirmed durable transitions are counted"
+                  (if failure = None then 1.0 else 0.0)
+                  (value "sol_jobs_processed_total" []);
+                Windtrap.equal
+                  (Windtrap.float 0.0)
+                  (if failure = None then 0.0 else 1.0)
+                  (value
+                     "sol_jobs_queue_errors_total"
+                     [ "action", action
+                     ; ("reason", if stale then "lease_lost" else "database_error")
+                     ]);
+                Windtrap.equal
+                  (Windtrap.float 0.0)
+                  1.0
+                  (value "sol_jobs_job_duration_seconds_count" []))))
+         [ None; Some false; Some true ])
+    [ "complete", Ok (), 2; "retry", Error "transient", 2; "fail", Error "terminal", 1 ]
+;;
+
+let test_max_jobs_counts_confirmed_terminal_transitions () =
+  with_pool (fun env pool ->
+    List.iter (exec_sql pool) ddl;
+    enqueue_slow pool;
+    let calls = ref 0 in
+    (Slow.on_handle
+     := fun () ->
+          incr calls;
+          if !calls = 1
+          then (
+            reclaim_now pool;
+            enqueue_slow pool);
+          Ok ());
+    Eio.Time.with_timeout_exn env#clock 5.0 (fun () -> run_slow ~max_jobs:1 env pool);
+    Windtrap.equal Windtrap.int ~msg:"stale success did not consume max_jobs" 2 !calls;
+    Windtrap.equal
+      (Windtrap.list (Windtrap.triple Windtrap.string Windtrap.string Windtrap.int))
+      [ "slow", "pending", 2; "slow", "completed", 1 ]
+      (rows pool))
+;;
+
 let () =
   Windtrap.run
     ~argv:[||]
     "sol_jobs_pg"
     [ Windtrap.group
+        "durable outcome accounting"
+        [ Windtrap.test
+            "handler outcomes differ from durable transitions"
+            test_metrics_distinguish_handler_and_queue_outcomes
+        ; Windtrap.test
+            "max_jobs counts confirmed transitions"
+            test_max_jobs_counts_confirmed_terminal_transitions
+        ]
+    ; Windtrap.group
         "enqueue and retention boundaries"
         [ Windtrap.test
             "retention is scoped to kinds"
