@@ -250,11 +250,37 @@ let checks ~project ~region ~cluster_name =
       ~resource_class:"storage bucket"
       ~identity:(cluster_name ^ "-*")
       (p [ "storage"; "buckets"; "list"; "--format"; "value(name)" ])
-  ; named
+  ; identity_check
       ~resource_class:"persistent disk"
-      ~identity:("gke-" ^ cluster_name ^ "-*")
-      ~prefix:("gke-" ^ cluster_name ^ "-")
-      (p [ "compute"; "disks"; "list"; "--format"; "value(name)" ])
+      ~identity:
+        (Printf.sprintf
+           "gke-%s-* or a pvc-* disk labelled goog-k8s-cluster-name=%s"
+           cluster_name
+           cluster_name)
+      ~attribution:
+        (Within_target
+           (Printf.sprintf
+              "the target's own cluster name: GKE names node disks gke-%s-*, and the \
+               Container Storage Interface labels a PersistentVolume's disk \
+               goog-k8s-cluster-name=%s"
+              cluster_name
+              cluster_name))
+      ~attributable:(fun line ->
+        match String.split_on_char '\t' line with
+        | [ name; label ] ->
+          String.equal label cluster_name
+          || String.starts_with ~prefix:("gke-" ^ cluster_name ^ "-") name
+        | [ name ] -> String.starts_with ~prefix:("gke-" ^ cluster_name ^ "-") name
+        | _ -> false)
+      (p
+         [ "compute"
+         ; "disks"
+         ; "list"
+         ; "--regions"
+         ; region
+         ; "--format"
+         ; "value(name,labels.goog-k8s-cluster-name)"
+         ])
   ; identity_check
       ~resource_class:"firewall rule"
       ~identity:(cluster_name ^ " and gke-" ^ cluster_name ^ "-*")
