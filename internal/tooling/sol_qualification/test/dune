@@ -68,6 +68,7 @@
   ../../../qualification/sol-under-test.sh
   ../../scripts/build-release-bundle.sh
   fixture_live_kubectl.py
+  ../bin/qualification_database_ca.exe
   candidate-obligations.golden)
  (action
   (run
@@ -79,7 +80,8 @@
    %{dep:../../scripts/build-release-bundle.sh}
    %{dep:../../../../cli/test/test_database_contract_binding.py}
    %{workspace_root}
-   %{dep:candidate-obligations.golden})))
+   %{dep:candidate-obligations.golden}
+   %{dep:../bin/qualification_database_ca.exe})))
 
 (test
  (name test_live_kubernetes)

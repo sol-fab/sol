@@ -58,6 +58,14 @@ elif args[:2] == ["auth", "whoami"]:
         print("Unauthorized DISTINCTIVE_PROCESS_SECRET", file=sys.stderr)
         sys.exit(1)
     value = world.get("after_whoami", world["whoami"]) if state["auth"] > 1 else world["whoami"]
+elif args[:2] == ["auth", "can-i"]:
+    # The driver requires `yes` for the exact reads it will perform; a test can
+    # model an unestablished read authority by denying it.
+    if world.get("deny_reads"):
+        print("no")
+        sys.exit(0)
+    print("yes")
+    sys.exit(0)
 elif args[:3] == ["get", "namespace", "kube-system"]:
     n = sum(1 for call in state["calls"] if call[:3] == args[:3])
     value = world.get("after_cluster", world["cluster"]) if n > 1 else world["cluster"]

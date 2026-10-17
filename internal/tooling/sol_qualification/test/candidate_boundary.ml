@@ -400,12 +400,9 @@ let integration_world prepared ~name ~uid ~mutation root =
        ])
 ;;
 
-(* The integrated path: verified candidate + complete obligations + authenticated
-   reads + migration execution receipt + durable evidence, composed once. *)
-let integration_probe prepared =
+(* Shared world fixture for both the offline path and the real-driver test. *)
+let write_world prepared =
   let root = env "SOL_INTEGRATION_ROOT" in
-  let evidence_dir = env "SOL_INTEGRATION_EVIDENCE" in
-  let result_path = env "SOL_INTEGRATION_RESULT" in
   let uid = "boundary-submission-uid" in
   let name = "boundary-migration" in
   let namespace =
@@ -428,6 +425,78 @@ let integration_probe prepared =
     ~uid
     ~mutation:(Sys.getenv_opt "SOL_INTEGRATION_MUTATION")
     root;
+  Out_channel.with_open_text (Filename.concat root "migration.json") (fun channel ->
+    output_string
+      channel
+      (Yojson.Safe.to_string
+         (obj [ "namespace", str namespace; "name", str name; "uid", str uid ])))
+;;
+
+(* Adversarial helper for the durable report: create a *valid* capture in the
+   same store whose content is mismatched, so the report must reject it rather
+   than merely failing to read it. *)
+let tamper_probe prepared =
+  let directory = env "SOL_TAMPER_EVIDENCE" in
+  let source = env "SOL_TAMPER_SOURCE" in
+  let out = env "SOL_TAMPER_OUT" in
+  let direction = env "SOL_TAMPER" in
+  let recorder = E.open_store ~directory ~run:prepared.B.run ~secrets:[] () |> evidence in
+  ignore
+    (E.start_assessment
+       recorder
+       ~reason:"AWS database CA family"
+       ~previous:[]
+       ~required_captures:prepared.B.required_captures
+     |> evidence);
+  let reference =
+    In_channel.with_open_text source In_channel.input_all
+    |> Yojson.Safe.from_string
+    |> E.reference_of_json
+    |> evidence
+  in
+  let source_payload =
+    (E.read_capture ~directory ~run:prepared.B.run reference |> evidence).E.payload
+  in
+  let verdicts = field "verdicts" source_payload in
+  let phase_payload =
+    match direction with
+    | "binding" ->
+      let tampered =
+        E.capture
+          recorder
+          ~subject:B.binding_subject
+          ~payload:(obj [ "revision", str "tampered" ])
+        |> evidence
+      in
+      obj
+        [ "phase", str "tampered"
+        ; "ok", `Bool true
+        ; "binding", E.reference_json tampered
+        ; "verdicts", verdicts
+        ]
+    | "verdicts" ->
+      obj
+        [ "phase", str "tampered"
+        ; "ok", `Bool true
+        ; "binding", field "binding" source_payload
+        ; "verdicts", verdicts
+        ]
+    | other -> failwith ("unsupported tamper " ^ other)
+  in
+  let capture =
+    E.capture recorder ~subject:"ca-family/tampered" ~payload:phase_payload |> evidence
+  in
+  Out_channel.with_open_text out (fun channel ->
+    output_string channel (Yojson.Safe.to_string (E.reference_json capture)));
+  E.close recorder
+;;
+
+(* The integrated path: verified candidate + complete obligations + authenticated
+   reads + migration execution receipt + durable evidence, composed once. *)
+let integration_probe prepared =
+  let evidence_dir = env "SOL_INTEGRATION_EVIDENCE" in
+  let result_path = env "SOL_INTEGRATION_RESULT" in
+  write_world prepared;
   let kubeconfig = env "SOL_TEST_KUBECONFIG" in
   Unix.putenv "KUBECONFIG" kubeconfig;
   let ctx =
@@ -788,9 +857,16 @@ let () =
       B.prepare ~verified ~scenario ~attempt:"offline" ~assessment:"a1" ~kubernetes:kube
       |> get
     in
-    (match Sys.getenv_opt "SOL_INTEGRATION_RESULT" with
-     | Some _ -> integration_probe prepared
-     | None -> if directory <> "-" then exercise ~scenario verified prepared directory);
+    (match Sys.getenv_opt "SOL_WORLD_ONLY" with
+     | Some _ -> write_world prepared
+     | None ->
+       (match Sys.getenv_opt "SOL_TAMPER" with
+        | Some _ -> tamper_probe prepared
+        | None ->
+          (match Sys.getenv_opt "SOL_INTEGRATION_RESULT" with
+           | Some _ -> integration_probe prepared
+           | None ->
+             if directory <> "-" then exercise ~scenario verified prepared directory)));
     let selection = D.select prepared.run prepared.intent |> get in
     print_endline
       (Yojson.Safe.to_string

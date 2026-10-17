@@ -248,17 +248,17 @@ record_ca_authority() {
   context="${CA_CONTEXT:-$CLUSTER-qualifier}"
   if ! principal="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
       auth whoami -o jsonpath='{.status.userInfo.username}' 2>"$err")"; then
-    say "could not read the qualifier principal: $(cat "$err" 2>/dev/null)"
+    say "could not read the observation principal; provider diagnostics are not copied into this log"
     return 1
   fi
   if ! cluster="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
       get namespace kube-system -o jsonpath='{.metadata.uid}' 2>>"$err")"; then
-    say "could not read the qualifier cluster identity: $(cat "$err" 2>/dev/null)"
+    say "could not read the observation cluster identity; provider diagnostics are not copied into this log"
     return 1
   fi
   if ! endpoint="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
       config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>>"$err")"; then
-    say "could not read the qualifier endpoint: $(cat "$err" 2>/dev/null)"
+    say "could not read the observation endpoint; provider diagnostics are not copied into this log"
     return 1
   fi
   python3 - "$LOG_DIR/ca-authority.json" "$principal" "$cluster" "$endpoint" <<'PY'
