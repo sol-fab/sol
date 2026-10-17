@@ -1,3 +1,5 @@
+val scope_class : string
+
 type attribution =
   | Named_for_target of string
   | Within_target of string

@@ -31,7 +31,10 @@ printf 'aws %s\n' "$*" >>"$LIFECYCLE_LOG"
       exit 0
       ;;
     "sts get-caller-identity")
-      printf 'arn:aws:iam::111122223333:role/harness-qualification\n'
+      case " $* " in
+        *" --query Account "*) printf '%s\n' "${AWS_CALLER_ACCOUNT:-111122223333}" ;;
+        *) printf 'arn:aws:iam::111122223333:role/harness-qualification\n' ;;
+      esac
       exit 0
       ;;
   esac
@@ -55,7 +58,13 @@ if [ "${DESTROYING:-}" = 1 ]; then
       fi
       case "$1 $2" in
         "rds describe-db-instances")
-          echo "An error occurred (DBInstanceNotFound) when calling the operation" >&2
+          case " $* " in
+            *"--db-instance-identifier"*)
+              echo "An error occurred (DBInstanceNotFound) when calling the operation" >&2
+              exit 254
+              ;;
+            *) printf '\n'; exit 0 ;;
+          esac
           ;;
         *)
           echo "An error occurred (ResourceNotFoundException) when calling the operation" >&2
@@ -105,6 +114,10 @@ if [ "${DESTROYING:-}" = 1 ]; then
       ;;
     "ec2 describe-volumes")
       [ "${AWS_RESIDUAL_KIND:-}" = ebs ] && printf 'vol-residual\n' || printf '\n'
+      exit 0
+      ;;
+    "rds describe-db-subnet-groups"|"ec2 describe-security-groups"|"ec2 describe-vpcs"|"ec2 describe-subnets"|"iam list-roles"|"iam list-policies"|"s3api list-buckets"|"cloudwatch list-dashboards"|"logs describe-log-groups")
+      printf '\n'
       exit 0
       ;;
   esac

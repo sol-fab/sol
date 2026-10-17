@@ -1367,9 +1367,9 @@ grep -F -- "'apply'" "$partial_log.out" >/dev/null || {
   cat "$partial_log.out" >&2
   exit 1
 }
-if grep -qF 'compute regions describe' "$no_project_log"; then
+if grep -qE 'compute regions describe.*--format[= ]json' "$no_project_log"; then
   echo "the quota was read although the project was never parsed:" >&2
-  grep -nF 'compute regions describe' "$no_project_log" >&2
+  grep -nE 'compute regions describe.*--format[= ]json' "$no_project_log" >&2
   exit 1
 fi
 

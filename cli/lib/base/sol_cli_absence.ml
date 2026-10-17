@@ -1,3 +1,5 @@
+let scope_class = "the provider scope"
+
 type attribution =
   | Named_for_target of string
   | Within_target of string
@@ -116,6 +118,20 @@ let to_sweep observations =
            identity
            (String.concat ", " found)
            (attribution_rule attribution)
+           checked_with
+         :: !residues
+    | Unobservable { resource_class; reason; checked_with }
+      when String.equal resource_class scope_class ->
+      (* A scope failure invalidates the whole inventory, not one residue probe. It
+         must fail the destruction postcondition rather than degrade to a probe that
+         did not run: an inventory taken in the wrong project, region or account
+         cannot establish absence. *)
+      residues
+      := Printf.sprintf
+           "%s could not be observed, so this inventory cannot establish absence: %s \
+            (checked with: %s)"
+           resource_class
+           reason
            checked_with
          :: !residues
     | Unobservable { resource_class; reason; checked_with } ->

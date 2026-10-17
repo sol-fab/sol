@@ -28,16 +28,36 @@ let target : Sol_cli_config.target =
   }
 ;;
 
-let fake_gcloud ~log ~node_pools_out ~nats_out ~list_exit =
+let fake_gcloud ~log ~cluster_out ~router_out ~node_pools_out ~nats_out ~list_exit =
   Printf.sprintf
     {|#!/bin/sh
 printf '%%s\n' "$*" >> %s
 case "$*" in
-  *"container node-pools list"*)
+  *" projects describe "*)
+    printf 'acme-project\n'
+    exit 0
+    ;;
+  *" compute regions describe "*)
+    printf 'us-central1\n'
+    exit 0
+    ;;
+  *" auth list "*)
+    printf 'scope-caller@example.com\n'
+    exit 0
+    ;;
+  *" container clusters list "*)
+    printf '%%s' %s
+    exit 0
+    ;;
+  *" container node-pools list"*)
     printf '%%s' %s%s
     exit %d
     ;;
-  *"routers nats list"*)
+  *" routers nats list"*)
+    printf '%%s' %s
+    exit 0
+    ;;
+  *" compute routers list "*)
     printf '%%s' %s
     exit 0
     ;;
@@ -45,20 +65,24 @@ esac
 exit 0
 |}
     log
+    (Filename.quote cluster_out)
     (Filename.quote node_pools_out)
     (if list_exit = 0 then "" else " >&2")
     list_exit
     (Filename.quote nats_out)
+    (Filename.quote router_out)
 ;;
 
-let with_fake_gcloud ~node_pools_out ~nats_out ~list_exit f =
+let with_fake_gcloud ~cluster_out ~router_out ~node_pools_out ~nats_out ~list_exit f =
   let dir = Filename.temp_file "sol-fake-gcloud-" "" in
   Sys.remove dir;
   Unix.mkdir dir 0o755;
   let log = Filename.concat dir "calls.log" in
   let bin = Filename.concat dir "gcloud" in
   let oc = open_out bin in
-  output_string oc (fake_gcloud ~log ~node_pools_out ~nats_out ~list_exit);
+  output_string
+    oc
+    (fake_gcloud ~log ~cluster_out ~router_out ~node_pools_out ~nats_out ~list_exit);
   close_out oc;
   Unix.chmod bin 0o755;
   let old_path =
@@ -107,17 +131,31 @@ let only observations resource_class =
   List.find (fun o -> String.equal (class_of o) resource_class) observations
 ;;
 
-let with_calls ~node_pools_out ~nats_out ~list_exit f =
-  with_fake_gcloud ~node_pools_out ~nats_out ~list_exit (fun () ->
-    let observations =
-      Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
-    in
-    let log =
-      match Sys.getenv_opt "PATH" with
-      | Some path -> Filename.concat (List.hd (String.split_on_char ':' path)) "calls.log"
-      | None -> Windtrap.fail "PATH is unset"
-    in
-    f ~log ~observations)
+let with_calls
+      ?(cluster_out = "")
+      ?(router_out = "")
+      ~node_pools_out
+      ~nats_out
+      ~list_exit
+      f
+  =
+  with_fake_gcloud
+    ~cluster_out
+    ~router_out
+    ~node_pools_out
+    ~nats_out
+    ~list_exit
+    (fun () ->
+       let observations =
+         Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
+       in
+       let log =
+         match Sys.getenv_opt "PATH" with
+         | Some path ->
+           Filename.concat (List.hd (String.split_on_char ':' path)) "calls.log"
+         | None -> Windtrap.fail "PATH is unset"
+       in
+       f ~log ~observations)
 ;;
 
 let test_location_is_explicit_on_every_regional_check () =
@@ -195,6 +233,8 @@ let test_a_present_resource_is_reported () =
 
 let test_a_refused_list_is_unobservable () =
   with_calls
+    ~cluster_out:"acme-prod\n"
+    ~router_out:"acme-prod-router\n"
     ~node_pools_out:"One of [--location, --zone, --region] must be supplied\n"
     ~nats_out:""
     ~list_exit:1

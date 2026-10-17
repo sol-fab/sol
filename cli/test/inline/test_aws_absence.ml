@@ -23,15 +23,22 @@ let target : Sol_cli_config.target =
   ; node_failure_headroom_nodes = None
   ; profile = None
   ; shape = Some Sol_cli_profile.Local
-  ; provider_fields = []
+  ; provider_fields =
+      [ ( "aws"
+        , [ "provisioner_role_arn", "arn:aws:iam::111122223333:role/acme-provisioner" ] )
+      ]
   ; secret_authorities = []
   }
 ;;
 
-let fake_aws ~log ~list_out ~tags_out ~tags_exit =
+let fake_aws ~log ~identity_out ~list_out ~tags_out ~tags_exit =
   Printf.sprintf
     {|#!/bin/sh
 printf '%%s\n' "$*" >> %s
+if [ "$1 $2" = "sts get-caller-identity" ]; then
+  printf '%%s' %s
+  exit 0
+fi
 case "$1 $2" in
   "elbv2 describe-load-balancers")
     printf '%%s' %s
@@ -45,20 +52,21 @@ esac
 exit 0
 |}
     log
+    (Filename.quote identity_out)
     (Filename.quote list_out)
     (Filename.quote tags_out)
     (if tags_exit = 0 then "" else " >&2")
     tags_exit
 ;;
 
-let with_fake_aws ~list_out ~tags_out ~tags_exit f =
+let with_fake_aws ?(identity_out = "111122223333\n") ~list_out ~tags_out ~tags_exit f =
   let dir = Filename.temp_file "sol-fake-aws-" "" in
   Sys.remove dir;
   Unix.mkdir dir 0o755;
   let log = Filename.concat dir "calls.log" in
   let bin = Filename.concat dir "aws" in
   let oc = open_out bin in
-  output_string oc (fake_aws ~log ~list_out ~tags_out ~tags_exit);
+  output_string oc (fake_aws ~log ~identity_out ~list_out ~tags_out ~tags_exit);
   close_out oc;
   Unix.chmod bin 0o755;
   let old_path =
