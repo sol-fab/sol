@@ -201,6 +201,48 @@ if python3 "$guard" "$tmp/does-not-exist" >/dev/null 2>&1; then
   fail=1
 fi
 
+# Reorganization must not hide an undeletable resource from the existing guard.
+for depth in 0 1 2; do
+  name="module_depth_$depth"
+  mk "$name" aws '' main.tf
+  directory="$tmp/$name/platform/cloud/aws/cluster"
+  for ((index=0; index<depth; index++)); do
+    mkdir -p "$directory/nested"
+    printf '%s\n' 'module "nested" { source = "./nested" }' >"$directory/module.tf"
+    directory="$directory/nested"
+  done
+  printf '%s\n' 'resource "aws_ecr_repository" "unremovable" { name = "x" }' >"$directory/main.tf"
+  expect_reject "$name" "an unremovable resource at local-module depth $depth"
+  printf '%s\n' 'resource "aws_ecr_repository" "unremovable" { name = "x" force_delete = true }' >"$directory/main.tf"
+  expect_accept "$name" "a removable resource at local-module depth $depth"
+done
+
+for shape in missing cycle outside expression; do
+  mk "source_$shape" aws '' main.tf
+  directory="$tmp/source_$shape/platform/cloud/aws/cluster"
+  case "$shape" in
+    missing) source='./missing' ;;
+    cycle) source='./' ;;
+    outside) source='../../../../../outside' ;;
+    expression) source='${var.module_source}' ;;
+  esac
+  printf 'module "broken" { source = "%s" }\n' "$source" >"$directory/module.tf"
+  expect_reject "source_$shape" "an uninspectable $shape local module"
+done
+
+# Unsupported source formats cannot silently remove a resource from coverage.
+mk jsonmodule aws 'module "nested" { source = "./nested" }' main.tf
+mkdir -p "$tmp/jsonmodule/platform/cloud/aws/cluster/nested"
+: >"$tmp/jsonmodule/platform/cloud/aws/cluster/nested/variables.tf"
+printf '%s\n' '{"resource":{"aws_ecr_repository":{"unremovable":{"name":"x"}}}}' \
+  >"$tmp/jsonmodule/platform/cloud/aws/cluster/nested/main.tf.json"
+expect_reject jsonmodule "an uninspected Terraform JSON resource in a local module"
+
+mk symlinkfile aws '' main.tf
+printf '%s\n' 'resource "aws_ecr_repository" "outside" { name = "x" force_delete = true }' >"$tmp/outside.tf"
+ln -s "$tmp/outside.tf" "$tmp/symlinkfile/platform/cloud/aws/cluster/external.tf"
+expect_reject symlinkfile "a source file outside shipped assets"
+
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi

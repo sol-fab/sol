@@ -41,7 +41,6 @@ let%test "the independent coverage requirement detects a deleted subnet-group pr
     (missing_classes (Sol_cli_resource_identity.aws ~cluster_name:"coverage") observed)
 ;;
 
-
 let observed_required_classes () =
   Sol_cli_aws_absence.observed_classes () @ Sol_cli_gcp_absence.observed_classes ()
 ;;
