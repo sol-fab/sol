@@ -135,7 +135,7 @@ class InfrastructurePermissions(unittest.TestCase):
                 condition = [{"test": '"StringEquals"', "variable": '"aws:RequestedRegion"',
                               "values": ['"us-east-1"']}]
                 if change == "wrong-resource":
-                    grant["resources"] = ['"arn:aws:ecr:us-east-1:999999999999:repository/other/*"']
+                    grant["resources"] = ['"arn:aws:ecr:us-east-1:000000000000:repository/other/*"']
                 elif change == "condition":
                     grant["condition"] = condition
                 else:
@@ -154,7 +154,7 @@ class InfrastructurePermissions(unittest.TestCase):
                     if change == "action":
                         deny["actions"] = ['"ecr:UnrelatedAction"']
                     elif change == "resource":
-                        deny["resources"] = ['"arn:aws:ecr:us-east-1:999999999999:repository/other/*"']
+                        deny["resources"] = ['"arn:aws:ecr:us-east-1:000000000000:repository/other/*"']
                     else:
                         deny["condition"] = [{"test": '"Bool"', "variable": '"aws:SecureTransport"', "values": ['"false"']}]
                     self.assertTrue(any(f[0] == policy and "separation deny" in f[3] for f in failures(docs)))
@@ -184,7 +184,7 @@ class InfrastructurePermissions(unittest.TestCase):
     def test_unrelated_denial_does_not_block_required_operations(self):
         docs = copy.deepcopy(self.documents)
         docs["provisioner"].append({"effect": '"Deny"', "actions": ['"ecr:CreateRepository"'],
-                                    "resources": ['"arn:aws:ecr:eu-west-1:999999999999:repository/other/*"']})
+                                    "resources": ['"arn:aws:ecr:eu-west-1:000000000000:repository/other/*"']})
         self.assertEqual([], failures(docs))
 
 
