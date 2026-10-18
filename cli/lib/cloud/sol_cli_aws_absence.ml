@@ -404,61 +404,39 @@ let durable_observations ~(target : Sol_cli_config.target) =
   ]
 ;;
 
-let class_names =
-  [ "EKS cluster"
-  ; "EKS node group"
-  ; "RDS instance"
-  ; "RDS subnet group"
-  ; "security group"
-  ; "VPC"
-  ; "subnet"
-  ; "IAM role"
-  ; "IAM policy"
-  ; "S3 bucket"
-  ; "CloudWatch dashboard"
-  ; "EKS control-plane log group"
-  ; "load balancer"
-  ; "EBS volume"
-  ; "ECR repository"
-  ]
-;;
-
-let ecr_observation ~region ~registry =
+let ecr_probe ~region ~registry =
   match registry with
   | Some prefix ->
-    run
-      ~check:
-        (check
-           ~resource_class:"ECR repository"
-           ~identity:(prefix ^ "/*")
-           ~attribution:
-             (Named_for_target
-                (Printf.sprintf
-                   "the target's own registry path: the cluster root names its \
-                    repositories under %s, which the target declares"
-                   prefix))
-           ~attributable:(fun line -> Sol_cli_string.contains ~needle:(prefix ^ "/") line)
-           [ "ecr"
-           ; "describe-repositories"
-           ; "--region"
-           ; region
-           ; "--query"
-           ; "repositories[].repositoryName"
-           ; "--output"
-           ; "text"
-           ])
+    Ok
+      (check
+         ~resource_class:"ECR repository"
+         ~identity:(prefix ^ "/*")
+         ~attribution:
+           (Named_for_target
+              (Printf.sprintf
+                 "the target's own registry path: the cluster root names its \
+                  repositories under %s, which the target declares"
+                 prefix))
+         ~attributable:(fun line -> Sol_cli_string.contains ~needle:(prefix ^ "/") line)
+         [ "ecr"
+         ; "describe-repositories"
+         ; "--region"
+         ; region
+         ; "--query"
+         ; "repositories[].repositoryName"
+         ; "--output"
+         ; "text"
+         ])
   | None ->
-    Not_attributable
-      { resource_class = "ECR repository"
-      ; reason =
-          "the target declares no registry, so Sol cannot say which repositories under \
-           this account belong to it -- reported rather than guessed"
-      }
+    Error
+      ( "ECR repository"
+      , "the target declares no registry, so Sol cannot say which repositories under \
+         this account belong to it -- reported rather than guessed" )
 ;;
 
-let authorization_checks ~(target : Sol_cli_config.target) =
-  let policy_name = "sol-" ^ target.env ^ "-workload-boundary" in
-  let role_name = "sol-" ^ target.env ^ "-authorization" in
+let authorization_checks ~env =
+  let policy_name = "sol-" ^ env ^ "-workload-boundary" in
+  let role_name = "sol-" ^ env ^ "-authorization" in
   [ check
       ~resource_class:"authorization IAM policy"
       ~identity:policy_name
@@ -497,13 +475,31 @@ let strict_authorization_observation ~check =
   | observation -> observation
 ;;
 
+(* Both execution and advertised coverage consume this same probe sequence. An
+   unavailable ownership identity remains an explicit observation, not a missing probe. *)
+let probes ~region ~cluster_name ~registry =
+  List.map (fun check -> Ok check) (checks ~region ~cluster_name)
+  @ [ ecr_probe ~region ~registry ]
+;;
+
+let observed_classes () =
+  probes ~region:"coverage" ~cluster_name:"coverage" ~registry:(Some "coverage")
+  @ List.map (fun check -> Ok check) (authorization_checks ~env:"coverage")
+  |> List.map (function
+    | Ok check -> check.resource_class
+    | Error (resource_class, _) -> resource_class)
+;;
+
 let observations (target : Sol_cli_config.target) ~cluster_name =
   match scope_binding target with
   | Error reason -> Sol_cli_absence.scope_failure ~reason
   | Ok () ->
     let observations =
-      List.map (fun c -> run ~check:c) (checks ~region:target.region ~cluster_name)
-      @ [ ecr_observation ~region:target.region ~registry:(registry_prefix target) ]
+      List.map
+        (function
+          | Ok check -> run ~check
+          | Error (resource_class, reason) -> Not_attributable { resource_class; reason })
+        (probes ~region:target.region ~cluster_name ~registry:(registry_prefix target))
     in
     let observations =
       if Sol_cli_provider_capabilities.authorization_trust target = None
@@ -512,7 +508,7 @@ let observations (target : Sol_cli_config.target) ~cluster_name =
         observations
         @ List.map
             (fun check -> strict_authorization_observation ~check)
-            (authorization_checks ~target)
+            (authorization_checks ~env:target.env)
     in
     observations @ durable_observations ~target
 ;;

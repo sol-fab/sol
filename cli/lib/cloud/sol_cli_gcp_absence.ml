@@ -365,23 +365,9 @@ let relinquished_residue_probes =
   [ "google_service_networking_connection.sql", "service-networking peering connection" ]
 ;;
 
-let class_names =
-  [ "GKE cluster"
-  ; "GKE node pool"
-  ; "VPC network"
-  ; "subnetwork"
-  ; "Cloud Router"
-  ; "Cloud NAT"
-  ; "Cloud SQL instance"
-  ; "reserved global address"
-  ; "Artifact Registry repository"
-  ; "service account"
-  ; "custom role"
-  ; "storage bucket"
-  ; "persistent disk"
-  ; "firewall rule"
-  ; "forwarding rule"
-  ]
+let observed_classes () =
+  checks ~project:"coverage" ~region:"coverage" ~cluster_name:"coverage"
+  |> List.map (fun check -> check.resource_class)
 ;;
 
 let unlistable =
