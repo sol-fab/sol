@@ -419,6 +419,14 @@ driver, which is registered (`Sol_cli_cloud_lifecycle.platform_storage`). A
 cluster whose default is some other class, or whose default is ambiguous, is
 `Unmet` — the platform's durable volumes are then not on the class Sol intends.
 
+Disk allocation is established by the cloud provider and the CSI controller. Sol
+checks PVC binding and workload readiness instead of estimating additional disk
+space from chart defaults. An existing platform update therefore does not require
+spare quota for volumes it already owns. A provisioning failure still fails the
+operation and retains Terraform's diagnostic. For a pending claim, inspect
+`kubectl describe pvc -n monitoring` or `kubectl describe pvc -n redpanda`; the
+claim's events identify provisioning failures, including provider quota limits.
+
 This is what makes Redpanda's RF≥3 persistent brokers schedulable. It changes
 nothing about how a workload declares persistence: the `single`-tier restriction
 DEC-026 §3 puts on workload-declared volumes is unaffected, because the driver and

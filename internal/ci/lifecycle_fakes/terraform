@@ -373,11 +373,11 @@ JSON
     esac
     : >"$GCP_SQL_PREPARED_FILE"
     ;;
-  *cloud/aws/cluster*" apply "*"provisioner_bootstrap_admin=true"*)
+  *cloud/aws/cluster*" apply "*"provisioner_bootstrap_admin=true"*|*cloud/gcp/cluster*" apply "*"provisioner_bootstrap_admin=true"*)
     printf 'true\n' >"$FAIL_MARKER_DIR/bootstrap-window"
     if fail_once cloud; then exit 20; fi
     ;;
-  *cloud/aws/cluster*" apply "*"provisioner_bootstrap_admin=false"*)
+  *cloud/aws/cluster*" apply "*"provisioner_bootstrap_admin=false"*|*cloud/gcp/cluster*" apply "*"provisioner_bootstrap_admin=false"*)
     printf 'false\n' >"$FAIL_MARKER_DIR/bootstrap-window"
     if fail_once deescalate; then exit 20; fi
     ;;
@@ -386,6 +386,9 @@ JSON
     [ -n "${PLATFORM_INSTALLED_FILE:-}" ] && : >"$PLATFORM_INSTALLED_FILE"
     ;;
   *cloud/aws/platform*" apply "*|*cloud/gcp/platform*" apply "*)
-    if fail_once platform; then exit 20; fi
+    if fail_once platform; then
+      printf 'Error: quotaExceeded: SSD_TOTAL_GB exhausted while provisioning a PVC\n' >&2
+      exit 20
+    fi
     ;;
 esac
