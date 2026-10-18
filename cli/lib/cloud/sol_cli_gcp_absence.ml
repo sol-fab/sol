@@ -6,16 +6,18 @@ type check =
   ; attribution : attribution
   ; argv : string list
   ; attributable : string -> bool
+  ; normalize : string -> string
   }
 
 let identity_check
       ?(attributable = fun _ -> true)
+      ?(normalize = fun line -> line)
       ~resource_class
       ~identity
       ~attribution
       argv
   =
-  { resource_class; identity; attribution; argv; attributable }
+  { resource_class; identity; attribution; argv; attributable; normalize }
 ;;
 
 let checked_with argv = "gcloud " ^ String.concat " " argv
@@ -60,15 +62,20 @@ let benign_empty_list_warning stderr =
 let run ~check =
   match Sol_cli_process.run (Sol_cli_process.cmd ("gcloud" :: check.argv)) with
   | Ok { Sol_cli_process.stdout; stderr } ->
-    let found = lines stdout |> List.filter check.attributable in
-    if found = [] && not (benign_empty_list_warning stderr)
+    (* An incomplete enumeration is unknown even when some matching resources were
+       returned: presence may be real, but the collection cannot authorize a destructive
+       reconciliation decision. *)
+    if not (benign_empty_list_warning stderr)
     then
       Unobservable
         { resource_class = check.resource_class
         ; reason = String.trim stderr
         ; checked_with = checked_with check.argv
         }
-    else ok_observation ~check found
+    else
+      ok_observation
+        ~check
+        (lines stdout |> List.filter check.attributable |> List.map check.normalize)
   | Error (Sol_cli_process.Non_zero r) ->
     Unobservable
       { resource_class = check.resource_class
@@ -129,6 +136,16 @@ let checks ~project ~region ~cluster_name =
         || (prefix <> "" && Sol_cli_string.contains ~needle:prefix line))
       argv
   in
+  let role_prefix =
+    "sol_"
+    ^ String.map
+        (function
+          | '-' -> '_'
+          | c -> c)
+        cluster_name
+    ^ "_"
+  in
+  let project_roles = "projects/" ^ project ^ "/roles/" in
   [ cluster_check ~project ~region ~cluster_name
   ; identity_check
       ~resource_class:"GKE node pool"
@@ -218,26 +235,16 @@ let checks ~project ~region ~cluster_name =
       (p [ "iam"; "service-accounts"; "list"; "--format"; "value(email)" ])
   ; identity_check
       ~resource_class:"custom role"
-      ~identity:
-        ("sol_"
-         ^ String.map
-             (function
-               | '-' -> '_'
-               | c -> c)
-             cluster_name
-         ^ "_*")
+      ~identity:(role_prefix ^ "*")
       ~attribution:(Named_for_target (names_the_cluster cluster_name))
       ~attributable:(fun line ->
-        Sol_cli_string.contains
-          ~needle:
-            ("sol_"
-             ^ String.map
-                 (function
-                   | '-' -> '_'
-                   | c -> c)
-                 cluster_name
-             ^ "_")
-          line)
+        if String.starts_with ~prefix:"projects/" line
+        then
+          String.starts_with ~prefix:project_roles line
+          && Sol_cli_string.contains ~needle:role_prefix line
+        else Sol_cli_string.contains ~needle:role_prefix line)
+      ~normalize:(fun line ->
+        if String.starts_with ~prefix:"projects/" line then line else project_roles ^ line)
       (p [ "iam"; "roles"; "list"; "--format"; "value(name)" ])
   ; named
       ~resource_class:"storage bucket"

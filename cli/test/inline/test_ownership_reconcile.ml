@@ -608,3 +608,15 @@ let%test "recovery: the target's own account still yields its exact candidate" =
             Windtrap.fail
               "the exact RDS name in the target's own account must be recoverable"))
 ;;
+
+let%test "recovery: a custom role in another project is Unmapped" =
+  match
+    gcp_disposition
+      ~resource_class:"custom role"
+      ~found:"projects/other-project/roles/sol_acme_prod_cluster_access"
+  with
+  | Sol_cli_ownership_reconciliation.Unmapped _ -> ()
+  | Sol_cli_ownership_reconciliation.Recover candidate ->
+    Windtrap.failf "a custom role in another project was imported as %s" candidate.address
+  | _ -> Windtrap.fail "a custom role in another project must be Unmapped"
+;;

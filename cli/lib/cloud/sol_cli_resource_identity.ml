@@ -142,6 +142,22 @@ let gcp ~cluster_name ~project_id =
         | c -> c)
       cluster_name
   in
+  let custom_role role_id =
+    match project with
+    | Some project ->
+      let name = "projects/" ^ project ^ "/roles/" ^ role_id in
+      name, name
+    | None -> "", ""
+  in
+  let cluster_access_observed, cluster_access_import =
+    custom_role ("sol_" ^ underscored ^ "_cluster_access")
+  in
+  let dns_records_observed, dns_records_import =
+    custom_role ("sol_" ^ underscored ^ "_cert_manager_dns_records")
+  in
+  let dns_discovery_observed, dns_discovery_import =
+    custom_role ("sol_" ^ underscored ^ "_cert_manager_dns_discovery")
+  in
   [ entry
       "google_compute_network.main"
       direct
@@ -256,25 +272,23 @@ let gcp ~cluster_name ~project_id =
       "google_project_iam_custom_role.provisioner_cluster_access"
       direct
       ~resource_class:"custom role"
-      ~observed_as:("sol_" ^ underscored ^ "_cluster_access")
+      ~observed_as:cluster_access_observed
       ~identity:("sol_" ^ underscored ^ "_cluster_access")
-      ~import_identity:("projects/-/roles/sol_" ^ underscored ^ "_cluster_access")
+      ~import_identity:cluster_access_import
   ; entry
       "google_project_iam_custom_role.cert_manager_dns_records"
       direct
       ~resource_class:"custom role"
-      ~observed_as:("sol_" ^ underscored ^ "_cert_manager_dns_records")
+      ~observed_as:dns_records_observed
       ~identity:("sol_" ^ underscored ^ "_cert_manager_dns_records")
-      ~import_identity:
-        ("projects/-/roles/sol_" ^ underscored ^ "_cert_manager_dns_records")
+      ~import_identity:dns_records_import
   ; entry
       "google_project_iam_custom_role.cert_manager_dns_discovery"
       direct
       ~resource_class:"custom role"
-      ~observed_as:("sol_" ^ underscored ^ "_cert_manager_dns_discovery")
+      ~observed_as:dns_discovery_observed
       ~identity:("sol_" ^ underscored ^ "_cert_manager_dns_discovery")
-      ~import_identity:
-        ("projects/-/roles/sol_" ^ underscored ^ "_cert_manager_dns_discovery")
+      ~import_identity:dns_discovery_import
   ; entry
       "google_storage_bucket.loki"
       external_by_contract

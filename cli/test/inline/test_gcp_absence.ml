@@ -28,7 +28,7 @@ let target : Sol_cli_config.target =
   }
 ;;
 
-let fake_gcloud ~log ~node_pools_out ~node_pools_err ~nats_out ~list_exit =
+let fake_gcloud ~log ~node_pools_out ~node_pools_err ~nats_out ~roles_out ~list_exit =
   Printf.sprintf
     {|#!/bin/sh
 printf '%%s\n' "$*" >> %s
@@ -42,6 +42,10 @@ case "$*" in
     printf '%%s' %s
     exit 0
     ;;
+  *"iam roles list"*)
+    printf '%%s' %s
+    exit 0
+    ;;
 esac
 exit 0
 |}
@@ -51,16 +55,19 @@ exit 0
     (Filename.quote node_pools_err)
     list_exit
     (Filename.quote nats_out)
+    (Filename.quote roles_out)
 ;;
 
-let with_fake_gcloud ~node_pools_out ~node_pools_err ~nats_out ~list_exit f =
+let with_fake_gcloud ~node_pools_out ~node_pools_err ~nats_out ~roles_out ~list_exit f =
   let dir = Filename.temp_file "sol-fake-gcloud-" "" in
   Sys.remove dir;
   Unix.mkdir dir 0o755;
   let log = Filename.concat dir "calls.log" in
   let bin = Filename.concat dir "gcloud" in
   let oc = open_out bin in
-  output_string oc (fake_gcloud ~log ~node_pools_out ~node_pools_err ~nats_out ~list_exit);
+  output_string
+    oc
+    (fake_gcloud ~log ~node_pools_out ~node_pools_err ~nats_out ~roles_out ~list_exit);
   close_out oc;
   Unix.chmod bin 0o755;
   let old_path =
@@ -109,17 +116,31 @@ let only observations resource_class =
   List.find (fun o -> String.equal (class_of o) resource_class) observations
 ;;
 
-let with_calls ?(node_pools_err = "") ~node_pools_out ~nats_out ~list_exit f =
-  with_fake_gcloud ~node_pools_out ~node_pools_err ~nats_out ~list_exit (fun () ->
-    let observations =
-      Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
-    in
-    let log =
-      match Sys.getenv_opt "PATH" with
-      | Some path -> Filename.concat (List.hd (String.split_on_char ':' path)) "calls.log"
-      | None -> Windtrap.fail "PATH is unset"
-    in
-    f ~log ~observations)
+let with_calls
+      ?(node_pools_err = "")
+      ?(roles_out = "")
+      ~node_pools_out
+      ~nats_out
+      ~list_exit
+      f
+  =
+  with_fake_gcloud
+    ~node_pools_out
+    ~node_pools_err
+    ~nats_out
+    ~roles_out
+    ~list_exit
+    (fun () ->
+       let observations =
+         Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
+       in
+       let log =
+         match Sys.getenv_opt "PATH" with
+         | Some path ->
+           Filename.concat (List.hd (String.split_on_char ':' path)) "calls.log"
+         | None -> Windtrap.fail "PATH is unset"
+       in
+       f ~log ~observations)
 ;;
 
 let test_location_is_explicit_on_every_regional_check () =
@@ -327,4 +348,63 @@ let%test "GCP scope: a missing-project warning on a successful list is Unobserva
 
 let%test "GCP scope: the benign empty-result filter warning is still absence" =
   test_the_benign_empty_filter_warning_is_still_absence ()
+;;
+
+let test_custom_roles_are_normalized_to_the_target_project () =
+  with_calls
+    ~node_pools_out:""
+    ~nats_out:""
+    ~roles_out:
+      "sol_acme_prod_cluster_access\n\
+       projects/acme-project/roles/sol_acme_prod_cluster_access\n\
+       projects/other-project/roles/sol_acme_prod_cluster_access\n"
+    ~list_exit:0
+    (fun ~log:_ ~observations ->
+       match only observations "custom role" with
+       | Sol_cli_absence.Present p ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"a bare role id is normalized into the target project"
+           true
+           (List.mem "projects/acme-project/roles/sol_acme_prod_cluster_access" p.found);
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"a role from another project is not attributed to this target"
+           false
+           (List.exists
+              (fun line -> Sol_cli_string.contains ~needle:"other-project" line)
+              p.found)
+       | Sol_cli_absence.Absent _ ->
+         Windtrap.fail "the target's custom roles must be Present"
+       | _ -> Windtrap.fail "the custom-role observation must be Present")
+;;
+
+let test_an_incomplete_enumeration_with_matches_is_unobservable () =
+  with_calls
+    ~node_pools_out:"acme-prod-pool-1\n"
+    ~node_pools_err:
+      "WARNING: Some requests did not succeed.\n\
+      \ - The resource 'projects/acme-project' was not found\n"
+    ~nats_out:""
+    ~list_exit:0
+    (fun ~log:_ ~observations ->
+       match only observations "GKE node pool" with
+       | Sol_cli_absence.Unobservable u ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the incomplete collection keeps the provider's warning"
+           true
+           (Sol_cli_string.contains ~needle:"did not succeed" u.reason)
+       | Sol_cli_absence.Present _ ->
+         Windtrap.fail
+           "matching output from an incomplete enumeration must not be Present"
+       | _ -> Windtrap.fail "an incomplete enumeration must be Unobservable")
+;;
+
+let%test "GCP roles: custom roles are normalized to the target project" =
+  test_custom_roles_are_normalized_to_the_target_project ()
+;;
+
+let%test "GCP scope: an incomplete enumeration with matches is Unobservable" =
+  test_an_incomplete_enumeration_with_matches_is_unobservable ()
 ;;
