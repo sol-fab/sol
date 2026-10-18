@@ -1048,12 +1048,23 @@ let provable_absence_reconciliation
           Ok Nothing_to_reconcile
         | _ -> probe state_name)
      | Cluster_unnamed ->
-       Sol_cli_report.warn
-         "warning: the state a provably absent substrate leaves behind was not \
-          reconciled: it represents a cluster but records no name, so the provider \
-          observation cannot be attributed to it. Nothing was forgotten (a state entry \
-          is only forgotten on a positively established absence).";
-       Ok Nothing_to_reconcile
+       (match resolved with
+        | Some cluster_name ->
+          Sol_cli_report.warn
+            "warning: the state a provably absent substrate leaves behind represents a \
+             cluster without recording its name; using the target's resolved \
+             cluster_name %S only to scope the provider observation. Nothing is \
+             forgotten unless that observation establishes the substrate's absence."
+            cluster_name;
+          probe cluster_name
+        | None ->
+          Sol_cli_report.warn
+            "warning: the state a provably absent substrate leaves behind was not \
+             reconciled: it represents a cluster but records no name, and the target \
+             does not resolve one, so the provider observation cannot be attributed to \
+             it. Nothing was forgotten (a state entry is only forgotten on a positively \
+             established absence).";
+          Ok Nothing_to_reconcile)
      | Cluster_not_in_state ->
        (match resolved with
         | Some cluster_name -> probe cluster_name
