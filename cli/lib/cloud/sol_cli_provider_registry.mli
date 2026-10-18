@@ -45,7 +45,6 @@ val observations
   -> Sol_cli_provider.t
   -> Sol_cli_config.target
   -> cluster_name:string
-  -> pre_destroy:Sol_cli_cloud_destroy.state_read
   -> Sol_cli_absence.observation list
 
 val substrate_absence
