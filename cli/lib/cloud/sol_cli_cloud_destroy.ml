@@ -246,25 +246,12 @@ let exit_code = function
 ;;
 
 let completion_message = function
-  | Destroy_succeeded { degradations = []; verification; _ }
-    when Sol_cli_destroy_verification.residue_absence_established verification ->
+  | Destroy_succeeded { degradations = []; _ } ->
     "Done. Destruction reached verified absence."
-  | Destroy_succeeded { degradations; verification; _ } ->
-    let degradations =
-      if degradations = []
-      then ""
-      else Printf.sprintf ", with %d degraded preparation(s)," (List.length degradations)
-    in
-    let probes = Sol_cli_destroy_verification.inconclusive_probes verification in
-    if probes = []
-    then Printf.sprintf "Done%s. Destruction reached verified absence." degradations
-    else
-      Printf.sprintf
-        "Done%s. Everything Sol owns is absent and verified, but %d residue probe(s) did \
-         not run, so residue absence is NOT established: %s"
-        degradations
-        (List.length probes)
-        (String.concat "; " probes)
+  | Destroy_succeeded { degradations; _ } ->
+    Printf.sprintf
+      "Done, with %d degraded preparation(s). Destruction reached verified absence."
+      (List.length degradations)
   | Destroy_blocked { guarantee } ->
     Printf.sprintf
       "Destruction is blocked by a guarantee this target declared, so nothing was \

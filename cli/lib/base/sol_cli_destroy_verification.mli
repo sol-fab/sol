@@ -39,9 +39,10 @@ type verdict =
   ; unknowns : string list
   }
 
+(** All required postconditions, including a completed residue inventory, must be
+    established. An unreadable or missing observation is unknown, never success. *)
 val classify : observation -> verdict
+
 val is_verified : verdict -> bool
 val verdict_message : verdict -> string
 val report : observation -> string
-val inconclusive_probes : observation -> string list
-val residue_absence_established : observation -> bool

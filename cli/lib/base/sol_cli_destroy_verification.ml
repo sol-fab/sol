@@ -90,22 +90,16 @@ let classify observation =
            still represents is unknown"
           reason));
   (match observation.sweep with
-   | Sweep_not_run -> ()
-   | Sweep_ran { residues; indeterminate = _ } -> List.iter violate residues);
+   | Sweep_not_run -> unknown "the residue inventory did not run"
+   | Sweep_ran { residues; indeterminate } ->
+     List.iter violate residues;
+     List.iter unknown indeterminate);
   (match observation.retention with
    | Retention_required_and_observed _ | Retention_not_required _ -> ()
    | Retention_violated reason -> violate reason
    | Retention_unknown reason -> unknown reason);
   { violations = List.rev !violations; unknowns = List.rev !unknowns }
 ;;
-
-let inconclusive_probes observation =
-  match observation.sweep with
-  | Sweep_not_run -> []
-  | Sweep_ran { indeterminate; _ } -> indeterminate
-;;
-
-let residue_absence_established observation = inconclusive_probes observation = []
 
 let report observation =
   let buffer = Buffer.create 1024 in
@@ -126,7 +120,7 @@ let report observation =
         not absence\n"
        reason);
   (match observation.sweep with
-   | Sweep_not_run -> ()
+   | Sweep_not_run -> line "    residue: UNKNOWN -- the residue inventory did not run\n"
    | Sweep_ran { residues = []; indeterminate = [] } ->
      line
        "    residue Terraform does not own (controller load balancers, PVC volumes, \

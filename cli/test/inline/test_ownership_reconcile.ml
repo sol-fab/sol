@@ -737,20 +737,32 @@ let%test "state identity: a GCP cluster with a name is identified" =
 ;;
 
 let%test "scope: a scope failure fails the destruction postcondition" =
-  match Sol_cli_absence.scope_failure ~reason:"the caller is in another account" with
-  | [ observation ] ->
-    (match Sol_cli_absence.to_sweep [ observation ] with
-     | Sol_cli_destroy_verification.Sweep_ran
-         { residues = [ residue ]; indeterminate = [] } ->
-       Windtrap.equal
-         Windtrap.bool
-         ~msg:"the violation says absence could not be established"
-         true
-         (Sol_cli_string.contains ~needle:"cannot establish absence" residue)
-     | Sol_cli_destroy_verification.Sweep_ran { residues = []; _ } ->
-       Windtrap.fail "a scope failure was degraded to an indeterminate probe"
-     | _ -> Windtrap.fail "a scope failure did not produce exactly one residue")
-  | _ -> Windtrap.fail "scope_failure must produce exactly one observation"
+  let verdict =
+    Sol_cli_destroy_verification.classify
+      { state = State_absent
+      ; sweep =
+          Sol_cli_absence.to_sweep
+            (Sol_cli_absence.scope_failure ~reason:"the caller is in another account")
+      ; retention = Retention_not_required "fixture"
+      }
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"unknown scope cannot establish the destruction postcondition"
+    false
+    (Sol_cli_destroy_verification.is_verified verdict);
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"unknown scope does not manufacture a present resource"
+    []
+    verdict.violations;
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the unknown preserves the scope diagnostic"
+    true
+    (List.exists
+       (Sol_cli_string.contains ~needle:"the caller is in another account")
+       verdict.unknowns)
 ;;
 
 let gcp_state_with_unnamed_cluster_and_incluster_resources =

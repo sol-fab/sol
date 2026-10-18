@@ -65,7 +65,9 @@ type failure =
   | Elevated_access_not_removed of string
   | Release_unestablished of string
 
-type outcome =
+(** Constructed only by [execute]: success means the authoritative verification
+    verdict established every required postcondition. *)
+type outcome = private
   | Destroy_succeeded of
       { preparation : preparation
       ; degradations : string list
