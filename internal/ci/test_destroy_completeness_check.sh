@@ -230,6 +230,19 @@ for shape in missing cycle outside expression; do
   expect_reject "source_$shape" "an uninspectable $shape local module"
 done
 
+# Unsupported source formats cannot silently remove a resource from coverage.
+mk jsonmodule aws 'module "nested" { source = "./nested" }' main.tf
+mkdir -p "$tmp/jsonmodule/platform/cloud/aws/cluster/nested"
+: >"$tmp/jsonmodule/platform/cloud/aws/cluster/nested/variables.tf"
+printf '%s\n' '{"resource":{"aws_ecr_repository":{"unremovable":{"name":"x"}}}}' \
+  >"$tmp/jsonmodule/platform/cloud/aws/cluster/nested/main.tf.json"
+expect_reject jsonmodule "an uninspected Terraform JSON resource in a local module"
+
+mk symlinkfile aws '' main.tf
+printf '%s\n' 'resource "aws_ecr_repository" "outside" { name = "x" force_delete = true }' >"$tmp/outside.tf"
+ln -s "$tmp/outside.tf" "$tmp/symlinkfile/platform/cloud/aws/cluster/external.tf"
+expect_reject symlinkfile "a source file outside shipped assets"
+
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi

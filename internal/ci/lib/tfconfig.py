@@ -131,11 +131,16 @@ def native_resources(directory, *, boundary):
             raise ValueError(f"local module {directory} is outside shipped assets {boundary}")
         if directory in ancestors:
             raise ValueError(f"cyclic local module reference to {directory}")
+        json_files = sorted(directory.glob("*.tf.json"))
+        if json_files:
+            raise ValueError(f"native source coverage cannot inspect Terraform JSON files: {json_files}")
         files = sorted(directory.glob("*.tf"))
         if not files:
             raise ValueError(f"local Terraform directory {directory} has no .tf files")
         found = []
         for path in files:
+            if not path.resolve().is_relative_to(boundary):
+                raise ValueError(f"native Terraform file {path} resolves outside shipped assets {boundary}")
             for resource in resources(path, kinds=("resource",)):
                 resource.module_address = prefix
                 resource.indexed_module = indexed_module
