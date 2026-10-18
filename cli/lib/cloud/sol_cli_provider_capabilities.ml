@@ -1194,7 +1194,7 @@ let gcp : t =
         ; reconciliation_scope = Sol_cli_terraform.targets gcp_bootstrap_binding
         }
   ; guarded_addresses =
-      [ "google_sql_database_instance.postgres"; "google_container_cluster.main" ]
+      [ "google_sql_database_instance.postgres[0]"; "google_container_cluster.main" ]
   ; cloud_ready_expectation =
       "the GKE cluster is RUNNING and the Cloud SQL instance is RUNNABLE"
   ; production_qualified = false

@@ -31,6 +31,7 @@ type policy =
   ; rules : rule list
   }
 
+val without_instance_key : string -> string
 val same_resource : string -> string -> bool
 val action_to_string : action -> string
 val changes_of_plan_json : string -> (change list, string) result

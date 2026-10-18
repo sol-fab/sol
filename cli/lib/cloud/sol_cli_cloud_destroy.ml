@@ -568,11 +568,15 @@ let execute ~deps =
                        destroy_and_verify ~cloud_exists ~cleanup ~preparation))))))
 ;;
 
+let guarded_resource_matcher address =
+  Sol_cli_terraform_plan.Resource (Sol_cli_terraform_plan.without_instance_key address)
+;;
+
 let guard_preparation_policy ~addresses : Sol_cli_terraform_plan.policy =
   let open Sol_cli_terraform_plan in
   { phase = "guard-preparation"
   ; rules =
-      [ { matches = List.map (fun address -> Resource address) addresses
+      [ { matches = List.map guarded_resource_matcher addresses
         ; allows = [ Update ]
         ; reason =
             "a guarded resource the inventory already represents may only have its \
@@ -606,7 +610,7 @@ let reconciliation_policy ~bootstrap ~guarded : Sol_cli_terraform_plan.policy =
             "the temporary bootstrap-access mechanism may be created or updated to \
              obtain destruction authority"
         }
-      ; { matches = List.map (fun address -> Resource address) guarded
+      ; { matches = List.map guarded_resource_matcher guarded
         ; allows = [ Update ]
         ; reason =
             "a guarded resource the inventory represents may only be reconciled to the \

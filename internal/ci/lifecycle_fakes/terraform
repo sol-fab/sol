@@ -73,7 +73,7 @@ JSON
           exit 92
         }
         case " $* " in
-          *" -target=google_sql_database_instance.postgres "*)
+          *" -target=google_sql_database_instance.postgres[0] "*)
             case " $* " in
               *" -var=sql_deletion_protection=false "*) : ;;
               *) exit 95 ;;
@@ -112,8 +112,8 @@ JSON
             ;;
         esac
         case " $plan_args " in
-          *" -target=google_sql_database_instance.postgres "*)
-            add_change "google_sql_database_instance.postgres" "google_sql_database_instance" "update"
+          *" -target=google_sql_database_instance.postgres[0] "*)
+            add_change "google_sql_database_instance.postgres[0]" "google_sql_database_instance" "update"
             ;;
         esac
         case " $plan_args " in
@@ -168,7 +168,7 @@ JSON
             add_declared '{"address":"google_compute_network.main","mode":"managed","type":"google_compute_network","values":{"name":"sol-qual","project":"sol-qualification"}}'
             add_declared '{"address":"google_artifact_registry_repository.images","mode":"managed","type":"google_artifact_registry_repository","values":{"repository_id":"sol-qual","location":"us-central1","project":"sol-qualification"}}'
             add_declared '{"address":"google_compute_global_address.sql_peering","mode":"managed","type":"google_compute_global_address","values":{"name":"sol-qual-sql-peering","project":"sol-qualification"}}'
-            add_declared '{"address":"google_sql_database_instance.postgres","mode":"managed","type":"google_sql_database_instance","values":{"name":"sol-qual-postgres","region":"us-central1","project":"sol-qualification"}}'
+            add_declared '{"address":"google_sql_database_instance.postgres[0]","mode":"managed","type":"google_sql_database_instance","values":{"name":"sol-qual-postgres","region":"us-central1","project":"sol-qualification"}}'
             add_declared '{"address":"google_container_cluster.main","mode":"managed","type":"google_container_cluster","values":{"name":"sol-qual","location":"us-central1","project":"sol-qualification"}}'
             add_declared '{"address":"google_project_iam_member.provisioner_cluster_access","mode":"managed","type":"google_project_iam_member","values":{"project":"sol-qualification"}}'
             if [ "${DECLARED_ORPHAN:-}" = 1 ]; then
@@ -237,8 +237,8 @@ JSON
           add_resource '{"address":"google_artifact_registry_repository.images","type":"google_artifact_registry_repository","values":{"id":"projects/sol-qualification/locations/us-central1/repositories/sol-qual","project":"sol-qualification","location":"us-central1","name":"sol-qual"}}'
         forgotten google_compute_global_address.sql_peering ||
           add_resource '{"address":"google_compute_global_address.sql_peering","type":"google_compute_global_address","values":{"self_link":"https://www.googleapis.com/compute/v1/projects/sol-qualification/global/addresses/sol-qual-sql-peering","project":"sol-qualification","name":"sol-qual-sql-peering"}}'
-        forgotten google_sql_database_instance.postgres ||
-          add_resource "{\"address\":\"google_sql_database_instance.postgres\",\"type\":\"google_sql_database_instance\",\"values\":{\"deletion_protection\":$sql_guard,\"self_link\":\"https://sqladmin.googleapis.com/sql/v1beta4/projects/sol-qualification/instances/sol-qual-postgres\",\"project\":\"sol-qualification\",\"region\":\"us-central1\"}}"
+        forgotten google_sql_database_instance.postgres[0] ||
+          add_resource "{\"address\":\"google_sql_database_instance.postgres[0]\",\"type\":\"google_sql_database_instance\",\"values\":{\"deletion_protection\":$sql_guard,\"self_link\":\"https://sqladmin.googleapis.com/sql/v1beta4/projects/sol-qualification/instances/sol-qual-postgres\",\"project\":\"sol-qualification\",\"region\":\"us-central1\"}}"
         if [ "${BOOTSTRAP_BINDING_IN_STATE:-}" = 1 ] \
           && ! forgotten kubernetes_cluster_role_binding.provisioner_bootstrap_admin; then
           add_resource '{"address":"kubernetes_cluster_role_binding.provisioner_bootstrap_admin","type":"kubernetes_cluster_role_binding","values":{"metadata":[{"name":"sol-provisioner-bootstrap"}]}}'
@@ -298,7 +298,7 @@ JSON
         ;;
     esac
     case " $plan_args " in
-      *" -target=google_sql_database_instance.postgres "*)
+      *" -target=google_sql_database_instance.postgres[0] "*)
         if fail_once gcp-prepare; then exit 20; fi
         : >"$GCP_SQL_PREPARED_FILE"
         : >"$GKE_PREPARED_FILE"
@@ -346,7 +346,7 @@ JSON
     fi
     [ "${STATE_RESIDUE_AFTER_DESTROY:-}" = 1 ] || : >"${LIFECYCLE_LOG}.destroyed"
     ;;
-  *cloud/gcp/cluster*" apply "*"-target=google_sql_database_instance.postgres"*)
+  *cloud/gcp/cluster*" apply "*"-target=google_sql_database_instance.postgres[0]"*)
     if fail_once gcp-prepare; then exit 20; fi
     case " $* " in
       *" -var=sql_deletion_protection=false "*) : ;;

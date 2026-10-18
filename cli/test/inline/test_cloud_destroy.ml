@@ -3488,3 +3488,80 @@ let test_rds_identity_is_the_counted_address () =
 let%test "verification: RDS identity uses the counted Terraform address (BUG-209)" =
   test_rds_identity_is_the_counted_address ()
 ;;
+
+let gcp_cluster_with_guard guard =
+  Printf.sprintf
+    {|{"address":"google_container_cluster.main","type":"google_container_cluster","values":{"name":"c","deletion_protection":%s}}|}
+    (string_of_bool guard)
+;;
+
+let gcp_database ~address ~guard =
+  Printf.sprintf
+    {|{"address":%S,"type":"google_sql_database_instance","values":{"deletion_protection":%s}}|}
+    address
+    (string_of_bool guard)
+;;
+
+let verify_gcp_state resources =
+  Sol_cli_gcp_destruction.verify_gcp_preparation_state
+    (inventory_of_show_json (show_json_resources (String.concat "," resources)))
+;;
+
+let%test "verification: GCP preparation reads the counted Cloud SQL address" =
+  let database address guard =
+    verify_gcp_state [ gcp_cluster_with_guard false; gcp_database ~address ~guard ]
+  in
+  (match database "google_sql_database_instance.postgres[0]" true with
+   | Error message ->
+     Windtrap.equal
+       Windtrap.bool
+       ~msg:"the counted database's guard is verified"
+       true
+       (Sol_cli_string.contains ~needle:"still enabled" message)
+   | Ok () -> Windtrap.fail "a counted database with protection enabled was accepted");
+  (match database "google_sql_database_instance.postgres[0]" false with
+   | Ok () -> ()
+   | Error message -> Windtrap.failf "a disabled counted guard was refused: %s" message);
+  match database "google_sql_database_instance.postgres" false with
+  | Error message ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"an unexpected bare address is diagnosed instead of skipped"
+      true
+      (Sol_cli_string.contains ~needle:"not the expected address" message)
+  | Ok () -> Windtrap.fail "a bare database address was accepted as the counted identity"
+;;
+
+let%test "verification: a count=0 Cloud SQL instance has no guard to lower" =
+  match verify_gcp_state [ gcp_cluster_with_guard false ] with
+  | Ok () -> ()
+  | Error message -> Windtrap.failf "a target with no database was refused: %s" message
+;;
+
+let%test "preparation: a count=0 Cloud SQL instance is not targeted" =
+  let guarded =
+    [ "google_sql_database_instance.postgres[0]"; "google_container_cluster.main" ]
+  in
+  let desired ~represented ~create_database =
+    Sol_cli_gcp_destruction.gcp_desired_guards ~represented ~guarded ~create_database
+  in
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"the absent database is not a desired guard"
+    [ "google_container_cluster.main" ]
+    (desired ~represented:[] ~create_database:(Some "false"));
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:
+      "a represented database is still guarded even if the current declaration says \
+       count=0"
+    guarded
+    (desired
+       ~represented:[ "google_sql_database_instance.postgres[0]" ]
+       ~create_database:(Some "false"));
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"the default count keeps the database guard"
+    guarded
+    (desired ~represented:[] ~create_database:None)
+;;

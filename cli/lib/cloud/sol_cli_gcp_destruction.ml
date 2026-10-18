@@ -3,6 +3,21 @@ open Sol_cli_destruction
 open Sol_cli_terraform_steps
 open Result.Syntax
 
+let gcp_desired_guards ~represented ~guarded ~create_database =
+  let database_address = "google_sql_database_instance.postgres" in
+  let database_represented =
+    List.exists
+      (fun address -> Sol_cli_terraform_plan.same_resource database_address address)
+      represented
+  in
+  match create_database with
+  | Some "false" when not database_represented ->
+    List.filter
+      (fun address -> not (Sol_cli_terraform_plan.same_resource database_address address))
+      guarded
+  | Some _ | None -> guarded
+;;
+
 let gcp_prepare_destroy_result ~guarded run_log infra_dir var_files vars state
   : unit Sol_cli_cloud_lifecycle.preparation_outcome
   =
@@ -28,7 +43,13 @@ let gcp_prepare_destroy_result ~guarded run_log infra_dir var_files vars state
        lowered"
   | Substrate_present | Substrate_absent ->
     let represented = addresses state in
-    let desired = guarded in
+    let desired =
+      gcp_desired_guards
+        ~represented
+        ~guarded
+        ~create_database:
+          (Sol_cli_terraform_vars.resolved "create_database" ~var_files ~vars)
+    in
     report_unrepresented
       (Sol_cli_cloud_lifecycle.preparations_unrepresented ~state:represented ~desired);
     (match Sol_cli_cloud_lifecycle.preparations_eligible ~state:represented ~desired with
@@ -56,32 +77,58 @@ let gcp_prepare_destroy_result ~guarded run_log infra_dir var_files vars state
         | Ok () -> Prepared ()))
 ;;
 
-let verify_gcp_destroy_preparation_result infra_dir =
-  let* state = read_cloud_state infra_dir in
+let verify_gcp_preparation_state state =
   let open Sol_cli_cloud_destroy in
-  let guard address =
-    Option.bind (find_address state address) (fun resource ->
-      resource.deletion_protection)
+  let resource_at expected =
+    match find_address state expected with
+    | Some resource -> Ok (Some resource)
+    | None ->
+      (match
+         List.find_opt
+           (fun (resource : resource) ->
+              Sol_cli_terraform_plan.same_resource expected resource.address)
+           (resources state)
+       with
+       | Some resource ->
+         Error
+           (Printf.sprintf
+              "the state represents the guarded resource at %s, not the expected address \
+               %s; \n\
+              \               the guard cannot be attributed to the resource Terraform \
+               will destroy"
+              resource.address
+              expected)
+       | None -> Ok None)
   in
-  if
-    find_address state "google_sql_database_instance.postgres" = None
-    && find_address state "google_container_cluster.main" = None
+  let* database = resource_at "google_sql_database_instance.postgres[0]" in
+  let* cluster = resource_at "google_container_cluster.main" in
+  if database = None && cluster = None
   then Error "GCP destroy preparation ran but no guarded resource is in state"
   else
     let* () =
-      match guard "google_sql_database_instance.postgres" with
-      | Some true ->
+      match database with
+      | Some { deletion_protection = Some true; _ } ->
         Error "Cloud SQL deletion protection is still enabled after preparation"
-      | Some false | None -> Ok ()
+      | Some { deletion_protection = Some false; _ }
+      | Some { deletion_protection = None; _ }
+      | None -> Ok ()
     in
     let* () =
-      match guard "google_container_cluster.main" with
-      | Some true -> Error "GKE deletion protection is still enabled after preparation"
-      | Some false | None -> Ok ()
+      match cluster with
+      | Some { deletion_protection = Some true; _ } ->
+        Error "GKE deletion protection is still enabled after preparation"
+      | Some { deletion_protection = Some false; _ }
+      | Some { deletion_protection = None; _ }
+      | None -> Ok ()
     in
     Sol_cli_report.app
       "  verify preparation: Cloud SQL and GKE deletion protection disabled.";
     Ok ()
+;;
+
+let verify_gcp_destroy_preparation_result infra_dir =
+  let* state = read_cloud_state infra_dir in
+  verify_gcp_preparation_state state
 ;;
 
 let observe_retention ~retention =
