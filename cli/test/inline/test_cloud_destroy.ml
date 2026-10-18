@@ -238,7 +238,12 @@ let fake_deps
       ?(destroy_substrate = fun () -> Ok ())
       ?(destroy_authorization =
         fun () -> Ok "authorization: the reconciler identity and its fence were removed")
-      ?(verify_destruction = fun ~pre_destroy:_ ~preparation:_ -> verified_observation)
+      ?(observe_residue = fun ~pre_destroy:_ -> [])
+      ?(verify_destruction =
+        fun ~pre_destroy:_
+          ~preparation:_
+          ~previously_attributed:_
+          ~pre_inventory_failures:_ -> verified_observation)
       ()
   =
   let calls =
@@ -325,10 +330,15 @@ let fake_deps
         (fun () ->
           calls.authorization <- calls.authorization + 1;
           destroy_authorization ())
+    ; observe_residue
     ; verify_destruction =
-        (fun ~pre_destroy ~preparation ->
+        (fun ~pre_destroy ~preparation ~previously_attributed ~pre_inventory_failures ->
           calls.verify <- calls.verify + 1;
-          verify_destruction ~pre_destroy ~preparation)
+          verify_destruction
+            ~pre_destroy
+            ~preparation
+            ~previously_attributed
+            ~pre_inventory_failures)
     ; report = (fun message -> calls.reports <- message :: calls.reports)
     ; warn = (fun _ -> ())
     }
@@ -475,7 +485,12 @@ let test_a_substrate_the_provider_lost_skips_what_must_reach_it () =
       ~state_after_reconciliation:(Ok state_after)
       ~prepare:(fun ~state:_ -> Sol_cli_cloud_lifecycle.Nothing_to_prepare)
       ~reconcile_provable_absence:(fun () -> Ok reconciliation)
-      ~verify_destruction:(fun ~pre_destroy ~preparation:_ ->
+      ~verify_destruction:
+        (fun
+          ~pre_destroy
+          ~preparation:_
+          ~previously_attributed:_
+          ~pre_inventory_failures:_ ->
         verified_pre_destroy := Some pre_destroy;
         verified_observation)
       ()
@@ -868,7 +883,12 @@ let test_cleanup_failure_does_not_decide_absence () =
     fake_deps
       ~state:(Ok (show_json_resources gcp_cluster))
       ~remove:(fun () -> Error "terraform exited 1: access removal failed")
-      ~verify_destruction:(fun ~pre_destroy:_ ~preparation:_ ->
+      ~verify_destruction:
+        (fun
+          ~pre_destroy:_
+          ~preparation:_
+          ~previously_attributed:_
+          ~pre_inventory_failures:_ ->
         { Sol_cli_destroy_verification.state = State_absent
         ; sweep =
             Sweep_ran
@@ -1889,7 +1909,12 @@ let test_an_unreadable_state_observation_is_not_the_refusal () =
     fake_deps
       ~state:(Error "the state backend refused the read")
       ~outputs:(Outputs_unreadable "terraform state list failed with exit 1")
-      ~verify_destruction:(fun ~pre_destroy:_ ~preparation:_ ->
+      ~verify_destruction:
+        (fun
+          ~pre_destroy:_
+          ~preparation:_
+          ~previously_attributed:_
+          ~pre_inventory_failures:_ ->
         { Sol_cli_destroy_verification.state =
             Sol_cli_destroy_verification.State_unreadable "permission denied"
         ; sweep =
@@ -2103,7 +2128,12 @@ let test_residue_the_state_does_not_own_is_not_absence () =
   let deps, calls =
     fake_deps
       ~state:(Ok (show_json_resources gcp_cluster))
-      ~verify_destruction:(fun ~pre_destroy:_ ~preparation:_ ->
+      ~verify_destruction:
+        (fun
+          ~pre_destroy:_
+          ~preparation:_
+          ~previously_attributed:_
+          ~pre_inventory_failures:_ ->
         { Sol_cli_destroy_verification.state = State_absent
         ; sweep =
             Sweep_ran
@@ -2134,7 +2164,12 @@ let assert_unestablished_verification ~reason verification =
   let deps, _ =
     fake_deps
       ~state:(Ok (show_json_resources gcp_cluster))
-      ~verify_destruction:(fun ~pre_destroy:_ ~preparation:_ -> verification)
+      ~verify_destruction:
+        (fun
+          ~pre_destroy:_
+          ~preparation:_
+          ~previously_attributed:_
+          ~pre_inventory_failures:_ -> verification)
       ()
   in
   let outcome = execute ~deps in
@@ -2353,7 +2388,14 @@ let test_an_external_resource_is_not_residue () =
     }
   in
   let deps, _ =
-    fake_deps ~verify_destruction:(fun ~pre_destroy:_ ~preparation:_ -> verification) ()
+    fake_deps
+      ~verify_destruction:
+        (fun
+          ~pre_destroy:_
+          ~preparation:_
+          ~previously_attributed:_
+          ~pre_inventory_failures:_ -> verification)
+      ()
   in
   let outcome = execute ~deps in
   Windtrap.equal
@@ -3005,7 +3047,12 @@ let test_verification_unknown_is_a_failure () =
   let deps, calls =
     fake_deps
       ~state:(Ok (show_json_resources gcp_cluster))
-      ~verify_destruction:(fun ~pre_destroy:_ ~preparation:_ ->
+      ~verify_destruction:
+        (fun
+          ~pre_destroy:_
+          ~preparation:_
+          ~previously_attributed:_
+          ~pre_inventory_failures:_ ->
         observation_with
           ~state:(Sol_cli_destroy_verification.State_unreadable "permission denied")
           ())
@@ -3042,7 +3089,12 @@ let test_degradation_preserved_when_verification_fails () =
     fake_deps
       ~state:(Ok (show_json_resources gcp_cluster))
       ~prepare:(fun ~state:_ -> continue_failure "guards not lowered")
-      ~verify_destruction:(fun ~pre_destroy:_ ~preparation:_ ->
+      ~verify_destruction:
+        (fun
+          ~pre_destroy:_
+          ~preparation:_
+          ~previously_attributed:_
+          ~pre_inventory_failures:_ ->
         observation_with
           ~sweep:
             (Sol_cli_destroy_verification.Sweep_ran
@@ -3077,7 +3129,12 @@ let test_missing_retention_fails () =
   let deps, _ =
     fake_deps
       ~state:(Ok (show_json_resources gcp_cluster))
-      ~verify_destruction:(fun ~pre_destroy:_ ~preparation:_ ->
+      ~verify_destruction:
+        (fun
+          ~pre_destroy:_
+          ~preparation:_
+          ~previously_attributed:_
+          ~pre_inventory_failures:_ ->
         observation_with
           ~retention:
             (Retention_violated
@@ -3112,7 +3169,12 @@ let test_fully_clean_is_exit_0 () =
       ~state:(Ok (show_json_resources gcp_cluster))
       ~prepare:(fun ~state:_ ->
         Sol_cli_cloud_lifecycle.Prepared (Prepared { retained = None }))
-      ~verify_destruction:(fun ~pre_destroy:_ ~preparation:_ -> observed)
+      ~verify_destruction:
+        (fun
+          ~pre_destroy:_
+          ~preparation:_
+          ~previously_attributed:_
+          ~pre_inventory_failures:_ -> observed)
       ()
   in
   let outcome = execute ~deps in
@@ -3751,4 +3813,65 @@ let test_desired_guards_follow_create_database () =
 
 let%test "GCP preparation: an uncreated database is not a missing guard" =
   test_desired_guards_follow_create_database ()
+;;
+
+let%test "destruction: pre-destroy identities and failures reach the verdict" =
+  let seen_prior = ref [] in
+  let seen_failures = ref [] in
+  let order = ref [] in
+  let present =
+    Sol_cli_absence.Present
+      { resource_class = "persistent disk"
+      ; identity = "a disk labelled goog-k8s-cluster-name=acme-prod"
+      ; found = [ "pvc-abc" ]
+      ; attribution = Sol_cli_absence.Within_target "the target's disk"
+      ; checked_with = "gcloud compute disks list"
+      }
+  in
+  let failure =
+    Sol_cli_absence.Unobservable
+      { resource_class = "persistent disk"
+      ; reason = "permission denied"
+      ; checked_with = "gcloud compute disks list"
+      }
+  in
+  let deps, calls =
+    fake_deps
+      ~state:(Ok {|{}|})
+      ~outputs:(Outputs_unavailable "no outputs")
+      ~observe_residue:(fun ~pre_destroy:_ ->
+        order := "observe" :: !order;
+        [ present; failure ])
+      ~destroy_substrate:(fun () ->
+        order := "substrate" :: !order;
+        Ok ())
+      ~verify_destruction:
+        (fun
+          ~pre_destroy:_ ~preparation:_ ~previously_attributed ~pre_inventory_failures ->
+        order := "verify" :: !order;
+        seen_prior := previously_attributed;
+        seen_failures := pre_inventory_failures;
+        verified_observation)
+      ()
+  in
+  (match execute ~deps with
+   | Destroy_succeeded _ -> ()
+   | _ -> Windtrap.fail "the destruction itself must still complete");
+  Windtrap.equal
+    (Windtrap.list (Windtrap.pair Windtrap.string (Windtrap.list Windtrap.string)))
+    ~msg:"the pre-destroy disk identity is carried into the post-destroy verdict"
+    [ "persistent disk", [ "pvc-abc" ] ]
+    !seen_prior;
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"the pre-destroy observation failure is carried as unknown, not dropped"
+    [ "persistent disk: permission denied" ]
+    !seen_failures;
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"the pre-destroy inventory runs before the substrate is destroyed"
+    [ "observe"; "substrate"; "verify" ]
+    (List.rev !order);
+  Windtrap.equal Windtrap.int ~msg:"substrate destroy ran" 1 calls.substrate;
+  Windtrap.equal Windtrap.int ~msg:"absence verified" 1 calls.verify
 ;;

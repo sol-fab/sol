@@ -103,7 +103,11 @@ let scope_binding target =
     Error ("could not establish the active AWS account: " ^ String.trim reason)
 ;;
 
-let run ~check =
+let prior_for class_name prior =
+  List.assoc_opt class_name prior |> Option.value ~default:[]
+;;
+
+let run ?(previously_attributed = []) ~check () =
   let unobservable reason =
     Unobservable
       { resource_class = check.resource_class
@@ -136,12 +140,18 @@ let run ~check =
   match run_argv check.argv with
   | Error (`NotFound reason) | Error (`Failed reason) -> unobservable reason
   | Ok candidates ->
-    let candidates = List.filter check.attributable candidates in
+    let prior = prior_for check.resource_class previously_attributed in
+    let attributed = List.filter check.attributable candidates in
+    let prior_matches = List.filter (fun line -> List.mem line prior) candidates in
+    let candidates =
+      List.sort_uniq String.compare (List.rev_append attributed prior_matches)
+    in
     (match check.tagged_with with
      | None -> observed candidates
      | Some tag_argv ->
        let rec resolve acc = function
          | [] -> Ok (List.rev acc)
+         | line :: rest when List.mem line prior -> resolve (line :: acc) rest
          | line :: rest ->
            (match run_argv (tag_argv line) with
             | Ok [] -> resolve acc rest
@@ -447,6 +457,7 @@ let ecr_observation ~region ~registry =
            ; "--output"
            ; "text"
            ])
+      ()
   | None ->
     Not_attributable
       { resource_class = "ECR repository"
@@ -487,7 +498,7 @@ let authorization_checks ~(target : Sol_cli_config.target) =
 ;;
 
 let strict_authorization_observation ~check =
-  match run ~check with
+  match run ~check () with
   | Unobservable u ->
     Unobservable
       { u with
@@ -497,12 +508,18 @@ let strict_authorization_observation ~check =
   | observation -> observation
 ;;
 
-let observations (target : Sol_cli_config.target) ~cluster_name =
+let observations
+      ?(previously_attributed = [])
+      (target : Sol_cli_config.target)
+      ~cluster_name
+  =
   match scope_binding target with
   | Error reason -> Sol_cli_absence.scope_failure ~reason
   | Ok () ->
     let observations =
-      List.map (fun c -> run ~check:c) (checks ~region:target.region ~cluster_name)
+      List.map
+        (fun c -> run ~previously_attributed ~check:c ())
+        (checks ~region:target.region ~cluster_name)
       @ [ ecr_observation ~region:target.region ~registry:(registry_prefix target) ]
     in
     let observations =
@@ -523,7 +540,7 @@ let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
     (match Sol_cli_absence.scope_failure ~reason with
      | [ observation ] -> observation
      | _ -> assert false)
-  | Ok () -> run ~check:(cluster_check ~region:target.region ~cluster_name)
+  | Ok () -> run ~check:(cluster_check ~region:target.region ~cluster_name) ()
 ;;
 
 let unresolved = Sol_cli_absence.unresolved

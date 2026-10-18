@@ -34,10 +34,25 @@ let verification_observation
       ~retention
       ~pre_destroy
       ~preparation
+      ~previously_attributed
+      ~pre_inventory_failures
   =
   let open Sol_cli_destroy_verification in
   let state = post_destroy_state ~infra_dir in
-  let observations = destruction.residue ~pre_destroy ~cluster in
+  let observations =
+    destruction.residue ~previously_attributed ~pre_destroy ~cluster ()
+  in
+  let failures =
+    List.map
+      (fun reason ->
+         Sol_cli_absence.Unobservable
+           { resource_class = Sol_cli_absence.scope_class
+           ; reason = "pre-destroy inventory: " ^ reason
+           ; checked_with = "the pre-destroy residue inventory"
+           })
+      pre_inventory_failures
+  in
+  let observations = observations @ failures in
   Sol_cli_report.app "%s" (Sol_cli_absence.report observations);
   let sweep = Sol_cli_absence.to_sweep observations in
   { state; sweep; retention = destruction.retention ~retention ~pre_destroy ~preparation }
@@ -1427,15 +1442,19 @@ let destroy_deps
             | Sol_cli_authorization_stage.Established ->
               "authorization: the reconciler identity and its fence were removed"
             | Not_declared -> Sol_cli_authorization_stage.outcome_to_string Not_declared))
+    ; observe_residue =
+        (fun ~pre_destroy -> destruction.residue ~pre_destroy ~cluster:!cluster_ref ())
     ; verify_destruction =
-        (fun ~pre_destroy ~preparation ->
+        (fun ~pre_destroy ~preparation ~previously_attributed ~pre_inventory_failures ->
           verification_observation
             ~destruction
             ~infra_dir
             ~cluster:!cluster_ref
             ~retention
             ~pre_destroy
-            ~preparation)
+            ~preparation
+            ~previously_attributed
+            ~pre_inventory_failures)
     ; report = (fun message -> Sol_cli_report.app "%s" message)
     ; warn = (fun message -> Sol_cli_report.warn "%s" message)
     }

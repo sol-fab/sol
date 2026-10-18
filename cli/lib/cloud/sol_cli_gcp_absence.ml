@@ -59,7 +59,11 @@ let benign_empty_list_warning stderr =
    subject may be the project, the caller's permission or the API's scope, not the
    resource. Reading that as absence is what allowed a bad scope to authorize state
    removal. *)
-let run ~check =
+let prior_for class_name prior =
+  List.assoc_opt class_name prior |> Option.value ~default:[]
+;;
+
+let run ?(previously_attributed = []) ~check () =
   match Sol_cli_process.run (Sol_cli_process.cmd ("gcloud" :: check.argv)) with
   | Ok { Sol_cli_process.stdout; stderr } ->
     (* An incomplete enumeration is unknown even when some matching resources were
@@ -72,10 +76,17 @@ let run ~check =
         ; reason = String.trim stderr
         ; checked_with = checked_with check.argv
         }
-    else
+    else (
+      let raw = lines stdout in
+      let prior = prior_for check.resource_class previously_attributed in
+      let attributed = List.filter check.attributable raw in
+      let prior_matches =
+        List.filter (fun line -> List.mem (check.normalize line) prior) raw
+      in
       ok_observation
         ~check
-        (lines stdout |> List.filter check.attributable |> List.map check.normalize)
+        (List.map check.normalize (List.rev_append attributed prior_matches)
+         |> List.sort_uniq String.compare))
   | Error (Sol_cli_process.Non_zero r) ->
     Unobservable
       { resource_class = check.resource_class
@@ -263,6 +274,10 @@ let checks ~project ~region ~cluster_name =
         match String.split_on_char '\t' line with
         | [ _name; label ] -> String.equal label cluster_name
         | _ -> false)
+      ~normalize:(fun line ->
+        match String.split_on_char '\t' line with
+        | name :: _ -> name
+        | [] -> line)
       (p
          [ "compute"
          ; "disks"
@@ -432,7 +447,7 @@ let authorization_checks ~project ~(target : Sol_cli_config.target) =
 ;;
 
 let strict_authorization_observation ~check =
-  match run ~check with
+  match run ~check () with
   | Unobservable u ->
     Unobservable
       { u with
@@ -442,7 +457,11 @@ let strict_authorization_observation ~check =
   | observation -> observation
 ;;
 
-let observations (target : Sol_cli_config.target) ~cluster_name =
+let observations
+      ?(previously_attributed = [])
+      (target : Sol_cli_config.target)
+      ~cluster_name
+  =
   match project_of target with
   | None ->
     Sol_cli_absence.scope_failure ~reason:unlistable
@@ -450,7 +469,7 @@ let observations (target : Sol_cli_config.target) ~cluster_name =
   | Some project ->
     let observations =
       List.map
-        (fun check -> run ~check)
+        (fun check -> run ~previously_attributed ~check ())
         (checks ~project ~region:target.region ~cluster_name)
     in
     let observations =
@@ -472,7 +491,7 @@ let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
      | [ observation ] -> observation
      | _ -> assert false)
   | Some project ->
-    run ~check:(cluster_check ~project ~region:target.region ~cluster_name)
+    run ~check:(cluster_check ~project ~region:target.region ~cluster_name) ()
 ;;
 
 let unresolved = Sol_cli_absence.unresolved
