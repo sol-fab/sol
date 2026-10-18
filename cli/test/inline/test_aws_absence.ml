@@ -348,7 +348,12 @@ let with_ebs_inventory ?(tags = "") ~volumes f =
 printf '%%s\n' "$*" >> %s
 case "$1 $2" in
   "sts get-caller-identity") printf '111122223333\n' ;;
-  "ec2 describe-volumes") printf '%%s' %s ;;
+  "ec2 describe-volumes")
+    case " $* " in
+      *" --filters "*) : ;;
+      *) printf '%%s' %s ;;
+    esac
+    ;;
   "ec2 describe-tags") printf '%%s' %s ;;
 esac
 exit 0
