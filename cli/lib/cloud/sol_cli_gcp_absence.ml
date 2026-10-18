@@ -136,8 +136,10 @@ let project_iam_binding_check ~project ~resource_class ~identity ~role ~member =
             role
             member))
     ~attributable:(fun line ->
-      Sol_cli_string.contains ~needle:role line
-      && Sol_cli_string.contains ~needle:member line)
+      match String.split_on_char '\t' line with
+      | [ actual_role; actual_member ] ->
+        String.equal actual_role role && String.equal actual_member member
+      | _ -> false)
     [ "--project"
     ; project
     ; "projects"
@@ -659,7 +661,34 @@ let strict_authorization observation =
   | observation -> observation
 ;;
 
-let observations (target : Sol_cli_config.target) ~cluster_name =
+let prior_for class_name prior =
+  List.assoc_opt class_name prior |> Option.value ~default:[]
+;;
+
+let filter_to_prior prior observation =
+  match observation with
+  | Present present ->
+    let prior = List.map String.trim (prior_for present.resource_class prior) in
+    let found =
+      List.filter (fun item -> List.mem (String.trim item) prior) present.found
+    in
+    if found = []
+    then
+      Absent
+        { resource_class = present.resource_class
+        ; identity = present.identity
+        ; attribution = present.attribution
+        ; checked_with = present.checked_with
+        }
+    else Present { present with found }
+  | observation -> observation
+;;
+
+let observations
+      ?(authorization_identities = [])
+      (target : Sol_cli_config.target)
+      ~cluster_name
+  =
   match project_of target with
   | None ->
     Sol_cli_absence.scope_failure ~reason:unlistable
@@ -678,13 +707,16 @@ let observations (target : Sol_cli_config.target) ~cluster_name =
     let observations =
       observations
       @ List.map
-          (fun check -> strict_authorization_observation ~check)
+          (fun check ->
+             strict_authorization_observation ~check
+             |> filter_to_prior authorization_identities)
           (authorization_checks ~project ~target)
     in
     let observations =
       observations
       @ [ strict_authorization
             (authorization_secret_bindings ~project ~environment:target.env)
+          |> filter_to_prior authorization_identities
         ]
     in
     derived_by_vpc ~cluster_name observations @ durable_observations ~target ~cluster_name
@@ -701,3 +733,51 @@ let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
 ;;
 
 let unresolved = Sol_cli_absence.unresolved
+
+let authorization_state_identities
+      ~(target : Sol_cli_config.target)
+      (state : Sol_cli_cloud_destroy.state_read)
+  =
+  let resources = Sol_cli_cloud_destroy.resources state in
+  let project =
+    Option.value (Sol_cli_config.provider_field target "project_id") ~default:""
+  in
+  let service_accounts =
+    resources
+    |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+      if String.equal resource.kind "google_service_account" then resource.email else None)
+  in
+  let custom_roles =
+    resources
+    |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+      if String.equal resource.kind "google_project_iam_custom_role"
+      then Option.map (fun name -> "projects/" ^ project ^ "/roles/" ^ name) resource.name
+      else None)
+  in
+  let project_bindings =
+    resources
+    |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+      if String.equal resource.kind "google_project_iam_member"
+      then (
+        match resource.role, resource.member with
+        | Some role, Some member -> Some (role ^ "\t" ^ member)
+        | _ -> None)
+      else None)
+  in
+  let secret_bindings =
+    resources
+    |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+      if String.equal resource.kind "google_secret_manager_secret_iam_member"
+      then (
+        match resource.secret_id, resource.role, resource.member with
+        | Some secret, Some role, Some member ->
+          Some (Printf.sprintf "%s: %s -> %s" (Filename.basename secret) role member)
+        | _ -> None)
+      else None)
+  in
+  [ "authorization service account", service_accounts
+  ; "authorization custom role", custom_roles
+  ; "authorization project IAM binding", project_bindings
+  ; "authorization secret IAM binding", secret_bindings
+  ]
+;;

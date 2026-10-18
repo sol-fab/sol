@@ -63,8 +63,10 @@ type t =
       -> preparation:Sol_cli_cloud_destroy.preparation
       -> Sol_cli_destroy_verification.retention
   ; residue :
-      pre_destroy:Sol_cli_cloud_destroy.state_read
+      ?authorization_identities:(string * string list) list
+      -> pre_destroy:Sol_cli_cloud_destroy.state_read
       -> cluster:Sol_cli_cluster.t option
+      -> unit
       -> Sol_cli_absence.observation list
   ; before_substrate_destroy : unit -> unit
   }

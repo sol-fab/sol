@@ -524,7 +524,34 @@ let strict_authorization_observation ~check =
   | observation -> observation
 ;;
 
-let observations (target : Sol_cli_config.target) ~cluster_name =
+let prior_for class_name prior =
+  List.assoc_opt class_name prior |> Option.value ~default:[]
+;;
+
+let filter_to_prior prior observation =
+  match observation with
+  | Present present ->
+    let prior = List.map String.trim (prior_for present.resource_class prior) in
+    let found =
+      List.filter (fun item -> List.mem (String.trim item) prior) present.found
+    in
+    if found = []
+    then
+      Absent
+        { resource_class = present.resource_class
+        ; identity = present.identity
+        ; attribution = present.attribution
+        ; checked_with = present.checked_with
+        }
+    else Present { present with found }
+  | observation -> observation
+;;
+
+let observations
+      ?(authorization_identities = [])
+      (target : Sol_cli_config.target)
+      ~cluster_name
+  =
   match scope_binding target with
   | Error reason -> Sol_cli_absence.scope_failure ~reason
   | Ok () ->
@@ -540,7 +567,9 @@ let observations (target : Sol_cli_config.target) ~cluster_name =
     let observations =
       observations
       @ List.map
-          (fun check -> strict_authorization_observation ~check)
+          (fun check ->
+             strict_authorization_observation ~check
+             |> filter_to_prior authorization_identities)
           (authorization_checks ~target)
     in
     observations @ durable_observations ~target
@@ -556,3 +585,23 @@ let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
 ;;
 
 let unresolved = Sol_cli_absence.unresolved
+
+let authorization_state_identities
+      ~(target : Sol_cli_config.target)
+      (state : Sol_cli_cloud_destroy.state_read)
+  =
+  let resources = Sol_cli_cloud_destroy.resources state in
+  let names kind =
+    resources
+    |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+      if String.equal resource.kind kind then resource.name else None)
+    |> List.sort_uniq String.compare
+  in
+  let reconciler = "sol-" ^ target.env ^ "-authorization" in
+  let roles = names "aws_iam_role" in
+  [ "authorization IAM role", List.filter (String.equal reconciler) roles
+  ; ( "authorization workload role"
+    , List.filter (fun name -> not (String.equal reconciler name)) roles )
+  ; "authorization IAM policy", names "aws_iam_policy"
+  ]
+;;

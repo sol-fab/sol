@@ -132,7 +132,10 @@ let%test "authorization: AWS role residue is observed and a failed check is stri
   with_fake_command "aws" (aws_script ~roles:"sol-prod-authorization\n" ~roles_exit:0 ())
   @@ fun () ->
   let observations =
-    Sol_cli_aws_absence.observations aws_target ~cluster_name:"acme-prod"
+    Sol_cli_aws_absence.observations
+      ~authorization_identities:[ "authorization IAM role", [ "sol-prod-authorization" ] ]
+      aws_target
+      ~cluster_name:"acme-prod"
   in
   (match find_class "authorization IAM role" observations with
    | Some (Sol_cli_absence.Present _) -> ()
@@ -140,7 +143,10 @@ let%test "authorization: AWS role residue is observed and a failed check is stri
   with_fake_command "aws" (aws_script ~roles:"" ~roles_exit:1 ())
   @@ fun () ->
   let observations =
-    Sol_cli_aws_absence.observations aws_target ~cluster_name:"acme-prod"
+    Sol_cli_aws_absence.observations
+      ~authorization_identities:[ "authorization IAM role", [ "sol-prod-authorization" ] ]
+      aws_target
+      ~cluster_name:"acme-prod"
   in
   match find_class Sol_cli_absence.scope_class observations with
   | Some (Sol_cli_absence.Unobservable _) -> ()
@@ -167,7 +173,11 @@ let%test "authorization: AWS workload roles are observed by environment path" =
        ())
   @@ fun () ->
   let observations =
-    Sol_cli_aws_absence.observations aws_target ~cluster_name:"acme-prod"
+    Sol_cli_aws_absence.observations
+      ~authorization_identities:
+        [ "authorization workload role", [ "sol-prod-charge-svc" ] ]
+      aws_target
+      ~cluster_name:"acme-prod"
   in
   match find_class "authorization workload role" observations with
   | Some (Sol_cli_absence.Present present) ->
@@ -185,7 +195,10 @@ let%test
   with_fake_command "aws" (aws_script ~roles:"sol-prod-authorization\n" ~roles_exit:0 ())
   @@ fun () ->
   let observations =
-    Sol_cli_aws_absence.observations aws_target_without_trust ~cluster_name:"acme-prod"
+    Sol_cli_aws_absence.observations
+      ~authorization_identities:[ "authorization IAM role", [ "sol-prod-authorization" ] ]
+      aws_target_without_trust
+      ~cluster_name:"acme-prod"
   in
   match find_class "authorization IAM role" observations with
   | Some (Sol_cli_absence.Present _) -> ()
@@ -230,7 +243,13 @@ let%test "authorization: GCP identity residue is observed by its environment nam
     (gcp_script ~service_accounts:gcp_auth_identity ~roles:gcp_auth_role ())
   @@ fun () ->
   let observations =
-    Sol_cli_gcp_absence.observations gcp_target ~cluster_name:"acme-prod"
+    Sol_cli_gcp_absence.observations
+      ~authorization_identities:
+        [ "authorization service account", [ gcp_auth_identity ]
+        ; "authorization custom role", [ gcp_auth_role ]
+        ]
+      gcp_target
+      ~cluster_name:"acme-prod"
   in
   (match find_class "authorization service account" observations with
    | Some (Sol_cli_absence.Present _) -> ()
@@ -252,7 +271,13 @@ let%test
     (gcp_script ~service_accounts:gcp_auth_identity ~roles:gcp_auth_role ())
   @@ fun () ->
   let observations =
-    Sol_cli_gcp_absence.observations gcp_target_without_trust ~cluster_name:"acme-prod"
+    Sol_cli_gcp_absence.observations
+      ~authorization_identities:
+        [ "authorization service account", [ gcp_auth_identity ]
+        ; "authorization custom role", [ gcp_auth_role ]
+        ]
+      gcp_target_without_trust
+      ~cluster_name:"acme-prod"
   in
   match find_class "authorization service account" observations with
   | Some (Sol_cli_absence.Present _) -> ()
@@ -278,7 +303,20 @@ let%test "authorization: GCP project IAM bindings survive their principals" =
        ())
   @@ fun () ->
   let observations =
-    Sol_cli_gcp_absence.observations gcp_target ~cluster_name:"acme-prod"
+    Sol_cli_gcp_absence.observations
+      ~authorization_identities:
+        [ ( "provisioner project IAM binding"
+          , [ "projects/acme-project/roles/sol_acme_prod_cluster_access\tserviceAccount:acme-prod-provisioner@acme-project.iam.gserviceaccount.com"
+            ] )
+        ; ( "cert-manager DNS discovery project IAM binding"
+          , [ "projects/acme-project/roles/sol_acme_prod_cert_manager_dns_discovery\tserviceAccount:acme-prod-cert-manager@acme-project.iam.gserviceaccount.com"
+            ] )
+        ; ( "authorization project IAM binding"
+          , [ "projects/acme-project/roles/sol_prod_authorization\tserviceAccount:sol-prod-authorization@acme-project.iam.gserviceaccount.com"
+            ] )
+        ]
+      gcp_target
+      ~cluster_name:"acme-prod"
   in
   List.iter
     (fun resource_class ->
@@ -289,6 +327,37 @@ let%test "authorization: GCP project IAM bindings survive their principals" =
     ; "cert-manager DNS discovery project IAM binding"
     ; "authorization project IAM binding"
     ]
+;;
+
+let gcp_project_bindings_near_match =
+  "projects/acme-project/roles/sol_acme_prod_cluster_access_extra\tserviceAccount:acme-prod-provisioner@acme-project.iam.gserviceaccount.com\n\
+   projects/acme-project/roles/sol_acme_prod_cluster_access\tserviceAccount:acme-prod-provisioner@acme-project.iam.gserviceaccount.com.evil\n"
+;;
+
+let%test "authorization: a near-match project binding is not that binding" =
+  with_fake_command
+    "gcloud"
+    (gcp_script
+       ~project_policy:gcp_project_bindings_near_match
+       ~service_accounts:gcp_auth_identity
+       ~roles:gcp_auth_role
+       ())
+  @@ fun () ->
+  let observations =
+    Sol_cli_gcp_absence.observations
+      ~authorization_identities:
+        [ ( "provisioner project IAM binding"
+          , [ "projects/acme-project/roles/sol_acme_prod_cluster_access\tserviceAccount:acme-prod-provisioner@acme-project.iam.gserviceaccount.com"
+            ] )
+        ]
+      gcp_target
+      ~cluster_name:"acme-prod"
+  in
+  match find_class "provisioner project IAM binding" observations with
+  | Some (Sol_cli_absence.Absent _) -> ()
+  | _ ->
+    Windtrap.fail
+      "a role or member that merely contains the expected text must not be attributed"
 ;;
 
 let gcp_secret_policy =
@@ -306,7 +375,15 @@ let%test "authorization: GCP secret IAM bindings are observed" =
        ())
   @@ fun () ->
   let observations =
-    Sol_cli_gcp_absence.observations gcp_target ~cluster_name:"acme-prod"
+    Sol_cli_gcp_absence.observations
+      ~authorization_identities:
+        [ ( "authorization secret IAM binding"
+          , [ "sol-prod-db-password: roles/secretmanager.secretAccessor -> \
+               serviceAccount:acme-project.svc.id.goog[app/charge-svc]"
+            ] )
+        ]
+      gcp_target
+      ~cluster_name:"acme-prod"
   in
   match find_class "authorization secret IAM binding" observations with
   | Some (Sol_cli_absence.Present present) ->
@@ -316,4 +393,61 @@ let%test "authorization: GCP secret IAM bindings are observed" =
       1
       (List.length present.found)
   | _ -> Windtrap.fail "the authorization secret IAM binding was not observed"
+;;
+
+let%test "authorization: AWS workload roles are target-scoped by the auth state" =
+  with_fake_command
+    "aws"
+    (aws_script
+       ~roles:"sol-prod-authorization\n"
+       ~workload_roles:"sol-prod-this-target\nsol-prod-other-target\n"
+       ~roles_exit:0
+       ())
+  @@ fun () ->
+  let observations =
+    Sol_cli_aws_absence.observations
+      ~authorization_identities:
+        [ "authorization workload role", [ "sol-prod-this-target" ] ]
+      aws_target
+      ~cluster_name:"acme-prod"
+  in
+  match find_class "authorization workload role" observations with
+  | Some (Sol_cli_absence.Present present) ->
+    Windtrap.equal
+      (Windtrap.list Windtrap.string)
+      ~msg:"another target's environment-level role is not this target's residue"
+      [ "sol-prod-this-target" ]
+      present.found
+  | _ -> Windtrap.fail "the target's own workload role was not observed"
+;;
+
+let%test "authorization: GCP project bindings are target-scoped by the auth state" =
+  let this_binding =
+    "projects/acme-project/roles/sol_acme_prod_cluster_access\tserviceAccount:acme-prod-provisioner@acme-project.iam.gserviceaccount.com"
+  in
+  let other_binding =
+    "projects/acme-project/roles/sol_acme_prod_cluster_access\tserviceAccount:acme-prod-other-provisioner@acme-project.iam.gserviceaccount.com"
+  in
+  with_fake_command
+    "gcloud"
+    (gcp_script
+       ~project_policy:(this_binding ^ "\n" ^ other_binding ^ "\n")
+       ~service_accounts:gcp_auth_identity
+       ~roles:gcp_auth_role
+       ())
+  @@ fun () ->
+  let observations =
+    Sol_cli_gcp_absence.observations
+      ~authorization_identities:[ "provisioner project IAM binding", [ this_binding ] ]
+      gcp_target
+      ~cluster_name:"acme-prod"
+  in
+  match find_class "provisioner project IAM binding" observations with
+  | Some (Sol_cli_absence.Present present) ->
+    Windtrap.equal
+      (Windtrap.list Windtrap.string)
+      ~msg:"another target's project binding is not this target's residue"
+      [ this_binding ]
+      present.found
+  | _ -> Windtrap.fail "the target's own project binding was not observed"
 ;;
