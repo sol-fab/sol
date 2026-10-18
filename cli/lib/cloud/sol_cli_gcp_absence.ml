@@ -250,11 +250,28 @@ let checks ~project ~region ~cluster_name =
       ~resource_class:"storage bucket"
       ~identity:(cluster_name ^ "-*")
       (p [ "storage"; "buckets"; "list"; "--format"; "value(name)" ])
-  ; named
+  ; identity_check
       ~resource_class:"persistent disk"
-      ~identity:("gke-" ^ cluster_name ^ "-*")
-      ~prefix:("gke-" ^ cluster_name ^ "-")
-      (p [ "compute"; "disks"; "list"; "--format"; "value(name)" ])
+      ~identity:(Printf.sprintf "a disk labelled goog-k8s-cluster-name=%s" cluster_name)
+      ~attribution:
+        (Within_target
+           (Printf.sprintf
+              "the target's own GKE cluster label: GKE applies goog-k8s-cluster-name=%s \
+               to the disks it owns, and the disk name is not an ownership signal"
+              cluster_name))
+      ~attributable:(fun line ->
+        match String.split_on_char '\t' line with
+        | [ _name; label ] -> String.equal label cluster_name
+        | _ -> false)
+      (p
+         [ "compute"
+         ; "disks"
+         ; "list"
+         ; "--regions"
+         ; region
+         ; "--format"
+         ; "value(name,labels.goog-k8s-cluster-name)"
+         ])
   ; identity_check
       ~resource_class:"firewall rule"
       ~identity:(cluster_name ^ " and gke-" ^ cluster_name ^ "-*")
