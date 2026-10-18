@@ -154,9 +154,18 @@ let verify_destroyed_state state =
          reason)
 ;;
 
-let destroy ~assets ~run_log ~target =
+type destroy_result =
+  { outcome : outcome
+  ; identities : (string * string list) list
+  }
+
+let identities_of_state ~(target : Sol_cli_config.target) state =
+  Sol_cli_provider_registry.authorization_state_identities target.provider ~target state
+;;
+
+let destroy_with_identities ~assets ~run_log ~target =
   if Sol_cli_string.is_blank (capabilities target).authorization_trust_field
-  then Ok Not_declared
+  then Ok { outcome = Not_declared; identities = [] }
   else
     let open Result.Syntax in
     let* dir, backend = prepare_root ~assets target in
@@ -175,9 +184,10 @@ let destroy ~assets ~run_log ~target =
     in
     let* state = read_state dir in
     match destroy_decision ~declared_trust:(declared_trust target) ~state with
-    | Never_established -> Ok Not_declared
+    | Never_established -> Ok { outcome = Not_declared; identities = [] }
     | Destruction_unknown reason -> Error reason
     | Destroy_established ->
+      let identities = identities_of_state ~target state in
       let* vars = destroy_root_vars target in
       let* () =
         Sol_cli_run_log.run_phase run_log ~name:"authorization-destroy" (fun () ->
@@ -191,5 +201,10 @@ let destroy ~assets ~run_log ~target =
       in
       let* state = read_state dir in
       let* () = verify_destroyed_state state in
-      Ok Established
+      Ok { outcome = Established; identities }
+;;
+
+let destroy ~assets ~run_log ~target =
+  destroy_with_identities ~assets ~run_log ~target
+  |> Result.map (fun result -> result.outcome)
 ;;

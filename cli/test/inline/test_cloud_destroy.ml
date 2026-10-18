@@ -237,13 +237,18 @@ let fake_deps
       ?(accept_unreleased = false)
       ?(destroy_substrate = fun () -> Ok ())
       ?(destroy_authorization =
-        fun () -> Ok "authorization: the reconciler identity and its fence were removed")
+        fun () ->
+          Ok ("authorization: the reconciler identity and its fence were removed", []))
       ?(observe_residue = fun ~pre_destroy:_ -> [])
       ?(verify_destruction =
-        fun ~pre_destroy:_
+        fun
+          ~pre_destroy:_
           ~preparation:_
           ~previously_attributed:_
-          ~pre_inventory_failures:_ -> verified_observation)
+          ~pre_inventory_failures:_
+          ~authorization_identities:_
+         ->
+          verified_observation)
       ()
   =
   let calls =
@@ -332,13 +337,20 @@ let fake_deps
           destroy_authorization ())
     ; observe_residue
     ; verify_destruction =
-        (fun ~pre_destroy ~preparation ~previously_attributed ~pre_inventory_failures ->
+        (fun
+          ~pre_destroy
+          ~preparation
+          ~previously_attributed
+          ~pre_inventory_failures
+          ~authorization_identities
+         ->
           calls.verify <- calls.verify + 1;
           verify_destruction
             ~pre_destroy
             ~preparation
             ~previously_attributed
-            ~pre_inventory_failures)
+            ~pre_inventory_failures
+            ~authorization_identities)
     ; report = (fun message -> calls.reports <- message :: calls.reports)
     ; warn = (fun _ -> ())
     }
@@ -490,7 +502,8 @@ let test_a_substrate_the_provider_lost_skips_what_must_reach_it () =
           ~pre_destroy
           ~preparation:_
           ~previously_attributed:_
-          ~pre_inventory_failures:_ ->
+          ~pre_inventory_failures:_
+          ~authorization_identities:_ ->
         verified_pre_destroy := Some pre_destroy;
         verified_observation)
       ()
@@ -888,7 +901,8 @@ let test_cleanup_failure_does_not_decide_absence () =
           ~pre_destroy:_
           ~preparation:_
           ~previously_attributed:_
-          ~pre_inventory_failures:_ ->
+          ~pre_inventory_failures:_
+          ~authorization_identities:_ ->
         { Sol_cli_destroy_verification.state = State_absent
         ; sweep =
             Sweep_ran
@@ -1914,7 +1928,8 @@ let test_an_unreadable_state_observation_is_not_the_refusal () =
           ~pre_destroy:_
           ~preparation:_
           ~previously_attributed:_
-          ~pre_inventory_failures:_ ->
+          ~pre_inventory_failures:_
+          ~authorization_identities:_ ->
         { Sol_cli_destroy_verification.state =
             Sol_cli_destroy_verification.State_unreadable "permission denied"
         ; sweep =
@@ -2133,7 +2148,8 @@ let test_residue_the_state_does_not_own_is_not_absence () =
           ~pre_destroy:_
           ~preparation:_
           ~previously_attributed:_
-          ~pre_inventory_failures:_ ->
+          ~pre_inventory_failures:_
+          ~authorization_identities:_ ->
         { Sol_cli_destroy_verification.state = State_absent
         ; sweep =
             Sweep_ran
@@ -2169,7 +2185,9 @@ let assert_unestablished_verification ~reason verification =
           ~pre_destroy:_
           ~preparation:_
           ~previously_attributed:_
-          ~pre_inventory_failures:_ -> verification)
+          ~pre_inventory_failures:_
+          ~authorization_identities:_ ->
+          verification)
       ()
   in
   let outcome = execute ~deps in
@@ -2394,7 +2412,9 @@ let test_an_external_resource_is_not_residue () =
           ~pre_destroy:_
           ~preparation:_
           ~previously_attributed:_
-          ~pre_inventory_failures:_ -> verification)
+          ~pre_inventory_failures:_
+          ~authorization_identities:_ ->
+          verification)
       ()
   in
   let outcome = execute ~deps in
@@ -3052,7 +3072,8 @@ let test_verification_unknown_is_a_failure () =
           ~pre_destroy:_
           ~preparation:_
           ~previously_attributed:_
-          ~pre_inventory_failures:_ ->
+          ~pre_inventory_failures:_
+          ~authorization_identities:_ ->
         observation_with
           ~state:(Sol_cli_destroy_verification.State_unreadable "permission denied")
           ())
@@ -3094,7 +3115,8 @@ let test_degradation_preserved_when_verification_fails () =
           ~pre_destroy:_
           ~preparation:_
           ~previously_attributed:_
-          ~pre_inventory_failures:_ ->
+          ~pre_inventory_failures:_
+          ~authorization_identities:_ ->
         observation_with
           ~sweep:
             (Sol_cli_destroy_verification.Sweep_ran
@@ -3134,7 +3156,8 @@ let test_missing_retention_fails () =
           ~pre_destroy:_
           ~preparation:_
           ~previously_attributed:_
-          ~pre_inventory_failures:_ ->
+          ~pre_inventory_failures:_
+          ~authorization_identities:_ ->
         observation_with
           ~retention:
             (Retention_violated
@@ -3174,7 +3197,9 @@ let test_fully_clean_is_exit_0 () =
           ~pre_destroy:_
           ~preparation:_
           ~previously_attributed:_
-          ~pre_inventory_failures:_ -> observed)
+          ~pre_inventory_failures:_
+          ~authorization_identities:_ ->
+          observed)
       ()
   in
   let outcome = execute ~deps in
@@ -3847,7 +3872,11 @@ let%test "destruction: pre-destroy identities and failures reach the verdict" =
         Ok ())
       ~verify_destruction:
         (fun
-          ~pre_destroy:_ ~preparation:_ ~previously_attributed ~pre_inventory_failures ->
+          ~pre_destroy:_
+          ~preparation:_
+          ~previously_attributed
+          ~pre_inventory_failures
+          ~authorization_identities:_ ->
         order := "verify" :: !order;
         seen_prior := previously_attributed;
         seen_failures := pre_inventory_failures;
