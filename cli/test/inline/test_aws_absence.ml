@@ -341,12 +341,6 @@ let%test "load balancer inventory: a failed tag read is Unobservable" =
   test_failed_tag_read_is_unobservable ()
 ;;
 
-let observation_of class_name observations =
-  List.find
-    (fun observation -> String.equal (class_of observation) class_name)
-    observations
-;;
-
 (* The cluster root writes `Name = <cluster>` on the VPC and `<cluster>-<suffix>`
    on the subnets; it does not write the cluster tag. The old probe filtered the
    list by the cluster tag before looking at the resource, so a Name-tagged VPC
@@ -662,4 +656,61 @@ let%test "EKS absence: a caller in another account is Unobservable" =
 
 let%test "EKS absence: an empty listing in the target's account is Absent" =
   test_matching_aws_account_can_establish_absence ()
+;;
+
+let with_fake_aws_security_groups ~groups f =
+  let dir = Filename.temp_file "sol-fake-aws-sg-" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o755;
+  let log = Filename.concat dir "calls.log" in
+  let bin = Filename.concat dir "aws" in
+  let script =
+    Printf.sprintf
+      {|#!/bin/sh
+printf '%%s\n' "$*" >> %s
+case "$1 $2" in
+  "sts get-caller-identity") printf '111122223333\n' ;;
+  "ec2 describe-security-groups") printf '%%s' %s ;;
+esac
+exit 0
+|}
+      (Filename.quote log)
+      (Filename.quote groups)
+  in
+  Out_channel.with_open_text bin (fun oc -> output_string oc script);
+  Unix.chmod bin 0o755;
+  let old_path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+  Unix.putenv "PATH" (dir ^ ":" ^ old_path);
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" old_path;
+      (try Sys.remove bin with
+       | _ -> ());
+      (try Sys.remove log with
+       | _ -> ());
+      try Unix.rmdir dir with
+      | _ -> ())
+    (fun () ->
+       let observations =
+         Sol_cli_aws_absence.observations target ~cluster_name:"acme-prod"
+       in
+       f ~log ~observations)
+;;
+
+let%test "AWS EKS security groups are observed independently of the cluster" =
+  with_fake_aws_security_groups
+    ~groups:"acme-prod-cluster-123\nacme-prod-node-456\nacme-prod-rds\n"
+    (fun ~log:_ ~observations ->
+       match
+         List.find_opt
+           (fun observation -> String.equal (class_of observation) "EKS security group")
+           observations
+       with
+       | Some (Sol_cli_absence.Present present) ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the EKS-created security groups are reported"
+           [ "acme-prod-cluster-123"; "acme-prod-node-456" ]
+           present.found
+       | _ -> Windtrap.fail "the EKS-created security groups were not observed")
 ;;

@@ -199,14 +199,11 @@ let destruction provider context =
         (fun ~retention:_ ~pre_destroy:_ ~preparation:_ ->
           Sol_cli_destroy_verification.Retention_not_required byo_no_root)
     ; residue =
-        (fun
-          ?previously_attributed:_
+        (fun ?previously_attributed:_
           ?authorization_identities:_
           ~pre_destroy:_
           ~cluster:_
-          ()
-         ->
-          [])
+          () -> [])
     ; before_substrate_destroy = (fun () -> ())
     }
 ;;

@@ -241,14 +241,11 @@ let fake_deps
           Ok ("authorization: the reconciler identity and its fence were removed", []))
       ?(observe_residue = fun ~pre_destroy:_ -> [])
       ?(verify_destruction =
-        fun
-          ~pre_destroy:_
+        fun ~pre_destroy:_
           ~preparation:_
           ~previously_attributed:_
           ~pre_inventory_failures:_
-          ~authorization_identities:_
-         ->
-          verified_observation)
+          ~authorization_identities:_ -> verified_observation)
       ()
   =
   let calls =
@@ -337,13 +334,11 @@ let fake_deps
           destroy_authorization ())
     ; observe_residue
     ; verify_destruction =
-        (fun
-          ~pre_destroy
+        (fun ~pre_destroy
           ~preparation
           ~previously_attributed
           ~pre_inventory_failures
-          ~authorization_identities
-         ->
+          ~authorization_identities ->
           calls.verify <- calls.verify + 1;
           verify_destruction
             ~pre_destroy
@@ -2186,8 +2181,7 @@ let assert_unestablished_verification ~reason verification =
           ~preparation:_
           ~previously_attributed:_
           ~pre_inventory_failures:_
-          ~authorization_identities:_ ->
-          verification)
+          ~authorization_identities:_ -> verification)
       ()
   in
   let outcome = execute ~deps in
@@ -2413,8 +2407,7 @@ let test_an_external_resource_is_not_residue () =
           ~preparation:_
           ~previously_attributed:_
           ~pre_inventory_failures:_
-          ~authorization_identities:_ ->
-          verification)
+          ~authorization_identities:_ -> verification)
       ()
   in
   let outcome = execute ~deps in
@@ -3198,8 +3191,7 @@ let test_fully_clean_is_exit_0 () =
           ~preparation:_
           ~previously_attributed:_
           ~pre_inventory_failures:_
-          ~authorization_identities:_ ->
-          observed)
+          ~authorization_identities:_ -> observed)
       ()
   in
   let outcome = execute ~deps in

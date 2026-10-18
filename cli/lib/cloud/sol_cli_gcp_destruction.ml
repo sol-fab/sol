@@ -198,13 +198,11 @@ let destruction ctx : Sol_cli_destruction.t =
   ; retention =
       (fun ~retention ~pre_destroy:_ ~preparation:_ -> observe_retention ~retention)
   ; residue =
-      (fun
-        ?(previously_attributed = [])
+      (fun ?(previously_attributed = [])
         ?(authorization_identities = [])
         ~pre_destroy
         ~cluster
-        ()
-       ->
+        () ->
         match
           Sol_cli_destruction.residue_cluster_name
             ~kind:"google_container_cluster"

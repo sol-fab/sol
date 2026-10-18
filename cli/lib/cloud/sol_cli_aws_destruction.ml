@@ -549,13 +549,11 @@ let destruction ctx : Sol_cli_destruction.t =
       (fun ~retention ~pre_destroy ~preparation ->
         observe_retention ~region:ctx.target.region ~retention ~pre_destroy ~preparation)
   ; residue =
-      (fun
-        ?(previously_attributed = [])
+      (fun ?(previously_attributed = [])
         ?(authorization_identities = [])
         ~pre_destroy
         ~cluster
-        ()
-       ->
+        () ->
         match
           Sol_cli_destruction.residue_cluster_name
             ~kind:"aws_eks_cluster"

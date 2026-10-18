@@ -289,8 +289,7 @@ type deps =
   ; release_workloads : unit -> Sol_cli_workload_scope.release
   ; accept_unreleased : bool
   ; destroy_substrate : unit -> (unit, string) result
-  ; destroy_authorization :
-      unit -> (string * (string * string list) list, string) result
+  ; destroy_authorization : unit -> (string * (string * string list) list, string) result
   ; observe_residue : pre_destroy:state_read -> Sol_cli_absence.observation list
   ; verify_destruction :
       pre_destroy:state_read

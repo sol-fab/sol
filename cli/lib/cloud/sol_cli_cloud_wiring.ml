@@ -1476,13 +1476,11 @@ let destroy_deps
     ; observe_residue =
         (fun ~pre_destroy -> destruction.residue ~pre_destroy ~cluster:!cluster_ref ())
     ; verify_destruction =
-        (fun
-          ~pre_destroy
+        (fun ~pre_destroy
           ~preparation
           ~previously_attributed
           ~pre_inventory_failures
-          ~authorization_identities
-         ->
+          ~authorization_identities ->
           verification_observation
             ~destruction
             ~infra_dir
