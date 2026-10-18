@@ -38,7 +38,7 @@ let services =
 
 let write path value = Out_channel.with_open_text path (fun c -> output_string c value)
 
-let with_workspace ?(omission = "") provider fn =
+let with_workspace ?(omission = "") ?(has_database = true) provider fn =
   let root = Filename.temp_dir "sol-contract-" "" in
   let old = Sys.getcwd () in
   Fun.protect
@@ -62,7 +62,7 @@ let with_workspace ?(omission = "") provider fn =
                 typ
                 domain
                 name
-                (if uses then "    uses: [app_db]\n" else "")
+                (if uses && has_database then "    uses: [app_db]\n" else "")
                 (if name = "notify_worker"
                  then "    language: typescript\n"
                  else "    language: ocaml\n"))
@@ -70,7 +70,9 @@ let with_workspace ?(omission = "") provider fn =
        in
        write
          "sol.yml"
-         ("project: fixture\nresources:\n  app_db:\n    type: postgres\nservices:\n"
+         ("project: fixture\n"
+          ^ (if has_database then "resources:\n  app_db:\n    type: postgres\n" else "")
+          ^ "services:\n"
           ^ String.concat "" declarations);
        Targets_fixture.write
          ~target:(target provider)
@@ -105,7 +107,7 @@ let project provider config facts =
   |> field "declaration"
 ;;
 
-let independently_plan config facts =
+let independently_plan ?emit_to config facts =
   let inventory = Sol_cli_workspace_model.services facts in
   let selected = Sol_cli_deploy_selection.select ~image_refs:[] inventory |> get in
   let selected =
@@ -120,7 +122,7 @@ let independently_plan config facts =
         Sol_cli_workspace.workspace_name ~root:facts.Sol_cli_workspace_model.root
     ; registry = "registry.invalid"
     ; sha = "render-test"
-    ; emit_to = None
+    ; emit_to
     ; config
     ; facts
     ; inventory
@@ -243,7 +245,7 @@ let check_complete_plan (config : Sol_cli_config.t) plan workloads =
       (fun (spec : P.service_spec) ->
          let doc = rendered ~plan spec in
          let database =
-           match spec.db_uses_target with
+           match Sol_cli_resource_binding.postgres_use_target spec.database with
            | None -> `Null
            | Some _ ->
              let resource =
@@ -349,7 +351,7 @@ let test_render provider () =
              workloads
          in
          let doc = rendered ~plan spec in
-         if spec.db_uses_target = None
+         if Sol_cli_resource_binding.postgres_use_target spec.database = None
          then
            check
              "nonconsumer declared explicitly"
@@ -400,7 +402,9 @@ let test_render provider () =
            let cm =
              R.ca_configmap_doc
                ~ns:(str (field "namespace" expected))
-               ~target:(Option.get spec.db_ca_target)
+               ~target:
+                 (Option.get
+                    (Sol_cli_resource_binding.postgres_use_ca_target spec.database))
                ~ca_cert:"fixture CA"
              |> fun doc -> Sol_cli_yaml.render [ doc ] |> documents |> List.hd
            in
@@ -420,7 +424,10 @@ let test_render provider () =
                 (matches ca (set "data" (`Assoc [ "ca.crt", `String "fixture CA" ]) cm)))))
       plan.services;
     let id =
-      Sol_cli_database_setup_run.identity_of_config ~workspace:plan.workspace config
+      Sol_cli_database_setup_run.identity
+        ~workspace:plan.workspace
+        ~config
+        ~database:plan.database
     in
     let database = field "database" projection in
     let migration = field "migration" database in
@@ -664,6 +671,200 @@ let test_profile_declaration_is_not_readiness () =
     | Ok _ -> Windtrap.fail "declaration extraction bypassed deployment preflight")
 ;;
 
+let external_config (config : Sol_cli_config.t) =
+  let binding : Sol_cli_config.resource_binding =
+    { ownership = Ownership_external
+    ; store = Some "current-store"
+    ; keys = []
+    ; connection = []
+    ; credentials = [ "ddl", "current/ddl"; "dml", "current/dml" ]
+    }
+  in
+  { config with
+    resources =
+      List.map
+        (fun (r : Sol_cli_config.resource) -> { r with binding = Some binding })
+        config.resources
+  }
+;;
+
+let test_external_execution_projection () =
+  with_workspace "aws" (fun root managed facts ->
+    let config = external_config managed in
+    let direct = independently_plan config facts in
+    let emitted = independently_plan ~emit_to:(root ^ "/gitops") config facts in
+    check
+      "direct apply and GitOps resolve identical external prerequisites"
+      (direct.resource_delivery = emitted.resource_delivery);
+    let dir = root ^ "/emitted" in
+    Sol_cli_fs.mkdir_p dir |> get;
+    Sol_cli_executor.run_plan
+      (Sol_cli_execution.context
+         ~cluster:Sol_cli_kube_destination.local_context
+         ~workspace:emitted.workspace
+         ())
+      ~mode:(Emit_to dir)
+      emitted
+    |> get
+    |> ignore;
+    let delivery = Option.get direct.resource_delivery in
+    let file = R.resource_prerequisites_file_name ~target:delivery.target in
+    let emitted_text =
+      In_channel.with_open_text (dir ^ "/" ^ file) In_channel.input_all
+    in
+    check
+      "emit writes the exact prerequisites direct apply renders"
+      (emitted_text
+       = Sol_cli_yaml.render
+           (Sol_cli_database_setup_run.external_credential_docs delivery));
+    List.iter
+      (fun value ->
+         check
+           ("emitted current authority: " ^ value)
+           (Sol_cli_string.contains ~needle:value emitted_text))
+      [ "current-store"; "current/ddl"; "current/dml" ];
+    List.iter
+      (fun (spec : P.service_spec) ->
+         let text = rendered ~plan:direct spec |> Yojson.Safe.to_string in
+         let consumes = List.mem "app_db" spec.uses in
+         check
+           "external consumer reads DML only"
+           (Sol_cli_string.contains ~needle:(R.dml_creds_name delivery.target) text
+            = consumes);
+         check
+           "no external workload receives a Sol CA or DDL credential"
+           ((not
+               (Sol_cli_string.contains ~needle:(R.ddl_creds_name delivery.target) text))
+            && not
+                 (Sol_cli_string.contains
+                    ~needle:(R.ca_configmap_name delivery.target)
+                    text)))
+      direct.services;
+    let id =
+      Sol_cli_database_setup_run.identity
+        ~workspace:direct.workspace
+        ~config
+        ~database:direct.database
+    in
+    let migration =
+      Sol_cli_manifest.migration_job_doc
+        ~name:"migration"
+        ~namespace:(R.database_namespace id)
+        ~image:"fixture-runner"
+        ~args:[ "apply" ]
+        ~configmap_name:"files"
+        ~ddl_creds_name:(R.ddl_creds_name id.target)
+        ()
+      |> fun d -> Sol_cli_yaml.render [ d ]
+    in
+    check
+      "external migration reads DDL without managed trust"
+      (Sol_cli_string.contains ~needle:(R.ddl_creds_name id.target) migration
+       && not (Sol_cli_string.contains ~needle:(R.ca_configmap_name id.target) migration)
+      );
+    (* Roll back the managed release against the current external selection, while
+       today's service declarations have dropped their database requirements. *)
+    let historical =
+      Sol_cli_release.of_plan
+        ~apply_mode:Sol_cli_release.Direct
+        (independently_plan managed facts)
+    in
+    let restored =
+      Sol_cli_rollback.service_specs_of_release
+        ~database:(id.target, direct.database)
+        historical
+      |> get
+    in
+    List.iter
+      (fun ((spec : P.service_spec), _) ->
+         check
+           "historical consumers use current external trust"
+           (Sol_cli_resource_binding.postgres_use_ca_target spec.database = None);
+         check
+           "historical requirements keep their current target route"
+           (Sol_cli_resource_binding.postgres_use_target spec.database
+            <> None
+            = List.mem "app_db" spec.uses))
+      restored)
+;;
+
+let test_absent_and_local_execution_projection () =
+  List.iter
+    (fun has_database ->
+       with_workspace ~has_database "aws" (fun root config facts ->
+         let inventory = Sol_cli_workspace_model.services facts in
+         let declared = Sol_cli_config.declared_of_config config in
+         let local =
+           Sol_cli_up_execution.local_plan
+             ~requested_scope:"all"
+             ~workspace:"fixture"
+             ~sha:"offline"
+             ~facts
+             ~declared
+             inventory
+           |> Result.map_error P.plan_error_to_string
+           |> get
+         in
+         check
+           "local selection is explicit"
+           (local.database
+            =
+            if has_database
+            then Sol_cli_resource_binding.Local_postgres "app_db"
+            else No_postgres);
+         check "local uses no external delivery" (local.resource_delivery = None);
+         List.iter
+           (fun (spec : P.service_spec) ->
+              let text = rendered ~plan:local spec |> Yojson.Safe.to_string in
+              check
+                "local workload has no managed CA"
+                (Sol_cli_resource_binding.postgres_use_ca_target spec.database = None);
+              check
+                "local consumer uses workspace DML class"
+                (Sol_cli_string.contains ~needle:(R.dml_creds_name "fixture") text
+                 = (has_database && List.mem "app_db" spec.uses)))
+           local.services;
+         if not has_database
+         then (
+           let remote = independently_plan config facts in
+           check
+             "absent cloud database has no setup or delivery"
+             (remote.database = No_postgres && remote.resource_delivery = None);
+           let dir = root ^ "/no-db" in
+           Sol_cli_fs.mkdir_p dir |> get;
+           Sol_cli_executor.run_plan
+             (Sol_cli_execution.context
+                ~cluster:Sol_cli_kube_destination.local_context
+                ~workspace:remote.workspace
+                ())
+             ~mode:(Emit_to dir)
+             remote
+           |> get
+           |> ignore;
+           check
+             "absent database emits no credential prerequisites"
+             (not
+                (Sys.file_exists
+                   (dir
+                    ^ "/"
+                    ^ R.resource_prerequisites_file_name ~target:"dev-aws-region")));
+           let release =
+             Sol_cli_release.of_plan ~apply_mode:Sol_cli_release.Direct remote
+           in
+           let restored =
+             Sol_cli_rollback.service_specs_of_release
+               ~database:("prod-aws-us-east-1", remote.database)
+               release
+             |> get
+           in
+           check
+             "absent rollback invents no database route"
+             (List.for_all
+                (fun ((spec : P.service_spec), _) -> spec.database = No_postgres_use)
+                restored))))
+    [ true; false ]
+;;
+
 let () =
   Windtrap.run
     "product database declaration"
@@ -677,6 +878,12 @@ let () =
         ; Windtrap.test "GCP rendered/runtime contract" (test_render "gcp")
         ; Windtrap.test "complete target selection" test_selection
         ; Windtrap.test "external binding facts preserve consumers" test_external
+        ; Windtrap.test
+            "external direct, migration, GitOps and rollback paths"
+            test_external_execution_projection
+        ; Windtrap.test
+            "local and absent execution paths"
+            test_absent_and_local_execution_projection
         ]
     ]
 ;;

@@ -124,7 +124,7 @@ def check(root: pathlib.Path) -> list[str]:
         )
     if (
         "managed_database_workloads" not in substrate
-        or "match spec.db_ca_target with" not in substrate
+        or "match Sol_cli_resource_binding.postgres_use_ca_target spec.database with" not in substrate
     ):
         problems.append(
             "cli/lib/deploy/sol_cli_substrate.ml: the allowance is not scoped to the units that "

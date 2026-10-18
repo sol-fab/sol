@@ -172,6 +172,29 @@ consumer that branched on ownership would be the dual-interpretation this model 
 
 ### 3.3 Ownership transitions
 
+The existing binding resolver normalizes PostgreSQL into one explicit selection:
+absent, managed, external with a store and fixed DDL/DML paths, or local development.
+Planning, database identity, setup, credential delivery and rollback consume that selection.
+Each workload carries one database-consumption value whose credential target and trust
+requirement are projected together; independently optional credential and CA targets are
+not maintained. Rollback applies historical `uses` to the current selection. It validates the
+current binding before acquiring the rollback lease, refreshes externally delivered DDL/DML
+classes from that binding, and waits for synchronization before reading migration history
+or restoring workloads. The DML destinations come from the release's historical consumers.
+An omitted or removed historical resource requirement refuses the rollback, even when
+another database is available. Explicit target migrations likewise refresh their DDL
+class from the current binding before executing; they do not rewrite workload DML classes.
+A target with no PostgreSQL selection and no migration history needs no SQL observation;
+explicit migration commands against an absent database refuse before submitting a Job.
+
+Managed setup publishes its CA. External and local delivery retain their connection's
+trust contract without inventing a Sol CA; this does not establish that an external
+database needs no private trust material or add support for a new trust-delivery mechanism.
+External PostgreSQL currently accepts complete URL credentials in the DDL/DML classes only.
+Additional `connection`, `keys`, or credential-class inputs are rejected during selection,
+including separate private CA sources, because the current delivery cannot honor them.
+The selection does not change password authority or database ownership transitions.
+
 **Changing a binding never authorizes destroying or relinquishing the previous database.** With
 `count = var.create_rds ? 1 : 0`, switching an existing resource to externally managed would take its
 database out of Terraform's desired configuration. v1 **refuses an ownership transition for an existing

@@ -231,3 +231,17 @@
    %{dep:../bin/database_contract_projection.exe}
    %{dep:../../internal/qualification/database-contract-binding.py}
    %{dep:../../internal/tooling/scripts/build-release-bundle.sh})))
+
+(rule
+ (alias runtest-lifecycle)
+ (deps
+  ../bin/main.exe
+  print_release_record.exe
+  test_postgres_rollback.sh
+  (source_tree ../../internal/ci/lifecycle_fakes))
+ (action
+  (run
+   bash
+   %{dep:test_postgres_rollback.sh}
+   %{dep:../bin/main.exe}
+   %{dep:print_release_record.exe})))

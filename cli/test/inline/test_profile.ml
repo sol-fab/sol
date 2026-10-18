@@ -221,6 +221,7 @@ let plan_for ?(services = [ charge_svc ]) ?(image_refs = []) ?scope target =
     write (Filename.concat s.dir "sol.toml") "");
   match
     Sol_cli_deployment_plan.of_services_result
+      ~database:Sol_cli_resource_binding.No_postgres
       ~facts:(facts ())
       ~workspace:"pluto"
       ~env
@@ -257,6 +258,7 @@ let node_failure_tolerant_plan target =
     "[infra.scale]\nreplicas = 2\navailability = \"node-failure-tolerant\"\n";
   match
     Sol_cli_deployment_plan.of_services_result
+      ~database:Sol_cli_resource_binding.No_postgres
       ~facts:(facts ())
       ~workspace:"pluto"
       ~env
@@ -273,6 +275,7 @@ let availability_rejection service ~toml =
   write (Filename.concat service.dir "sol.toml") toml;
   match
     Sol_cli_deployment_plan.of_services_result
+      ~database:Sol_cli_resource_binding.No_postgres
       ~facts:(facts ())
       ~workspace:"pluto"
       ~env

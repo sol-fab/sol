@@ -166,14 +166,19 @@ let svc_spec : Sol_cli_deployment_plan.service_spec =
   ; extra_labels = []
   ; progressive_delivery = None
   ; uses = []
-  ; db_uses_target = None
-  ; db_ca_target = None
+  ; database = Sol_cli_resource_binding.No_postgres_use
   }
 ;;
 
 (* 2b: a unit that consumes the target's database reads `POSTGRES_URL` from that target's
    DML class Secret, whatever the database's ownership. *)
-let db_consumer_spec = { svc_spec with db_uses_target = Some "prod-aws-us-east-1" }
+let db_consumer_spec =
+  { svc_spec with
+    database =
+      Sol_cli_resource_binding.Postgres_use
+        { target = "prod-aws-us-east-1"; trust = Connection_trust }
+  }
+;;
 
 let db_consumer_dml_creds =
   Sol_cli_database_setup_render.dml_creds_name "prod-aws-us-east-1"
@@ -210,8 +215,7 @@ let worker_spec : Sol_cli_deployment_plan.service_spec =
   ; extra_labels = []
   ; progressive_delivery = None
   ; uses = []
-  ; db_uses_target = None
-  ; db_ca_target = None
+  ; database = Sol_cli_resource_binding.No_postgres_use
   }
 ;;
 
@@ -246,8 +250,7 @@ let fn_spec : Sol_cli_deployment_plan.service_spec =
   ; extra_labels = []
   ; progressive_delivery = None
   ; uses = []
-  ; db_uses_target = None
-  ; db_ca_target = None
+  ; database = Sol_cli_resource_binding.No_postgres_use
   }
 ;;
 

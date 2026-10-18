@@ -39,7 +39,7 @@ let workload_of_owned (o : Sol_cli_release_id.owned_object) : Sol_cli_release_id
   ; memory = "128Mi"
   ; extra_labels = []
   ; volumes = []
-  ; rollout = "none"
+  ; rollout = "rolling_update"
   ; ingress_host = None
   ; ingress_path = None
   ; cluster_issuer = "letsencrypt-prod"
@@ -50,7 +50,8 @@ let workload_of_owned (o : Sol_cli_release_id.owned_object) : Sol_cli_release_id
 let () =
   let workspace = ref None
   and out = ref None
-  and owned = ref [] in
+  and owned = ref []
+  and uses = ref [] in
   let rec parse = function
     | [] -> ()
     | "--workspace" :: value :: rest ->
@@ -58,6 +59,9 @@ let () =
       parse rest
     | "--out" :: value :: rest ->
       out := Some value;
+      parse rest
+    | "--uses" :: value :: rest ->
+      uses := value :: !uses;
       parse rest
     | "--own" :: value :: rest ->
       owned := owned_of_arg value :: !owned;
@@ -76,7 +80,9 @@ let () =
     | None -> fail "--out is required"
   in
   let owned = List.rev !owned in
-  let specs = List.map workload_of_owned owned in
+  let specs =
+    List.map (fun o -> { (workload_of_owned o) with uses = List.rev !uses }) owned
+  in
   (* A direct deploy: every workload was applied by this release, so the id is the plain
      content id and [of_recorded_boundary] rederives it (see Sol_cli_release_id). *)
   let release_id =

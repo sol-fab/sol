@@ -62,8 +62,7 @@ let test_run_without_cmdliner () =
           ; declared = None
           ; platform_shape = Sol_cli_profile.Local
           ; target = None
-          ; target_database = None
-          ; provisioned_database = None
+          ; database = Sol_cli_resource_binding.No_postgres
           }
         ~mode:(Sol_cli_executor.Emit_to emit_dir)
         ~facts:(facts ())

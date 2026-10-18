@@ -728,21 +728,12 @@ let run_database_setup_step
   let target_path =
     planning.Sol_cli_deploy_selection.Target_plan_input.config.target.name
   in
-  let* bindings =
-    Sol_cli_resource_binding.resolve planning.config
-    |> Result.map_error (fun message ->
-      Printf.sprintf
-        "could not resolve resource ownership for the database setup step: %s"
-        message)
-  in
-  (* **One derivation, and the caller does not sanitize a target itself.** `identity_of_config`
-     resolves the target from the config it is given and the resource from the same config, so
-     "which resource is this target's database" is answered in one place rather than twice
-     (#1424). The identity is not a function of the selected services. *)
+  let selection = plan.Sol_cli_deployment_plan.database in
   let database =
-    Sol_cli_database_setup_run.identity_of_config
+    Sol_cli_database_setup_run.identity
       ~workspace:planning.workspace
-      planning.config
+      ~config:planning.config
+      ~database:selection
   in
   let target = database.Sol_cli_database_setup_render.target in
   (* The namespace and the declaration belong to the target's database operations, so they are
@@ -760,8 +751,10 @@ let run_database_setup_step
       (Sol_cli_database_setup_render.database_identity_report database);
     Ok ()
   in
-  match Sol_cli_resource_binding.provisioned_database bindings with
-  | None ->
+  match selection with
+  | Sol_cli_resource_binding.No_postgres
+  | Sol_cli_resource_binding.External_postgres _
+  | Sol_cli_resource_binding.Local_postgres _ ->
     (* No Sol-provisioned database: the target either binds its database externally — then
        the class Secrets are still delivered, by ESO, from the store the delivery names — or
        has no database and there is nothing to do. The delivery was resolved with the plan
@@ -772,7 +765,7 @@ let run_database_setup_step
      | Some delivery ->
        let* () = establish () in
        Sol_cli_database_setup_run.run_external_credentials ~ctx delivery)
-  | Some (provisioned : Sol_cli_resource_binding.t) ->
+  | Sol_cli_resource_binding.Managed_postgres _ ->
     let* () = establish () in
     let provider =
       planning.Sol_cli_deploy_selection.Target_plan_input.config.target.provider
@@ -886,7 +879,7 @@ let run_database_setup_step
     let dml_namespaces =
       Sol_cli_database_setup_run.dml_namespaces
         ~declared:(Some declared)
-        ~binding:provisioned
+        ~database:selection
         plan
     in
     let ddl_secret =

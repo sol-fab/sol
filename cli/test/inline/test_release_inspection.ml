@@ -66,8 +66,7 @@ let service
   ; extra_labels = []
   ; progressive_delivery
   ; uses = []
-  ; db_uses_target = None
-  ; db_ca_target = None
+  ; database = Sol_cli_resource_binding.No_postgres_use
   }
 ;;
 
@@ -106,6 +105,7 @@ let hosted_plan ?progressive_delivery () =
   ; profile = None
   ; contract = []
   ; contract_changes = []
+  ; database = Sol_cli_resource_binding.No_postgres
   ; resource_delivery = None
   }
 ;;

@@ -170,8 +170,7 @@ let emit_resource_prerequisites ~dir (plan : Sol_cli_deployment_plan.t) =
   match plan.Sol_cli_deployment_plan.resource_delivery with
   | None -> Ok ()
   | Some delivery ->
-    let open Result.Syntax in
-    let* docs = Sol_cli_database_setup_run.external_credential_docs delivery in
+    let docs = Sol_cli_database_setup_run.external_credential_docs delivery in
     let name =
       Sol_cli_database_setup_render.resource_prerequisites_file_name
         ~target:delivery.target

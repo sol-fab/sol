@@ -16,7 +16,7 @@ let namespaces (plan : Sol_cli_deployment_plan.t) : string list =
 ;;
 
 (** The units that declared the database *this target provisions*, and only those. The signal
-    is [db_ca_target] — the same field the renderer uses to mount the setup step's CA
+    is [database]'s published-CA target — the same field the renderer uses to mount the setup step's CA
     ConfigMap — so a unit that consumes no database is never widened. A unit that consumes an
     externally bound database is also absent: Sol does not own that destination and therefore
     has no provider-derived range for it. That external-egress contract is deliberately not
@@ -25,7 +25,7 @@ let managed_database_workloads (plan : Sol_cli_deployment_plan.t) : (string * st
   =
   plan.services
   |> List.filter_map (fun (spec : Sol_cli_deployment_plan.service_spec) ->
-    match spec.db_ca_target with
+    match Sol_cli_resource_binding.postgres_use_ca_target spec.database with
     | None -> None
     | Some _ ->
       Some

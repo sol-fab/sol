@@ -67,27 +67,8 @@ type service_spec =
   ; called_by : service_call list
   ; extra_labels : (string * string) list
   ; progressive_delivery : Sol_cli_toml.progressive_delivery option
-  ; (* 2b: the target whose postgres resource this unit consumes, whatever its ownership.
-       The routing signal is the capability — this unit declared the resource in `uses:` —
-       not the key name, so both a Sol-provisioned and an externally bound database route
-       the unit's `POSTGRES_URL` to `<target>-dml-creds`. The renderer derives that Secret's
-       name from it ({!Sol_cli_database_setup_render.dml_creds_name}), so the plan never
-       names an object the renderer owns. [None] for a unit that consumes no database, or
-       one that merely declares `POSTGRES_URL` as an application secret: that key stays
-       unit-scoped. *)
-    db_uses_target : string option
-    (** What this unit **declared** it uses (`uses: [app_db]`) -- the requirement, not its
-        resolution. The release record carries it so a rollback re-resolves it against the
-        *current* target's authorities and bindings rather than against today's declarations
-        (#1422). *)
+  ; database : Sol_cli_resource_binding.postgres_use
   ; uses : string list
-  ; (* 2d: the target whose *Sol-provisioned* database this unit consumes, if any. The CA
-       ConfigMap exists only where Sol's setup step writes it, so this stays [None] for a
-       consumer of an externally bound database — its anchor is not Sol's to publish. The
-       renderer derives the ConfigMap's name from it
-       ({!Sol_cli_database_setup_render.ca_configmap_name}), so the plan never names an
-       object the renderer owns. *)
-    db_ca_target : string option
   }
 
 type profile_claim =
@@ -139,7 +120,7 @@ type resource_delivery =
   { target : string
   ; resource : string
   ; store : string
-  ; credentials : (string * string) list
+  ; credentials : Sol_cli_resource_binding.postgres_credentials
   ; migration_namespace : string
   ; dml_namespaces : string list
   }
@@ -158,10 +139,12 @@ type t =
   ; profile : profile_claim option
   ; contract : Sol_cli_release_id.contract_fact list
   ; contract_changes : contract_change list
+  ; database : Sol_cli_resource_binding.postgres
   ; resource_delivery : resource_delivery option
   }
 
 type plan_error =
+  | Invalid_resource_binding of string
   | Toml_error of Sol_cli_toml.parse_error
   | Invalid_persistence of
       { workload : string
@@ -699,18 +682,6 @@ let service_uses_resource declared service_name resource_name =
        List.exists (fun ref -> resource_name_of_ref ref = Some resource_name) service.uses)
 ;;
 
-(** The one rule for the reader's routing signal: a unit consumes *the target's* database
-    when it declared `uses` of the resource the target resolved as its database. The signal
-    is the capability, not the key name — a unit that merely declares `POSTGRES_URL` gets
-    [None] and keeps it unit-scoped. Both the plan and `sol secret set` ask this rule, so
-    neither can route on a different notion of "consumer". *)
-let db_uses_target declared ~target ~target_database service_name =
-  match target, target_database with
-  | Some target, Some resource when service_uses_resource declared service_name resource
-    -> Some target
-  | _ -> None
-;;
-
 let derive_consumer_groups ?declared workspace services =
   List.filter_map
     (fun s ->
@@ -746,6 +717,7 @@ let image_ref ~registry ~workspace ~k8s_name ~tag =
 ;;
 
 let plan_error_to_string = function
+  | Invalid_resource_binding message -> message
   | Toml_error err -> Sol_cli_toml.parse_error_to_string err
   | Invalid_persistence { workload; message } ->
     Printf.sprintf "workload %S has invalid persistence: %s" workload message
@@ -1061,6 +1033,17 @@ let profile_claim ~declared ~services ~topics ~migrations ~whole_workspace =
       })
 ;;
 
+(* Planning and secret writes use current declarations; rollback supplies recorded
+   requirements. All three project routing and trust from the same selection. *)
+let database_for_uses ~target ~database uses =
+  match target, Sol_cli_resource_binding.postgres_resource database with
+  | Some target, Some resource
+    when List.exists (fun ref -> resource_name_of_ref ref = Some resource) uses ->
+    Sol_cli_resource_binding.Postgres_use
+      { target; trust = Sol_cli_resource_binding.postgres_trust database }
+  | _ -> Sol_cli_resource_binding.No_postgres_use
+;;
+
 let of_services_result
       ~workspace
       ~env
@@ -1071,29 +1054,16 @@ let of_services_result
       ?(image_refs = [])
       ?inventory
       ?target
-      ?target_database
-      ?provisioned_database
+      ~database
       services
   =
-  (* 2b: [db_uses_target] is the reader's routing signal — the unit consumes *the target's*
-     postgres resource, whatever its ownership — so `POSTGRES_URL` from `uses:` reads
-     `<target>-dml-creds` for a Sol-provisioned and an externally bound database alike. A
-     unit that declares `POSTGRES_URL` without consuming a resource gets [None] and keeps it
-     unit-scoped. [target_database] defaults to [provisioned_database] so a Sol-provisioned
-     target's consumers route without a caller restating the resource. *)
-  let target_database =
-    match target_database with
-    | Some _ -> target_database
-    | None -> provisioned_database
-  in
-  (* 2d: a unit gets a CA mount only when it consumes the database *this target provisions*:
-     the ConfigMap is what Sol's setup step writes, so an externally bound database has none
-     to mount, and mounting one the deploy will not publish would wedge the pod. *)
-  let db_ca_target service_name =
-    match target, provisioned_database with
-    | Some target, Some resource when service_uses_resource declared service_name resource
-      -> Some target
-    | _ -> None
+  let* () =
+    match target, Sol_cli_resource_binding.postgres_resource database with
+    | None, Some _ ->
+      Error
+        (Invalid_resource_binding
+           "a resolved PostgreSQL selection requires its target identity")
+    | _ -> Ok ()
   in
   let resolution_units =
     match inventory with
@@ -1294,9 +1264,11 @@ let of_services_result
       ; called_by = []
       ; extra_labels = toml.extra_labels
       ; progressive_delivery = toml.progressive_delivery
-      ; db_uses_target =
-          db_uses_target declared ~target ~target_database svc.Sol_cli_manifest.name
-      ; db_ca_target = db_ca_target svc.Sol_cli_manifest.name
+      ; database =
+          database_for_uses
+            ~target
+            ~database
+            (declared_uses declared svc.Sol_cli_manifest.name)
       ; (* What this unit **declared** it uses. Captured here, where the workspace's declaration
            is in scope, so the release record can carry it and a rollback can re-resolve it
            against the current target (#1422). *)
@@ -1381,6 +1353,7 @@ let of_services_result
           ~whole_workspace:(String.equal requested_scope "workspace")
     ; contract
     ; contract_changes = []
+    ; database
     ; resource_delivery = None
     }
 ;;

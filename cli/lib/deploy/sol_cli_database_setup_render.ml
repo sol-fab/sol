@@ -198,9 +198,9 @@ let job_name target = setup_name target
 
     The class name *is* the output Secret's name suffix: one definition serves the Sol
     writer, the external writer and the reader, so none of them can drift. *)
-let ddl_class = "ddl"
+let ddl_class = Sol_cli_resource_binding.ddl_class
 
-let dml_class = "dml"
+let dml_class = Sol_cli_resource_binding.dml_class
 
 (** Every class this contract has. Delivery must cover all of them: the reader asks for each
     one and must not learn from a missing Secret that the target is externally bound. *)

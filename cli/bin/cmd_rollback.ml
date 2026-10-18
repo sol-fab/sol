@@ -64,10 +64,15 @@ let declared_external_secrets_of_release (release : Sol_cli_release.t) =
           }))
 ;;
 
-let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
+let run_locked ~lease ~ctx ~local ~database_selection ?config ~workspace ~facts release_id
   : (unit, string) result
   =
   let* release = Sol_cli_release_store.get ~ctx ~workspace ~release_id in
+  let* () =
+    match config with
+    | None -> Ok ()
+    | Some config -> Sol_cli_rollback.validate_resource_requirements ~config release
+  in
   Printf.printf "Rolling back %s to release %s\n%!" workspace release.release_id;
   let current_migrations =
     Sol_cli_workspace_model.migration_files facts
@@ -91,22 +96,17 @@ let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
      provisions that database. A local rollback has no target binding and keeps the
      workspace runtime Secret path. *)
   (* Which namespace the migration read runs in, and -- against a target -- the target whose
-     class Secret names it reads. **One** `identity_of_config` call supplies both, so the
+     class Secret names it reads. **One** resolved selection supplies both, so the
      namespace and the Secret names cannot disagree (#1424). A local rollback has no target;
      {!Sol_cli_migration_job.local_namespace} explains why its namespace stays inventory-derived. *)
   let* namespace, target, provisions =
     match config with
     | Some config ->
-      let database = Sol_cli_database_setup_run.identity_of_config ~workspace config in
-      (* A different question from the identity's ("which resource is the target's database"):
-         this asks whether Sol provisions it, and only the CA mount depends on the answer. It
-         resolves the config again rather than adding a second public shape for the identity,
-         which is the duplication #1424 removed. `resolve` is pure. *)
-      let provisions =
-        match Sol_cli_resource_binding.resolve config with
-        | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
-        | Error _ -> false
+      let selection = database_selection in
+      let database =
+        Sol_cli_database_setup_run.identity ~workspace ~config ~database:selection
       in
+      let provisions = Sol_cli_resource_binding.postgres_is_managed selection in
       Ok
         ( Sol_cli_database_setup_render.database_namespace database
         , Some database.Sol_cli_database_setup_render.target
@@ -128,19 +128,64 @@ let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
         then Some (Sol_cli_database_setup_render.ca_configmap_name target)
         else None )
   in
+  let database = Option.map (fun target -> target, database_selection) target in
+  (* Reconstruct historical consumers against this run's already resolved target.
+     The transaction uses the same pure projection; credential delivery needs its
+     namespaces before the migration read, which is the first DDL consumer. *)
+  let* restored = Sol_cli_rollback.service_specs_of_release ?database release in
+  let deliver_credentials () =
+    match database_selection, target with
+    | Sol_cli_resource_binding.External_postgres binding, Some target ->
+      let dml_namespaces =
+        restored
+        |> List.filter_map (fun ((spec : Sol_cli_deployment_plan.service_spec), _) ->
+          match spec.database with
+          | Sol_cli_resource_binding.No_postgres_use -> None
+          | Postgres_use _ ->
+            Some (Sol_cli_deployment_plan.namespace_to_string spec.namespace))
+        |> List.sort_uniq String.compare
+      in
+      let delivery =
+        Sol_cli_database_setup_run.resource_delivery
+          ~target
+          ~resource:binding.resource
+          ~migration_namespace:namespace
+          ~dml_namespaces
+          binding
+      in
+      let* () = Sol_cli_boundary_lease.ensure_held lease in
+      let* () =
+        Sol_cli_substrate.ensure
+          ~ctx
+          ~namespaces:(namespace :: dml_namespaces)
+          ~workloads:[]
+      in
+      Sol_cli_database_setup_run.run_external_credentials ~ctx delivery
+    | _ -> Ok ()
+  in
   let deps : Sol_cli_rollback.transaction_deps =
-    { config
+    { database
     ; ensure_held = (fun () -> Sol_cli_boundary_lease.ensure_held lease)
     ; applied_migrations =
         (fun () ->
-          Sol_cli_migration_gate.read_applied
-            ~ctx
-            ~dir:migrations_dir
-            ~table:(Sol_cli_migration.table_name ~workspace)
-            ~namespace
-            ~ddl_creds_name
-            ?ca_configmap
-            ())
+          match config, database_selection with
+          | Some _, Sol_cli_resource_binding.No_postgres ->
+            if release.migrations = [] && current_migrations = []
+            then Ok []
+            else
+              Error
+                "the current target declares no PostgreSQL resource, so its migration \
+                 history cannot be established"
+          | _ ->
+            let* () = deliver_credentials () in
+            Sol_cli_migration_gate.read_applied
+              ~ctx
+              ~dir:migrations_dir
+              ~table:(Sol_cli_migration.table_name ~workspace)
+              ~namespace
+              ~ddl_creds_name
+              ?ca_configmap
+              ())
     ; apply =
         apply_specs
           ~ensure_held:(fun () -> Sol_cli_boundary_lease.ensure_held lease)
@@ -210,13 +255,28 @@ let run ~ctx ?(local = false) ?config release_id =
   let workspace = workspace_name () in
   Sol_cli_exit.of_msg
     (let* facts = Sol_cli_workspace_model.load_cwd () in
+     (* Validate the current binding before acquiring a lease or mutating the cluster. *)
+     let* database_selection =
+       match config with
+       | None -> Ok Sol_cli_resource_binding.No_postgres
+       | Some config -> Sol_cli_resource_binding.resolve_postgres config
+     in
      Sol_cli_boundary_lease.with_boundary_lease
        ~ctx
        ~workspace
        ~holder:Sol_cli_boundary_lease.Rollback
        ~ttl:ttl_s
        ~wait_s
-       (fun lease -> run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id))
+       (fun lease ->
+          run_locked
+            ~lease
+            ~ctx
+            ~local
+            ~database_selection
+            ?config
+            ~workspace
+            ~facts
+            release_id))
 ;;
 
 let release_id_arg =

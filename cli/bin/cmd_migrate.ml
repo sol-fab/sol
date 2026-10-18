@@ -106,59 +106,89 @@ let run_migration_job ~ctx ~namespace (job : Sol_cli_migration_job.job) =
   finish_job outcome
 ;;
 
-let active_services path =
-  let* cfg =
-    Sol_cli_config.load_for_target ~target:path
-    |> Result.map_error Sol_cli_config.error_to_string
-  in
-  Ok (List.map (fun (s : Sol_cli_config.service) -> s.name) (Sol_cli_config.services cfg))
-;;
+type target_migration =
+  { workspace : string
+  ; services : Sol_cli_manifest.service list
+  ; database : Sol_cli_database_setup_render.database_identity
+  ; selection : Sol_cli_resource_binding.postgres
+  ; ddl_creds_name : string
+  ; ca_configmap : string option
+  ; target : string
+  }
 
 (* 2b: what the in-cluster migration paths need, computed once — the target's services and
    the class Secret the Job reads. The reader never branches on ownership; only the CA mount
    does, because an externally bound database publishes no Sol CA ConfigMap. *)
-let in_cluster_context ~target_path ~active =
+let in_cluster_context ~target_path =
   let workspace = Sol_cli_workspace.current_name () in
   let* facts = Sol_cli_workspace_model.load_cwd () in
+  let* config =
+    Sol_cli_config.load_for_target ~target:target_path
+    |> Result.map_error Sol_cli_config.error_to_string
+  in
+  let active =
+    List.map (fun (s : Sol_cli_config.service) -> s.name) (Sol_cli_config.services config)
+  in
   let services =
     Sol_cli_migration_job.services_of_target
       ~all:(Sol_cli_workspace_model.services facts)
       ~active
   in
-  let* config =
-    Sol_cli_config.load_for_target ~target:target_path
-    |> Result.map_error Sol_cli_config.error_to_string
-  in
   (* The database identity, resolved once here so the dry run, the apply and the migration Job
      all use the same namespace and the same target string (#1424). *)
-  let database = Sol_cli_database_setup_run.identity_of_config ~workspace config in
-  let target = database.Sol_cli_database_setup_render.target in
-  (* Two resolutions of one config, deliberately: `identity_of_config` answers "which resource
-     is this target's database", and this answers the different question "does Sol provision
-     it". `resolve` is pure, and collapsing them would mean a second public shape for the
-     identity (which is the duplication #1424 removed). An unresolvable graph refuses: reading
-     it as "not Sol-provisioned" would skip the CA mount on the migration Job and let it fail
-     as if the database belonged to someone else (#1469). *)
-  let* provisions_database =
-    Sol_cli_resource_binding.provisions_of_config config ~typ:"postgres"
-    |> Result.map_error (fun message ->
-      Printf.sprintf
-        "cannot determine whether this target provisions its database, so the migration \
-         Job cannot decide whether to mount its CA ConfigMap: %s"
-        message)
+  let* selection = Sol_cli_resource_binding.resolve_postgres config in
+  let* () =
+    match selection with
+    | Sol_cli_resource_binding.No_postgres ->
+      Error
+        (Printf.sprintf
+           "target %s declares no PostgreSQL resource; migrations require an explicit \
+            database binding"
+           config.target.name)
+    | _ -> Ok ()
   in
+  let database =
+    Sol_cli_database_setup_run.identity ~workspace ~config ~database:selection
+  in
+  let target = database.Sol_cli_database_setup_render.target in
+  let provisions_database = Sol_cli_resource_binding.postgres_is_managed selection in
   let ca_configmap =
     if provisions_database
     then Some (Sol_cli_database_setup_render.ca_configmap_name target)
     else None
   in
   Ok
-    ( workspace
-    , services
-    , database
-    , Sol_cli_database_setup_render.ddl_creds_name target
-    , ca_configmap
-    , config.target.name )
+    { workspace
+    ; services
+    ; database
+    ; selection
+    ; ddl_creds_name = Sol_cli_database_setup_render.ddl_creds_name target
+    ; ca_configmap
+    ; target = config.target.name
+    }
+;;
+
+(* Explicit migrations resolve the current authority too. Only their DDL class
+   is delivered; application credentials remain a deploy/rollback responsibility. *)
+let prepare_migration_credentials ~ctx context =
+  match context.selection with
+  | Sol_cli_resource_binding.External_postgres binding ->
+    let migration_namespace =
+      Sol_cli_database_setup_render.database_namespace context.database
+    in
+    let* () =
+      Sol_cli_substrate.ensure ~ctx ~namespaces:[ migration_namespace ] ~workloads:[]
+    in
+    let delivery =
+      Sol_cli_database_setup_run.resource_delivery
+        ~target:context.database.target
+        ~resource:context.database.resource
+        ~migration_namespace
+        ~dml_namespaces:[]
+        binding
+    in
+    Sol_cli_database_setup_run.run_external_credentials ~ctx delivery
+  | _ -> Ok ()
 ;;
 
 let print_pending_files ~dir applied files =
@@ -174,10 +204,10 @@ let print_pending_files ~dir applied files =
    status Job the deploy gate uses, then prints the local files that Job reports pending. It
    never connects from the operator's machine, so it needs no credential in the operator's
    environment — the Job reads the target's DDL class Secret. *)
-let run_dry_run_in_cluster ~ctx ~dir ~table ~target_path ~active =
-  let* _workspace, _services, database, ddl_creds_name, ca_configmap, _target =
-    in_cluster_context ~target_path ~active
-  in
+let run_dry_run_in_cluster ~ctx ~dir ~table ~target_path =
+  let* context = in_cluster_context ~target_path in
+  let { database; ddl_creds_name; ca_configmap; _ } = context in
+  let* () = prepare_migration_credentials ~ctx context in
   let namespace = Sol_cli_database_setup_render.database_namespace database in
   let* applied =
     Sol_cli_migration_gate.read_applied
@@ -194,13 +224,12 @@ let run_dry_run_in_cluster ~ctx ~dir ~table ~target_path ~active =
   Ok ()
 ;;
 
-let run_apply_in_cluster ~ctx ~dir ~table ~target_path ~active =
-  let* workspace, services, database, ddl_creds_name, ca_configmap, target =
-    in_cluster_context ~target_path ~active
+let run_apply_in_cluster ~ctx ~dir ~table ~target_path =
+  let* context = in_cluster_context ~target_path in
+  let { workspace; services; database; ddl_creds_name; ca_configmap; target; _ } =
+    context
   in
   let namespace = Sol_cli_database_setup_render.database_namespace database in
-  let* () = Sol_cli_substrate.ensure ~ctx ~namespaces:[ namespace ] ~workloads:[] in
-  Sol_cli_migration_gate.reconcile_operator_bindings ~ctx ~workspace ~services;
   let* files = Sol_cli_migration_gate.migration_files dir in
   if files = []
   then (
@@ -220,6 +249,9 @@ let run_apply_in_cluster ~ctx ~dir ~table ~target_path ~active =
          message);
     Ok ())
   else
+    let* () = prepare_migration_credentials ~ctx context in
+    let* () = Sol_cli_substrate.ensure ~ctx ~namespaces:[ namespace ] ~workloads:[] in
+    Sol_cli_migration_gate.reconcile_operator_bindings ~ctx ~workspace ~services;
     let* image = Sol_cli_migration_job.runner_image () in
     let* job =
       Sol_cli_migration_job.submit
@@ -317,14 +349,11 @@ let run_apply ~ctx dir table dry_run target =
     | Some path ->
       (* 2b: no operator-held POSTGRES_URL. A target's pending set is read by an in-cluster
          read-only status Job and compared with the local files. *)
-      let* active = active_services path in
-      run_dry_run_in_cluster ~ctx ~dir ~table ~target_path:path ~active)
+      run_dry_run_in_cluster ~ctx ~dir ~table ~target_path:path)
   else (
     match target with
     | None -> run_apply_local ~ctx dir table
-    | Some path ->
-      let* active = active_services path in
-      run_apply_in_cluster ~ctx ~dir ~table ~target_path:path ~active)
+    | Some path -> run_apply_in_cluster ~ctx ~dir ~table ~target_path:path)
 ;;
 
 let run_apply_term dir table dry_run target =
@@ -426,11 +455,11 @@ let target_arg =
       "Deployment target path: <env>/<provider>/<region>. When given, migrations run \
        from a one-shot Kubernetes Job inside the target's cluster instead of connecting \
        directly from this machine — required for any real deployment whose database \
-       (e.g. RDS) isn't reachable from outside its network by design (FRIC-012). \
-       **Requires a deploy to have run first**: the Job reads the target's DDL \
-       credential from `<target>-ddl-creds`, which the deploy's database setup step \
-       writes. Omit for the local dev cluster, which remains directly reachable via \
-       kubectl port-forward."
+       (e.g. RDS) isn't reachable from outside its network by design (FRIC-012). The Job \
+       reads `<target>-ddl-creds`. A managed database requires a prior deploy to \
+       establish its DDL credential and CA; an external binding synchronizes its current \
+       DDL source before the Job runs. Omit for the local dev cluster, which remains \
+       directly reachable via kubectl port-forward."
 ;;
 
 let apply_cmd =

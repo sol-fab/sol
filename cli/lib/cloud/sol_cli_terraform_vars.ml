@@ -42,10 +42,10 @@ let of_config ~workspace cfg =
   (* Provisioning follows the resolved ownership, not the bare presence of a postgres
      resource: an externally bound database must not also be provisioned, and every
      provider derives the decision from the same resolution. *)
-  match Sol_cli_resource_binding.resolve cfg with
+  match Sol_cli_resource_binding.resolve_postgres cfg with
   | Error message -> Error message
-  | Ok bindings ->
-    let has_postgres = Sol_cli_resource_binding.provisions bindings ~typ:"postgres" in
+  | Ok database ->
+    let has_postgres = Sol_cli_resource_binding.postgres_is_managed database in
     let production = target.profile = Some Sol_cli_profile.Production_single_region in
     let production_postgres = has_postgres && production in
     let vars = capabilities.profile_vars ~production ~production_postgres @ vars in

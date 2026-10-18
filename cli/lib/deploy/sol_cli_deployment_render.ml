@@ -10,13 +10,13 @@ type common_fields =
   ; calls : Sol_cli_deployment_plan.service_call list
   ; called_by : Sol_cli_deployment_plan.service_call list
   ; (* 2b: the `<target>-dml-creds` Secret this unit reads `POSTGRES_URL` from, derived from
-       the plan's [db_uses_target] by {!Sol_cli_database_setup_render.dml_creds_name} — the
+       the plan's [database]'s credential target by {!Sol_cli_database_setup_render.dml_creds_name} — the
        one definition the Sol writer, the external writer and the reader share. [None] when
        the unit does not consume the target's database, so a unit that merely declares
        `POSTGRES_URL` keeps reading its own Secret. *)
     db_dml_creds_name : string option
   ; (* 2d: the database-CA ConfigMap this unit mounts, derived from the plan's
-       [db_ca_target] by {!Sol_cli_database_setup_render.ca_configmap_name} — the one
+       [database]'s published-CA target by {!Sol_cli_database_setup_render.ca_configmap_name} — the one
        definition the deploy writes with. *)
     db_ca_configmap : string option
   }
@@ -374,9 +374,13 @@ let render_spec
     ; calls = s.calls
     ; called_by = s.called_by
     ; db_dml_creds_name =
-        Option.map Sol_cli_database_setup_render.dml_creds_name s.db_uses_target
+        Option.map
+          Sol_cli_database_setup_render.dml_creds_name
+          (Sol_cli_resource_binding.postgres_use_target s.database)
     ; db_ca_configmap =
-        Option.map Sol_cli_database_setup_render.ca_configmap_name s.db_ca_target
+        Option.map
+          Sol_cli_database_setup_render.ca_configmap_name
+          (Sol_cli_resource_binding.postgres_use_ca_target s.database)
     }
   in
   let deployment =

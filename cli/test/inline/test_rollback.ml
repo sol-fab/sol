@@ -1,3 +1,18 @@
+let service_specs_of_release ?config release =
+  let open Result.Syntax in
+  let* database =
+    match config with
+    | None -> Ok None
+    | Some config ->
+      let* selection =
+        Sol_cli_resource_binding.resolve_postgres config
+        |> Result.map_error (fun message -> "resource bindings: " ^ message)
+      in
+      Ok (Some (Sol_cli_kubernetes_name.sanitize_name config.target.name, selection))
+  in
+  Sol_cli_rollback.service_specs_of_release ?database release
+;;
+
 let k8s_name value =
   match Sol_cli_deployment_plan.k8s_name_result value with
   | Ok name -> name
@@ -116,8 +131,7 @@ let ledger_spec : Sol_cli_deployment_plan.service_spec =
   ; extra_labels = [ "team", "payments" ]
   ; progressive_delivery = None
   ; uses = []
-  ; db_uses_target = None
-  ; db_ca_target = None
+  ; database = Sol_cli_resource_binding.No_postgres_use
   }
 ;;
 
@@ -171,8 +185,7 @@ let billing_spec : Sol_cli_deployment_plan.service_spec =
                ]
            })
   ; uses = []
-  ; db_uses_target = None
-  ; db_ca_target = None
+  ; database = Sol_cli_resource_binding.No_postgres_use
   }
 ;;
 
@@ -201,6 +214,7 @@ let gate_plan : Sol_cli_deployment_plan.t =
   ; profile = None
   ; contract = []
   ; contract_changes = []
+  ; database = Sol_cli_resource_binding.No_postgres
   ; resource_delivery = None
   }
 ;;
@@ -208,7 +222,7 @@ let gate_plan : Sol_cli_deployment_plan.t =
 let gate_release = Sol_cli_release.of_plan ~apply_mode:Sol_cli_release.Direct gate_plan
 
 let reconstruct_ok () =
-  match Sol_cli_rollback.service_specs_of_release gate_release with
+  match service_specs_of_release gate_release with
   | Ok specs -> specs
   | Error msg -> Windtrap.failf "expected reconstruction to succeed: %s" msg
 ;;
@@ -449,7 +463,7 @@ let bad_workload_release update : Sol_cli_release.t =
 
 let test_gate_failure_unknown_rollout_encoding () =
   let release = bad_workload_release (fun w -> { w with rollout = "canary:bogus" }) in
-  match Sol_cli_rollback.service_specs_of_release release with
+  match service_specs_of_release release with
   | Ok _ -> Windtrap.fail "expected reconstruction to fail on an unknown rollout encoding"
   | Error msg ->
     assert (matches_regex (Str.regexp "r-0000000000000000") msg);
@@ -459,7 +473,7 @@ let test_gate_failure_unknown_rollout_encoding () =
 
 let test_gate_failure_invalid_cpu () =
   let release = bad_workload_release (fun w -> { w with cpu = "not-a-cpu-quantity" }) in
-  match Sol_cli_rollback.service_specs_of_release release with
+  match service_specs_of_release release with
   | Ok _ -> Windtrap.fail "expected reconstruction to fail on an invalid cpu quantity"
   | Error msg ->
     assert (matches_regex (Str.regexp "ledger_svc") msg);
@@ -468,7 +482,7 @@ let test_gate_failure_invalid_cpu () =
 
 let test_gate_failure_invalid_availability () =
   let release = bad_workload_release (fun w -> { w with availability = "sometimes" }) in
-  match Sol_cli_rollback.service_specs_of_release release with
+  match service_specs_of_release release with
   | Ok _ -> Windtrap.fail "expected reconstruction to fail on an invalid availability"
   | Error msg ->
     assert (matches_regex (Str.regexp "ledger_svc") msg);
@@ -899,7 +913,7 @@ let fn_release : Sol_cli_release.t =
 ;;
 
 let test_fn_reconstructs_and_verifies_as_cronjob () =
-  match Sol_cli_rollback.service_specs_of_release fn_release with
+  match service_specs_of_release fn_release with
   | Error msg -> Windtrap.fail msg
   | Ok [ (got, applied_by) ] ->
     Windtrap.equal
@@ -981,7 +995,7 @@ let test_reconstruction_rejects_invalid_persistence () =
     }
   in
   let invalid = { gate_release with workloads = [ invalid_workload ] } in
-  match Sol_cli_rollback.service_specs_of_release invalid with
+  match service_specs_of_release invalid with
   | Ok _ -> Windtrap.fail "expected rollback reconstruction to reject persistence"
   | Error msg -> assert (matches_regex (Str.regexp "set replicas = 1") msg)
 ;;
@@ -1430,7 +1444,7 @@ let recording_deps
         Ok []
   in
   let deps : Sol_cli_rollback.transaction_deps =
-    { config = None
+    { database = None
     ; ensure_held
     ; applied_migrations
     ; apply =
@@ -2162,7 +2176,7 @@ let modelled_deps ~release ~cluster ?(fail_at = None) ()
        | Error _ as e -> e
        | Ok () -> apply_all (index + 1) rest)
   in
-  { config = None
+  { database = None
   ; Sol_cli_rollback.ensure_held = (fun () -> Ok ())
   ; applied_migrations = (fun () -> Ok [])
   ; apply = apply_all 0
@@ -2368,7 +2382,7 @@ let test_qualification_partial_apply_leaves_the_pointer () =
 let test_qualification_render_never_carries_secret_material () =
   let spec = { ledger_spec with secrets = [ "DB_PASSWORD", "super-secret-material" ] } in
   let release = release_with_workloads ~apply_mode:Sol_cli_release.Direct [ spec ] in
-  match Sol_cli_rollback.service_specs_of_release release with
+  match service_specs_of_release release with
   | Error msg -> Windtrap.fail msg
   | Ok reconstructed ->
     List.iter
@@ -2799,7 +2813,7 @@ let test_rollback_restores_recorded_requirements () =
       ; store = Some "vault"
       ; keys = []
       ; connection = []
-      ; credentials = []
+      ; credentials = [ "ddl", "external/ddl"; "dml", "external/dml" ]
       }
   in
   let target = "prod-aws-us-east-1" in
@@ -2816,7 +2830,7 @@ let test_rollback_restores_recorded_requirements () =
   in
   (* (a) today's declaration drops the dependency entirely; the record's stands. *)
   (match
-     Sol_cli_rollback.service_specs_of_release
+     service_specs_of_release
        ~config:(config ~services:[ service "ledger_svc" []; service "billing_svc" [] ] ())
        release
    with
@@ -2827,22 +2841,25 @@ let test_rollback_restores_recorded_requirements () =
        ~msg:
          "(a) a requirement the release declared survives today's declaration dropping it"
        (Some target)
-       (spec_of specs "ledger_svc").db_uses_target;
+       (Sol_cli_resource_binding.postgres_use_target
+          (spec_of specs "ledger_svc").database);
      Windtrap.equal
        (Windtrap.option Windtrap.string)
        ~msg:"(b) and the CA follows the *current* ownership, which provisions it"
        (Some target)
-       (spec_of specs "ledger_svc").db_ca_target;
+       (Sol_cli_resource_binding.postgres_use_ca_target
+          (spec_of specs "ledger_svc").database);
      Windtrap.equal
        (Windtrap.option Windtrap.string)
        ~msg:"and a unit that declared nothing gets neither"
        None
-       (spec_of specs "billing_svc").db_uses_target);
+       (Sol_cli_resource_binding.postgres_use_target
+          (spec_of specs "billing_svc").database));
   (* (b) the same recorded requirement, resolved against a *different* current binding: the
      reader signal stands (an external owner still delivers a class Secret) and the CA does not,
      because Sol provisions nothing. This is the resolution being current. *)
   (match
-     Sol_cli_rollback.service_specs_of_release
+     service_specs_of_release
        ~config:(config ~resources:[ resource ~binding:external_binding () ] ())
        release
    with
@@ -2852,16 +2869,18 @@ let test_rollback_restores_recorded_requirements () =
        (Windtrap.option Windtrap.string)
        ~msg:"(b) an externally bound current target still delivers the class Secret"
        (Some target)
-       (spec_of specs "ledger_svc").db_uses_target;
+       (Sol_cli_resource_binding.postgres_use_target
+          (spec_of specs "ledger_svc").database);
      Windtrap.equal
        (Windtrap.option Windtrap.string)
        ~msg:"(b) and mounts no CA, because Sol provisions nothing there"
        None
-       (spec_of specs "ledger_svc").db_ca_target);
+       (Sol_cli_resource_binding.postgres_use_ca_target
+          (spec_of specs "ledger_svc").database));
   (* (c) the current target cannot resolve its bindings at all. The rollback must refuse: the
      old code answered "no bindings", which renders a workload with no dependency. *)
   (match
-     Sol_cli_rollback.service_specs_of_release
+     service_specs_of_release
        ~config:(config ~resources:[ resource (); resource ~name:"other_db" () ] ())
        release
    with
@@ -2905,16 +2924,80 @@ let test_rollback_restores_recorded_requirements () =
       ; billing_spec
       ]
   in
-  match Sol_cli_rollback.service_specs_of_release ~config:(config ()) namespaced with
+  (match
+     Sol_cli_rollback.validate_resource_requirements ~config:(config ()) namespaced
+   with
+   | Ok () -> ()
+   | Error message ->
+     Windtrap.fail ("a path-shaped historical requirement was rejected: " ^ message));
+  match service_specs_of_release ~config:(config ()) namespaced with
   | Error message -> Windtrap.fail message
   | Ok specs ->
     Windtrap.equal
       (Windtrap.option Windtrap.string)
       ~msg:"and a path-shaped requirement resolves through the deploy's own ref decode"
       (Some target)
-      (spec_of specs "ledger_svc").db_uses_target
+      (Sol_cli_resource_binding.postgres_use_target (spec_of specs "ledger_svc").database)
 ;;
 
 let%test "2b: a rollback restores recorded requirements against current bindings" =
   test_rollback_restores_recorded_requirements ()
+;;
+
+let%test
+    "rollback refuses omitted historical resources while preserving other resource kinds"
+  =
+  let resource name typ omit : Sol_cli_config.resource =
+    { name
+    ; typ = Some typ
+    ; omit
+    ; binding = None
+    ; partition_key = None
+    ; sort_key = None
+    ; indexes = []
+    ; size = None
+    }
+  in
+  let config resources : Sol_cli_config.t =
+    { project = Some "ws"
+    ; target = Result.get_ok (Sol_cli_config.parse_target "prod/aws/us-east-1")
+    ; resources
+    ; services = []
+    }
+  in
+  let release uses =
+    release_with_workloads
+      ~apply_mode:Sol_cli_release.Direct
+      [ { ledger_spec with Sol_cli_deployment_plan.uses } ]
+  in
+  List.iter
+    (fun resources ->
+       match
+         Sol_cli_rollback.validate_resource_requirements
+           ~config:(config resources)
+           (release [ "app_db" ])
+       with
+       | Error message ->
+         Windtrap.equal
+           Windtrap.bool
+           true
+           (Sol_cli_string.contains ~needle:"app_db" message)
+       | Ok () -> Windtrap.fail "historical database requirement disappeared")
+    [ [ resource "app_db" "postgres" true ]
+    ; [ resource "app_db" "postgres" true; resource "replacement_db" "postgres" false ]
+    ];
+  (match
+     Sol_cli_rollback.validate_resource_requirements ~config:(config []) (release [ "/" ])
+   with
+   | Error _ -> ()
+   | Ok () -> Windtrap.fail "an undecodable historical requirement was silently dropped");
+  Windtrap.equal
+    Windtrap.bool
+    true
+    (Sol_cli_rollback.validate_resource_requirements
+       ~config:
+         (config
+            [ resource "app_db" "postgres" true; resource "event_log" "kafka" false ])
+       (release [ "event_log" ])
+     = Ok ())
 ;;

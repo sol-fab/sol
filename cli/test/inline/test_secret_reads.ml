@@ -502,8 +502,7 @@ let external_workload_spec () : Sol_cli_deployment_plan.service_spec =
   ; extra_labels = []
   ; progressive_delivery = None
   ; uses = []
-  ; db_uses_target = None
-  ; db_ca_target = None
+  ; database = Sol_cli_resource_binding.No_postgres_use
   }
 ;;
 
@@ -1061,9 +1060,9 @@ let class_delivery () : Sol_cli_deployment_plan.resource_delivery =
   ; resource = "app-db"
   ; store = "vault-production"
   ; credentials =
-      [ Sol_cli_database_setup_render.ddl_class, "secret/production/app-db-migrator"
-      ; Sol_cli_database_setup_render.dml_class, "secret/production/app-db-app"
-      ]
+      { Sol_cli_resource_binding.ddl = "secret/production/app-db-migrator"
+      ; dml = "secret/production/app-db-app"
+      }
   ; migration_namespace = "myapp-payments"
   ; dml_namespaces = [ "myapp-comms" ]
   }

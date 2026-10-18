@@ -73,33 +73,19 @@ let unit_input_owners
           (Sol_cli_config.secret_authority config.target ~unit_address ~key) ))
 ;;
 
-(* Which target database a unit consumes, by `Sol_cli_deployment_plan.db_uses_target` — the
-   same function `Sol_cli_deployment_plan.of_services_result` calls to fill
-   [spec.db_uses_target], so `sol secret set` resolves the same capability the plan gate
-   carries.
-
-   The declaration resolved here is the **workspace** declaration: `db_uses_target` reads
-   the unit's `uses:` edge from [Sol_cli_config.declared.services]. The unit's *declared
-   secret keys* are a different input — the caller's [declared] to {!check_unit_secret_write}
-   — and the two are not interchangeable. *)
+(* Secret writes and planning use the same resolved selection and declared uses.
+   Declaring a POSTGRES_URL secret alone does not make a unit a database consumer. *)
 let unit_consumes_target_database ~(config : Sol_cli_config.t) ~unit_name =
   let workspace = Sol_cli_config.declared_of_config config in
-  match Sol_cli_resource_binding.resolve config with
-  | Error _ as error -> error
-  | Ok bindings ->
-    let target = Sol_cli_kubernetes_name.sanitize_name config.target.name in
-    let target_database =
-      Option.map
-        (fun (database : Sol_cli_resource_binding.t) -> database.resource)
-        (Sol_cli_resource_binding.target_database bindings)
-    in
-    Ok
-      (Option.is_some
-         (Sol_cli_deployment_plan.db_uses_target
-            (Some workspace)
-            ~target:(Some target)
-            ~target_database
-            unit_name))
+  let* database = Sol_cli_resource_binding.resolve_postgres config in
+  let target = Sol_cli_kubernetes_name.sanitize_name config.target.name in
+  Ok
+    (Option.is_some
+       (Sol_cli_resource_binding.postgres_use_target
+          (Sol_cli_deployment_plan.database_for_uses
+             ~target:(Some target)
+             ~database
+             (Sol_cli_deployment_plan.declared_uses (Some workspace) unit_name))))
 ;;
 
 (* **The `sol secret set` decision for one key.** It refuses a key the unit does not carry,
@@ -158,7 +144,8 @@ let secret_authorities_for_plan ~config plan =
            ~config
            ~unit_address
            ~transport
-           ~db_uses_target:(Option.is_some spec.db_uses_target)
+           ~db_uses_target:
+             (Option.is_some (Sol_cli_resource_binding.postgres_use_target spec.database))
            ~declared:(List.map fst spec.secrets)
        in
        List.iter
@@ -329,35 +316,25 @@ let declaration_plan (input : Planning_input.t) =
         Option.value config.target.cluster_issuer ~default:"letsencrypt-prod"
     }
   in
-  (* 2d: the plan carries the target's sanitized identity and whether Sol provisions the
-     database; the renderer derives any object name from both. 2b adds the target's postgres
-     resource whatever its ownership, so a consumer's `POSTGRES_URL` routes to the class
-     Secret for a Sol-provisioned and an externally bound database alike. The binding module
-     owns *which* resource that is; the plan only carries the names. *)
+  (* Resolve the database once; identity, consumer routing, trust and external
+     delivery are projections of this selection. *)
   let target = Sol_cli_kubernetes_name.sanitize_name config.target.name in
-  let* bindings = Sol_cli_resource_binding.resolve config |> refused in
-  let resource_of (database : Sol_cli_resource_binding.t) = database.resource in
-  let provisioned_database =
-    Option.map resource_of (Sol_cli_resource_binding.provisioned_database bindings)
-  in
-  let target_database =
-    Option.map resource_of (Sol_cli_resource_binding.target_database bindings)
-  in
+  let* database = Sol_cli_resource_binding.resolve_postgres config |> refused in
   (* A GitOps emit cannot run the database setup step, so it cannot deliver a database Sol
      provisions. Refuse it here, keyed on the binding rather than on a profile, so the
      ownership matrix is established by the deploy contract and not by whichever profile a
      target happens to select. An externally bound database emits its class Secrets from the
      plan's resource delivery below. *)
   let* () =
-    (match emit_to, Sol_cli_resource_binding.provisioned_database bindings with
-     | Some _, Some database ->
+    (match emit_to, database with
+     | Some _, Sol_cli_resource_binding.Managed_postgres resource ->
        Error
          (Printf.sprintf
             "target %s cannot emit a GitOps bundle: it provisions database %S, whose \
              setup Job and class credentials run during a direct apply. Bind the \
              database externally to emit it, or deploy this target directly."
             config.target.name
-            database.Sol_cli_resource_binding.resource)
+            resource)
      | _ -> Ok ())
     |> refused
   in
@@ -373,8 +350,7 @@ let declaration_plan (input : Planning_input.t) =
       ~image_refs
       ~inventory
       ~target
-      ?target_database
-      ?provisioned_database
+      ~database
       services
     |> refused
   in
@@ -384,30 +360,25 @@ let declaration_plan (input : Planning_input.t) =
      same value, so they cannot name different objects; a binding that cannot deliver every
      class is refused here, before anything is applied. *)
   let* plan =
-    match Sol_cli_resource_binding.target_database bindings with
-    | Some database
-      when database.Sol_cli_resource_binding.ownership = Sol_cli_config.Ownership_external
-      ->
+    match database with
+    | Sol_cli_resource_binding.External_postgres binding ->
       let declared = Sol_cli_config.declared_of_config config in
       let dml_namespaces =
-        Sol_cli_database_setup_run.dml_namespaces
-          ~declared:(Some declared)
-          ~binding:database
-          plan
+        Sol_cli_database_setup_run.dml_namespaces ~declared:(Some declared) ~database plan
       in
       let database_identity =
-        Sol_cli_database_setup_run.identity_of_config ~workspace config
+        Sol_cli_database_setup_run.identity ~workspace ~config ~database
       in
-      Sol_cli_database_setup_run.resource_delivery
-        ~target:database_identity.Sol_cli_database_setup_render.target
-        ~resource:database_identity.Sol_cli_database_setup_render.resource
-        ~migration_namespace:
-          (Sol_cli_database_setup_render.database_namespace database_identity)
-        ~dml_namespaces
-        database
-      |> Result.map (fun resource_delivery ->
-        { plan with Sol_cli_deployment_plan.resource_delivery = Some resource_delivery })
-      |> refused
+      let resource_delivery =
+        Sol_cli_database_setup_run.resource_delivery
+          ~target:database_identity.Sol_cli_database_setup_render.target
+          ~resource:database_identity.Sol_cli_database_setup_render.resource
+          ~migration_namespace:
+            (Sol_cli_database_setup_render.database_namespace database_identity)
+          ~dml_namespaces
+          binding
+      in
+      Ok { plan with Sol_cli_deployment_plan.resource_delivery = Some resource_delivery }
     | _ -> Ok plan
   in
   Ok plan

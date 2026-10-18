@@ -48,15 +48,12 @@ let apply_doc ~ctx ~what doc =
    `load_for_target` takes the config's own target when it declares one -- so two sanitized
    strings would put one target's database operations in two namespaces. That is the defect this
    identity exists to remove, one level up (#1424). *)
-let identity_of_config ~workspace (config : Sol_cli_config.t) =
+let identity ~workspace ~(config : Sol_cli_config.t) ~database =
   let target = Sol_cli_kubernetes_name.sanitize_name config.target.name in
+  (* Explicit absence is the only source of the no-database identity. Resolution
+     failures never reach this function as a fabricated absent selection. *)
   let resource =
-    match Sol_cli_resource_binding.resolve config with
-    | Ok bindings ->
-      (match Sol_cli_resource_binding.of_type bindings ~typ:"postgres" with
-       | (binding : Sol_cli_resource_binding.t) :: _ -> binding.resource
-       | [] -> "none")
-    | Error _ -> "none"
+    Option.value (Sol_cli_resource_binding.postgres_resource database) ~default:"none"
   in
   Sol_cli_database_setup_render.database_identity ~workspace ~target ~resource
 ;;
@@ -143,16 +140,16 @@ let cleanup ~ctx ~namespace ~job_name ~configmap_name ~secret_name =
     infrastructure gate has already passed. *)
 let setup_image_preflight (config : Sol_cli_config.t) =
   let open Result.Syntax in
-  let* bindings =
-    Sol_cli_resource_binding.resolve config
+  let* database =
+    Sol_cli_resource_binding.resolve_postgres config
     |> Result.map_error (fun message ->
       Printf.sprintf
         "could not resolve resource ownership for the database setup image: %s"
         message)
   in
-  match Sol_cli_resource_binding.provisioned_database bindings with
-  | None -> Ok None
-  | Some _ ->
+  match Sol_cli_resource_binding.postgres_is_managed database with
+  | false -> Ok None
+  | true ->
     let* assets =
       Sol_cli_platform_assets.resolve ()
       |> Result.map_error (fun error ->
@@ -165,36 +162,21 @@ let setup_image_preflight (config : Sol_cli_config.t) =
       "the database setup image could not be resolved: " ^ message)
 ;;
 
-(** The namespaces that must receive the DML credential: one per unit that declares it uses
-    the resource this binding names.
-
-    This is the declared signal, not the resolved one. The writer runs before the units are
-    rendered and before the class Secrets it writes exist, so an enumeration derived from
-    the reader's routing would be circular; the declared `uses:` edge names the same units
-    without reading a projection this step is about to create.
-
-    It names the resource, not the type, so a consumer of a *different*, externally bound
-    postgres resource is not handed a Sol-written credential: the external database is
-    responsible for its own roles, and only the Sol-provisioned one's consumers get the DML
-    credential. That ownership resolution already exists
-    ([Sol_cli_resource_binding.provisions]); this asks it once and passes the binding.
-
-    **The argument is the binding, not a name string.** The predicate compares the resource
-    key the units declared (`uses: [app_db]`), so the value compared must be the resource's
-    own name ([binding.resource]) and never a Kubernetes-name projection of it. The
-    sanitized [database_identity.resource] answers a different question — `app-db` never
-    equals `app_db` — and silently empties every delivery list built from it, which is
-    exactly how the database CA and DML credential reached no consumer namespace (#1481).
-    Taking the binding keeps that mistake unrepresentable at the call sites. *)
+(** Consumer namespaces are selected by the resolved database's original resource
+    key, preserving underscores. Kubernetes identity sanitization is only for object
+    names and must never enter this declaration comparison. *)
 let dml_namespaces
       ~declared
-      ~(binding : Sol_cli_resource_binding.t)
+      ~(database : Sol_cli_resource_binding.postgres)
       (plan : Sol_cli_deployment_plan.t)
   =
-  let resource = binding.Sol_cli_resource_binding.resource in
+  let resource = Sol_cli_resource_binding.postgres_resource database in
   plan.Sol_cli_deployment_plan.services
   |> List.filter (fun (spec : Sol_cli_deployment_plan.service_spec) ->
-    Sol_cli_deployment_plan.service_uses_resource declared spec.source_name resource)
+    Option.fold
+      ~none:false
+      ~some:(Sol_cli_deployment_plan.service_uses_resource declared spec.source_name)
+      resource)
   |> List.map (fun (spec : Sol_cli_deployment_plan.service_spec) ->
     Sol_cli_deployment_plan.namespace_to_string spec.namespace)
   |> List.sort_uniq String.compare
@@ -537,64 +519,26 @@ let run
     Nothing here runs for a Sol-provisioned database; that target's classes are written by
     the setup Job's coordinator ([run]). *)
 
-(** The store and one remote path per credential class an externally bound database
-    delivers, or the reason it cannot. {!resource_delivery} is the one caller, and the class
-    [ExternalSecret] renderer consumes its result, so one rule serves both. *)
-let external_credential_sources (binding : Sol_cli_resource_binding.t) =
-  let module Render = Sol_cli_database_setup_render in
-  let* store =
-    match binding.Sol_cli_resource_binding.store with
-    | Some store -> Ok store
-    | None ->
-      Error
-        (Printf.sprintf
-           "the externally bound database %S names no store, so there is nowhere to read \
-            its credentials from"
-           binding.resource)
-  in
-  let* classes =
-    Sol_cli_result.map_list
-      (fun credential_class ->
-         match
-           List.assoc_opt credential_class binding.Sol_cli_resource_binding.credentials
-         with
-         | Some remote_path -> Ok (credential_class, remote_path)
-         | None ->
-           Error
-             (Printf.sprintf
-                "the externally bound database %S names no remote path for the %S \
-                 credential class (binding.credentials.%s), so that class would have no \
-                 credential at all"
-                binding.resource
-                credential_class
-                credential_class))
-      Render.postgres_classes
-  in
-  Ok (store, classes)
-;;
-
-(** **The target-scoped delivery**, resolved once at plan time: the name-safe target and
-    resource identity, the store, one remote path per credential class, and the namespaces
-    each class lands in. It fails before anything is applied when the binding cannot deliver
-    every class, so planning refuses rather than emitting a class Secret nothing produces. *)
+(** The resolved external selection already contains both credential paths. *)
 let resource_delivery
       ~target
       ~resource
       ~migration_namespace
       ~dml_namespaces
-      (binding : Sol_cli_resource_binding.t)
+      (binding : Sol_cli_resource_binding.external_postgres)
   =
-  let* store, credentials = external_credential_sources binding in
-  Ok
-    Sol_cli_deployment_plan.
-      { target; resource; store; credentials; migration_namespace; dml_namespaces }
+  Sol_cli_deployment_plan.
+    { target
+    ; resource
+    ; store = binding.store
+    ; credentials = binding.credentials
+    ; migration_namespace
+    ; dml_namespaces
+    }
 ;;
 
-(** The class ExternalSecrets the delivery names, one per class per namespace that reads it.
-    [resource_delivery] establishes a path for every class, so this error is unreachable in
-    the deploy flow; it is returned rather than raised so a delivery missing a class fails
-    with the class named instead of a [Not_found]. Direct apply and GitOps emit render the
-    same documents. *)
+(** Rendering is total: every resolved delivery has both DDL and DML sources.
+    Direct apply and GitOps emit consume the same typed delivery. *)
 let external_credential_docs (delivery : Sol_cli_deployment_plan.resource_delivery) =
   let module Render = Sol_cli_database_setup_render in
   (* The DDL class is what the migration path reads, so it lands where migrations run; the
@@ -604,28 +548,19 @@ let external_credential_docs (delivery : Sol_cli_deployment_plan.resource_delive
     then [ delivery.migration_namespace ]
     else delivery.dml_namespaces
   in
-  Render.postgres_classes
-  |> Sol_cli_result.map_list (fun credential_class ->
-    match List.assoc_opt credential_class delivery.credentials with
-    | None ->
-      Error
-        (Printf.sprintf
-           "the resolved database delivery for %S names no remote path for the %S \
-            credential class, so it would emit no object for it"
-           delivery.resource
-           credential_class)
-    | Some remote_path ->
-      Ok
-        (namespaces_for_class credential_class
-         |> List.sort_uniq String.compare
-         |> List.map (fun ns ->
-           Render.class_external_secret_doc
-             ~ns
-             ~target:delivery.target
-             ~credential_class
-             ~store:delivery.store
-             ~remote_path)))
-  |> Result.map List.concat
+  [ Render.ddl_class, delivery.credentials.ddl
+  ; Render.dml_class, delivery.credentials.dml
+  ]
+  |> List.concat_map (fun (credential_class, remote_path) ->
+    namespaces_for_class credential_class
+    |> List.sort_uniq String.compare
+    |> List.map (fun ns ->
+      Render.class_external_secret_doc
+        ~ns
+        ~target:delivery.target
+        ~credential_class
+        ~store:delivery.store
+        ~remote_path))
 ;;
 
 (** The class Secrets are the readers' inputs, so the external delivery is not complete until
@@ -675,7 +610,7 @@ let run_external_credentials
       ~ctx
       (delivery : Sol_cli_deployment_plan.resource_delivery)
   =
-  let* docs = external_credential_docs delivery in
+  let docs = external_credential_docs delivery in
   let module Render = Sol_cli_database_setup_render in
   let target = delivery.target in
   (* Each class's ExternalSecret in the namespace that class is read from. Two checks, one per

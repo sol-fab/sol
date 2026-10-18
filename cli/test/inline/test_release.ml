@@ -651,6 +651,7 @@ let with_plan ~requested_scope f =
     write_file "app/payments/charge_svc/sol.toml" "";
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~facts:(facts ())
         ~workspace:"myworkspace"
         ~env:test_env
@@ -823,6 +824,7 @@ let test_selected_plan_builder_preserves_scoped_provenance () =
     let build ~services ~requested_scope ~env =
       match
         Sol_cli_deployment_plan.of_services_result
+          ~database:Sol_cli_resource_binding.No_postgres
           ~facts:(facts ())
           ~workspace:"myworkspace"
           ~env

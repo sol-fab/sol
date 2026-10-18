@@ -1,5 +1,12 @@
+(** Refuse historical resource requirements whose current target authority is
+    absent or omitted, before applying any restored workloads. *)
+val validate_resource_requirements
+  :  config:Sol_cli_config.t
+  -> Sol_cli_release.t
+  -> (unit, string) result
+
 val service_specs_of_release
-  :  ?config:Sol_cli_config.t
+  :  ?database:string * Sol_cli_resource_binding.postgres
   -> Sol_cli_release.t
   -> ((Sol_cli_deployment_plan.service_spec * string) list, string) result
 
@@ -200,10 +207,10 @@ val pointer_report_ok : pointer_report -> bool
 val pointer_report_to_string : release:Sol_cli_release.t -> pointer_report -> string
 
 type transaction_deps =
-  { (* 2b: the target's **current** config, from which the restored workloads' database
-       delivery is derived (historical requirements, current bindings). [None] for a local
+  { (* 2b: the target's already resolved **current** database selection, from which
+       restored workloads' delivery is derived (historical requirements, current bindings). [None] for a local
        rollback, where delivery stays unit-scoped. *)
-    config : Sol_cli_config.t option
+    database : (string * Sol_cli_resource_binding.postgres) option
   ; ensure_held : unit -> (unit, string) result
   ; applied_migrations : unit -> (int list, string) result
   ; apply : (Sol_cli_deployment_plan.service_spec * string) list -> (unit, string) result

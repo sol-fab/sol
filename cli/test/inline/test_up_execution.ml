@@ -52,8 +52,7 @@ let spec : Sol_cli_deployment_plan.service_spec =
   ; extra_labels = []
   ; progressive_delivery = None
   ; uses = []
-  ; db_uses_target = None
-  ; db_ca_target = None
+  ; database = Sol_cli_resource_binding.No_postgres_use
   }
 ;;
 

@@ -47,8 +47,7 @@ let spec ~domain ~name ~k8s primitive : Sol_cli_deployment_plan.service_spec =
   ; extra_labels = []
   ; progressive_delivery = None
   ; uses = []
-  ; db_uses_target = None
-  ; db_ca_target = None
+  ; database = Sol_cli_resource_binding.No_postgres_use
   }
 ;;
 
@@ -86,6 +85,7 @@ let plan ?profile services : Sol_cli_deployment_plan.t =
   ; profile
   ; contract = []
   ; contract_changes = []
+  ; database = Sol_cli_resource_binding.No_postgres
   ; resource_delivery = None
   }
 ;;
@@ -208,22 +208,30 @@ let test_unresolvable_binding_refuses () =
     ~resources:
       "resources:\n  app_db:\n    type: postgres\n  other_db:\n    type: postgres\n"
     (fun ctx ->
-       match gate ctx ~plan:(plan []) ~live:true with
-       | Ok (), _ ->
-         Windtrap.fail
-           "an unresolvable resource binding must not be read as an externally managed \
-            database"
-       | Error (Sol_cli_deploy_run.Refused message), _ ->
+       (* Invalid graphs are rejected at planning, before a migration gate can
+          receive a resolved selection or perform Kubernetes work. *)
+       match
+         Sol_cli_deploy_selection.declaration_plan
+           { workspace = ctx.execution.workspace
+           ; registry = "registry.example.com"
+           ; sha = "test"
+           ; emit_to = None
+           ; config = ctx.resolved_config
+           ; facts = ctx.facts
+           ; inventory = []
+           ; requested_scope = "workspace"
+           ; image_refs = []
+           ; services = []
+           }
+       with
+       | Error (Sol_cli_deploy_selection.Refused message) ->
          Windtrap.equal
            Windtrap.bool
-           ~msg:"the refusal is the binding resolution error"
+           ~msg:"preserves the binding resolution error"
            true
            (Sol_cli_string.contains ~needle:"PostgreSQL resources" message)
-       | Error (Sol_cli_deploy_run.Failed message), _ ->
-         Windtrap.failf
-           "an unresolvable binding must refuse before the migration gate, not fail at \
-            it: %s"
-           message)
+       | Error _ -> Windtrap.fail "unexpected planning preflight error"
+       | Ok _ -> Windtrap.fail "an invalid graph reached the migration execution boundary")
 ;;
 
 (** **#1403: the migration gate follows the work, not the shape.** A cloud target that declares
@@ -1208,7 +1216,7 @@ let%test "migration gate (#1403): an explicit local shape is still checked" =
   test_migration_gate_is_shape_independent ()
 ;;
 
-let%test "migration gate (#1469): an unresolvable binding refuses" =
+let%test "migration planning (#1469): an unresolvable binding refuses before execution" =
   test_unresolvable_binding_refuses ()
 ;;
 
@@ -1557,7 +1565,9 @@ let with_provisioned_database f =
 
 let managed_database_consumer : Sol_cli_deployment_plan.service_spec list =
   [ { (spec ~domain:"payments" ~name:"charge_svc" ~k8s:"charge-svc" Svc) with
-      db_ca_target = Some "dev-aws-us-east-1"
+      database =
+        Sol_cli_resource_binding.Postgres_use
+          { target = "dev-aws-us-east-1"; trust = Published_ca }
     }
   ]
 ;;
