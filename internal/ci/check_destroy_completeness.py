@@ -17,7 +17,7 @@ def main():
         print(f"sol_providers: {e}", file=sys.stderr)
         sys.exit(f"{NAME}: could not read the provider list")
     target_roots = [
-        f"platform/cloud/{p}/{role}"
+        (p, f"platform/cloud/{p}/{role}")
         for p in names
         for role in ("cluster", "authorization")
         if (root / f"platform/cloud/{p}/{role}").is_dir()
@@ -27,32 +27,32 @@ def main():
             f"{NAME}: no provider has a cluster root under '{root}/platform/cloud'; "
             "a check of nothing is not a pass."
         )
+    target_roots += [(p, "platform/cloud/modules/platform") for p in names
+                     if (root / "platform/cloud/modules/platform").is_dir()]
     capabilities = root / "cli/lib/cloud/sol_cli_provider_capabilities.ml"
     capabilities_text = capabilities.read_text() if capabilities.exists() else ""
     problems = []
     checked = 0
-    for directory in target_roots:
-        provider = directory.split("/")[2]
+    for provider, directory in target_roots:
         residue_texts = []
         for home in ("destruction", "absence"):
             candidate = root / f"cli/lib/cloud/sol_cli_{provider}_{home}.ml"
             if candidate.exists():
                 residue_texts.append(candidate.read_text())
         residue_text = "\n".join(residue_texts)
-        for tf in sorted((root / directory).glob("*.tf")):
-            checked += 1
-            try:
-                found = tfconfig.resources(tf)
-            except Exception as e:
-                problems.append(f"{tf} could not be parsed as Terraform: {e}")
-                continue
-            problems += check_resources(found, capabilities_text, residue_text, provider, directory)
+        try:
+            found = tfconfig.native_resources(root / directory, boundary=root / "platform/cloud")
+        except Exception as e:
+            problems.append(f"{directory} could not be inspected as native Terraform: {e}")
+            continue
+        checked += len(found)
+        problems += check_resources(found, capabilities_text, residue_text, provider, directory)
     if problems:
         for p in problems:
             print(f"{NAME}: {p}", file=sys.stderr)
         sys.exit(1)
     print(
-        f'{NAME}: {checked} terraform file(s) in {len(target_roots)} target root(s); no prevent_destroy '
+        f'{NAME}: {checked} native Terraform resource(s), including shipped local modules, in {len(target_roots)} native root/provider pair(s); no prevent_destroy '
         'or deletion_policy = "PREVENT", no literal deletion guard, every lifecycle-populated resource '
         "removable, every routed guard liftable by the Destroy policy, every relinquished deletion "
         "classified and covered by a residue probe, and every GCS bucket's soft delete declared."
