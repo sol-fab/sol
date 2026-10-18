@@ -56,11 +56,6 @@ type t =
        -> cluster_name:string
        -> (Sol_cli_cluster_substrate.t, string) result)
         option
-  ; disk_quota :
-      (outputs_json:string
-       -> region:string
-       -> (Sol_cli_disk_quota.observation, string) result)
-        option
   ; installation_prerequisites : Sol_cli_installation.prerequisite list
   ; installation_probes :
       Sol_cli_installation.installation_config -> Sol_cli_installation.probe list

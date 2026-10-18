@@ -70,11 +70,6 @@ type t =
        -> cluster_name:string
        -> (Sol_cli_cluster_substrate.t, string) result)
         option
-  ; disk_quota :
-      (outputs_json:string
-       -> region:string
-       -> (Sol_cli_disk_quota.observation, string) result)
-        option
   ; installation_prerequisites : Sol_cli_installation.prerequisite list
   ; installation_probes :
       Sol_cli_installation.installation_config -> Sol_cli_installation.probe list
@@ -929,7 +924,6 @@ let aws : t =
   ; cluster_access_role_arn = aws_cluster_access_role_arn
   ; platform_storage = { storage_class = "gp3"; csi_driver = "ebs.csi.aws.com" }
   ; cluster_substrate = None
-  ; disk_quota = None
   ; installation_prerequisites =
       [ Sol_cli_installation.State_backend
       ; Sol_cli_installation.State_lock
@@ -1161,10 +1155,6 @@ let gcp : t =
       Some
         (fun ~outputs_json ~region ~cluster_name ->
           Sol_cli_gcp_cluster.substrate_of_describe ~outputs_json ~region ~cluster_name)
-  ; disk_quota =
-      Some
-        (fun ~outputs_json ~region ->
-          Sol_cli_gcp_cluster.disk_quota ~outputs_json ~region)
   ; installation_prerequisites =
       [ Sol_cli_installation.State_backend
       ; Sol_cli_installation.Delegated_zone
@@ -1250,7 +1240,6 @@ let byo : t =
   ; cluster_access_role_arn = (fun _ -> Ok None)
   ; platform_storage = { storage_class = ""; csi_driver = "" }
   ; cluster_substrate = None
-  ; disk_quota = None
   ; installation_prerequisites = []
   ; installation_probes = (fun _ -> [])
   ; installation_backend = (fun _ -> Error byo_no_root)

@@ -372,32 +372,6 @@ let project_id_of_outputs_json text : (string, string) result =
   |> Fun.flip Result.bind (fun (_raw, string, _optional_string) -> string "project_id")
 ;;
 
-let disk_quota ~outputs_json ~region : (Sol_cli_disk_quota.observation, string) result =
-  let open Result.Syntax in
-  let* project = project_id_of_outputs_json outputs_json in
-  match
-    Sol_cli_process.run
-      (Sol_cli_process.cmd
-         [ "gcloud"
-         ; "compute"
-         ; "regions"
-         ; "describe"
-         ; region
-         ; "--project"
-         ; project
-         ; "--format=json"
-         ])
-  with
-  | Ok result -> Sol_cli_disk_quota.observation_of_json result.stdout
-  | Error error ->
-    Error
-      (Printf.sprintf
-         "could not read the disk quota of region %s in project %s: %s"
-         region
-         project
-         (Sol_cli_process.error_to_string error))
-;;
-
 let autopilot_of_describe_json text : (bool, string) result =
   match Yojson.Safe.from_string text with
   | exception Yojson.Json_error message ->

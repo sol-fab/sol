@@ -22,8 +22,6 @@ type ('outputs, 'env, 'control) deps =
   ; open_window : 'outputs -> ('control option, string) result
   ; platform_vars : 'outputs -> (string list, string) result
   ; cloud_ready : 'outputs -> (unit, string) result
-  ; observe_disk_quota :
-      'outputs -> (Sol_cli_disk_quota.observation option, string) result
   ; with_cluster_access :
       'outputs -> ('env -> (unit, failure) result) -> (unit, failure) result
   ; platform_init : unit -> (unit, failure) result
