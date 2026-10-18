@@ -46,20 +46,6 @@ let test_boundary () =
   is_error "a non-object item" (Sol_cli_json.items ~what:"x" {|{"items":[1]}|})
 ;;
 
-let test_disk_quota () =
-  is_error
-    "a quota without usage"
-    (Sol_cli_disk_quota.observation_of_json
-       {|{"quotas":[{"metric":"SSD_TOTAL_GB","limit":500.0}]}|});
-  let o =
-    ok
-      "complete"
-      (Sol_cli_disk_quota.observation_of_json
-         {|{"quotas":[{"metric":"SSD_TOTAL_GB","limit":500.0,"usage":0}]}|})
-  in
-  Windtrap.equal Windtrap.int ~msg:"free" 500 (Sol_cli_disk_quota.free_gb o)
-;;
-
 let test_migration_status () =
   is_error
     "an applied entry without a version"
@@ -90,6 +76,5 @@ let test_release_lists () =
 ;;
 
 let%test "REFAC-132: the boundary" = test_boundary ()
-let%test "REFAC-132: disk quota" = test_disk_quota ()
 let%test "REFAC-132: migration status" = test_migration_status ()
 let%test "REFAC-132: release lists" = test_release_lists ()

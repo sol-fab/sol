@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -eu
+printf 'curl %s\n' "$*" >>"$LIFECYCLE_LOG"
+case "$*" in
+  '-fsS https://container.googleapis.com/v1/projects/sol-qualification/locations/us-central1/clusters/sol-qual/.well-known/openid-configuration')
+    printf '%s\n' '{"issuer":"https://container.googleapis.com/v1/projects/sol-qualification/locations/us-central1/clusters/sol-qual"}'
+    ;;
+  *) exit 90 ;;
+esac

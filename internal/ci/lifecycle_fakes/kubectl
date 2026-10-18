@@ -135,10 +135,13 @@ case " $* " in
   *" auth can-i escalate clusterroles "*|*" auth can-i bind clusterroles "*|\
     *" auth can-i create namespaces "*|*" auth can-i create clusterroles "*|\
     *" auth can-i create storageclasses "*)
-    if [ "$(cat "$FAIL_MARKER_DIR/kubeconfig-role" 2>/dev/null || true)" != "sol-cluster-access" ]; then
-      printf 'error: the authorizer was asked about the wrong principal\n' >&2
-      exit 90
-    fi
+    case "$(cat "$FAIL_MARKER_DIR/kubeconfig-role" 2>/dev/null || true)" in
+      sol-cluster-access|gcp-provisioner) : ;;
+      *)
+        printf 'error: the authorizer was asked about the wrong principal\n' >&2
+        exit 90
+        ;;
+    esac
     case " $* " in
       *" can-i escalate clusterroles "*|*" can-i bind clusterroles "*)
         if [ "${CAN_I_FAIL:-}" = 1 ] &&
@@ -427,6 +430,8 @@ case "$*" in
   "get storageclass -o jsonpath="*)
     if [ "${STORAGE_CLASS_WRONG:-}" = 1 ]; then
       printf 'gp3|pd.csi.storage.gke.io|true '
+    elif [ "$(cat "$FAIL_MARKER_DIR/kubeconfig-role" 2>/dev/null || true)" = gcp-provisioner ]; then
+      printf 'standard-rwo|pd.csi.storage.gke.io|true '
     else
       printf 'gp3|ebs.csi.aws.com|true '
     fi

@@ -662,20 +662,6 @@ let apply_deps
                 | Ok () -> Ok ()
                 | Error message -> Error (Sol_cli_cloud_apply.Refused message))
              | Error _ -> Ok ()))
-    ; observe_disk_quota =
-        (fun _ ->
-          match (Sol_cli_provider_capabilities.capabilities_of provider).disk_quota with
-          | None -> Ok None
-          | Some observe ->
-            (match Sol_cli_terraform.output_json ~chdir:infra_dir () with
-             | Error _ ->
-               Error
-                 "could not read the cloud root's outputs to scope the disk-quota \
-                  observation"
-             | Ok outputs ->
-               Result.map
-                 Option.some
-                 (observe ~outputs_json:outputs.stdout ~region:target_cfg.region)))
     ; cloud_ready =
         (fun cluster ->
           if cluster.ready ()

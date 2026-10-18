@@ -1368,54 +1368,40 @@ grep -F -- "'apply'" "$partial_log.out" >/dev/null || {
   cat "$partial_log.out" >&2
   exit 1
 }
-if grep -qF 'compute regions describe' "$no_project_log"; then
-  echo "the quota was read although the project was never parsed:" >&2
-  grep -nF 'compute regions describe' "$no_project_log" >&2
-  exit 1
-fi
+# The quota API is unsupported by the fake: installation and no-growth updates
+# rely on actual provisioning/readiness, not a prediction of additional disk demand.
+rm -f "$PLATFORM_INSTALLED_FILE"
+: >"$tmp/gcp-deploy-kubeconfig"
+for phase in PlatformInstalling PlatformUpdating; do
+  rm -f "$FAIL_MARKER_DIR/bootstrap-window"
+  allocation_log="$tmp/gcp-storage-$phase.log"
+  if ! (cd "$tmp/work" && FRESH_TARGET=1 KUBECONFIG="$tmp/gcp-deploy-kubeconfig" LIFECYCLE_LOG="$allocation_log" \
+        "$sol" cloud apply prod/gcp/us-central1) >"$allocation_log.out" 2>&1; then
+    cat "$allocation_log.out" >&2
+    echo "GCP $phase must not depend on an available disk-quota API" >&2
+    exit 1
+  fi
+  assert_contains "the platform entered $phase" "$allocation_log.out" \
+    "lifecycle phase: $phase"
+  assert_contains "the platform established readiness" "$allocation_log.out" \
+    'lifecycle phase: Ready'
+  if grep -qF 'compute regions describe' "$allocation_log"; then
+    echo "the platform consulted a quota prediction rather than provisioning/readiness" >&2
+    exit 1
+  fi
+done
 
-quota_log="$tmp/gcp-disk-quota.log"
-rm -f "$FAIL_MARKER_DIR/access" "$FAIL_MARKER_DIR/bootstrap-window"
-if (cd "$tmp/work" && STUB_SSD_USAGE=500 LIFECYCLE_LOG="$quota_log" \
-      "$sol" cloud apply prod/gcp/us-central1) >"$quota_log.out" 2>&1
-then
-  cat "$quota_log.out" >&2
-  echo "GCP apply succeeded although the region's disk quota was exhausted" >&2
+allocation_failure_log="$tmp/gcp-storage-allocation-failure.log"
+rm -f "$FAIL_MARKER_DIR/platform" "$FAIL_MARKER_DIR/bootstrap-window"
+if (cd "$tmp/work" && FAIL_ON=platform KUBECONFIG="$tmp/gcp-deploy-kubeconfig" LIFECYCLE_LOG="$allocation_failure_log" \
+      "$sol" cloud apply prod/gcp/us-central1) >"$allocation_failure_log.out" 2>&1; then
+  echo "a platform allocation failure must fail the apply" >&2
   exit 1
 fi
-if grep -qF 'is missing or not a string' "$quota_log.out"; then
-  echo "the quota scenario never crossed the parser: the stub's payload was not accepted" >&2
-  cat "$quota_log.out" >&2
-  exit 1
-fi
-grep -F 'compute regions describe' "$quota_log" >/dev/null || {
-  echo "the quota scenario refused without ever reading the provider's quota:" >&2
-  cat "$quota_log" >&2
-  exit 1
-}
-grep -F 'SSD_TOTAL_GB 500/500' "$quota_log.out" >/dev/null || {
-  echo "the refusal did not name the observed quota and its usage:" >&2
-  cat "$quota_log.out" >&2
-  exit 1
-}
-grep -F "declared minimum persistent-disk requirement is 20 GiB" "$quota_log.out" >/dev/null || {
-  echo "the refusal did not name Sol's declared requirement:" >&2
-  cat "$quota_log.out" >&2
-  exit 1
-}
-if grep -qF 'get-credentials' "$quota_log"; then
-  echo "the disk-quota refusal happened after cluster access was already attempted:" >&2
-  grep -nF 'get-credentials' "$quota_log" >&2
-  exit 1
-fi
-if grep -qE -- 'chdir=[^ ]*/platform/cloud/[a-z]+/platform[^ ]* apply' "$quota_log"; then
-  echo "the disk-quota refusal happened after a platform apply had begun:" >&2
-  grep -nE -- 'chdir=[^ ]*' "$quota_log" >&2
-  exit 1
-fi
-if ! grep -qF -- 'provisioner_bootstrap_admin=false' "$quota_log"; then
-  echo "the disk-quota refusal left the bootstrap window open:" >&2
-  grep -nE 'provisioner_bootstrap_admin|disk quota' "$quota_log" >&2 || true
+assert_contains "the allocation diagnostic is preserved" "$allocation_failure_log.out" \
+  'quotaExceeded: SSD_TOTAL_GB exhausted while provisioning a PVC'
+if grep -qF 'lifecycle phase: Ready' "$allocation_failure_log.out"; then
+  echo "a failed allocation reported the platform Ready" >&2
   exit 1
 fi
 

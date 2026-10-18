@@ -50,15 +50,6 @@ let deps calls : (unit, unit, unit) A.deps =
       (fun () ->
         calls.events <- "cloud_ready" :: calls.events;
         Ok ())
-  ; observe_disk_quota =
-      (fun () ->
-        calls.events <- "observe_disk_quota" :: calls.events;
-        Ok
-          (Some
-             { Sol_cli_disk_quota.quota_name = "TEST_QUOTA"
-             ; limit_gb = 1000
-             ; used_gb = 0
-             }))
   ; with_cluster_access = (fun () f -> f ())
   ; platform_init = (fun () -> Ok ())
   ; platform_installed = (fun () -> false)
@@ -121,13 +112,23 @@ let test_happy_path () =
 
 let test_failure_in_window_removes_it () =
   let calls = fresh () in
+  let diagnostic = "quotaExceeded: SSD_TOTAL_GB exhausted while provisioning a PVC" in
   let deps =
     { (deps calls) with
-      apply_platform = (fun () _ -> Error (A.Terraform_failed "terraform exited 1."))
+      apply_platform = (fun () _ -> Error (A.Terraform_failed diagnostic))
     }
   in
   let message, cleanup = failed_with (A.execute ~deps) in
-  Windtrap.equal Windtrap.string ~msg:"Terraform's own text" "terraform exited 1." message;
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"Terraform's allocation diagnostic"
+    diagnostic
+    message;
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"allocation failure cannot report Ready"
+    false
+    (List.mem "  lifecycle phase: Ready" calls.reports);
   cleanup_is `Succeeded cleanup;
   Windtrap.equal Windtrap.int ~msg:"removed exactly once" 1 calls.removals
 ;;
@@ -290,92 +291,6 @@ let test_unsupported_substrate_refuses_before_the_plan () =
   Windtrap.equal Windtrap.bool ~msg:"nothing was applied" false calls.applied_cloud
 ;;
 
-let test_disk_quota_insufficient_refuses_before_the_platform () =
-  let calls = fresh () in
-  let deps =
-    { (deps calls) with
-      observe_disk_quota =
-        (fun () ->
-          calls.events <- "observe_disk_quota" :: calls.events;
-          Ok
-            (Some
-               { Sol_cli_disk_quota.quota_name = "SSD_TOTAL_GB"
-               ; limit_gb = 500
-               ; used_gb = 500
-               }))
-    }
-  in
-  (match A.execute ~deps with
-   | A.Applied -> Windtrap.fail "expected a refusal: the whole quota is already spent"
-   | A.Apply_failed _ -> ());
-  Windtrap.equal
-    Windtrap.bool
-    ~msg:"the platform was never applied"
-    false
-    calls.platform_applied;
-  Windtrap.equal
-    Windtrap.bool
-    ~msg:"the prerequisites were never applied"
-    false
-    calls.prerequisites_applied;
-  Windtrap.equal
-    (Windtrap.list Windtrap.string)
-    ~msg:"the observation is the last thing that ran"
-    [ "substrate_supported"; "cloud_ready"; "observe_disk_quota" ]
-    (List.rev calls.events)
-;;
-
-let test_disk_quota_sufficient_proceeds_in_order () =
-  let calls = fresh () in
-  (match A.execute ~deps:(deps calls) with
-   | A.Applied -> ()
-   | A.Apply_failed _ -> Windtrap.fail "expected the apply to succeed with room to spare");
-  Windtrap.equal
-    (Windtrap.list Windtrap.string)
-    ~msg:"substrate, cloud ready, observation, then the platform"
-    [ "substrate_supported"
-    ; "cloud_ready"
-    ; "observe_disk_quota"
-    ; "apply_prerequisites"
-    ; "apply_platform"
-    ]
-    (List.rev calls.events)
-;;
-
-let test_disk_quota_unobserved_is_reported_not_passed () =
-  let calls = fresh () in
-  let deps = { (deps calls) with observe_disk_quota = (fun () -> Ok None) } in
-  (match A.execute ~deps with
-   | A.Applied -> ()
-   | A.Apply_failed _ -> Windtrap.fail "an unobserved quota is a report, not a refusal");
-  Windtrap.equal
-    Windtrap.bool
-    ~msg:"the run says it could not say"
-    true
-    (List.exists
-       (fun line -> String.length line > 0)
-       (calls.reports
-        |> List.filter (fun line ->
-          String.length line >= 27
-          && String.sub line (String.length line - 27) 27 = "cannot say whether they fit")
-       ))
-;;
-
-let test_disk_quota_unreadable_refuses () =
-  let calls = fresh () in
-  let deps =
-    { (deps calls) with observe_disk_quota = (fun () -> Error "gcloud is not installed") }
-  in
-  (match A.execute ~deps with
-   | A.Applied -> Windtrap.fail "an unreadable quota must fail closed"
-   | A.Apply_failed _ -> ());
-  Windtrap.equal
-    Windtrap.bool
-    ~msg:"the platform was never applied"
-    false
-    calls.platform_applied
-;;
-
 let test_missing_platform_prerequisite_refuses_before_the_platform () =
   let calls = fresh () in
   let deps =
@@ -407,7 +322,6 @@ let test_missing_platform_prerequisite_refuses_before_the_platform () =
        apply"
     [ "substrate_supported"
     ; "cloud_ready"
-    ; "observe_disk_quota"
     ; "apply_prerequisites"
     ; "verify_platform_prerequisites"
     ]
@@ -507,20 +421,6 @@ let%test "execute: fresh target reports CloudBootstrap" =
 let%test "execute: an unsupported substrate refuses before any plan exists" =
   test_unsupported_substrate_refuses_before_the_plan ()
 ;;
-
-let%test "execute: insufficient disk quota refuses before the platform" =
-  test_disk_quota_insufficient_refuses_before_the_platform ()
-;;
-
-let%test "execute: sufficient disk quota proceeds, and the check sits between the two" =
-  test_disk_quota_sufficient_proceeds_in_order ()
-;;
-
-let%test "execute: an unobserved quota is reported, not passed off as room" =
-  test_disk_quota_unobserved_is_reported_not_passed ()
-;;
-
-let%test "execute: an unreadable quota refuses" = test_disk_quota_unreadable_refuses ()
 
 let%test
     "execute: a missing operator-supplied platform credential refuses before the platform"
