@@ -41,11 +41,13 @@ class Resource:
     body: dict
     path: Path
     line: int
+    module_address: str = ""
+    indexed_module: bool = False
 
     @property
     def address(self):
         prefix = "data." if self.kind == "data" else ""
-        return f"{prefix}{self.type}.{self.name}"
+        return f"{self.module_address}{prefix}{self.type}.{self.name}"
 
     @property
     def where(self):
@@ -112,3 +114,54 @@ def attributes(node, key):
     elif isinstance(node, list):
         for v in node:
             yield from attributes(v, key)
+
+
+def native_resources(directory, *, boundary):
+    """Read a shipped root and its local modules, preserving Terraform addresses.
+
+    Remote modules remain their providers' contract; this is not terraform init or
+    an inspection of user infrastructure. Reject unreadable local sources rather
+    than treating an incomplete walk as complete coverage.
+    """
+    boundary = Path(boundary).resolve()
+
+    def visit(directory, prefix, ancestors, indexed_module):
+        directory = Path(directory).resolve()
+        if not directory.is_relative_to(boundary):
+            raise ValueError(f"local module {directory} is outside shipped assets {boundary}")
+        if directory in ancestors:
+            raise ValueError(f"cyclic local module reference to {directory}")
+        json_files = sorted(directory.glob("*.tf.json"))
+        if json_files:
+            raise ValueError(f"native source coverage cannot inspect Terraform JSON files: {json_files}")
+        files = sorted(directory.glob("*.tf"))
+        if not files:
+            raise ValueError(f"local Terraform directory {directory} has no .tf files")
+        found = []
+        for path in files:
+            if not path.resolve().is_relative_to(boundary):
+                raise ValueError(f"native Terraform file {path} resolves outside shipped assets {boundary}")
+            for resource in resources(path, kinds=("resource",)):
+                resource.module_address = prefix
+                resource.indexed_module = indexed_module
+                found.append(resource)
+            for module in modules(path):
+                source = module.body.get("source")
+                if not is_string_literal(source):
+                    raise ValueError(f"{module.where}: module {module.name} has no literal source")
+                source = unquote(source)
+                if "${" in source or "%{" in source or not source:
+                    raise ValueError(f"{module.where}: unsupported module source {source!r}")
+                if source.startswith("/"):
+                    raise ValueError(f"{module.where}: absolute local module source {source!r}")
+                if not source.startswith(("./", "../")):
+                    continue
+                found.extend(visit(
+                    directory / source,
+                    f"{prefix}module.{module.name}.",
+                    ancestors + (directory,),
+                    indexed_module or "count" in module.body or "for_each" in module.body,
+                ))
+        return found
+
+    return visit(directory, "", (), False)

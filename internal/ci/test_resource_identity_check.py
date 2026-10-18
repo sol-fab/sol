@@ -134,6 +134,46 @@ def main():
     )
     cases.append(("a class-level rule that no longer covers the in-cluster family", tmp))
 
+    # The same missing ownership obligation must fail at every local-module depth.
+    for depth in (0, 1, 2):
+        tmp = scratch()
+        directory = tmp / "platform/cloud/aws/cluster"
+        for index in range(depth):
+            child = directory / "nested"
+            child.mkdir()
+            (directory / f"module_{index}.tf").write_text(
+                f'module "nested" {{ source = "./nested" }}\n'
+            )
+            directory = child
+        (directory / "uncovered.tf").write_text(
+            'resource "aws_eip" "uncovered" { domain = "vpc" }\n'
+        )
+        cases.append((f"an uncovered native resource at module depth {depth}", tmp))
+
+    # Moving an already covered resource must require a correctly qualified
+    # recovery address; the old root mapping cannot authorize a module import.
+    tmp = scratch()
+    module = tmp / "platform/cloud/aws/cluster/nested"
+    module.mkdir()
+    source = tmp / "platform/cloud/aws/cluster/main.tf"
+    text = source.read_text()
+    start = text.index('resource "aws_db_subnet_group" "main" {')
+    end = text.index('\n}', start) + 2
+    (module / "main.tf").write_text(text[start:end] + "\n")
+    source.write_text(text[:start] + text[end:] + '\nmodule "nested" { source = "./nested" }\n')
+    result = run(tmp)
+    if result.returncode == 0 or "module.nested.aws_db_subnet_group.main" not in result.stderr:
+        failures.append("moving a resource into a module did not require its qualified ownership mapping")
+    mutate(tmp, "cli/lib/cloud/sol_cli_resource_identity.ml",
+           '"aws_db_subnet_group.main[0]"', '"module.nested.aws_db_subnet_group.main[0]"')
+    result = run(tmp)
+    if result.returncode != 0:
+        failures.append("an explicitly qualified module recovery mapping was rejected:\n" + result.stderr)
+    mutate(tmp, "platform/cloud/aws/cluster/main.tf",
+           'module "nested" { source = "./nested" }',
+           'module "nested" { source = "./nested" count = 1 }')
+    cases.append(("Direct recovery beneath an indexed module without an instance policy", tmp))
+
     for label, tmp in cases:
         result = run(tmp)
         if result.returncode == 0:
