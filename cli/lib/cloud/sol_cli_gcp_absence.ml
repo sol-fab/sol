@@ -6,16 +6,18 @@ type check =
   ; attribution : attribution
   ; argv : string list
   ; attributable : string -> bool
+  ; parse : string -> (string list, string) result
   }
 
 let identity_check
       ?(attributable = fun _ -> true)
+      ?(parse = fun stdout -> Ok (lines stdout))
       ~resource_class
       ~identity
       ~attribution
       argv
   =
-  { resource_class; identity; attribution; argv; attributable }
+  { resource_class; identity; attribution; argv; attributable; parse }
 ;;
 
 let not_found =
@@ -48,7 +50,14 @@ let ok_observation ~check found =
 let run ~check =
   match Sol_cli_process.run (Sol_cli_process.cmd ("gcloud" :: check.argv)) with
   | Ok { Sol_cli_process.stdout; _ } ->
-    ok_observation ~check (lines stdout |> List.filter check.attributable)
+    (match check.parse stdout with
+     | Ok candidates -> ok_observation ~check (List.filter check.attributable candidates)
+     | Error reason ->
+       Unobservable
+         { resource_class = check.resource_class
+         ; reason
+         ; checked_with = checked_with check.argv
+         })
   | Error (Sol_cli_process.Non_zero r) when not_found r.stderr ->
     Absent
       { resource_class = check.resource_class
@@ -101,6 +110,52 @@ let cluster_check ~project ~cluster_name =
 
 let checks ~project ~region ~cluster_name =
   let p args = [ "--project"; project ] @ args in
+  let disk_check () =
+    let prefix = "gke-" ^ cluster_name ^ "-" in
+    let parse stdout =
+      match Yojson.Safe.from_string stdout with
+      | exception Yojson.Json_error message ->
+        Error ("invalid `gcloud compute disks list --format=json`: " ^ message)
+      | `List disks ->
+        Ok
+          (List.filter_map
+             (fun disk ->
+                match Sol_cli_json.field [ "name" ] disk |> Sol_cli_json.string with
+                | None -> None
+                | Some name ->
+                  let cluster_label =
+                    Sol_cli_json.field [ "labels"; "goog-k8s-cluster-name" ] disk
+                    |> Sol_cli_json.string
+                  in
+                  if
+                    String.starts_with ~prefix name
+                    ||
+                    match cluster_label with
+                    | Some label -> String.equal label cluster_name
+                    | None -> false
+                  then Some name
+                  else None)
+             disks)
+      | _ ->
+        Error
+          "unexpected `gcloud compute disks list --format=json` shape: the answer is not \
+           an array"
+    in
+    identity_check
+      ~resource_class:"persistent disk"
+      ~identity:(prefix ^ "* or label goog-k8s-cluster-name=" ^ cluster_name)
+      ~attribution:
+        (Named_for_target
+           (Printf.sprintf
+              "the target's own cluster name: GKE names node-boot disks gke-%s-*, and \
+               labels disks it creates for this cluster's PVCs with \
+               goog-k8s-cluster-name=%s, so a pvc-<uuid> disk carrying that label is \
+               this target's too"
+              cluster_name
+              cluster_name))
+      ~parse
+      (p [ "compute"; "disks"; "list"; "--format"; "json" ])
+  in
   let named ~resource_class ~identity ?(prefix = cluster_name ^ "-") argv =
     identity_check
       ~resource_class
@@ -217,11 +272,7 @@ let checks ~project ~region ~cluster_name =
       ~resource_class:"storage bucket"
       ~identity:(cluster_name ^ "-*")
       (p [ "storage"; "buckets"; "list"; "--format"; "value(name)" ])
-  ; named
-      ~resource_class:"persistent disk"
-      ~identity:("gke-" ^ cluster_name ^ "-*")
-      ~prefix:("gke-" ^ cluster_name ^ "-")
-      (p [ "compute"; "disks"; "list"; "--format"; "value(name)" ])
+  ; disk_check ()
   ; identity_check
       ~resource_class:"firewall rule"
       ~identity:(cluster_name ^ " and gke-" ^ cluster_name ^ "-*")

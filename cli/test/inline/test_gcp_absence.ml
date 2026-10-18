@@ -28,11 +28,15 @@ let target : Sol_cli_config.target =
   }
 ;;
 
-let fake_gcloud ~log ~node_pools_out ~nats_out ~list_exit =
+let fake_gcloud ~log ~disks_out ~node_pools_out ~nats_out ~list_exit =
   Printf.sprintf
     {|#!/bin/sh
 printf '%%s\n' "$*" >> %s
 case "$*" in
+  *"compute disks list"*)
+    printf '%%s' %s
+    exit 0
+    ;;
   *"container node-pools list"*)
     printf '%%s' %s%s
     exit %d
@@ -45,20 +49,21 @@ esac
 exit 0
 |}
     log
+    (Filename.quote disks_out)
     (Filename.quote node_pools_out)
     (if list_exit = 0 then "" else " >&2")
     list_exit
     (Filename.quote nats_out)
 ;;
 
-let with_fake_gcloud ~node_pools_out ~nats_out ~list_exit f =
+let with_fake_gcloud ?(disks_out = "") ~node_pools_out ~nats_out ~list_exit f =
   let dir = Filename.temp_file "sol-fake-gcloud-" "" in
   Sys.remove dir;
   Unix.mkdir dir 0o755;
   let log = Filename.concat dir "calls.log" in
   let bin = Filename.concat dir "gcloud" in
   let oc = open_out bin in
-  output_string oc (fake_gcloud ~log ~node_pools_out ~nats_out ~list_exit);
+  output_string oc (fake_gcloud ~log ~disks_out ~node_pools_out ~nats_out ~list_exit);
   close_out oc;
   Unix.chmod bin 0o755;
   let old_path =
@@ -107,8 +112,8 @@ let only observations resource_class =
   List.find (fun o -> String.equal (class_of o) resource_class) observations
 ;;
 
-let with_calls ~node_pools_out ~nats_out ~list_exit f =
-  with_fake_gcloud ~node_pools_out ~nats_out ~list_exit (fun () ->
+let with_calls ?(disks_out = "") ~node_pools_out ~nats_out ~list_exit f =
+  with_fake_gcloud ~disks_out ~node_pools_out ~nats_out ~list_exit (fun () ->
     let observations =
       Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
     in
@@ -227,4 +232,46 @@ let%test "location-scoped inventory: a present resource is Present" =
 
 let%test "location-scoped inventory: a refused list is Unobservable" =
   test_a_refused_list_is_unobservable ()
+;;
+
+let%test "persistent disks: a PVC disk is attributed by its GKE cluster label" =
+  with_calls
+    ~disks_out:{|[{"name":"pvc-abc","labels":{"goog-k8s-cluster-name":"acme-prod"}}]|}
+    ~node_pools_out:""
+    ~nats_out:""
+    ~list_exit:0
+    (fun ~log:_ ~observations ->
+       match only observations "persistent disk" with
+       | Present present ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the PVC-backed disk is this target's residue"
+           [ "pvc-abc" ]
+           present.found
+       | _ ->
+         Windtrap.fail "a pvc-<uuid> disk with this cluster's GKE label was not observed")
+;;
+
+let%test "persistent disks: another cluster's PVC disk is not attributed" =
+  with_calls
+    ~disks_out:{|[{"name":"pvc-abc","labels":{"goog-k8s-cluster-name":"other-cluster"}}]|}
+    ~node_pools_out:""
+    ~nats_out:""
+    ~list_exit:0
+    (fun ~log:_ ~observations ->
+       match only observations "persistent disk" with
+       | Absent _ -> ()
+       | _ -> Windtrap.fail "another cluster's PVC disk was attributed to this target")
+;;
+
+let%test "persistent disks: a malformed disk inventory is unobservable" =
+  with_calls
+    ~disks_out:{|{not json|}
+    ~node_pools_out:""
+    ~nats_out:""
+    ~list_exit:0
+    (fun ~log:_ ~observations ->
+       match only observations "persistent disk" with
+       | Unobservable _ -> ()
+       | _ -> Windtrap.fail "a malformed disk inventory was read as an observation")
 ;;

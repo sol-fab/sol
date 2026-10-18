@@ -26,6 +26,12 @@ case " $* " in
     ;;
 esac
 case " $* " in
+  *" compute disks list "*)
+    printf '%s\n' "${DISKS_JSON:-[]}"
+    exit 0
+    ;;
+esac
+case " $* " in
   *" container clusters list "*)
     if [ "${SUBSTRATE_ABSENT_AT_PROVIDER:-}" != 1 ] &&
       [ ! -e "${LIFECYCLE_LOG}.destroyed" ]; then
