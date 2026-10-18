@@ -6,6 +6,10 @@ type resource =
   ; deletion_protection : bool option
   ; final_snapshot_identifier : string option
   ; skip_final_snapshot : bool option
+  ; role : string option
+  ; member : string option
+  ; secret_id : string option
+  ; email : string option
   }
 
 type state_read =
@@ -49,6 +53,10 @@ let resource_of_json json =
       ; deletion_protection
       ; final_snapshot_identifier = string_attr "final_snapshot_identifier" values
       ; skip_final_snapshot
+      ; role = string_attr "role" values
+      ; member = string_attr "member" values
+      ; secret_id = string_attr "secret_id" values
+      ; email = string_attr "email" values
       }
   | None, _ ->
     Error
@@ -281,10 +289,11 @@ type deps =
   ; release_workloads : unit -> Sol_cli_workload_scope.release
   ; accept_unreleased : bool
   ; destroy_substrate : unit -> (unit, string) result
-  ; destroy_authorization : unit -> (string, string) result
+  ; destroy_authorization : unit -> (string * (string * string list) list, string) result
   ; verify_destruction :
       pre_destroy:state_read
       -> preparation:preparation
+      -> authorization_identities:(string * string list) list
       -> Sol_cli_destroy_verification.observation
   ; report : string -> unit
   ; warn : string -> unit
@@ -435,13 +444,18 @@ let execute ~deps =
            (Sol_cli_cloud_lifecycle.phase_to_string Sol_cli_cloud_lifecycle.Destroying));
     match deps.destroy_authorization () with
     | Error message -> fail ~cleanup (Authorization_not_removed message)
-    | Ok evidence ->
+    | Ok (evidence, authorization_identities) ->
       deps.report ("  " ^ evidence);
       (match deps.destroy_substrate () with
        | Error message -> fail ~cleanup (Substrate_destroy_failed message)
        | Ok () ->
          deps.report "\nVerifying teardown...";
-         let observation = deps.verify_destruction ~pre_destroy:!state ~preparation in
+         let observation =
+           deps.verify_destruction
+             ~pre_destroy:!state
+             ~preparation
+             ~authorization_identities
+         in
          let verdict = Sol_cli_destroy_verification.classify observation in
          if Sol_cli_destroy_verification.is_verified verdict
          then succeed ~cleanup ~verification:observation preparation

@@ -5,6 +5,10 @@ let authorization_resource =
   ; kind = "aws_iam_role"
   ; name = Some "sol-prod-authorization"
   ; identifier = None
+  ; role = None
+  ; member = None
+  ; secret_id = None
+  ; email = None
   ; deletion_protection = None
   ; final_snapshot_identifier = None
   ; skip_final_snapshot = None
@@ -290,4 +294,67 @@ let%test "authorization destroy: post-destroy state must be empty" =
   match verify_destroyed_state Sol_cli_cloud_destroy.State_empty with
   | Ok () -> ()
   | Error message -> Windtrap.failf "an empty authorization state was refused: %s" message
+;;
+
+let aws_target : Sol_cli_config.target =
+  { name = "prod/aws/us-east-1"
+  ; env = "prod"
+  ; provider = Sol_cli_provider.Aws
+  ; region = "us-east-1"
+  ; registry = None
+  ; base_domain = None
+  ; cluster_issuer = None
+  ; letsencrypt_email = None
+  ; cluster_name = Some "acme-prod"
+  ; kube_context = None
+  ; kubeconfig = None
+  ; terraform_var_file = None
+  ; observability_backend = None
+  ; destroy_retention = None
+  ; alert_receiver_type = None
+  ; alert_receiver_url = None
+  ; alert_owner = None
+  ; alert_runbook_url = None
+  ; state_bucket = None
+  ; cluster_endpoint_cidr = None
+  ; dns_zone_ownership = None
+  ; node_failure_headroom_nodes = None
+  ; profile = None
+  ; shape = Some Sol_cli_profile.Local
+  ; provider_fields =
+      [ ( "aws"
+        , [ "provisioner_role_arn", "arn:aws:iam::111122223333:role/sol-provisioner" ] )
+      ]
+  ; secret_authorities = []
+  }
+;;
+
+let%test "authorization: pre-destroy state names the target's own identities" =
+  let state =
+    Sol_cli_cloud_destroy.inventory_of_show_json
+      {|{"values":{"root_module":{"resources":[
+        {"address":"aws_iam_role.workload[\"charge-svc\"]","type":"aws_iam_role","values":{"name":"sol-prod-charge-svc"}},
+        {"address":"aws_iam_role.reconciler","type":"aws_iam_role","values":{"name":"sol-prod-authorization"}},
+        {"address":"aws_iam_policy.workload_boundary","type":"aws_iam_policy","values":{"name":"sol-prod-workload-boundary"}}
+      ]}}}|}
+  in
+  let identities = identities_of_state ~target:aws_target state in
+  let find class_name =
+    List.assoc_opt class_name identities |> Option.value ~default:[]
+  in
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"the reconciler role is not treated as a workload role"
+    [ "sol-prod-charge-svc" ]
+    (find "authorization workload role");
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"the reconciler role is named"
+    [ "sol-prod-authorization" ]
+    (find "authorization IAM role");
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"the boundary policy is named"
+    [ "sol-prod-workload-boundary" ]
+    (find "authorization IAM policy")
 ;;

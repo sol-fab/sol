@@ -33,6 +33,25 @@ val fence
 
 val verify_destroyed_state : Sol_cli_cloud_destroy.state_read -> (unit, string) result
 
+type destroy_result =
+  { outcome : outcome
+  ; identities : (string * string list) list
+  }
+
+(** The resource identities the authorization root's pre-destroy state records, grouped
+    by the observation class they belong to. These are the target's own authorization
+    resources, not the environment-level names a sibling target could share. *)
+val identities_of_state
+  :  target:Sol_cli_config.target
+  -> Sol_cli_cloud_destroy.state_read
+  -> (string * string list) list
+
+val destroy_with_identities
+  :  assets:Sol_cli_platform_assets.t
+  -> run_log:Sol_cli_run_log.t
+  -> target:Sol_cli_config.target
+  -> (destroy_result, string) result
+
 val destroy
   :  assets:Sol_cli_platform_assets.t
   -> run_log:Sol_cli_run_log.t
