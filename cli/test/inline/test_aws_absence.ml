@@ -148,15 +148,18 @@ let test_load_balancers_use_a_supported_command () =
     let ec2_calls = arguments_of ~log ~contains:"describe-vpcs" in
     Windtrap.equal
       Windtrap.bool
-      ~msg:"the volumes/vpcs still filter by tag"
+      ~msg:"the VPC probe lists candidates before attributing them"
       true
       (ec2_calls <> []);
     List.iter
       (fun call ->
          Windtrap.equal
            Windtrap.bool
-           ~msg:(Printf.sprintf "ec2 filters remain in %S" call)
-           true
+           ~msg:
+             (Printf.sprintf
+                "the VPC probe does not pre-filter by the cluster tag in %S"
+                call)
+           false
            (Sol_cli_string.contains ~needle:"--filters" call))
       ec2_calls)
 ;;
@@ -222,6 +225,184 @@ let%test "load balancer inventory: an untagged inventory is Absent" =
 
 let%test "load balancer inventory: a failed tag read is Unobservable" =
   test_failed_tag_read_is_unobservable ()
+;;
+
+let observation_of class_name observations =
+  List.find
+    (fun observation -> String.equal (class_of observation) class_name)
+    observations
+;;
+
+(* The cluster root writes `Name = <cluster>` on the VPC and `<cluster>-<suffix>`
+   on the subnets; it does not write the cluster tag. The old probe filtered the
+   list by the cluster tag before looking at the resource, so a Name-tagged VPC
+   was invisible. *)
+let with_inventory_script
+      ~vpc_tags
+      ~subnet_tags
+      ~vpc_cluster_tagged
+      ~subnet_cluster_tagged
+      f
+  =
+  let dir = Filename.temp_file "sol-fake-aws-inventory-" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o755;
+  let log = Filename.concat dir "calls.log" in
+  let bin = Filename.concat dir "aws" in
+  let flag value = if value then 1 else 0 in
+  let script =
+    Printf.sprintf
+      {|#!/bin/sh
+printf '%%s\n' "$*" >> %s
+case "$1 $2" in
+  "sts get-caller-identity")
+    printf '111122223333\n'
+    ;;
+  "ec2 describe-vpcs")
+    case " $* " in
+      *" --filters "*)
+        if [ %d -eq 1 ]; then printf 'vpc-123\n'; fi
+        ;;
+      *)
+        printf 'vpc-123\n'
+        ;;
+    esac
+    ;;
+  "ec2 describe-subnets")
+    case " $* " in
+      *" --filters "*)
+        if [ %d -eq 1 ]; then printf 'subnet-123\n'; fi
+        ;;
+      *)
+        printf 'subnet-123\n'
+        ;;
+    esac
+    ;;
+  "ec2 describe-tags")
+    case " $* " in
+      *"Values=vpc-123"*)
+        case %s in
+          *"acme-prod"*|*"owned"*|*"shared"*) printf '%%s' %s ;;
+        esac
+        ;;
+      *"Values=subnet-123"*)
+        case %s in
+          *"acme-prod"*|*"owned"*|*"shared"*) printf '%%s' %s ;;
+        esac
+        ;;
+    esac
+    ;;
+esac
+exit 0
+|}
+      (Filename.quote log)
+      (flag vpc_cluster_tagged)
+      (flag subnet_cluster_tagged)
+      (Filename.quote vpc_tags)
+      (Filename.quote vpc_tags)
+      (Filename.quote subnet_tags)
+      (Filename.quote subnet_tags)
+  in
+  Out_channel.with_open_text bin (fun oc -> output_string oc script);
+  Unix.chmod bin 0o755;
+  let old_path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+  Unix.putenv "PATH" (dir ^ ":" ^ old_path);
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" old_path;
+      (try Sys.remove bin with
+       | _ -> ());
+      (try Sys.remove log with
+       | _ -> ());
+      try Unix.rmdir dir with
+      | _ -> ())
+    (fun () ->
+       let observations =
+         Sol_cli_aws_absence.observations target ~cluster_name:"acme-prod"
+       in
+       f ~log ~observations)
+;;
+
+let%test "AWS VPC inventory: a Name-tagged VPC is Present" =
+  with_inventory_script
+    ~vpc_tags:"acme-prod\n"
+    ~subnet_tags:""
+    ~vpc_cluster_tagged:false
+    ~subnet_cluster_tagged:false
+    (fun ~log:_ ~observations ->
+       match observation_of "VPC" observations with
+       | Sol_cli_absence.Present present ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the VPC named for the cluster is reported"
+           [ "vpc-123" ]
+           present.found
+       | _ -> Windtrap.fail "a VPC named for the cluster must be Present")
+;;
+
+let%test "AWS VPC inventory: another cluster's Name is not attributed" =
+  with_inventory_script
+    ~vpc_tags:"other-cluster\n"
+    ~subnet_tags:""
+    ~vpc_cluster_tagged:false
+    ~subnet_cluster_tagged:false
+    (fun ~log:_ ~observations ->
+       match observation_of "VPC" observations with
+       | Sol_cli_absence.Absent _ -> ()
+       | _ -> Windtrap.fail "another cluster's VPC must not be attributed")
+;;
+
+let%test "AWS subnet inventory: a Name-tagged subnet is Present" =
+  with_inventory_script
+    ~vpc_tags:""
+    ~subnet_tags:"acme-prod-private\n"
+    ~vpc_cluster_tagged:false
+    ~subnet_cluster_tagged:false
+    (fun ~log:_ ~observations ->
+       match observation_of "subnet" observations with
+       | Sol_cli_absence.Present present ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the subnet named for the cluster is reported"
+           [ "subnet-123" ]
+           present.found
+       | _ -> Windtrap.fail "a subnet named for the cluster must be Present")
+;;
+
+let%test "AWS VPC inventory: a cluster-tagged VPC is Present" =
+  with_inventory_script
+    ~vpc_tags:"owned\n"
+    ~subnet_tags:""
+    ~vpc_cluster_tagged:true
+    ~subnet_cluster_tagged:false
+    (fun ~log:_ ~observations ->
+       match observation_of "VPC" observations with
+       | Sol_cli_absence.Present present ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the cluster-tagged VPC is reported"
+           [ "vpc-123" ]
+           present.found
+       | _ -> Windtrap.fail "a cluster-tagged VPC must be Present")
+;;
+
+let%test "AWS VPC inventory: the tag read covers the cluster tag and the Name" =
+  with_inventory_script
+    ~vpc_tags:""
+    ~subnet_tags:""
+    ~vpc_cluster_tagged:false
+    ~subnet_cluster_tagged:false
+    (fun ~log ~observations:_ ->
+       let tag_calls = arguments_of ~log ~contains:"ec2 describe-tags" in
+       Windtrap.equal
+         Windtrap.bool
+         ~msg:"the VPC tag read attributes either the cluster tag or the provisioned Name"
+         true
+         (List.exists
+            (fun call ->
+               Sol_cli_string.contains ~needle:"kubernetes.io/cluster/acme-prod" call
+               && Sol_cli_string.contains ~needle:"starts_with(Value, 'acme-prod-')" call)
+            tag_calls))
 ;;
 
 let aws_not_found_needles = [ "notfound"; "not found"; "does not exist"; "no such" ]
