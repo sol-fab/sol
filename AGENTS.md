@@ -53,6 +53,12 @@ conversation resolution remain authoritative; never bypass them. Resolve failing
 conflicts, review findings, and changed parents while independent or downstream work
 continues.
 
+**External operations:** Do not block on long-running external operations such as GitHub
+Actions CI. After pushing a PR, check its status once and report any pending checks or
+required reviews, then return control. Do not poll repeatedly or leave background polling
+processes running unless explicitly requested. For asynchronous operations, distinguish
+submitted work from completed work.
+
 ## Engineering quality and prioritization
 
 Sol's primary engineering objective is a reliable, secure, maintainable lifecycle: provision
