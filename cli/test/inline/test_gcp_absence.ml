@@ -356,7 +356,6 @@ let test_custom_roles_are_normalized_to_the_target_project () =
     ~nats_out:""
     ~roles_out:
       "sol_acme_prod_cluster_access\n\
-       projects/acme-project/roles/sol_acme_prod_cluster_access\n\
        projects/other-project/roles/sol_acme_prod_cluster_access\n"
     ~list_exit:0
     (fun ~log:_ ~observations ->
