@@ -357,7 +357,11 @@ let reconcile_ownership
              (String.concat ", " addresses))
     in
     let observations =
-      Sol_cli_provider_registry.observations provider target_cfg ~cluster_name
+      Sol_cli_provider_registry.observations
+        provider
+        target_cfg
+        ~cluster_name
+        ~pre_destroy:state
     in
     let dispositions =
       Sol_cli_ownership_reconciliation.dispositions

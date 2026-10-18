@@ -203,9 +203,10 @@ let destruction provider context =
     }
 ;;
 
-let observations provider target ~cluster_name =
+let observations provider target ~cluster_name ~pre_destroy =
   match provider with
-  | Sol_cli_provider.Aws -> Sol_cli_aws_absence.observations target ~cluster_name
+  | Sol_cli_provider.Aws ->
+    Sol_cli_aws_absence.observations ~pre_destroy target ~cluster_name
   | Sol_cli_provider.Gcp -> Sol_cli_gcp_absence.observations target ~cluster_name
   | Sol_cli_provider.Byo -> []
 ;;

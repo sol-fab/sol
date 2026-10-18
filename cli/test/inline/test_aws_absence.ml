@@ -136,17 +136,28 @@ let observation_of class_name observations =
 ;;
 
 (* ECR repositories are named `<workspace>/<service>` by the cluster root from
-   the `workspace_name` variable. The target's registry is optional and may name
-   another registry entirely, so the workspace name must be the attribution
-   prefix. *)
-let with_ecr_inventory ~workspace ~repositories f =
-  let root = Filename.temp_file "sol-ecr-workspace-" "" in
+   the `workspace_name` variable. The pre-destroy Terraform state records the
+   names the target actually created. The current working directory is not an
+   ownership record: teardown may run elsewhere and the workspace may have been
+   renamed. *)
+let ecr_state names =
+  let resources =
+    names
+    |> List.map (fun name ->
+      Printf.sprintf
+        {|{"address":%S,"type":"aws_ecr_repository","values":{"name":%S}}|}
+        ("aws_ecr_repository.services[" ^ name ^ "]")
+        name)
+    |> String.concat ","
+  in
+  Sol_cli_cloud_destroy.inventory_of_show_json
+    (Printf.sprintf {|{"values":{"root_module":{"resources":[%s]}}}|} resources)
+;;
+
+let with_ecr_inventory ~state ~repositories f =
+  let root = Filename.temp_file "sol-ecr-inventory-" "" in
   Sys.remove root;
   Unix.mkdir root 0o755;
-  let ws = Filename.concat root workspace in
-  Unix.mkdir ws 0o755;
-  let sol_yml = Filename.concat ws "sol.yml" in
-  Out_channel.with_open_text sol_yml (fun _ -> ());
   let bin_dir = Filename.concat root "bin" in
   Unix.mkdir bin_dir 0o755;
   let log = Filename.concat bin_dir "calls.log" in
@@ -169,7 +180,7 @@ exit 0
   let old_path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
   let old_cwd = Sys.getcwd () in
   Unix.putenv "PATH" (bin_dir ^ ":" ^ old_path);
-  Sys.chdir ws;
+  Sys.chdir root;
   Fun.protect
     ~finally:(fun () ->
       Sys.chdir old_cwd;
@@ -178,46 +189,58 @@ exit 0
        | _ -> ());
       (try Sys.remove log with
        | _ -> ());
-      (try Sys.remove sol_yml with
-       | _ -> ());
-      (try Unix.rmdir ws with
-       | _ -> ());
       (try Unix.rmdir bin_dir with
        | _ -> ());
       try Unix.rmdir root with
       | _ -> ())
     (fun () ->
        let observations =
-         Sol_cli_aws_absence.observations target ~cluster_name:"acme-prod"
+         Sol_cli_aws_absence.observations
+           ~pre_destroy:state
+           target
+           ~cluster_name:"acme-prod"
        in
        f ~log ~observations)
 ;;
 
-let%test "AWS ECR inventory: workspace repositories are attributable without a registry" =
+let%test "AWS ECR inventory: historical state names are attributed outside the workspace" =
   with_ecr_inventory
-    ~workspace:"acme"
+    ~state:(ecr_state [ "acme/charge-svc"; "acme/old-service" ])
     ~repositories:"acme/charge-svc\nacme/old-service\nother/charge-svc\n"
     (fun ~log:_ ~observations ->
        match observation_of "ECR repository" observations with
        | Sol_cli_absence.Present present ->
          Windtrap.equal
            (Windtrap.list Windtrap.string)
-           ~msg:"the workspace's current and historical repositories are reported"
+           ~msg:"the state's current and historical repositories are reported"
            [ "acme/charge-svc"; "acme/old-service" ]
            present.found
        | _ ->
          Windtrap.fail
-           "the workspace's ECR repositories must be attributable without a registry")
+           "the state's ECR repositories must be attributable from any working directory")
 ;;
 
 let%test "AWS ECR inventory: another workspace's repository is not attributed" =
   with_ecr_inventory
-    ~workspace:"acme"
+    ~state:(ecr_state [ "acme/charge-svc" ])
     ~repositories:"other/charge-svc\n"
     (fun ~log:_ ~observations ->
        match observation_of "ECR repository" observations with
        | Sol_cli_absence.Absent _ -> ()
        | _ -> Windtrap.fail "another workspace's ECR repository must not be attributed")
+;;
+
+let%test "AWS ECR inventory: lost ownership is not read as absence" =
+  with_ecr_inventory
+    ~state:(ecr_state [])
+    ~repositories:"acme/charge-svc\n"
+    (fun ~log:_ ~observations ->
+       match observation_of "ECR repository" observations with
+       | Sol_cli_absence.Not_attributable _ -> ()
+       | _ ->
+         Windtrap.fail
+           "an empty pre-destroy state without a declared registry must not be read as \
+            absence")
 ;;
 
 let test_load_balancers_use_a_supported_command () =
