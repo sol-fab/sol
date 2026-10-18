@@ -60,13 +60,18 @@ def strings(statement, key):
         raise ValueError(f"{key} is not a literal list")
     if any(not tfconfig.is_string_literal(value) for value in values):
         raise ValueError(f"{key} contains an unevaluated expression")
-    return [tfconfig.unquote(value) for value in values]
+    decoded = [tfconfig.unquote(value) for value in values]
+    if any("${" in value or "%{" in value for value in decoded):
+        raise ValueError(f"{key} contains an unevaluated interpolation")
+    return decoded
 
 
 def matches(statement, action, resource):
     # Deliberately bounded to the existing positive Action/Resource contract.
-    if "not_actions" in statement or "not_resources" in statement:
-        raise ValueError("negated IAM selectors need explicit contract review")
+    if any(key in statement for key in ("not_actions", "not_resources", "principals", "not_principals")):
+        raise ValueError("additional IAM selectors need explicit contract review")
+    if tfconfig.unquote(statement.get("effect", '\"Allow\"')) not in ("Allow", "Deny"):
+        raise ValueError("unevaluated IAM effect needs explicit contract review")
     return (
         any(fnmatch.fnmatchcase(action.lower(), pattern.lower())
             for pattern in strings(statement, "actions"))
@@ -94,11 +99,14 @@ def failures(documents):
 class InfrastructurePermissions(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.documents = {
-            r.name: tfconfig.blocks(r.body, "statement")
-            for r in tfconfig.resources(BOOTSTRAP / "main.tf")
-            if r.type == "aws_iam_policy_document"
-        }
+        cls.documents = {}
+        for resource in tfconfig.resources(BOOTSTRAP / "main.tf"):
+            if resource.type != "aws_iam_policy_document":
+                continue
+            unsupported = set(resource.body) - {"statement", "version", "policy_id", "__is_block__"}
+            if unsupported:
+                raise ValueError(f"unmodeled policy composition: {sorted(unsupported)}")
+            cls.documents[resource.name] = tfconfig.blocks(resource.body, "statement")
 
     def test_real_policy_contract(self):
         self.assertEqual([], failures(self.documents))
@@ -158,6 +166,20 @@ class InfrastructurePermissions(unittest.TestCase):
                                     "actions": ['\"ecr:CreateRepositor?\"'],
                                     "resources": ['\"arn:aws:ecr:eu-west-1:111122223333:repository/review/*\"']})
         self.assertEqual([], failures(docs))
+
+    def test_opaque_or_additional_selectors_cannot_be_assumed_harmless(self):
+        for field, value in (
+            ("resources", ['\"arn:aws:ecr:${var.region}:111122223333:repository/*\"']),
+            ("effect", "${var.effect}"),
+            ("principals", [{"type": '\"AWS\"', "identifiers": ['\"other-account\"']}]),
+        ):
+            with self.subTest(field=field):
+                docs = copy.deepcopy(self.documents)
+                deny = {"effect": '\"Deny\"', "actions": ['\"ecr:CreateRepository\"'], "resources": ['\"*\"']}
+                deny[field] = value
+                docs["provisioner"].append(deny)
+                with self.assertRaises(ValueError):
+                    failures(docs)
 
     def test_unrelated_denial_does_not_block_required_operations(self):
         docs = copy.deepcopy(self.documents)
