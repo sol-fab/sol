@@ -129,6 +129,45 @@ let with_calls
     f ~log ~observations)
 ;;
 
+let with_fake_aws_security_groups ~groups f =
+  let dir = Filename.temp_file "sol-fake-aws-sg-" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o755;
+  let log = Filename.concat dir "calls.log" in
+  let bin = Filename.concat dir "aws" in
+  let script =
+    Printf.sprintf
+      {|#!/bin/sh
+printf '%%s\n' "$*" >> %s
+case "$1 $2" in
+  "sts get-caller-identity") printf '111122223333\n' ;;
+  "ec2 describe-security-groups") printf '%%s' %s ;;
+esac
+exit 0
+|}
+      (Filename.quote log)
+      (Filename.quote groups)
+  in
+  Out_channel.with_open_text bin (fun oc -> output_string oc script);
+  Unix.chmod bin 0o755;
+  let old_path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+  Unix.putenv "PATH" (dir ^ ":" ^ old_path);
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" old_path;
+      (try Sys.remove bin with
+       | _ -> ());
+      (try Sys.remove log with
+       | _ -> ());
+      try Unix.rmdir dir with
+      | _ -> ())
+    (fun () ->
+       let observations =
+         Sol_cli_aws_absence.observations target ~cluster_name:"acme-prod"
+       in
+       f ~log ~observations)
+;;
+
 let test_load_balancers_use_a_supported_command () =
   with_calls ~list_out:"" ~tags_out:"" ~tags_exit:0 (fun ~log ~observations:_ ->
     let list_calls = arguments_of ~log ~contains:"describe-load-balancers" in
@@ -222,6 +261,24 @@ let%test "load balancer inventory: an untagged inventory is Absent" =
 
 let%test "load balancer inventory: a failed tag read is Unobservable" =
   test_failed_tag_read_is_unobservable ()
+;;
+
+let%test "AWS EKS security groups are observed independently of the cluster" =
+  with_fake_aws_security_groups
+    ~groups:"acme-prod-cluster-123\nacme-prod-node-456\nacme-prod-rds\n"
+    (fun ~log:_ ~observations ->
+       match
+         List.find_opt
+           (fun observation -> String.equal (class_of observation) "EKS security group")
+           observations
+       with
+       | Some (Sol_cli_absence.Present present) ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the EKS-created security groups are reported"
+           [ "acme-prod-cluster-123"; "acme-prod-node-456" ]
+           present.found
+       | _ -> Windtrap.fail "the EKS-created security groups were not observed")
 ;;
 
 let aws_not_found_needles = [ "notfound"; "not found"; "does not exist"; "no such" ]

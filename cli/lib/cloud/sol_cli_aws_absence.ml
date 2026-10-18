@@ -288,6 +288,35 @@ let checks ~region ~cluster_name =
       ; "--output"
       ; "text"
       ]
+  ; (* The EKS module creates its cluster, node, and remote-access security
+       groups independently of the managed node group. If the cluster's state
+       is lost they can remain as orphaned EC2 resources; the RDS security
+       group check above does not see them. *)
+    check
+      ~resource_class:"EKS security group"
+      ~identity:
+        (Printf.sprintf
+           "%s-cluster-*, %s-node-*, %s-remote-access-*"
+           cluster_name
+           cluster_name
+           cluster_name)
+      ~attribution:(Named_for_target (named_for_cluster cluster_name))
+      ~attributable:(fun line ->
+        List.exists
+          (fun prefix -> String.starts_with ~prefix line)
+          [ cluster_name ^ "-cluster-"
+          ; cluster_name ^ "-node-"
+          ; cluster_name ^ "-remote-access-"
+          ])
+      [ "ec2"
+      ; "describe-security-groups"
+      ; "--region"
+      ; region
+      ; "--query"
+      ; "SecurityGroups[].GroupName"
+      ; "--output"
+      ; "text"
+      ]
   ; cluster_tagged
       ~cluster_name
       "VPC"
@@ -381,7 +410,12 @@ let checks ~region ~cluster_name =
       ; "--output"
       ; "text"
       ]
-  ; cluster_tagged
+  ; (* The EKS-managed aws-ebs-csi-driver add-on sets --k8s-tag-cluster-id, so
+       dynamically provisioned volumes carry kubernetes.io/cluster/<cluster>.
+       Volumes created before that flag, or outside the add-on, are covered by
+       the pre-teardown identity continuity work, not by a weaker CSI-only tag
+       that would attribute another cluster's PVC volumes. *)
+    cluster_tagged
       ~cluster_name
       "EBS volume"
       (ec2_tagged_argv
@@ -420,6 +454,7 @@ let class_names =
   ; "load balancer"
   ; "EBS volume"
   ; "ECR repository"
+  ; "EKS security group"
   ]
 ;;
 
