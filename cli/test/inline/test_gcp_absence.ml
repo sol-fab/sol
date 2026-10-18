@@ -721,3 +721,45 @@ let%test "GCP regional addresses: a failed forwarding-rule read is unknown" =
            (Sol_cli_string.contains ~needle:"permission denied" u.reason)
        | _ -> Windtrap.fail "a failed forwarding-rule read must be unknown")
 ;;
+
+let with_failed_regional_address_list f =
+  let dir = Filename.temp_file "sol-fake-regional-address-list-fail-" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o755;
+  let bin = Filename.concat dir "gcloud" in
+  let script =
+    {|#!/bin/sh
+case "$*" in
+  *"compute addresses list"*) printf 'permission denied\n' >&2; exit 254 ;;
+esac
+exit 0
+|}
+  in
+  Out_channel.with_open_text bin (fun oc -> output_string oc script);
+  Unix.chmod bin 0o755;
+  let old_path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+  Unix.putenv "PATH" (dir ^ ":" ^ old_path);
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" old_path;
+      (try Sys.remove bin with
+       | _ -> ());
+      try Unix.rmdir dir with
+      | _ -> ())
+    f
+;;
+
+let%test "GCP regional addresses: a failed address listing is unknown" =
+  with_failed_regional_address_list (fun () ->
+    let observations =
+      Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
+    in
+    match regional_address observations with
+    | Sol_cli_absence.Unobservable u ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the provider's address-list error is preserved"
+        true
+        (Sol_cli_string.contains ~needle:"permission denied" u.reason)
+    | _ -> Windtrap.fail "a failed address listing must be unknown")
+;;
