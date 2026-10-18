@@ -651,3 +651,65 @@ let%test "scope: a scope failure fails the destruction postcondition" =
      | _ -> Windtrap.fail "a scope failure did not produce exactly one residue")
   | _ -> Windtrap.fail "scope_failure must produce exactly one observation"
 ;;
+
+let gcp_state_with_unnamed_cluster_and_incluster_resources =
+  {|{"values":{"root_module":{"resources":[
+    {"address":"google_container_cluster.main","type":"google_container_cluster","values":{}},
+    {"address":"kubernetes_namespace.app","type":"kubernetes_namespace","values":{}}
+  ]}}}|}
+;;
+
+(* A provider observation for the configured cluster name does not establish that an
+   unnamed cluster represented in state is that cluster. The actual reconciliation
+   decision must not even probe the provider, because a probe may authorize state rm. *)
+let test_unnamed_state_cluster_never_forgets_state () =
+  let state =
+    Sol_cli_cloud_destroy.inventory_of_show_json
+      gcp_state_with_unnamed_cluster_and_incluster_resources
+  in
+  let sentinel = Filename.temp_file "sol-gcloud-probe-" "" in
+  Sys.remove sentinel;
+  let script = Printf.sprintf "#!/bin/sh\ntouch %s\nexit 0\n" (Filename.quote sentinel) in
+  Fun.protect
+    ~finally:(fun () ->
+      try Sys.remove sentinel with
+      | Sys_error _ -> ())
+    (fun () ->
+       with_fake_gcloud_script script
+       @@ fun () ->
+       with_fake_terraform ~stdout:"{}" ~exit_code:0 (fun ~log:_ ~infra ->
+         let base = Filename.concat infra "run-log" in
+         Unix.mkdir base 0o755;
+         let run_log = Sol_cli_run_log.create ~base ~prefix:"test" () in
+         match
+           Sol_cli_cloud_wiring.provable_absence_reconciliation
+             ~assets:(assets ())
+             ~run_log
+             ~provider:Sol_cli_provider.Gcp
+             ~target_cfg:gcp_target
+             ~infra_dir:infra
+             ~platform_dir:infra
+             ~platform_backend:[]
+             ~var_files:[]
+             ~vars:[ "cluster_name=acme-prod" ]
+             ~state
+         with
+         | Ok Sol_cli_cloud_destroy.Nothing_to_reconcile ->
+           Windtrap.equal
+             Windtrap.bool
+             ~msg:"the unnamed state did not even probe the resolved name"
+             false
+             (Sys.file_exists sentinel)
+         | Ok (Sol_cli_cloud_destroy.Reconciled _) ->
+           Windtrap.fail
+             "the provider's observation of the configured name does not identify the \
+              unnamed state cluster"
+         | Error message ->
+           Windtrap.failf
+             "an unnamed state should decline to reconcile, not fail the run: %s"
+             message))
+;;
+
+let%test "destroy: an unnamed state cluster never authorizes state rm" =
+  test_unnamed_state_cluster_never_forgets_state ()
+;;
