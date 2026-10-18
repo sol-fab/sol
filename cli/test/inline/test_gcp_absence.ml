@@ -28,7 +28,15 @@ let target : Sol_cli_config.target =
   }
 ;;
 
-let fake_gcloud ~log ~node_pools_out ~node_pools_err ~nats_out ~roles_out ~list_exit =
+let fake_gcloud
+      ~log
+      ~node_pools_out
+      ~node_pools_err
+      ~nats_out
+      ~roles_out
+      ~disks_out
+      ~list_exit
+  =
   Printf.sprintf
     {|#!/bin/sh
 printf '%%s\n' "$*" >> %s
@@ -46,6 +54,10 @@ case "$*" in
     printf '%%s' %s
     exit 0
     ;;
+  *"compute disks list"*)
+    printf '%%s' %s
+    exit 0
+    ;;
 esac
 exit 0
 |}
@@ -56,9 +68,18 @@ exit 0
     list_exit
     (Filename.quote nats_out)
     (Filename.quote roles_out)
+    (Filename.quote disks_out)
 ;;
 
-let with_fake_gcloud ~node_pools_out ~node_pools_err ~nats_out ~roles_out ~list_exit f =
+let with_fake_gcloud
+      ~node_pools_out
+      ~node_pools_err
+      ~nats_out
+      ~roles_out
+      ~disks_out
+      ~list_exit
+      f
+  =
   let dir = Filename.temp_file "sol-fake-gcloud-" "" in
   Sys.remove dir;
   Unix.mkdir dir 0o755;
@@ -67,7 +88,14 @@ let with_fake_gcloud ~node_pools_out ~node_pools_err ~nats_out ~roles_out ~list_
   let oc = open_out bin in
   output_string
     oc
-    (fake_gcloud ~log ~node_pools_out ~node_pools_err ~nats_out ~roles_out ~list_exit);
+    (fake_gcloud
+       ~log
+       ~node_pools_out
+       ~node_pools_err
+       ~nats_out
+       ~roles_out
+       ~disks_out
+       ~list_exit);
   close_out oc;
   Unix.chmod bin 0o755;
   let old_path =
@@ -117,6 +145,7 @@ let only observations resource_class =
 ;;
 
 let with_calls
+      ?(disks_out = "")
       ?(node_pools_err = "")
       ?(roles_out = "")
       ~node_pools_out
@@ -129,6 +158,7 @@ let with_calls
     ~node_pools_err
     ~nats_out
     ~roles_out
+    ~disks_out
     ~list_exit
     (fun () ->
        let observations =
@@ -195,7 +225,21 @@ let test_location_is_explicit_on_every_regional_check () =
       true
       (List.exists
          (fun call -> Sol_cli_string.contains ~needle:"--location us-central1" call)
-         artifacts))
+         artifacts);
+    let disks = arguments_of ~log ~contains:"disks list" in
+    Windtrap.equal Windtrap.int ~msg:"one disk check" 1 (List.length disks);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the disk check is scoped to the target's region"
+      true
+      (Sol_cli_string.contains ~needle:"--regions us-central1" (List.hd disks));
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"and asks for the GKE cluster label that attributes a PVC disk"
+      true
+      (Sol_cli_string.contains
+         ~needle:"value(name,labels.goog-k8s-cluster-name)"
+         (List.hd disks)))
 ;;
 
 let test_the_target_region_beats_the_configured_default () =
@@ -406,4 +450,61 @@ let%test "GCP roles: custom roles are normalized to the target project" =
 
 let%test "GCP scope: an incomplete enumeration with matches is Unobservable" =
   test_an_incomplete_enumeration_with_matches_is_unobservable ()
+;;
+
+let test_attributable_pvc_disks_are_present () =
+  with_calls
+    ~node_pools_out:""
+    ~nats_out:""
+    ~disks_out:
+      "pvc-2120bdaa\tacme-prod\n\
+       pvc-other\tother-cluster\n\
+       gke-acme-prod-node-1\tacme-prod\n\
+       pvc-unlabelled\n\
+       gke-acme-prod-node-2\n"
+    ~list_exit:0
+    (fun ~log:_ ~observations ->
+       match only observations "persistent disk" with
+       | Sol_cli_absence.Present p ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:
+             "the cluster label attributes the PVC and labelled node disks; an unrelated \
+              label, no label, or an unlabelled gke-* name is not attributed"
+           [ "pvc-2120bdaa\tacme-prod"; "gke-acme-prod-node-1\tacme-prod" ]
+           p.found
+       | Sol_cli_absence.Absent _ ->
+         Windtrap.fail "an attributable pvc-* disk must be Present"
+       | _ -> Windtrap.fail "the disk observation must be Present")
+;;
+
+let test_a_present_pvc_disk_prevents_verified_absence () =
+  with_calls
+    ~node_pools_out:""
+    ~nats_out:""
+    ~disks_out:"pvc-2120bdaa\tacme-prod\n"
+    ~list_exit:0
+    (fun ~log:_ ~observations ->
+       let disk = only observations "persistent disk" in
+       match Sol_cli_absence.to_sweep [ disk ] with
+       | Sol_cli_destroy_verification.Sweep_ran { residues; indeterminate = [] } ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the destroy sweep names the PVC disk and refuses verified absence"
+           true
+           (List.exists
+              (fun residue ->
+                 Sol_cli_string.contains ~needle:"persistent disk" residue
+                 && Sol_cli_string.contains ~needle:"pvc-2120bdaa" residue)
+              residues)
+       | _ ->
+         Windtrap.fail "a present disk must produce a residue, not an inconclusive probe")
+;;
+
+let%test "GCP disks: the cluster label, not the disk name, is the attribution" =
+  test_attributable_pvc_disks_are_present ()
+;;
+
+let%test "GCP disks: an attributable PVC disk prevents verified absence" =
+  test_a_present_pvc_disk_prevents_verified_absence ()
 ;;
