@@ -41,7 +41,8 @@ case " $* " in
     *" compute networks subnets list "*|*" compute routers list "*|*" compute addresses list "*|\
     *" artifacts repositories list "*|*" iam service-accounts list "*|*" iam roles list "*|\
     *" storage buckets list "*|*" compute disks list "*|*" compute firewall-rules list "*|\
-    *" compute forwarding-rules list "*|*" compute routers nats list "*)
+    *" compute forwarding-rules list "*|*" compute routers nats list "*|\
+    *" projects get-iam-policy "*|*" secrets list "*|*" secrets get-iam-policy "*)
     exit 0
     ;;
   *" sql instances list "*)
