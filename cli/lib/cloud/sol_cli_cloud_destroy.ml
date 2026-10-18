@@ -241,7 +241,10 @@ let exit_clean = 0
 let exit_failure = 1
 
 let exit_code = function
-  | Destroy_succeeded _ -> exit_clean
+  | Destroy_succeeded { verification; _ }
+    when Sol_cli_destroy_verification.residue_absence_established verification ->
+    exit_clean
+  | Destroy_succeeded _ -> exit_failure
   | Destroy_blocked _ | Destroy_failed _ -> exit_failure
 ;;
 

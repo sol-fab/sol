@@ -192,6 +192,17 @@ let run_destroy ~show_out ~show_stderr ~show_exit =
       outcome, calls))
 ;;
 
+(* The log carries the whole command line, including the worktree path. Match
+   the command as a token: a directory named "destroy" is not a destroy. *)
+let ran_terraform_command calls command =
+  calls
+  |> String.split_on_char '\n'
+  |> List.exists (fun line ->
+    line
+    |> String.split_on_char ' '
+    |> List.exists (fun word -> String.equal word command))
+;;
+
 let%test "authorization destroy: an empty state is never established" =
   let outcome, calls = run_destroy ~show_out:"{}" ~show_stderr:"" ~show_exit:0 in
   (match outcome with
@@ -203,7 +214,7 @@ let%test "authorization destroy: an empty state is never established" =
     Windtrap.bool
     ~msg:"an empty state does not run terraform destroy"
     false
-    (Sol_cli_string.contains ~needle:"destroy" calls)
+    (ran_terraform_command calls "destroy")
 ;;
 
 let%test "authorization destroy: an unreadable state refuses, it does not skip" =
@@ -222,7 +233,7 @@ let%test "authorization destroy: an unreadable state refuses, it does not skip" 
     Windtrap.bool
     ~msg:"an unreadable state does not run terraform destroy"
     false
-    (Sol_cli_string.contains ~needle:"destroy" calls)
+    (ran_terraform_command calls "destroy")
 ;;
 
 let%test "authorization destroy: removed trust still yields destroy variables" =

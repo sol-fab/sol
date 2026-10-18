@@ -2165,11 +2165,45 @@ let test_inconclusive_residue_probe_is_unknown () =
         && matches_regex (Str.regexp_string "peering check was not run") message)
    | _ ->
      Windtrap.fail
-       "a destroy whose owned resources are gone is not a failure; the observation is");
+       "the destruction completed, but the verification outcome is what is reported");
   Windtrap.equal
     Windtrap.int
-    ~msg:"and the owned resources are still gone, so the destruction itself succeeded"
-    exit_clean
+    ~msg:"and the exit status reports that absence was not established"
+    exit_failure
+    (exit_code outcome)
+;;
+
+let test_a_sweep_that_did_not_run_is_not_absence () =
+  let deps, _ =
+    fake_deps
+      ~state:(Ok (show_json_resources gcp_cluster))
+      ~verify_destruction:(fun ~pre_destroy:_ ~preparation:_ ->
+        { Sol_cli_destroy_verification.state = State_absent
+        ; sweep = Sweep_not_run
+        ; retention = Retention_not_required "this fixture declares no retention"
+        })
+      ()
+  in
+  let outcome = execute ~deps in
+  let message = completion_message outcome in
+  (match outcome with
+   | Destroy_succeeded _ ->
+     Windtrap.equal
+       Windtrap.bool
+       ~msg:"a sweep that did not run never claims verified absence"
+       false
+       (matches_regex (Str.regexp_string "reached verified absence") message);
+     Windtrap.equal
+       Windtrap.bool
+       ~msg:"it says the residue inventory did not run"
+       true
+       (matches_regex (Str.regexp_string "residue absence is NOT established") message
+        && matches_regex (Str.regexp_string "residue inventory did not run") message)
+   | _ -> Windtrap.fail "the destruction itself completed; the verification is incomplete");
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"and the exit status is nonzero"
+    exit_failure
     (exit_code outcome)
 ;;
 
@@ -3185,6 +3219,10 @@ let%test "failure policy: residue the state does not own is not absence" =
 
 let%test "failure policy: an inconclusive residue probe is an unknown" =
   test_inconclusive_residue_probe_is_unknown ()
+;;
+
+let%test "failure policy: a sweep that did not run is not absence" =
+  test_a_sweep_that_did_not_run_is_not_absence ()
 ;;
 
 let%test "failure policy: an empty provider inventory permits the claim" =

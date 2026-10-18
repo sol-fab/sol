@@ -101,7 +101,7 @@ let classify observation =
 
 let inconclusive_probes observation =
   match observation.sweep with
-  | Sweep_not_run -> []
+  | Sweep_not_run -> [ "the residue inventory did not run" ]
   | Sweep_ran { indeterminate; _ } -> indeterminate
 ;;
 

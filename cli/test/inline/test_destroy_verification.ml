@@ -111,6 +111,20 @@ let test_sweep () =
              ())))
 ;;
 
+let test_sweep_not_run_is_not_absence () =
+  let observation = observation ~sweep:Sweep_not_run () in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"a sweep that did not run does not establish residue absence"
+    false
+    (residue_absence_established observation);
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"the missing inventory is named"
+    [ "the residue inventory did not run" ]
+    (inconclusive_probes observation)
+;;
+
 let test_gcp_not_found_subject_must_match () =
   Windtrap.equal
     Windtrap.bool
@@ -351,6 +365,11 @@ let%test "state: residue is a violation" = test_state_residue ()
 let%test "state: unreadable is UNKNOWN" = test_state_unreadable ()
 let%test "combined: clean is verified" = test_combined_verified ()
 let%test "combined: residue and inconclusive checks" = test_sweep ()
+
+let%test "combined: a sweep that did not run is not absence" =
+  test_sweep_not_run_is_not_absence ()
+;;
+
 let%test "combined: GCP not-found subject" = test_gcp_not_found_subject_must_match ()
 let%test "retention: final snapshot observed" = test_retention_final_snapshot_observed ()
 let%test "retention: final snapshot missing" = test_retention_final_snapshot_missing ()

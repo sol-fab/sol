@@ -1643,14 +1643,14 @@ cp "$tmp/work/sol/environments.yml" "$tmp/work/target.before-infra082.yml"
 grep -v '      cluster_name: sol-qual$' "$tmp/work/target.before-infra082.yml" \
   >"$tmp/work/sol/environments.yml"
 rm -f "$STATE_RM_FILE" "$GCP_SQL_PREPARED_FILE" "$GKE_PREPARED_FILE"
-if ! (cd "$tmp/work" && CLOUD_STATE_EMPTY=1 PARTIAL_INSTALL=1 DESTROYING=1 \
-        LIFECYCLE_LOG="$stale_unidentified_log" \
-        "$sol" destroy prod/gcp/us-central1 --apply) \
+if (cd "$tmp/work" && CLOUD_STATE_EMPTY=1 PARTIAL_INSTALL=1 DESTROYING=1 \
+      LIFECYCLE_LOG="$stale_unidentified_log" \
+      "$sol" destroy prod/gcp/us-central1 --apply) \
   >"$stale_unidentified_log.out" 2>&1
 then
   mv "$tmp/work/target.before-infra082.yml" "$tmp/work/sol/environments.yml"
   cat "$stale_unidentified_log.out" >&2
-  echo "INFRA-082: a destroy whose substrate could not be identified did not converge" >&2
+  echo "INFRA-082: a destroy whose substrate could not be identified reported success; its exit status must report that absence was not established" >&2
   exit 1
 fi
 mv "$tmp/work/target.before-infra082.yml" "$tmp/work/sol/environments.yml"
