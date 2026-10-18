@@ -162,17 +162,15 @@ let named_for_cluster cluster_name =
     cluster_name
 ;;
 
-let registry_prefix (target : Sol_cli_config.target) =
-  match target.registry with
-  | None -> None
-  | Some registry ->
-    (match String.index_opt registry '/' with
-     | None -> None
-     | Some index ->
-       let prefix =
-         String.sub registry (index + 1) (String.length registry - index - 1)
-       in
-       if prefix = "" then None else Some prefix)
+(* The cluster root names ECR repositories `<workspace>/<service>` from the
+   `workspace_name` variable, not from the target's registry path. The registry
+   is optional and may name a different registry entirely, so it cannot decide
+   which ECR repositories this workspace created. The workspace name is the
+   authoritative prefix; using it also accounts for historical services that
+   are no longer declared. *)
+let ecr_prefix () =
+  let workspace = Sol_cli_workspace.current_name () in
+  if Sol_cli_string.is_blank workspace then None else Some workspace
 ;;
 
 let cluster_tag_named cluster_name =
@@ -423,8 +421,8 @@ let class_names =
   ]
 ;;
 
-let ecr_observation ~region ~registry =
-  match registry with
+let ecr_observation ~region ~prefix =
+  match prefix with
   | Some prefix ->
     run
       ~check:
@@ -434,10 +432,11 @@ let ecr_observation ~region ~registry =
            ~attribution:
              (Named_for_target
                 (Printf.sprintf
-                   "the target's own registry path: the cluster root names its \
-                    repositories under %s, which the target declares"
+                   "the target's own workspace name: the cluster root names its \
+                    repositories %s/<service>, including services no longer declared"
                    prefix))
-           ~attributable:(fun line -> Sol_cli_string.contains ~needle:(prefix ^ "/") line)
+           ~attributable:(fun line ->
+             String.equal line prefix || String.starts_with ~prefix:(prefix ^ "/") line)
            [ "ecr"
            ; "describe-repositories"
            ; "--region"
@@ -451,8 +450,8 @@ let ecr_observation ~region ~registry =
     Not_attributable
       { resource_class = "ECR repository"
       ; reason =
-          "the target declares no registry, so Sol cannot say which repositories under \
-           this account belong to it -- reported rather than guessed"
+          "the workspace name could not be established, so Sol cannot say which \
+           repositories under this account belong to it -- reported rather than guessed"
       }
 ;;
 
@@ -503,7 +502,7 @@ let observations (target : Sol_cli_config.target) ~cluster_name =
   | Ok () ->
     let observations =
       List.map (fun c -> run ~check:c) (checks ~region:target.region ~cluster_name)
-      @ [ ecr_observation ~region:target.region ~registry:(registry_prefix target) ]
+      @ [ ecr_observation ~region:target.region ~prefix:(ecr_prefix ()) ]
     in
     let observations =
       if Sol_cli_provider_capabilities.authorization_trust target = None

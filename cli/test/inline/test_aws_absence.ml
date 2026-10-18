@@ -129,6 +129,97 @@ let with_calls
     f ~log ~observations)
 ;;
 
+let observation_of class_name observations =
+  List.find
+    (fun observation -> String.equal (class_of observation) class_name)
+    observations
+;;
+
+(* ECR repositories are named `<workspace>/<service>` by the cluster root from
+   the `workspace_name` variable. The target's registry is optional and may name
+   another registry entirely, so the workspace name must be the attribution
+   prefix. *)
+let with_ecr_inventory ~workspace ~repositories f =
+  let root = Filename.temp_file "sol-ecr-workspace-" "" in
+  Sys.remove root;
+  Unix.mkdir root 0o755;
+  let ws = Filename.concat root workspace in
+  Unix.mkdir ws 0o755;
+  let sol_yml = Filename.concat ws "sol.yml" in
+  Out_channel.with_open_text sol_yml (fun _ -> ());
+  let bin_dir = Filename.concat root "bin" in
+  Unix.mkdir bin_dir 0o755;
+  let log = Filename.concat bin_dir "calls.log" in
+  let bin = Filename.concat bin_dir "aws" in
+  let script =
+    Printf.sprintf
+      {|#!/bin/sh
+printf '%%s\n' "$*" >> %s
+case "$1 $2" in
+  "sts get-caller-identity") printf '111122223333\n' ;;
+  "ecr describe-repositories") printf '%%s' %s ;;
+esac
+exit 0
+|}
+      (Filename.quote log)
+      (Filename.quote repositories)
+  in
+  Out_channel.with_open_text bin (fun oc -> output_string oc script);
+  Unix.chmod bin 0o755;
+  let old_path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+  let old_cwd = Sys.getcwd () in
+  Unix.putenv "PATH" (bin_dir ^ ":" ^ old_path);
+  Sys.chdir ws;
+  Fun.protect
+    ~finally:(fun () ->
+      Sys.chdir old_cwd;
+      Unix.putenv "PATH" old_path;
+      (try Sys.remove bin with
+       | _ -> ());
+      (try Sys.remove log with
+       | _ -> ());
+      (try Sys.remove sol_yml with
+       | _ -> ());
+      (try Unix.rmdir ws with
+       | _ -> ());
+      (try Unix.rmdir bin_dir with
+       | _ -> ());
+      try Unix.rmdir root with
+      | _ -> ())
+    (fun () ->
+       let observations =
+         Sol_cli_aws_absence.observations target ~cluster_name:"acme-prod"
+       in
+       f ~log ~observations)
+;;
+
+let%test "AWS ECR inventory: workspace repositories are attributable without a registry" =
+  with_ecr_inventory
+    ~workspace:"acme"
+    ~repositories:"acme/charge-svc\nacme/old-service\nother/charge-svc\n"
+    (fun ~log:_ ~observations ->
+       match observation_of "ECR repository" observations with
+       | Sol_cli_absence.Present present ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the workspace's current and historical repositories are reported"
+           [ "acme/charge-svc"; "acme/old-service" ]
+           present.found
+       | _ ->
+         Windtrap.fail
+           "the workspace's ECR repositories must be attributable without a registry")
+;;
+
+let%test "AWS ECR inventory: another workspace's repository is not attributed" =
+  with_ecr_inventory
+    ~workspace:"acme"
+    ~repositories:"other/charge-svc\n"
+    (fun ~log:_ ~observations ->
+       match observation_of "ECR repository" observations with
+       | Sol_cli_absence.Absent _ -> ()
+       | _ -> Windtrap.fail "another workspace's ECR repository must not be attributed")
+;;
+
 let test_load_balancers_use_a_supported_command () =
   with_calls ~list_out:"" ~tags_out:"" ~tags_exit:0 (fun ~log ~observations:_ ->
     let list_calls = arguments_of ~log ~contains:"describe-load-balancers" in
