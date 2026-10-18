@@ -88,6 +88,7 @@ type outcome = private
       ; verification : Sol_cli_destroy_verification.observation option
       }
 
+val required_identity_classes : unit -> string list
 val failure_message : failure -> string
 val accept_unreleased_flag : string
 val exit_clean : int

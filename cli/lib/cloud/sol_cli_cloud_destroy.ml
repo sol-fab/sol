@@ -412,16 +412,24 @@ let collect_pre_inventory_failures observations =
    disks and addresses, load balancers, the OIDC provider, and a failure of the
    whole enumeration scope. Terraform-managed roots have a durable state identity
    and do not need a pre-destroy identity to establish their final absence. *)
-let required_identity_class = function
-  | "persistent disk"
-  | "EBS volume"
-  | "elastic IP"
-  | "load balancer"
-  | "global address"
-  | "regional address"
-  | "forwarding rule"
-  | "OIDC provider" -> true
-  | class_name -> String.equal class_name Sol_cli_absence.scope_class
+(* The authoritative set of controller-created classes whose identity must be
+   captured before destruction. Terraform-managed classes are covered by their
+   durable state identity and the native recovery registry instead. *)
+let required_identity_classes () =
+  [ "persistent disk"
+  ; "EBS volume"
+  ; "elastic IP"
+  ; "load balancer"
+  ; "reserved global address"
+  ; "regional address"
+  ; "forwarding rule"
+  ; "OIDC provider"
+  ]
+;;
+
+let required_identity_class class_name =
+  List.mem class_name (required_identity_classes ())
+  || String.equal class_name Sol_cli_absence.scope_class
 ;;
 
 let required_pre_inventory_failures observations =

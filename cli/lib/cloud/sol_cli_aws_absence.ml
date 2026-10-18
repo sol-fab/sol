@@ -551,92 +551,62 @@ let durable_observations ~(target : Sol_cli_config.target) =
   ]
 ;;
 
-let class_names =
-  [ "EKS cluster"
-  ; "EKS node group"
-  ; "RDS instance"
-  ; "RDS subnet group"
-  ; "security group"
-  ; "VPC"
-  ; "subnet"
-  ; "IAM role"
-  ; "IAM policy"
-  ; "S3 bucket"
-  ; "CloudWatch dashboard"
-  ; "EKS control-plane log group"
-  ; "load balancer"
-  ; "EBS volume"
-  ; "ECR repository"
-  ; "elastic IP"
-  ; "authorization IAM policy"
-  ; "authorization IAM role"
-  ; "authorization workload role"
-  ; "EKS security group"
-  ; "OIDC provider"
-  ]
+let ecr_check ~region ~identity ~attribution ~attributable =
+  check
+    ~resource_class:"ECR repository"
+    ~identity
+    ~attribution
+    ~attributable
+    [ "ecr"
+    ; "describe-repositories"
+    ; "--region"
+    ; region
+    ; "--query"
+    ; "repositories[].repositoryName"
+    ; "--output"
+    ; "text"
+    ]
 ;;
 
-let ecr_observation ~region ~repositories ~prefix =
+let ecr_probe ~region ~repositories ~prefix =
+  let resource_class = "ECR repository" in
   match repositories, prefix with
   | _ :: _, _ ->
-    run
-      ~check:
-        (check
-           ~resource_class:"ECR repository"
-           ~identity:(String.concat ", " repositories)
-           ~attribution:
-             (Named_for_target
-                "the pre-destroy Terraform state names the ECR repositories this target \
-                 created")
-           ~attributable:(fun line -> List.mem line repositories)
-           [ "ecr"
-           ; "describe-repositories"
-           ; "--region"
-           ; region
-           ; "--query"
-           ; "repositories[].repositoryName"
-           ; "--output"
-           ; "text"
-           ])
-      ()
+    Ok
+      (ecr_check
+         ~region
+         ~identity:(String.concat ", " repositories)
+         ~attribution:
+           (Named_for_target
+              "the pre-destroy Terraform state names the ECR repositories this target \
+               created")
+         ~attributable:(fun line -> List.mem line repositories))
   | [], Some prefix ->
-    run
-      ~check:
-        (check
-           ~resource_class:"ECR repository"
-           ~identity:(prefix ^ "/*")
-           ~attribution:
-             (Named_for_target
-                (Printf.sprintf
-                   "the target's declared registry names its workspace prefix %s, and \
-                    the cluster root names its repositories %s/<service>"
-                   prefix
-                   prefix))
-           ~attributable:(fun line ->
-             String.equal line prefix || String.starts_with ~prefix:(prefix ^ "/") line)
-           [ "ecr"
-           ; "describe-repositories"
-           ; "--region"
-           ; region
-           ; "--query"
-           ; "repositories[].repositoryName"
-           ; "--output"
-           ; "text"
-           ])
-      ()
+    Ok
+      (ecr_check
+         ~region
+         ~identity:(prefix ^ "/*")
+         ~attribution:
+           (Named_for_target
+              (Printf.sprintf
+                 "the target's declared registry names its workspace prefix %s, and \
+                  the cluster root names its repositories %s/<service>"
+                 prefix
+                 prefix))
+         ~attributable:(fun line ->
+           String.equal line prefix || String.starts_with ~prefix:(prefix ^ "/") line))
   | [], None ->
-    Not_attributable
-      { resource_class = "ECR repository"
-      ; reason =
-          "the pre-destroy Terraform state names no ECR repositories and the target \
-           declares no registry, so Sol cannot distinguish \"this target created none\" \
-           from \"the ownership record was lost\"; reported rather than guessed"
-      }
+    Error
+      ( resource_class
+      , "the pre-destroy Terraform state names no ECR repositories and the target \
+         declares no registry, so Sol cannot distinguish \"this target created none\" \
+         from \"the ownership record was lost\"; reported rather than guessed" )
+;;
 ;;
 
-let authorization_checks ~(target : Sol_cli_config.target) =
-  let policy_name = "sol-" ^ target.env ^ "-workload-boundary" in
-  let role_name = "sol-" ^ target.env ^ "-authorization" in
+let authorization_checks ~env =
+  let policy_name = "sol-" ^ env ^ "-workload-boundary" in
+  let role_name = "sol-" ^ env ^ "-authorization" in
   [ check
       ~resource_class:"authorization IAM policy"
       ~identity:policy_name
@@ -668,20 +638,20 @@ let authorization_checks ~(target : Sol_cli_config.target) =
        environments' roles out even when their unit names overlap. *)
     check
       ~resource_class:"authorization workload role"
-      ~identity:(Printf.sprintf "sol-%s-* under /sol/%s/" target.env target.env)
+      ~identity:(Printf.sprintf "sol-%s-* under /sol/%s/" env env)
       ~attribution:
         (Named_for_target
            (Printf.sprintf
               "the target's environment names the workload role prefix sol-%s- at \
                /sol/%s/"
-              target.env
-              target.env))
+              env
+              env))
       ~attributable:(fun line ->
-        String.starts_with ~prefix:("sol-" ^ target.env ^ "-") line)
+        String.starts_with ~prefix:("sol-" ^ env ^ "-") line)
       [ "iam"
       ; "list-roles"
       ; "--query"
-      ; Printf.sprintf "Roles[?Path=='/sol/%s/'].RoleName" target.env
+      ; Printf.sprintf "Roles[?Path=='/sol/%s/'].RoleName" env
       ; "--output"
       ; "text"
       ]
@@ -720,6 +690,9 @@ let filter_to_prior prior observation =
         }
     else Present { present with found }
   | observation -> observation
+;;
+
+let oidc_resource_class = "OIDC provider"
 ;;
 
 let oidc_provider_urls pre_destroy =
@@ -776,13 +749,13 @@ let oidc_provider_observation
          Error ("the cluster's OIDC issuer could not be read: " ^ String.trim reason))
   in
   match urls with
-  | Error reason -> Not_attributable { resource_class = "OIDC provider"; reason }
+  | Error reason -> Not_attributable { resource_class = oidc_resource_class; reason }
   | Ok urls ->
     run
       ~previously_attributed
       ~check:
         (check
-           ~resource_class:"OIDC provider"
+           ~resource_class:oidc_resource_class
            ~identity:(String.concat ", " urls)
            ~attribution:
              (Named_for_target
@@ -802,6 +775,23 @@ let oidc_provider_observation
       ()
 ;;
 
+let probes ~region ~cluster_name ~repositories ~prefix =
+  List.map (fun check -> Ok check) (checks ~region ~cluster_name)
+  @ [ ecr_probe ~region ~repositories ~prefix ]
+;;
+
+let observed_classes () =
+  let generic =
+    probes ~region:"coverage" ~cluster_name:"coverage" ~repositories:[] ~prefix:(Some "coverage")
+    @ List.map (fun check -> Ok check) (authorization_checks ~env:"coverage")
+    |> List.filter_map (function
+      | Ok check -> Some check.resource_class
+      | Error _ -> None)
+  in
+  (* The OIDC observation is a custom pre-destroy probe: its issuer must be read
+     from state or the live cluster before the standard tag/name probe can run. *)
+  generic @ [ oidc_resource_class ]
+;;
 let observations
       ?(previously_attributed = [])
       ?(pre_destroy = Sol_cli_cloud_destroy.State_empty)
@@ -809,18 +799,21 @@ let observations
       (target : Sol_cli_config.target)
       ~cluster_name
   =
+
+
   match scope_binding target with
   | Error reason -> Sol_cli_absence.scope_failure ~reason
   | Ok () ->
     let observations =
       List.map
-        (fun c -> run ~previously_attributed ~check:c ())
-        (checks ~region:target.region ~cluster_name)
-      @ [ ecr_observation
-            ~region:target.region
-            ~repositories:(ecr_repositories_of_state pre_destroy)
-            ~prefix:(registry_prefix target)
-        ]
+        (function
+          | Ok check -> run ~previously_attributed ~check ()
+          | Error (resource_class, reason) -> Not_attributable { resource_class; reason })
+        (probes
+           ~region:target.region
+           ~cluster_name
+           ~repositories:(ecr_repositories_of_state pre_destroy)
+           ~prefix:(registry_prefix target))
       @ [ oidc_provider_observation
             ~previously_attributed
             ~region:target.region
@@ -840,7 +833,7 @@ let observations
           (fun check ->
              strict_authorization_observation ~check
              |> filter_to_prior authorization_identities)
-          (authorization_checks ~target)
+          (authorization_checks ~env:target.env)
     in
     observations @ durable_observations ~target
 ;;
