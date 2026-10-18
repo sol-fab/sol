@@ -3,6 +3,25 @@ open Sol_cli_destruction
 open Sol_cli_terraform_steps
 open Result.Syntax
 
+(* A target that does not create a database declares no SQL guard to lower, and must not
+   warn that the database is missing from state. A database the current declaration no
+   longer creates but the state still represents is different: its guard must still be
+   lowered before Terraform can destroy it. *)
+let gcp_desired_guards ~represented ~guarded ~create_database =
+  let database_address = "google_sql_database_instance.postgres" in
+  let database_represented =
+    List.exists
+      (fun address -> Sol_cli_terraform_plan.same_resource database_address address)
+      represented
+  in
+  match create_database with
+  | Some "false" when not database_represented ->
+    List.filter
+      (fun address -> not (Sol_cli_terraform_plan.same_resource database_address address))
+      guarded
+  | Some _ | None -> guarded
+;;
+
 let gcp_prepare_destroy_result ~guarded run_log infra_dir var_files vars state
   : unit Sol_cli_cloud_lifecycle.preparation_outcome
   =
@@ -28,7 +47,13 @@ let gcp_prepare_destroy_result ~guarded run_log infra_dir var_files vars state
        lowered"
   | Substrate_present | Substrate_absent ->
     let represented = addresses state in
-    let desired = guarded in
+    let desired =
+      gcp_desired_guards
+        ~represented
+        ~guarded
+        ~create_database:
+          (Sol_cli_terraform_vars.resolved "create_database" ~var_files ~vars)
+    in
     report_unrepresented
       (Sol_cli_cloud_lifecycle.preparations_unrepresented ~state:represented ~desired);
     (match Sol_cli_cloud_lifecycle.preparations_eligible ~state:represented ~desired with

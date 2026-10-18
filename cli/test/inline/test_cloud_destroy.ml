@@ -3621,3 +3621,54 @@ let test_counted_cloud_sql_guard_is_verified () =
 let%test "GCP preparation: the counted Cloud SQL guard is verified, not assumed" =
   test_counted_cloud_sql_guard_is_verified ()
 ;;
+
+let test_desired_guards_follow_create_database () =
+  let sql = "google_sql_database_instance.postgres" in
+  let gke = "google_container_cluster.main" in
+  let guarded = [ sql; gke ] in
+  let desired ~represented ~create_database =
+    Sol_cli_gcp_destruction.gcp_desired_guards ~represented ~guarded ~create_database
+  in
+  let uncreated = desired ~represented:[ gke ] ~create_database:(Some "false") in
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"an uncreated database is not a guard this target must lower"
+    [ gke ]
+    uncreated;
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"and it produces no missing-resource warning"
+    []
+    (Sol_cli_cloud_lifecycle.preparations_unrepresented ~state:[ gke ] ~desired:uncreated);
+  let historical =
+    desired
+      ~represented:[ "google_sql_database_instance.postgres[0]"; gke ]
+      ~create_database:(Some "false")
+  in
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"a represented historical database keeps its guard when creation is disabled"
+    [ sql; gke ]
+    historical;
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"and the historical database is still a preparation target"
+    [ sql; gke ]
+    (Sol_cli_cloud_lifecycle.preparations_eligible
+       ~state:[ "google_sql_database_instance.postgres[0]"; gke ]
+       ~desired:historical);
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"a declared database still gets its guard even when it is absent from state"
+    [ sql; gke ]
+    (desired ~represented:[ gke ] ~create_database:(Some "true"));
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"an unresolved create_database decision keeps the declared guards"
+    [ sql; gke ]
+    (desired ~represented:[ gke ] ~create_database:None)
+;;
+
+let%test "GCP preparation: an uncreated database is not a missing guard" =
+  test_desired_guards_follow_create_database ()
+;;
