@@ -244,7 +244,7 @@ JSON
           add_resource '{"address":"kubernetes_cluster_role_binding.provisioner_bootstrap_admin","type":"kubernetes_cluster_role_binding","values":{"metadata":[{"name":"sol-provisioner-bootstrap"}]}}'
         fi
         forgotten google_container_cluster.main ||
-          add_resource "{\"address\":\"google_container_cluster.main\",\"type\":\"google_container_cluster\",\"values\":{\"deletion_protection\":$gke_guard,\"self_link\":\"https://container.googleapis.com/v1/projects/sol-qualification/locations/us-central1/clusters/sol-qual\",\"project\":\"sol-qualification\",\"location\":\"us-central1\"}}"
+          add_resource "{\"address\":\"google_container_cluster.main\",\"type\":\"google_container_cluster\",\"values\":{\"name\":\"sol-qual\",\"deletion_protection\":$gke_guard,\"self_link\":\"https://container.googleapis.com/v1/projects/sol-qualification/locations/us-central1/clusters/sol-qual\",\"project\":\"sol-qualification\",\"location\":\"us-central1\"}}"
         forgotten google_project_iam_member.provisioner_cluster_access ||
           add_resource '{"address":"google_project_iam_member.provisioner_cluster_access","type":"google_project_iam_member","values":{"project":"sol-qualification","role":"projects/sol-qualification/roles/solProvisionerClusterAccess"}}'
         printf '{"values":{"root_module":{"resources":[%s]}}}\n' "$resources"

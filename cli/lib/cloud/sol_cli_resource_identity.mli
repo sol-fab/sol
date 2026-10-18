@@ -19,7 +19,7 @@ type type_rule =
   ; ownership : ownership
   }
 
-val gcp : cluster_name:string -> entry list
+val gcp : cluster_name:string -> project_id:string option -> entry list
 val aws : cluster_name:string -> entry list
 val type_rules : type_rule list
 val ownership_kind : ownership -> string
