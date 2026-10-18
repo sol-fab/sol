@@ -912,3 +912,63 @@ let%test "AWS OIDC inventory: the cluster issuer is a fallback when the state is
       Windtrap.fail
         "the cluster issuer must attribute the provider when the state is empty")
 ;;
+
+let with_lost_cluster_oidc ~providers f =
+  let dir = Filename.temp_file "sol-fake-oidc-lost-" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o755;
+  let log = Filename.concat dir "calls.log" in
+  let bin = Filename.concat dir "aws" in
+  let script =
+    Printf.sprintf
+      {|#!/bin/sh
+printf '%%s\n' "$*" >> %s
+case "$1 $2" in
+  "sts get-caller-identity") printf '111122223333\n' ;;
+  "eks describe-cluster")
+    printf 'An error occurred (ResourceNotFoundException) when calling the DescribeCluster operation\n' >&2
+    exit 254
+    ;;
+  "iam list-open-id-connect-providers") printf '%%s' %s ;;
+esac
+exit 0
+|}
+      (Filename.quote log)
+      (Filename.quote providers)
+  in
+  Out_channel.with_open_text bin (fun oc -> output_string oc script);
+  Unix.chmod bin 0o755;
+  let old_path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+  Unix.putenv "PATH" (dir ^ ":" ^ old_path);
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" old_path;
+      (try Sys.remove bin with
+       | _ -> ());
+      (try Sys.remove log with
+       | _ -> ());
+      try Unix.rmdir dir with
+      | _ -> ())
+    f
+;;
+
+let%test
+    "AWS OIDC inventory: empty state and an absent cluster with an orphan are unknown"
+  =
+  let orphan =
+    "arn:aws:iam::111122223333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/ORPHAN"
+  in
+  with_lost_cluster_oidc ~providers:(orphan ^ "\n") (fun () ->
+    let observations =
+      Sol_cli_aws_absence.observations
+        ~pre_destroy:Sol_cli_cloud_destroy.State_empty
+        target
+        ~cluster_name:"acme-prod"
+    in
+    match oidc observations with
+    | Sol_cli_absence.Not_attributable _ -> ()
+    | _ ->
+      Windtrap.fail
+        "empty state and an absent cluster must not turn an orphaned OIDC provider into \
+         absence")
+;;
