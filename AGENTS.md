@@ -20,9 +20,15 @@ into this file.
 
 ## Development posture
 
-Sol is pre-alpha. There are no compatibility guarantees for current APIs or repository
-structure: prefer the correct design over compatibility shims, deprecated aliases, or
-version gates. Update callers and tests in the same change.
+Sol is pre-alpha. Backwards compatibility is not a goal. There are no compatibility
+guarantees for current APIs or repository structure: prefer the correct design over
+compatibility shims, deprecated aliases, or version gates. Update callers and tests in the
+same change.
+
+When replacing a mechanism, remove the old path rather than retaining it as a fallback.
+A second attribution, parsing, recovery, or lifecycle path is justified only by a distinct,
+currently supported requirement, never by historical behavior. If the old path does serve
+such a requirement, state that requirement instead of calling it compatibility.
 
 GitHub Issues and pull requests are the work-state authority. Make every change in a Git
 worktree, never by switching the primary checkout off `main`; branch and worktree names
