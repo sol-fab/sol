@@ -3508,7 +3508,7 @@ let test_authorization_teardown_is_required_for_success () =
   let outcome = execute ~deps in
   (match outcome with
    | Destroy_failed
-       { failure = Authorization_not_removed message; verification = Some _; _ } ->
+       { failure = Authorization_not_removed message; verification = None; _ } ->
      Windtrap.equal
        Windtrap.bool
        ~msg:"the failure carries the authorization stage's own error"
@@ -3523,7 +3523,12 @@ let test_authorization_teardown_is_required_for_success () =
      Windtrap.fail
        "a failed authorization teardown must not be reported as a verified destroy"
    | _ -> Windtrap.fail "expected the authorization failure to fail the destroy");
-  Windtrap.equal Windtrap.int ~msg:"the teardown ran exactly once" 1 calls.authorization
+  Windtrap.equal Windtrap.int ~msg:"the teardown ran exactly once" 1 calls.authorization;
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"the substrate is left standing after an authorization failure"
+    0
+    calls.substrate
 ;;
 
 let test_authorization_teardown_evidence_is_reported () =

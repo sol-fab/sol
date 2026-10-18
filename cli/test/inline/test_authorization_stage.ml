@@ -260,3 +260,23 @@ let%test "authorization destroy: an unresolved prior apply is not empty-state ev
       "an unresolved authorization apply must not let an empty state claim \
        never-established"
 ;;
+
+let%test "authorization destroy: post-destroy state must be empty" =
+  let represented =
+    Sol_cli_cloud_destroy.inventory_of_show_json
+      {|{"values":{"root_module":{"resources":[{"address":"aws_iam_role.reconciler","type":"aws_iam_role","values":{}}]}}}|}
+  in
+  (match verify_destroyed_state represented with
+   | Error message ->
+     Windtrap.equal
+       Windtrap.bool
+       ~msg:"the refusal names the remaining authorization resource"
+       true
+       (Sol_cli_string.contains ~needle:"still represents" message)
+   | Ok () ->
+     Windtrap.fail
+       "terraform destroy's exit status alone was accepted as authorization absence");
+  match verify_destroyed_state Sol_cli_cloud_destroy.State_empty with
+  | Ok () -> ()
+  | Error message -> Windtrap.failf "an empty authorization state was refused: %s" message
+;;

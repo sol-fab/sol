@@ -456,13 +456,65 @@ let ecr_observation ~region ~registry =
       }
 ;;
 
+let authorization_checks ~(target : Sol_cli_config.target) =
+  let policy_name = "sol-" ^ target.env ^ "-workload-boundary" in
+  let role_name = "sol-" ^ target.env ^ "-authorization" in
+  [ check
+      ~resource_class:"authorization IAM policy"
+      ~identity:policy_name
+      ~attribution:
+        (Named_for_target
+           "the target's environment names the authorization workload boundary")
+      ~attributable:(fun line -> line = policy_name)
+      [ "iam"
+      ; "list-policies"
+      ; "--scope"
+      ; "Local"
+      ; "--query"
+      ; "Policies[].PolicyName"
+      ; "--output"
+      ; "text"
+      ]
+  ; check
+      ~resource_class:"authorization IAM role"
+      ~identity:role_name
+      ~attribution:
+        (Named_for_target
+           "the target's environment names the authorization reconciler role")
+      ~attributable:(fun line -> line = role_name)
+      [ "iam"; "list-roles"; "--query"; "Roles[].RoleName"; "--output"; "text" ]
+  ]
+;;
+
+let strict_authorization_observation ~check =
+  match run ~check with
+  | Unobservable u ->
+    Unobservable
+      { u with
+        resource_class = Sol_cli_absence.scope_class
+      ; reason = check.resource_class ^ ": " ^ u.reason
+      }
+  | observation -> observation
+;;
+
 let observations (target : Sol_cli_config.target) ~cluster_name =
   match scope_binding target with
   | Error reason -> Sol_cli_absence.scope_failure ~reason
   | Ok () ->
-    List.map (fun c -> run ~check:c) (checks ~region:target.region ~cluster_name)
-    @ [ ecr_observation ~region:target.region ~registry:(registry_prefix target) ]
-    @ durable_observations ~target
+    let observations =
+      List.map (fun c -> run ~check:c) (checks ~region:target.region ~cluster_name)
+      @ [ ecr_observation ~region:target.region ~registry:(registry_prefix target) ]
+    in
+    let observations =
+      if Sol_cli_provider_capabilities.authorization_trust target = None
+      then observations
+      else
+        observations
+        @ List.map
+            (fun check -> strict_authorization_observation ~check)
+            (authorization_checks ~target)
+    in
+    observations @ durable_observations ~target
 ;;
 
 let substrate_absence (target : Sol_cli_config.target) ~cluster_name =

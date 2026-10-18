@@ -29,14 +29,7 @@ let capabilities (target : Sol_cli_config.target) =
   Sol_cli_provider_capabilities.capabilities_of target.provider
 ;;
 
-let declared_trust (target : Sol_cli_config.target) =
-  match
-    Sol_cli_config.provider_field target (capabilities target).authorization_trust_field
-  with
-  | Some value when not (Sol_cli_string.is_blank value) -> Some value
-  | Some _ | None -> None
-;;
-
+let declared_trust = Sol_cli_provider_capabilities.authorization_trust
 let root_vars target = (capabilities target).authorization_root_vars target
 
 let with_provider_field (target : Sol_cli_config.target) key value =
@@ -140,6 +133,27 @@ let fence ~assets ~run_log ~target =
     Ok Established
 ;;
 
+let verify_destroyed_state state =
+  match state with
+  | Sol_cli_cloud_destroy.State_empty -> Ok ()
+  | State_represented resources ->
+    Error
+      (Printf.sprintf
+         "the authorization root's state still represents %d resource(s) after \
+          `terraform destroy`: %s. Terraform's exit status is not evidence that the \
+          authorization identities are gone."
+         (List.length resources)
+         (String.concat
+            ", "
+            (List.map (fun (r : Sol_cli_cloud_destroy.resource) -> r.address) resources)))
+  | State_unreadable reason ->
+    Error
+      (Printf.sprintf
+         "the authorization root's state could not be read after `terraform destroy` \
+          (%s), so its absence is not established"
+         reason)
+;;
+
 let destroy ~assets ~run_log ~target =
   if Sol_cli_string.is_blank (capabilities target).authorization_trust_field
   then Ok Not_declared
@@ -175,5 +189,7 @@ let destroy ~assets ~run_log ~target =
         |> Result.map ignore
         |> Result.map_error Sol_cli_process.error_to_string
       in
+      let* state = read_state dir in
+      let* () = verify_destroyed_state state in
       Ok Established
 ;;
