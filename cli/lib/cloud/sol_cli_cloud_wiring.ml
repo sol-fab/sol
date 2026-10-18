@@ -36,11 +36,17 @@ let verification_observation
       ~preparation
       ~previously_attributed
       ~pre_inventory_failures
+      ~authorization_identities
   =
   let open Sol_cli_destroy_verification in
   let state = post_destroy_state ~infra_dir in
   let observations =
-    destruction.residue ~previously_attributed ~pre_destroy ~cluster ()
+    destruction.residue
+      ~previously_attributed
+      ~authorization_identities
+      ~pre_destroy
+      ~cluster
+      ()
   in
   let failures =
     List.map
@@ -1441,15 +1447,26 @@ let destroy_deps
                  ())))
     ; destroy_authorization =
         (fun () ->
-          Sol_cli_authorization_stage.destroy ~assets ~run_log ~target:target_cfg
-          |> Result.map (function
-            | Sol_cli_authorization_stage.Established ->
-              "authorization: the reconciler identity and its fence were removed"
-            | Not_declared -> Sol_cli_authorization_stage.outcome_to_string Not_declared))
+          Sol_cli_authorization_stage.destroy_with_identities
+            ~assets
+            ~run_log
+            ~target:target_cfg
+          |> Result.map (fun (result : Sol_cli_authorization_stage.destroy_result) ->
+            let evidence =
+              match result.outcome with
+              | Sol_cli_authorization_stage.Established ->
+                "authorization: the reconciler identity and its fence were removed"
+              | Not_declared -> Sol_cli_authorization_stage.outcome_to_string Not_declared
+            in
+            evidence, result.identities))
     ; observe_residue =
         (fun ~pre_destroy -> destruction.residue ~pre_destroy ~cluster:!cluster_ref ())
     ; verify_destruction =
-        (fun ~pre_destroy ~preparation ~previously_attributed ~pre_inventory_failures ->
+        (fun ~pre_destroy
+          ~preparation
+          ~previously_attributed
+          ~pre_inventory_failures
+          ~authorization_identities ->
           verification_observation
             ~destruction
             ~infra_dir
@@ -1458,7 +1475,8 @@ let destroy_deps
             ~pre_destroy
             ~preparation
             ~previously_attributed
-            ~pre_inventory_failures)
+            ~pre_inventory_failures
+            ~authorization_identities)
     ; report = (fun message -> Sol_cli_report.app "%s" message)
     ; warn = (fun message -> Sol_cli_report.warn "%s" message)
     }

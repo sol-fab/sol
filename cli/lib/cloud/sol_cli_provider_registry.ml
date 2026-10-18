@@ -198,7 +198,12 @@ let destruction provider context =
     ; retention =
         (fun ~retention:_ ~pre_destroy:_ ~preparation:_ ->
           Sol_cli_destroy_verification.Retention_not_required byo_no_root)
-    ; residue = (fun ?previously_attributed:_ ~pre_destroy:_ ~cluster:_ () -> [])
+    ; residue =
+        (fun ?previously_attributed:_
+          ?authorization_identities:_
+          ~pre_destroy:_
+          ~cluster:_
+          () -> [])
     ; before_substrate_destroy = (fun () -> ())
     }
 ;;
@@ -206,6 +211,7 @@ let destruction provider context =
 let observations
       ?(previously_attributed = [])
       ?(pre_destroy = Sol_cli_cloud_destroy.State_empty)
+      ?(authorization_identities = [])
       provider
       target
       ~cluster_name
@@ -215,11 +221,13 @@ let observations
     Sol_cli_aws_absence.observations
       ~previously_attributed
       ~pre_destroy
+      ~authorization_identities
       target
       ~cluster_name
   | Sol_cli_provider.Gcp ->
     Sol_cli_gcp_absence.observations
       ~previously_attributed
+      ~authorization_identities
       ~pre_destroy
       target
       ~cluster_name
@@ -252,4 +260,13 @@ let credentials provider ~operation ~leaves_target_standing =
   | Sol_cli_provider.Gcp ->
     Sol_cli_gcp_cluster.credentials ~operation ~leaves_target_standing
   | Sol_cli_provider.Byo -> Error byo_no_root
+;;
+
+let authorization_state_identities provider ~target state =
+  match provider with
+  | Sol_cli_provider.Aws ->
+    Sol_cli_aws_absence.authorization_state_identities ~target state
+  | Sol_cli_provider.Gcp ->
+    Sol_cli_gcp_absence.authorization_state_identities ~target state
+  | Sol_cli_provider.Byo -> []
 ;;

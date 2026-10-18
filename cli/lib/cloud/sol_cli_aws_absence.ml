@@ -538,6 +538,9 @@ let class_names =
   ; "load balancer"
   ; "EBS volume"
   ; "ECR repository"
+  ; "authorization IAM policy"
+  ; "authorization IAM role"
+  ; "authorization workload role"
   ; "OIDC provider"
   ; "elastic IP"
   ]
@@ -628,6 +631,30 @@ let authorization_checks ~(target : Sol_cli_config.target) =
            "the target's environment names the authorization reconciler role")
       ~attributable:(fun line -> line = role_name)
       [ "iam"; "list-roles"; "--query"; "Roles[].RoleName"; "--output"; "text" ]
+  ; (* The authorization root creates one role per grant unit at
+       /sol/<environment>/ and names it sol-<environment>-<unit>. They are not
+       children of the reconciler role or the boundary policy, so the two
+       exact-name checks above do not see them. The path filter keeps other
+       environments' roles out even when their unit names overlap. *)
+    check
+      ~resource_class:"authorization workload role"
+      ~identity:(Printf.sprintf "sol-%s-* under /sol/%s/" target.env target.env)
+      ~attribution:
+        (Named_for_target
+           (Printf.sprintf
+              "the target's environment names the workload role prefix sol-%s- at \
+               /sol/%s/"
+              target.env
+              target.env))
+      ~attributable:(fun line ->
+        String.starts_with ~prefix:("sol-" ^ target.env ^ "-") line)
+      [ "iam"
+      ; "list-roles"
+      ; "--query"
+      ; Printf.sprintf "Roles[?Path=='/sol/%s/'].RoleName" target.env
+      ; "--output"
+      ; "text"
+      ]
   ]
 ;;
 
@@ -639,6 +666,29 @@ let strict_authorization_observation ~check =
         resource_class = Sol_cli_absence.scope_class
       ; reason = check.resource_class ^ ": " ^ u.reason
       }
+  | observation -> observation
+;;
+
+let prior_for class_name prior =
+  List.assoc_opt class_name prior |> Option.value ~default:[]
+;;
+
+let filter_to_prior prior observation =
+  match observation with
+  | Present present ->
+    let prior = List.map String.trim (prior_for present.resource_class prior) in
+    let found =
+      List.filter (fun item -> List.mem (String.trim item) prior) present.found
+    in
+    if found = []
+    then
+      Absent
+        { resource_class = present.resource_class
+        ; identity = present.identity
+        ; attribution = present.attribution
+        ; checked_with = present.checked_with
+        }
+    else Present { present with found }
   | observation -> observation
 ;;
 
@@ -725,6 +775,7 @@ let oidc_provider_observation
 let observations
       ?(previously_attributed = [])
       ?(pre_destroy = Sol_cli_cloud_destroy.State_empty)
+      ?(authorization_identities = [])
       (target : Sol_cli_config.target)
       ~cluster_name
   =
@@ -748,14 +799,18 @@ let observations
             ()
         ]
     in
+    (* The authorization root's names are derived from the environment, not from
+       the current trust declaration. A prior apply can have created them and a
+       later target can have removed the trust, so an absent current declaration
+       is not evidence that they are gone. Observe them unconditionally; a
+       failed read is a scope failure, not absence. *)
     let observations =
-      if Sol_cli_provider_capabilities.authorization_trust target = None
-      then observations
-      else
-        observations
-        @ List.map
-            (fun check -> strict_authorization_observation ~check)
-            (authorization_checks ~target)
+      observations
+      @ List.map
+          (fun check ->
+             strict_authorization_observation ~check
+             |> filter_to_prior authorization_identities)
+          (authorization_checks ~target)
     in
     observations @ durable_observations ~target
 ;;
@@ -770,3 +825,23 @@ let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
 ;;
 
 let unresolved = Sol_cli_absence.unresolved
+
+let authorization_state_identities
+      ~(target : Sol_cli_config.target)
+      (state : Sol_cli_cloud_destroy.state_read)
+  =
+  let resources = Sol_cli_cloud_destroy.resources state in
+  let names kind =
+    resources
+    |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+      if String.equal resource.kind kind then resource.name else None)
+    |> List.sort_uniq String.compare
+  in
+  let reconciler = "sol-" ^ target.env ^ "-authorization" in
+  let roles = names "aws_iam_role" in
+  [ "authorization IAM role", List.filter (String.equal reconciler) roles
+  ; ( "authorization workload role"
+    , List.filter (fun name -> not (String.equal reconciler name)) roles )
+  ; "authorization IAM policy", names "aws_iam_policy"
+  ]
+;;

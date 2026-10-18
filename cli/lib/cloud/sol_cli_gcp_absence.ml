@@ -135,6 +135,32 @@ let cluster_check ~project ~region ~cluster_name =
     ]
 ;;
 
+let project_iam_binding_check ~project ~resource_class ~identity ~role ~member =
+  identity_check
+    ~resource_class
+    ~identity
+    ~attribution:
+      (Named_for_target
+         (Printf.sprintf
+            "the target's own project: a binding of %s to %s is the grant the root \
+             creates"
+            role
+            member))
+    ~attributable:(fun line ->
+      match String.split_on_char '\t' line with
+      | [ actual_role; actual_member ] ->
+        String.equal actual_role role && String.equal actual_member member
+      | _ -> false)
+    [ "--project"
+    ; project
+    ; "projects"
+    ; "get-iam-policy"
+    ; project
+    ; "--flatten=bindings[].members"
+    ; "--format=value(bindings.role,bindings.members)"
+    ]
+;;
+
 let checks ~project ~region ~cluster_name =
   let p args = [ "--project"; project ] @ args in
   let named ~resource_class ~identity ?(prefix = cluster_name ^ "-") argv =
@@ -332,6 +358,41 @@ let checks ~project ~region ~cluster_name =
       ~attributable:(fun line ->
         Sol_cli_string.contains ~needle:("/networks/" ^ cluster_name) line)
       (p [ "compute"; "forwarding-rules"; "list"; "--format"; "value(name,network)" ])
+  ; (* Project IAM bindings are not children of the principal or the custom
+       role. Deleting the service account or role can leave the project policy
+       entry behind, so observe each binding the root creates. *)
+    project_iam_binding_check
+      ~project
+      ~resource_class:"provisioner project IAM binding"
+      ~identity:
+        (Printf.sprintf
+           "%s -> serviceAccount:%s-provisioner@%s.iam.gserviceaccount.com"
+           (project_roles ^ role_prefix ^ "cluster_access")
+           cluster_name
+           project)
+      ~role:(project_roles ^ role_prefix ^ "cluster_access")
+      ~member:
+        ("serviceAccount:"
+         ^ cluster_name
+         ^ "-provisioner@"
+         ^ project
+         ^ ".iam.gserviceaccount.com")
+  ; project_iam_binding_check
+      ~project
+      ~resource_class:"cert-manager DNS discovery project IAM binding"
+      ~identity:
+        (Printf.sprintf
+           "%s -> serviceAccount:%s-cert-manager@%s.iam.gserviceaccount.com"
+           (project_roles ^ role_prefix ^ "cert_manager_dns_discovery")
+           cluster_name
+           project)
+      ~role:(project_roles ^ role_prefix ^ "cert_manager_dns_discovery")
+      ~member:
+        ("serviceAccount:"
+         ^ cluster_name
+         ^ "-cert-manager@"
+         ^ project
+         ^ ".iam.gserviceaccount.com")
   ]
 ;;
 
@@ -396,8 +457,18 @@ let class_names =
   ; "persistent disk"
   ; "firewall rule"
   ; "forwarding rule"
+  ; "provisioner project IAM binding"
+  ; "cert-manager DNS discovery project IAM binding"
+  ; "authorization project IAM binding"
+  ; "authorization secret IAM binding"
   ; "regional address"
   ]
+;;
+
+let observed_classes () =
+  checks ~project:"coverage" ~region:"coverage" ~cluster_name:"coverage"
+  |> List.map (fun check -> check.resource_class)
+  |> fun classes -> classes @ [ "regional address" ]
 ;;
 
 let unlistable =
@@ -444,6 +515,12 @@ let authorization_checks ~project ~(target : Sol_cli_config.target) =
       ~attributable:(fun line -> line = role)
       ~normalize:(fun line -> line)
       [ "--project"; project; "iam"; "roles"; "list"; "--format"; "value(name)" ]
+  ; project_iam_binding_check
+      ~project
+      ~resource_class:"authorization project IAM binding"
+      ~identity:(Printf.sprintf "%s -> serviceAccount:%s" role email)
+      ~role
+      ~member:("serviceAccount:" ^ email)
   ]
 ;;
 
@@ -455,6 +532,177 @@ let strict_authorization_observation ~check =
         resource_class = Sol_cli_absence.scope_class
       ; reason = check.resource_class ^ ": " ^ u.reason
       }
+  | observation -> observation
+;;
+
+let secret_bindings_checked_with ~project ~environment =
+  Printf.sprintf
+    "gcloud secrets list --project %s --filter=name:sol-%s- --format=value(name), then \
+     gcloud secrets get-iam-policy <secret> --project %s --format=json for each secret"
+    project
+    environment
+    project
+;;
+
+let secret_binding_members ~project text =
+  let open Result.Syntax in
+  let* json = Sol_cli_json.decode ~what:"the secret IAM policy" text in
+  let* bindings =
+    Sol_cli_json.optional
+      ~what:"the secret IAM policy"
+      [ "bindings" ]
+      Sol_cli_json.list
+      json
+    |> Result.map (Option.value ~default:[])
+  in
+  let* found =
+    Sol_cli_result.map_list
+      (fun binding ->
+         let* role =
+           Sol_cli_json.require
+             ~what:"a secret IAM binding"
+             [ "role" ]
+             Sol_cli_json.string
+             binding
+         in
+         let* members =
+           Sol_cli_json.require
+             ~what:"a secret IAM binding"
+             [ "members" ]
+             Sol_cli_json.list
+             binding
+         in
+         let* members =
+           Sol_cli_result.map_list
+             (fun member ->
+                match Sol_cli_json.string member with
+                | Some member -> Ok member
+                | None -> Error "a secret IAM member is not a string")
+             members
+         in
+         Ok
+           (List.filter_map
+              (fun member ->
+                 if
+                   String.starts_with
+                     ~prefix:("serviceAccount:" ^ project ^ ".svc.id.goog[")
+                     member
+                 then Some (role, member)
+                 else None)
+              members))
+      bindings
+  in
+  Ok (List.concat found)
+;;
+
+(* The authorization root puts secret IAM members on durable environment
+   secrets. The secrets themselves are not target residue, but a grant the
+   target added to one is: deleting the reconciler or the workload identity does
+   not necessarily remove the secret's policy entry. Enumerate the environment's
+   secrets and read each policy; a failed read is UNKNOWN, never absence. *)
+let authorization_secret_bindings ~project ~environment =
+  let resource_class = "authorization secret IAM binding" in
+  let identity =
+    Printf.sprintf
+      "secret IAM bindings on secrets named sol-%s-* in %s"
+      environment
+      project
+  in
+  let attribution =
+    Named_for_target
+      (Printf.sprintf
+         "the target's environment names the secret prefix sol-%s-"
+         environment)
+  in
+  let checked_with = secret_bindings_checked_with ~project ~environment in
+  let list_argv =
+    [ "--project"
+    ; project
+    ; "secrets"
+    ; "list"
+    ; "--filter=name:sol-" ^ environment ^ "-"
+    ; "--format=value(name)"
+    ]
+  in
+  let gcloud_failure = function
+    | Sol_cli_process.Non_zero r ->
+      if String.trim r.stderr = ""
+      then Printf.sprintf "gcloud exited %d" r.exit_code
+      else String.trim r.stderr
+    | _ -> "the gcloud CLI is unavailable"
+  in
+  match Sol_cli_process.run (Sol_cli_process.cmd ("gcloud" :: list_argv)) with
+  | Error error ->
+    Unobservable { resource_class; reason = gcloud_failure error; checked_with }
+  | Ok { Sol_cli_process.stdout; stderr } ->
+    if String.trim stderr <> ""
+    then Unobservable { resource_class; reason = String.trim stderr; checked_with }
+    else (
+      let secrets = Sol_cli_absence.lines stdout in
+      let rec read acc = function
+        | [] -> Ok (List.rev acc)
+        | secret :: rest ->
+          let argv =
+            [ "--project"; project; "secrets"; "get-iam-policy"; secret; "--format=json" ]
+          in
+          (match Sol_cli_process.run (Sol_cli_process.cmd ("gcloud" :: argv)) with
+           | Error error -> Error (secret, gcloud_failure error)
+           | Ok { Sol_cli_process.stdout; stderr } ->
+             if String.trim stderr <> ""
+             then Error (secret, String.trim stderr)
+             else (
+               match secret_binding_members ~project stdout with
+               | Error reason -> Error (secret, reason)
+               | Ok bindings ->
+                 let found =
+                   bindings
+                   |> List.map (fun (role, member) ->
+                     Printf.sprintf "%s: %s -> %s" secret role member)
+                 in
+                 read (List.rev_append found acc) rest))
+      in
+      match read [] secrets with
+      | Error (secret, reason) ->
+        Unobservable
+          { resource_class
+          ; reason = Printf.sprintf "secret %s: %s" secret reason
+          ; checked_with
+          }
+      | Ok [] -> Absent { resource_class; identity; attribution; checked_with }
+      | Ok found -> Present { resource_class; identity; found; attribution; checked_with })
+;;
+
+let strict_authorization observation =
+  match observation with
+  | Unobservable u ->
+    Unobservable
+      { u with
+        resource_class = Sol_cli_absence.scope_class
+      ; reason = u.resource_class ^ ": " ^ u.reason
+      }
+  | observation -> observation
+;;
+
+let prior_for class_name prior =
+  List.assoc_opt class_name prior |> Option.value ~default:[]
+;;
+
+let filter_to_prior prior observation =
+  match observation with
+  | Present present ->
+    let prior = List.map String.trim (prior_for present.resource_class prior) in
+    let found =
+      List.filter (fun item -> List.mem (String.trim item) prior) present.found
+    in
+    if found = []
+    then
+      Absent
+        { resource_class = present.resource_class
+        ; identity = present.identity
+        ; attribution = present.attribution
+        ; checked_with = present.checked_with
+        }
+    else Present { present with found }
   | observation -> observation
 ;;
 
@@ -626,6 +874,7 @@ let regional_address_observation
 
 let observations
       ?(previously_attributed = [])
+      ?(authorization_identities = [])
       ?(pre_destroy = Sol_cli_cloud_destroy.State_empty)
       (target : Sol_cli_config.target)
       ~cluster_name
@@ -641,14 +890,25 @@ let observations
         (fun check -> run ~previously_attributed ~check ())
         (checks ~project ~region:target.region ~cluster_name)
     in
+    (* The authorization root's names are derived from the environment, not from
+       the current trust declaration. A prior apply can have created them and a
+       later target can have removed the trust, so an absent current declaration
+       is not evidence that they are gone. Observe them unconditionally; a
+       failed read is a scope failure, not absence. *)
     let observations =
-      if Sol_cli_provider_capabilities.authorization_trust target = None
-      then observations
-      else
-        observations
-        @ List.map
-            (fun check -> strict_authorization_observation ~check)
-            (authorization_checks ~project ~target)
+      observations
+      @ List.map
+          (fun check ->
+             strict_authorization_observation ~check
+             |> filter_to_prior authorization_identities)
+          (authorization_checks ~project ~target)
+    in
+    let observations =
+      observations
+      @ [ strict_authorization
+            (authorization_secret_bindings ~project ~environment:target.env)
+          |> filter_to_prior authorization_identities
+        ]
     in
     let observations =
       observations
@@ -674,3 +934,51 @@ let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
 ;;
 
 let unresolved = Sol_cli_absence.unresolved
+
+let authorization_state_identities
+      ~(target : Sol_cli_config.target)
+      (state : Sol_cli_cloud_destroy.state_read)
+  =
+  let resources = Sol_cli_cloud_destroy.resources state in
+  let project =
+    Option.value (Sol_cli_config.provider_field target "project_id") ~default:""
+  in
+  let service_accounts =
+    resources
+    |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+      if String.equal resource.kind "google_service_account" then resource.email else None)
+  in
+  let custom_roles =
+    resources
+    |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+      if String.equal resource.kind "google_project_iam_custom_role"
+      then Option.map (fun name -> "projects/" ^ project ^ "/roles/" ^ name) resource.name
+      else None)
+  in
+  let project_bindings =
+    resources
+    |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+      if String.equal resource.kind "google_project_iam_member"
+      then (
+        match resource.role, resource.member with
+        | Some role, Some member -> Some (role ^ "\t" ^ member)
+        | _ -> None)
+      else None)
+  in
+  let secret_bindings =
+    resources
+    |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+      if String.equal resource.kind "google_secret_manager_secret_iam_member"
+      then (
+        match resource.secret_id, resource.role, resource.member with
+        | Some secret, Some role, Some member ->
+          Some (Printf.sprintf "%s: %s -> %s" (Filename.basename secret) role member)
+        | _ -> None)
+      else None)
+  in
+  [ "authorization service account", service_accounts
+  ; "authorization custom role", custom_roles
+  ; "authorization project IAM binding", project_bindings
+  ; "authorization secret IAM binding", secret_bindings
+  ]
+;;
