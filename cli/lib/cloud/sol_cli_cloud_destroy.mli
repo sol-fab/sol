@@ -6,6 +6,7 @@ type resource =
   ; deletion_protection : bool option
   ; final_snapshot_identifier : string option
   ; skip_final_snapshot : bool option
+  ; url : string option
   }
 
 type state_read =
@@ -105,9 +106,12 @@ type deps =
   ; accept_unreleased : bool
   ; destroy_substrate : unit -> (unit, string) result
   ; destroy_authorization : unit -> (string, string) result
+  ; observe_residue : pre_destroy:state_read -> Sol_cli_absence.observation list
   ; verify_destruction :
       pre_destroy:state_read
       -> preparation:preparation
+      -> previously_attributed:(string * string list) list
+      -> pre_inventory_failures:string list
       -> Sol_cli_destroy_verification.observation
   ; report : string -> unit
   ; warn : string -> unit
