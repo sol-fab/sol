@@ -2375,7 +2375,11 @@ let%test "driver: byo has nothing to observe, identify or credential (DEC-051)" 
     Windtrap.bool
     ~msg:"a rootless driver observes and identifies nothing"
     true
-    (Sol_cli_provider_registry.observations Sol_cli_provider.Byo target ~cluster_name:"x"
+    (Sol_cli_provider_registry.observations
+       Sol_cli_provider.Byo
+       target
+       ~cluster_name:"x"
+       ~pre_destroy:Sol_cli_cloud_destroy.State_empty
      = []
      && Sol_cli_provider_registry.resource_identity
           Sol_cli_provider.Byo

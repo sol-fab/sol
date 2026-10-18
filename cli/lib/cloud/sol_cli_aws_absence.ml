@@ -172,6 +172,19 @@ let named_for_cluster cluster_name =
     cluster_name
 ;;
 
+(* The cluster root names ECR repositories `<workspace>/<service>` from the
+   `workspace_name` variable. The current working directory is not the identity
+   that provisioned them: teardown may run from another directory, and the
+   workspace may have been renamed. The pre-destroy Terraform state is the
+   authoritative record of the repositories this target created. The target's
+   declared registry is an explicit fallback; the current workspace name is not. *)
+let ecr_repositories_of_state state =
+  Sol_cli_cloud_destroy.resources state
+  |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+    if String.equal resource.kind "aws_ecr_repository" then resource.name else None)
+  |> List.sort_uniq String.compare
+;;
+
 let registry_prefix (target : Sol_cli_config.target) =
   match target.registry with
   | None -> None
@@ -530,21 +543,19 @@ let class_names =
   ]
 ;;
 
-let ecr_observation ~region ~registry =
-  match registry with
-  | Some prefix ->
+let ecr_observation ~region ~repositories ~prefix =
+  match repositories, prefix with
+  | _ :: _, _ ->
     run
       ~check:
         (check
            ~resource_class:"ECR repository"
-           ~identity:(prefix ^ "/*")
+           ~identity:(String.concat ", " repositories)
            ~attribution:
              (Named_for_target
-                (Printf.sprintf
-                   "the target's own registry path: the cluster root names its \
-                    repositories under %s, which the target declares"
-                   prefix))
-           ~attributable:(fun line -> Sol_cli_string.contains ~needle:(prefix ^ "/") line)
+                "the pre-destroy Terraform state names the ECR repositories this target \
+                 created")
+           ~attributable:(fun line -> List.mem line repositories)
            [ "ecr"
            ; "describe-repositories"
            ; "--region"
@@ -555,12 +566,38 @@ let ecr_observation ~region ~registry =
            ; "text"
            ])
       ()
-  | None ->
+  | [], Some prefix ->
+    run
+      ~check:
+        (check
+           ~resource_class:"ECR repository"
+           ~identity:(prefix ^ "/*")
+           ~attribution:
+             (Named_for_target
+                (Printf.sprintf
+                   "the target's declared registry names its workspace prefix %s, and \
+                    the cluster root names its repositories %s/<service>"
+                   prefix
+                   prefix))
+           ~attributable:(fun line ->
+             String.equal line prefix || String.starts_with ~prefix:(prefix ^ "/") line)
+           [ "ecr"
+           ; "describe-repositories"
+           ; "--region"
+           ; region
+           ; "--query"
+           ; "repositories[].repositoryName"
+           ; "--output"
+           ; "text"
+           ])
+      ()
+  | [], None ->
     Not_attributable
       { resource_class = "ECR repository"
       ; reason =
-          "the target declares no registry, so Sol cannot say which repositories under \
-           this account belong to it -- reported rather than guessed"
+          "the pre-destroy Terraform state names no ECR repositories and the target \
+           declares no registry, so Sol cannot distinguish \"this target created none\" \
+           from \"the ownership record was lost\"; reported rather than guessed"
       }
 ;;
 
@@ -698,7 +735,11 @@ let observations
       List.map
         (fun c -> run ~previously_attributed ~check:c ())
         (checks ~region:target.region ~cluster_name)
-      @ [ ecr_observation ~region:target.region ~registry:(registry_prefix target) ]
+      @ [ ecr_observation
+            ~region:target.region
+            ~repositories:(ecr_repositories_of_state pre_destroy)
+            ~prefix:(registry_prefix target)
+        ]
       @ [ oidc_provider_observation
             ~previously_attributed
             ~region:target.region
