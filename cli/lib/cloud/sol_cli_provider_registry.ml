@@ -198,15 +198,31 @@ let destruction provider context =
     ; retention =
         (fun ~retention:_ ~pre_destroy:_ ~preparation:_ ->
           Sol_cli_destroy_verification.Retention_not_required byo_no_root)
-    ; residue = (fun ~pre_destroy:_ ~cluster:_ -> [])
+    ; residue = (fun ?previously_attributed:_ ~pre_destroy:_ ~cluster:_ () -> [])
     ; before_substrate_destroy = (fun () -> ())
     }
 ;;
 
-let observations provider target ~cluster_name =
+let observations
+      ?(previously_attributed = [])
+      ?(pre_destroy = Sol_cli_cloud_destroy.State_empty)
+      provider
+      target
+      ~cluster_name
+  =
   match provider with
-  | Sol_cli_provider.Aws -> Sol_cli_aws_absence.observations target ~cluster_name
-  | Sol_cli_provider.Gcp -> Sol_cli_gcp_absence.observations target ~cluster_name
+  | Sol_cli_provider.Aws ->
+    Sol_cli_aws_absence.observations
+      ~previously_attributed
+      ~pre_destroy
+      target
+      ~cluster_name
+  | Sol_cli_provider.Gcp ->
+    Sol_cli_gcp_absence.observations
+      ~previously_attributed
+      ~pre_destroy
+      target
+      ~cluster_name
   | Sol_cli_provider.Byo -> []
 ;;
 

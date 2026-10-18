@@ -263,22 +263,23 @@ JSON
       exit 0
     fi
     eks_resource='{"address":"module.eks.aws_eks_cluster.this[0]","type":"aws_eks_cluster","values":{"id":"lifecycle-test","arn":"arn:aws:eks:us-east-1:111122223333:cluster/lifecycle-test"}}'
+    oidc_resource='{"address":"module.eks.aws_iam_openid_connect_provider.oidc_provider[0]","type":"aws_iam_openid_connect_provider","values":{"url":"https://oidc.eks.us-east-1.amazonaws.com/id/LIFECYCLETEST"}}'
     if [ "${RDS_ABSENT:-}" = 1 ]; then
-      printf '{"values":{"root_module":{"resources":[%s]}}}\n' "$eks_resource"
+      printf '{"values":{"root_module":{"resources":[%s,%s]}}}\n' "$eks_resource" "$oidc_resource"
     elif [ -e "$RDS_PREPARED_FILE" ]; then
       prepared_value="$(cat "$RDS_PREPARED_FILE")"
       if [ "$prepared_value" = "skip" ]; then
-        printf '{"values":{"root_module":{"resources":[%s,{"address":"aws_db_instance.postgres[0]","type":"aws_db_instance","values":{"deletion_protection":false,"skip_final_snapshot":true,"final_snapshot_identifier":null,"identifier":"lifecycle-test-postgres","id":"db-LIFECYCLETEST","arn":"arn:aws:rds:us-east-1:111122223333:db:lifecycle-test-postgres"}}]}}}\n' \
-          "$eks_resource"
+        printf '{"values":{"root_module":{"resources":[%s,%s,{"address":"aws_db_instance.postgres[0]","type":"aws_db_instance","values":{"deletion_protection":false,"skip_final_snapshot":true,"final_snapshot_identifier":null,"identifier":"lifecycle-test-postgres","id":"db-LIFECYCLETEST","arn":"arn:aws:rds:us-east-1:111122223333:db:lifecycle-test-postgres"}}]}}}\n' \
+          "$eks_resource" "$oidc_resource"
       else
         printf \
-          '{"values":{"root_module":{"resources":[%s,{"address":"aws_db_instance.postgres[0]","type":"aws_db_instance","values":{"deletion_protection":false,"skip_final_snapshot":false,"final_snapshot_identifier":"%s","identifier":"lifecycle-test-postgres","id":"db-LIFECYCLETEST","arn":"arn:aws:rds:us-east-1:111122223333:db:lifecycle-test-postgres"}}]}}}\n' \
-          "$eks_resource" "${prepared_value}${RDS_SNAPSHOT_MISMATCH:+-other}"
+          '{"values":{"root_module":{"resources":[%s,%s,{"address":"aws_db_instance.postgres[0]","type":"aws_db_instance","values":{"deletion_protection":false,"skip_final_snapshot":false,"final_snapshot_identifier":"%s","identifier":"lifecycle-test-postgres","id":"db-LIFECYCLETEST","arn":"arn:aws:rds:us-east-1:111122223333:db:lifecycle-test-postgres"}}]}}}\n' \
+          "$eks_resource" "$oidc_resource" "${prepared_value}${RDS_SNAPSHOT_MISMATCH:+-other}"
       fi
     else
       printf \
-        '{"values":{"root_module":{"resources":[%s,{"address":"aws_db_instance.postgres[0]","type":"aws_db_instance","values":{"deletion_protection":true,"skip_final_snapshot":false,"final_snapshot_identifier":null,"identifier":"lifecycle-test-postgres","id":"db-LIFECYCLETEST","arn":"arn:aws:rds:us-east-1:111122223333:db:lifecycle-test-postgres"}}]}}}\n' \
-        "$eks_resource"
+        '{"values":{"root_module":{"resources":[%s,%s,{"address":"aws_db_instance.postgres[0]","type":"aws_db_instance","values":{"deletion_protection":true,"skip_final_snapshot":false,"final_snapshot_identifier":null,"identifier":"lifecycle-test-postgres","id":"db-LIFECYCLETEST","arn":"arn:aws:rds:us-east-1:111122223333:db:lifecycle-test-postgres"}}]}}}\n' \
+        "$eks_resource" "$oidc_resource"
     fi
     ;;
   *" apply "*".tfplan")

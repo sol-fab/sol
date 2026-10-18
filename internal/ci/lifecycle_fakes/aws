@@ -13,6 +13,13 @@ printf 'aws %s\n' "$*" >>"$LIFECYCLE_LOG"
     fi
     exit 0
   fi
+  if [ "$1 $2" = "ec2 describe-tags" ]; then
+    case " $* " in
+      *"Values=vol-residual"*) printf 'owned\n' ;;
+      *"Values=eipalloc-residual"*) printf 'owned\n' ;;
+    esac
+    exit 0
+  fi
   if [ "$1 $2" = "elbv2 describe-tags" ]; then
     if [ "${LB_RESIDUE_PRESENT:-}" = 1 ]; then
       printf 'owned\n'
@@ -123,7 +130,7 @@ if [ "${DESTROYING:-}" = 1 ]; then
       [ "${AWS_RESIDUAL_KIND:-}" = ebs ] && printf 'vol-residual\n' || printf '\n'
       exit 0
       ;;
-    "rds describe-db-subnet-groups"|"ec2 describe-security-groups"|"ec2 describe-vpcs"|"ec2 describe-subnets"|"iam list-roles"|"iam list-policies"|"s3api list-buckets"|"cloudwatch list-dashboards"|"logs describe-log-groups")
+    "rds describe-db-subnet-groups"|"ec2 describe-security-groups"|"ec2 describe-vpcs"|"ec2 describe-subnets"|"iam list-roles"|"iam list-policies"|"iam list-open-id-connect-providers"|"s3api list-buckets"|"cloudwatch list-dashboards"|"logs describe-log-groups")
       printf '\n'
       exit 0
       ;;
