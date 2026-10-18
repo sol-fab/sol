@@ -163,14 +163,29 @@ let named_for_cluster cluster_name =
 ;;
 
 (* The cluster root names ECR repositories `<workspace>/<service>` from the
-   `workspace_name` variable, not from the target's registry path. The registry
-   is optional and may name a different registry entirely, so it cannot decide
-   which ECR repositories this workspace created. The workspace name is the
-   authoritative prefix; using it also accounts for historical services that
-   are no longer declared. *)
-let ecr_prefix () =
-  let workspace = Sol_cli_workspace.current_name () in
-  if Sol_cli_string.is_blank workspace then None else Some workspace
+   `workspace_name` variable. The current working directory is not the identity
+   that provisioned them: teardown may run from another directory, and the
+   workspace may have been renamed. The pre-destroy Terraform state is the
+   authoritative record of the repositories this target created. The target's
+   declared registry is an explicit fallback; the current workspace name is not. *)
+let ecr_repositories_of_state state =
+  Sol_cli_cloud_destroy.resources state
+  |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+    if String.equal resource.kind "aws_ecr_repository" then resource.name else None)
+  |> List.sort_uniq String.compare
+;;
+
+let registry_prefix (target : Sol_cli_config.target) =
+  match target.registry with
+  | None -> None
+  | Some registry ->
+    (match String.index_opt registry '/' with
+     | None -> None
+     | Some index ->
+       let prefix =
+         String.sub registry (index + 1) (String.length registry - index - 1)
+       in
+       if prefix = "" then None else Some prefix)
 ;;
 
 let cluster_tag_named cluster_name =
@@ -495,9 +510,29 @@ let class_names =
   ]
 ;;
 
-let ecr_observation ~region ~prefix =
-  match prefix with
-  | Some prefix ->
+let ecr_observation ~region ~repositories ~prefix =
+  match repositories, prefix with
+  | _ :: _, _ ->
+    run
+      ~check:
+        (check
+           ~resource_class:"ECR repository"
+           ~identity:(String.concat ", " repositories)
+           ~attribution:
+             (Named_for_target
+                "the pre-destroy Terraform state names the ECR repositories this target \
+                 created")
+           ~attributable:(fun line -> List.mem line repositories)
+           [ "ecr"
+           ; "describe-repositories"
+           ; "--region"
+           ; region
+           ; "--query"
+           ; "repositories[].repositoryName"
+           ; "--output"
+           ; "text"
+           ])
+  | [], Some prefix ->
     run
       ~check:
         (check
@@ -506,8 +541,9 @@ let ecr_observation ~region ~prefix =
            ~attribution:
              (Named_for_target
                 (Printf.sprintf
-                   "the target's own workspace name: the cluster root names its \
-                    repositories %s/<service>, including services no longer declared"
+                   "the target's declared registry names its workspace prefix %s, and \
+                    the cluster root names its repositories %s/<service>"
+                   prefix
                    prefix))
            ~attributable:(fun line ->
              String.equal line prefix || String.starts_with ~prefix:(prefix ^ "/") line)
@@ -520,12 +556,13 @@ let ecr_observation ~region ~prefix =
            ; "--output"
            ; "text"
            ])
-  | None ->
+  | [], None ->
     Not_attributable
       { resource_class = "ECR repository"
       ; reason =
-          "the workspace name could not be established, so Sol cannot say which \
-           repositories under this account belong to it -- reported rather than guessed"
+          "the pre-destroy Terraform state names no ECR repositories and the target \
+           declares no registry, so Sol cannot distinguish \"this target created none\" \
+           from \"the ownership record was lost\"; reported rather than guessed"
       }
 ;;
 
@@ -570,13 +607,21 @@ let strict_authorization_observation ~check =
   | observation -> observation
 ;;
 
-let observations (target : Sol_cli_config.target) ~cluster_name =
+let observations
+      ?(pre_destroy = Sol_cli_cloud_destroy.State_empty)
+      (target : Sol_cli_config.target)
+      ~cluster_name
+  =
   match scope_binding target with
   | Error reason -> Sol_cli_absence.scope_failure ~reason
   | Ok () ->
     let observations =
       List.map (fun c -> run ~check:c) (checks ~region:target.region ~cluster_name)
-      @ [ ecr_observation ~region:target.region ~prefix:(ecr_prefix ()) ]
+      @ [ ecr_observation
+            ~region:target.region
+            ~repositories:(ecr_repositories_of_state pre_destroy)
+            ~prefix:(registry_prefix target)
+        ]
     in
     let observations =
       if Sol_cli_provider_capabilities.authorization_trust target = None
