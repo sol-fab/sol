@@ -282,9 +282,12 @@ type deps =
   ; accept_unreleased : bool
   ; destroy_substrate : unit -> (unit, string) result
   ; destroy_authorization : unit -> (string, string) result
+  ; observe_residue : pre_destroy:state_read -> Sol_cli_absence.observation list
   ; verify_destruction :
       pre_destroy:state_read
       -> preparation:preparation
+      -> previously_attributed:(string * string list) list
+      -> pre_inventory_failures:string list
       -> Sol_cli_destroy_verification.observation
   ; report : string -> unit
   ; warn : string -> unit
@@ -367,6 +370,32 @@ let teardown ~deps ~platform : (cleanup * string list, failure * cleanup) result
      | Protected_failed message -> Error (Platform_destroy_failed message, cleanup))
 ;;
 
+let authorization_class class_name =
+  String.starts_with ~prefix:"authorization " class_name
+;;
+
+let collect_previously_attributed observations =
+  observations
+  |> List.filter_map (function
+    | Sol_cli_absence.Present present
+      when not (authorization_class present.resource_class) ->
+      Some (present.resource_class, present.found)
+    | _ -> None)
+;;
+
+let collect_pre_inventory_failures observations =
+  observations
+  |> List.filter_map (function
+    | Sol_cli_absence.Unobservable observation
+      when not (authorization_class observation.resource_class) ->
+      Some (observation.resource_class ^ ": " ^ observation.reason)
+    | Sol_cli_absence.Not_attributable observation
+      when not (authorization_class observation.resource_class) ->
+      Some (observation.resource_class ^ ": " ^ observation.reason)
+    | _ -> None)
+  |> List.sort_uniq String.compare
+;;
+
 let execute ~deps =
   let read_state () =
     match deps.observe_state () with
@@ -433,6 +462,13 @@ let execute ~deps =
         (Printf.sprintf
            "  lifecycle phase: %s"
            (Sol_cli_cloud_lifecycle.phase_to_string Sol_cli_cloud_lifecycle.Destroying));
+    (* Capture the provider identities that exist before anything is destroyed. The
+       post-destroy inventory reuses them, so a resource that is still present but has
+       lost its label or tag is not silently read as absent. A pre-inventory that could
+       not run is carried into the verdict as unknown, not ignored. *)
+    let pre_observations = deps.observe_residue ~pre_destroy:!state in
+    let previously_attributed = collect_previously_attributed pre_observations in
+    let pre_inventory_failures = collect_pre_inventory_failures pre_observations in
     match deps.destroy_authorization () with
     | Error message -> fail ~cleanup (Authorization_not_removed message)
     | Ok evidence ->
@@ -441,7 +477,13 @@ let execute ~deps =
        | Error message -> fail ~cleanup (Substrate_destroy_failed message)
        | Ok () ->
          deps.report "\nVerifying teardown...";
-         let observation = deps.verify_destruction ~pre_destroy:!state ~preparation in
+         let observation =
+           deps.verify_destruction
+             ~pre_destroy:!state
+             ~preparation
+             ~previously_attributed
+             ~pre_inventory_failures
+         in
          let verdict = Sol_cli_destroy_verification.classify observation in
          if Sol_cli_destroy_verification.is_verified verdict
          then succeed ~cleanup ~verification:observation preparation
