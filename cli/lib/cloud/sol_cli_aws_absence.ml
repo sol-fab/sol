@@ -405,11 +405,12 @@ let durable_observations ~(target : Sol_cli_config.target) =
 ;;
 
 let ecr_probe ~region ~registry =
+  let resource_class = "ECR repository" in
   match registry with
   | Some prefix ->
     Ok
       (check
-         ~resource_class:"ECR repository"
+         ~resource_class
          ~identity:(prefix ^ "/*")
          ~attribution:
            (Named_for_target
@@ -429,7 +430,7 @@ let ecr_probe ~region ~registry =
          ])
   | None ->
     Error
-      ( "ECR repository"
+      ( resource_class
       , "the target declares no registry, so Sol cannot say which repositories under \
          this account belong to it -- reported rather than guessed" )
 ;;
@@ -485,9 +486,9 @@ let probes ~region ~cluster_name ~registry =
 let observed_classes () =
   probes ~region:"coverage" ~cluster_name:"coverage" ~registry:(Some "coverage")
   @ List.map (fun check -> Ok check) (authorization_checks ~env:"coverage")
-  |> List.map (function
-    | Ok check -> check.resource_class
-    | Error (resource_class, _) -> resource_class)
+  |> List.filter_map (function
+    | Ok check -> Some check.resource_class
+    | Error _ -> None)
 ;;
 
 let observations (target : Sol_cli_config.target) ~cluster_name =
