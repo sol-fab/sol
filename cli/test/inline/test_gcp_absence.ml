@@ -533,7 +533,7 @@ let%test "GCP disks: an attributable PVC disk prevents verified absence" =
   test_a_present_pvc_disk_prevents_verified_absence ()
 ;;
 
-let with_fake_regional_addresses ~addresses ~network f =
+let with_fake_regional_addresses ?(rule_exit = 0) ?(rule_err = "") ~addresses ~network f =
   let dir = Filename.temp_file "sol-fake-regional-addresses-" "" in
   Sys.remove dir;
   Unix.mkdir dir 0o755;
@@ -545,12 +545,18 @@ let with_fake_regional_addresses ~addresses ~network f =
 printf '%%s\n' "$*" >> %s
 case "$*" in
   *"compute addresses list"*) printf '%%s' %s ;;
-  *"compute forwarding-rules describe"*) printf '%%s\n' %s ;;
+  *"compute forwarding-rules describe"*)
+    if [ %d -ne 0 ]; then printf '%%s' %s >&2; exit %d; fi
+    printf '%%s\n' %s
+    ;;
 esac
 exit 0
 |}
       (Filename.quote log)
       (Filename.quote addresses)
+      rule_exit
+      (Filename.quote rule_err)
+      rule_exit
       (Filename.quote network)
   in
   Out_channel.with_open_text bin (fun oc -> output_string oc script);
@@ -636,4 +642,82 @@ let%test "GCP regional addresses: a different VPC is not attributed" =
        match regional_address observations with
        | Sol_cli_absence.Absent _ -> ()
        | _ -> Windtrap.fail "a regional address in another VPC must not be attributed")
+;;
+
+let%test "GCP regional addresses: an absent users field is a genuine empty relationship" =
+  let addresses = {|[{"name":"k8s2-abc","address":"1.2.3.4"}]|} in
+  with_fake_regional_addresses
+    ~addresses
+    ~network:
+      "https://www.googleapis.com/compute/v1/projects/acme-project/global/networks/acme-prod"
+    (fun () ->
+       let observations =
+         Sol_cli_gcp_absence.observations
+           ~previously_attributed:[ "regional address", [ "k8s2-abc" ] ]
+           target
+           ~cluster_name:"acme-prod"
+       in
+       match regional_address observations with
+       | Sol_cli_absence.Present present ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the prior identity is preserved when users is absent"
+           [ "k8s2-abc" ]
+           present.found
+       | _ ->
+         Windtrap.fail
+           "an absent users field is the provider's empty repeated-field encoding")
+;;
+
+let%test "GCP regional addresses: a malformed users field is unknown" =
+  let addresses = {|[{"name":"k8s2-abc","address":"1.2.3.4","users":"not-a-list"}]|} in
+  with_fake_regional_addresses
+    ~addresses
+    ~network:
+      "https://www.googleapis.com/compute/v1/projects/acme-project/global/networks/acme-prod"
+    (fun () ->
+       let observations =
+         Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
+       in
+       match regional_address observations with
+       | Sol_cli_absence.Unobservable _ -> ()
+       | _ -> Windtrap.fail "a non-list users field must not become an empty relationship")
+;;
+
+let%test "GCP regional addresses: a non-string user is unknown" =
+  let addresses = {|[{"name":"k8s2-abc","address":"1.2.3.4","users":[123]}]|} in
+  with_fake_regional_addresses
+    ~addresses
+    ~network:
+      "https://www.googleapis.com/compute/v1/projects/acme-project/global/networks/acme-prod"
+    (fun () ->
+       let observations =
+         Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
+       in
+       match regional_address observations with
+       | Sol_cli_absence.Unobservable _ -> ()
+       | _ -> Windtrap.fail "a non-string user must not be silently discarded")
+;;
+
+let%test "GCP regional addresses: a failed forwarding-rule read is unknown" =
+  let addresses =
+    {|[{"name":"k8s2-abc","address":"1.2.3.4","users":["https://www.googleapis.com/compute/v1/projects/acme-project/regions/us-central1/forwardingRules/rule-1"]}]|}
+  in
+  with_fake_regional_addresses
+    ~addresses
+    ~network:""
+    ~rule_exit:254
+    ~rule_err:"permission denied"
+    (fun () ->
+       let observations =
+         Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
+       in
+       match regional_address observations with
+       | Sol_cli_absence.Unobservable u ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the provider's forwarding-rule error is preserved"
+           true
+           (Sol_cli_string.contains ~needle:"permission denied" u.reason)
+       | _ -> Windtrap.fail "a failed forwarding-rule read must be unknown")
 ;;

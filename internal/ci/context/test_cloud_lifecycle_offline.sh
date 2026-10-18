@@ -2114,11 +2114,16 @@ grep -qF 'no usable answer' "$destroy_tri_log.out" || {
 
 rm -f "$RDS_PREPARED_FILE"
 log="$tmp/destroy-absent.log"
-if ! (export OUTPUT_ABSENT=1; run_destroy "$log"); then
+if (export OUTPUT_ABSENT=1; run_destroy "$log"); then
   cat "$log.out" >&2
-  echo "destroy on an absent target must still succeed" >&2
+  echo "an absent target claimed verified absence while OIDC attribution was unknown" >&2
   exit 1
 fi
+grep -F 'OIDC provider' "$log.out" >/dev/null || {
+  echo "the absent-target destroy did not name the unknown OIDC attribution:" >&2
+  cat "$log.out" >&2
+  exit 1
+}
 grep -F 'prepare: cloud substrate is absent, nothing to prepare' "$log.out" >/dev/null
 if grep -F -- '-target=aws_db_instance.postgres' "$log" >/dev/null; then
   echo "destroy attempted RDS preparation on an absent cloud substrate" >&2

@@ -605,11 +605,12 @@ let oidc_provider_observation
        | Ok [ url ] when String.trim url <> "" -> Ok [ String.trim url ]
        | Ok _ -> Error "neither the state nor the cluster records an OIDC issuer"
        | Error (`NotFound _) ->
-         (match pre_destroy with
-          | Sol_cli_cloud_destroy.State_empty -> Ok []
-          | Sol_cli_cloud_destroy.State_represented _
-          | Sol_cli_cloud_destroy.State_unreadable _ ->
-            Error "neither the state nor the cluster records an OIDC issuer")
+         (* An IAM OIDC provider outlives its EKS cluster. Empty Terraform state
+            and an absent cluster do not establish that no provider was created;
+            without an issuer or a prior identity it is unknown, not absence. *)
+         Error
+           "neither the state nor the cluster records an OIDC issuer, and an IAM OIDC \
+            provider can outlive the cluster"
        | Error (`Failed reason) ->
          Error ("the cluster's OIDC issuer could not be read: " ^ String.trim reason))
   in

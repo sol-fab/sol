@@ -559,13 +559,28 @@ let regional_address_observation
                    then Ok (Some name)
                    else (
                      let users =
-                       Sol_cli_json.optional
-                         ~what:"a regional address"
-                         [ "users" ]
-                         Sol_cli_json.list
-                         address
-                       |> Result.map (Option.value ~default:[])
-                       |> Result.map (List.filter_map Sol_cli_json.string)
+                       match
+                         Sol_cli_json.optional
+                           ~what:"a regional address"
+                           [ "users" ]
+                           Sol_cli_json.list
+                           address
+                       with
+                       | Error reason -> Error reason
+                       | Ok None ->
+                         (* Compute Engine documents `users` as an output-only,
+                            repeated string field. Empty repeated fields are
+                            omitted from JSON, so an absent field is a genuinely
+                            empty relationship; a present non-list or a list with
+                            a non-string entry is malformed, not empty. *)
+                         Ok []
+                       | Ok (Some users) ->
+                         let rec strings acc = function
+                           | [] -> Ok (List.rev acc)
+                           | `String user :: rest -> strings (user :: acc) rest
+                           | _ -> Error "a regional address has a non-string users entry"
+                         in
+                         strings [] users
                      in
                      let* users = users in
                      let rec attribute = function
