@@ -193,6 +193,48 @@ let ec2_tagged_argv ~region ~tag ~subcommand ~query =
   ]
 ;;
 
+(* The cluster root names the VPC after the cluster and the subnets
+   `<cluster>-<suffix>`; it does not currently write the
+   `kubernetes.io/cluster/<cluster>` tag to them. Attribute a resource by the
+   cluster tag when present, and by the Name the provisioning actually writes
+   otherwise. The value comparison is exact or component-prefixed, so
+   `sol-a` does not match `sol-alpha`. *)
+let cluster_owned_tag ~region ~cluster_name resource_id =
+  [ "ec2"
+  ; "describe-tags"
+  ; "--region"
+  ; region
+  ; "--filters"
+  ; "Name=resource-id,Values=" ^ resource_id
+  ; "--query"
+  ; Printf.sprintf
+      "Tags[?(Key=='kubernetes.io/cluster/%s' && (Value=='' || Value=='owned' || \
+       Value=='shared')) || (Key=='Name' && (Value=='%s' || starts_with(Value, '%s-')))]"
+      cluster_name
+      cluster_name
+      cluster_name
+  ; "--output"
+  ; "text"
+  ]
+;;
+
+let cluster_owned ?checked_as ~region ~cluster_name ~resource_class ~identity argv =
+  check
+    ?checked_as
+    ~resource_class
+    ~identity
+    ~attribution:
+      (Within_target
+         (Printf.sprintf
+            "the target's own cluster tag or a Name naming %s: the cluster root sets the \
+             VPC name to the cluster name and the subnet names to %s-<suffix>"
+            cluster_name
+            cluster_name))
+    ~attributable:(fun line -> line <> "")
+    ~tagged_with:(fun id -> cluster_owned_tag ~region ~cluster_name id)
+    argv
+;;
+
 let cluster_tagged ?tagged_with ?checked_as ~cluster_name class_name argv =
   check
     ?tagged_with
@@ -288,22 +330,54 @@ let checks ~region ~cluster_name =
       ; "--output"
       ; "text"
       ]
-  ; cluster_tagged
+  ; cluster_owned
+      ~region
       ~cluster_name
-      "VPC"
-      (ec2_tagged_argv
-         ~region
-         ~tag:(cluster_tag_named cluster_name)
-         ~subcommand:"describe-vpcs"
-         ~query:"Vpcs[].VpcId")
-  ; cluster_tagged
+      ~resource_class:"VPC"
+      ~identity:
+        (Printf.sprintf
+           "tagged kubernetes.io/cluster/%s or named %s"
+           cluster_name
+           cluster_name)
+      ~checked_as:
+        (Printf.sprintf
+           "aws ec2 describe-vpcs --region %s, then aws ec2 describe-tags --region %s \
+            --filters Name=resource-id,Values=<vpc id> for each VPC it returns"
+           region
+           region)
+      [ "ec2"
+      ; "describe-vpcs"
+      ; "--region"
+      ; region
+      ; "--query"
+      ; "Vpcs[].VpcId"
+      ; "--output"
+      ; "text"
+      ]
+  ; cluster_owned
+      ~region
       ~cluster_name
-      "subnet"
-      (ec2_tagged_argv
-         ~region
-         ~tag:(cluster_tag_named cluster_name)
-         ~subcommand:"describe-subnets"
-         ~query:"Subnets[].SubnetId")
+      ~resource_class:"subnet"
+      ~identity:
+        (Printf.sprintf
+           "tagged kubernetes.io/cluster/%s or named %s-*"
+           cluster_name
+           cluster_name)
+      ~checked_as:
+        (Printf.sprintf
+           "aws ec2 describe-subnets --region %s, then aws ec2 describe-tags --region %s \
+            --filters Name=resource-id,Values=<subnet id> for each subnet it returns"
+           region
+           region)
+      [ "ec2"
+      ; "describe-subnets"
+      ; "--region"
+      ; region
+      ; "--query"
+      ; "Subnets[].SubnetId"
+      ; "--output"
+      ; "text"
+      ]
   ; prefixed_class
       ~resource_class:"IAM role"
       ~prefix:(cluster_name ^ "-")
