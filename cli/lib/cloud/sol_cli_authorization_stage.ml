@@ -89,12 +89,12 @@ let prepare_root ~assets (target : Sol_cli_config.target) =
     |> Result.map ignore
     |> Result.map_error Sol_cli_process.error_to_string
   in
-  Ok dir
+  Ok (dir, backend)
 ;;
 
 let prepare ~assets target =
   let open Result.Syntax in
-  let* dir = prepare_root ~assets target in
+  let* dir, _backend = prepare_root ~assets target in
   let* vars = root_vars target in
   Ok (dir, Sol_cli_terraform.kv_args vars)
 ;;
@@ -145,7 +145,20 @@ let destroy ~assets ~run_log ~target =
   then Ok Not_declared
   else
     let open Result.Syntax in
-    let* dir = prepare_root ~assets target in
+    let* dir, backend = prepare_root ~assets target in
+    (* Empty state is only evidence that nothing was established when the previous
+       authorization operation is resolved. An interrupted or failed apply may have
+       created provider resources without recording them; the existing state guard
+       refuses that case instead of letting an empty state claim absence. *)
+    let* () =
+      Sol_cli_state_guard.check
+        ~constructive:true
+        ~accept_unresolved:false
+        ~chdir:dir
+        ~backend_config:backend
+      |> Result.map_error (fun message ->
+        "the authorization root's state cannot be trusted as evidence: " ^ message)
+    in
     let* state = read_state dir in
     match destroy_decision ~declared_trust:(declared_trust target) ~state with
     | Never_established -> Ok Not_declared

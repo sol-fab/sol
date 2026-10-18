@@ -238,3 +238,25 @@ let%test "authorization destroy: removed trust still yields destroy variables" =
       (Some "arn:aws:iam::000000000000:role/sol-destroy-placeholder")
       (List.assoc_opt "reconciler_trust_principal_arn" vars)
 ;;
+
+let%test "authorization destroy: an unresolved prior apply is not empty-state evidence" =
+  match
+    Sol_cli_state_guard.verdict
+      ~constructive:true
+      ~accept_unresolved:false
+      (Sol_cli_supervised.Unresolved
+         { reason = "the authorization apply was interrupted"; dir = "/record" })
+  with
+  | Sol_cli_state_guard.Refuse message ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the guard names the provider-may-have-changed risk"
+      true
+      (Sol_cli_string.contains ~needle:"without recording it" message)
+  | Sol_cli_state_guard.Proceed
+  | Sol_cli_state_guard.Warn _
+  | Sol_cli_state_guard.Acknowledge _ ->
+    Windtrap.fail
+      "an unresolved authorization apply must not let an empty state claim \
+       never-established"
+;;
