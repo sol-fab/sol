@@ -9,8 +9,6 @@ ROOT = Path(__file__).resolve().parents[2]
 GUARD = ROOT / "internal/ci/check_resource_identity.py"
 COPIED = [
     "cli/lib/cloud/sol_cli_resource_identity.ml",
-    "cli/lib/cloud/sol_cli_gcp_absence.ml",
-    "cli/lib/cloud/sol_cli_aws_absence.ml",
     "platform/cloud/gcp/cluster/main.tf",
     "platform/cloud/gcp/cluster/variables.tf",
     "platform/cloud/aws/cluster/main.tf",
