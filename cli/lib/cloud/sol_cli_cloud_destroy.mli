@@ -10,6 +10,7 @@ type resource =
   ; member : string option
   ; secret_id : string option
   ; email : string option
+  ; url : string option
   }
 
 type state_read =

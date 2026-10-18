@@ -2091,7 +2091,7 @@ if (export STATE_RESIDUE_AFTER_DESTROY=1; run_destroy "$residue_state_log"); the
   exit 1
 fi
 assert_contains "the state residue was reported, by address" "$residue_state_log.out" \
-  'STILL REPRESENTS module.eks.aws_eks_cluster.this[0], aws_db_instance.postgres[0]' || exit 1
+  'STILL REPRESENTS module.eks.aws_eks_cluster.this[0], module.eks.aws_iam_openid_connect_provider.oidc_provider[0], aws_db_instance.postgres[0]' || exit 1
 
 destroy_tri_log="$tmp/destroy-can-i-indeterminate.log"
 rm -f "$FAIL_MARKER_DIR/bootstrap-window"

@@ -461,6 +461,7 @@ let class_names =
   ; "cert-manager DNS discovery project IAM binding"
   ; "authorization project IAM binding"
   ; "authorization secret IAM binding"
+  ; "regional address"
   ]
 ;;
 
@@ -699,12 +700,165 @@ let filter_to_prior prior observation =
   | observation -> observation
 ;;
 
+let regional_address_checked_with ~project ~region =
+  Printf.sprintf
+    "gcloud compute addresses list --project %s --regions %s --format=json, then gcloud \
+     compute forwarding-rules describe <rule> --project %s --region %s \
+     --format=value(network) for each user of an address"
+    project
+    region
+    project
+    region
+;;
+
+let forwarding_rule_name user =
+  match List.rev (String.split_on_char '/' user) with
+  | name :: _ -> name
+  | [] -> user
+;;
+
+let regional_address_observation
+      ?(previously_attributed = [])
+      ~project
+      ~region
+      ~cluster_name
+      ()
+  =
+  let resource_class = "regional address" in
+  let checked_with = regional_address_checked_with ~project ~region in
+  let prior = prior_for resource_class previously_attributed in
+  let open Result.Syntax in
+  let network_of_rule rule =
+    match
+      Sol_cli_process.run
+        (Sol_cli_process.cmd
+           [ "gcloud"
+           ; "compute"
+           ; "forwarding-rules"
+           ; "describe"
+           ; rule
+           ; "--project"
+           ; project
+           ; "--region"
+           ; region
+           ; "--format"
+           ; "value(network)"
+           ])
+    with
+    | Ok { Sol_cli_process.stdout; stderr } ->
+      if not (benign_empty_list_warning stderr)
+      then Error (String.trim stderr)
+      else Ok (String.trim stdout)
+    | Error (Sol_cli_process.Non_zero r) -> Error (String.trim r.stderr)
+    | Error _ -> Error "the gcloud CLI is unavailable"
+  in
+  match
+    Sol_cli_process.run
+      (Sol_cli_process.cmd
+         [ "gcloud"
+         ; "compute"
+         ; "addresses"
+         ; "list"
+         ; "--project"
+         ; project
+         ; "--regions"
+         ; region
+         ; "--format"
+         ; "json"
+         ])
+  with
+  | Error (Sol_cli_process.Non_zero r) ->
+    Unobservable { resource_class; reason = String.trim r.stderr; checked_with }
+  | Error _ ->
+    Unobservable
+      { resource_class; reason = "the gcloud CLI is unavailable"; checked_with }
+  | Ok { Sol_cli_process.stdout; stderr } ->
+    if not (benign_empty_list_warning stderr)
+    then Unobservable { resource_class; reason = String.trim stderr; checked_with }
+    else (
+      match Sol_cli_json.decode ~what:"the regional address listing" stdout with
+      | Error reason -> Unobservable { resource_class; reason; checked_with }
+      | Ok json ->
+        (match Sol_cli_json.list json with
+         | None ->
+           Unobservable
+             { resource_class
+             ; reason = "the regional address listing is not a list"
+             ; checked_with
+             }
+         | Some addresses ->
+           (match
+              Sol_cli_result.map_list
+                (fun address ->
+                   let* name =
+                     Sol_cli_json.require
+                       ~what:"a regional address"
+                       [ "name" ]
+                       Sol_cli_json.string
+                       address
+                   in
+                   if List.mem name prior
+                   then Ok (Some name)
+                   else (
+                     let users =
+                       Sol_cli_json.optional
+                         ~what:"a regional address"
+                         [ "users" ]
+                         Sol_cli_json.list
+                         address
+                       |> Result.map (Option.value ~default:[])
+                       |> Result.map (List.filter_map Sol_cli_json.string)
+                     in
+                     let* users = users in
+                     let rec attribute = function
+                       | [] -> Ok None
+                       | user :: rest ->
+                         let* network = network_of_rule (forwarding_rule_name user) in
+                         if String.ends_with ~suffix:("/" ^ cluster_name) network
+                         then Ok (Some name)
+                         else attribute rest
+                     in
+                     attribute users))
+                addresses
+            with
+            | Error reason -> Unobservable { resource_class; reason; checked_with }
+            | Ok found ->
+              let found =
+                List.filter_map (fun item -> item) found |> List.sort_uniq String.compare
+              in
+              let attribution =
+                Within_target
+                  (Printf.sprintf
+                     "the target's own VPC: a regional address used by a forwarding rule \
+                      in %s belongs to a service the target's cluster created"
+                     cluster_name)
+              in
+              (match found with
+               | [] ->
+                 Absent
+                   { resource_class
+                   ; identity = "addresses in the target's VPC"
+                   ; attribution
+                   ; checked_with
+                   }
+               | found ->
+                 Present
+                   { resource_class
+                   ; identity = "addresses in the target's VPC"
+                   ; found
+                   ; attribution
+                   ; checked_with
+                   }))))
+;;
+
 let observations
       ?(previously_attributed = [])
       ?(authorization_identities = [])
+      ?(pre_destroy = Sol_cli_cloud_destroy.State_empty)
       (target : Sol_cli_config.target)
       ~cluster_name
   =
+  let _ = pre_destroy in
   match project_of target with
   | None ->
     Sol_cli_absence.scope_failure ~reason:unlistable
@@ -733,6 +887,16 @@ let observations
       @ [ strict_authorization
             (authorization_secret_bindings ~project ~environment:target.env)
           |> filter_to_prior authorization_identities
+        ]
+    in
+    let observations =
+      observations
+      @ [ regional_address_observation
+            ~previously_attributed
+            ~project
+            ~region:target.region
+            ~cluster_name
+            ()
         ]
     in
     derived_by_vpc ~cluster_name observations @ durable_observations ~target ~cluster_name

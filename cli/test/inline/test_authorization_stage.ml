@@ -12,6 +12,7 @@ let authorization_resource =
   ; deletion_protection = None
   ; final_snapshot_identifier = None
   ; skip_final_snapshot = None
+  ; url = None
   }
 ;;
 

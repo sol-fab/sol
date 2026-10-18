@@ -228,6 +228,7 @@ let observations
     Sol_cli_gcp_absence.observations
       ~previously_attributed
       ~authorization_identities
+      ~pre_destroy
       target
       ~cluster_name
   | Sol_cli_provider.Byo -> []
