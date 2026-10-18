@@ -252,25 +252,16 @@ let checks ~project ~region ~cluster_name =
       (p [ "storage"; "buckets"; "list"; "--format"; "value(name)" ])
   ; identity_check
       ~resource_class:"persistent disk"
-      ~identity:
-        (Printf.sprintf
-           "gke-%s-* or a pvc-* disk labelled goog-k8s-cluster-name=%s"
-           cluster_name
-           cluster_name)
+      ~identity:(Printf.sprintf "a disk labelled goog-k8s-cluster-name=%s" cluster_name)
       ~attribution:
         (Within_target
            (Printf.sprintf
-              "the target's own cluster name: GKE names node disks gke-%s-*, and the \
-               Container Storage Interface labels a PersistentVolume's disk \
-               goog-k8s-cluster-name=%s"
-              cluster_name
+              "the target's own GKE cluster label: GKE applies goog-k8s-cluster-name=%s \
+               to the disks it owns, and the disk name is not an ownership signal"
               cluster_name))
       ~attributable:(fun line ->
         match String.split_on_char '\t' line with
-        | [ name; label ] ->
-          String.equal label cluster_name
-          || String.starts_with ~prefix:("gke-" ^ cluster_name ^ "-") name
-        | [ name ] -> String.starts_with ~prefix:("gke-" ^ cluster_name ^ "-") name
+        | [ _name; label ] -> String.equal label cluster_name
         | _ -> false)
       (p
          [ "compute"

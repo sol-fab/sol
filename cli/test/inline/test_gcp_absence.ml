@@ -460,7 +460,8 @@ let test_attributable_pvc_disks_are_present () =
       "pvc-2120bdaa\tacme-prod\n\
        pvc-other\tother-cluster\n\
        gke-acme-prod-node-1\tacme-prod\n\
-       pvc-unlabelled\n"
+       pvc-unlabelled\n\
+       gke-acme-prod-node-2\n"
     ~list_exit:0
     (fun ~log:_ ~observations ->
        match only observations "persistent disk" with
@@ -468,8 +469,8 @@ let test_attributable_pvc_disks_are_present () =
          Windtrap.equal
            (Windtrap.list Windtrap.string)
            ~msg:
-             "the cluster label attributes the PVC disk, while an unrelated label or no \
-              label is not attributed and the node disk keeps its name rule"
+             "the cluster label attributes the PVC and labelled node disks; an unrelated \
+              label, no label, or an unlabelled gke-* name is not attributed"
            [ "pvc-2120bdaa\tacme-prod"; "gke-acme-prod-node-1\tacme-prod" ]
            p.found
        | Sol_cli_absence.Absent _ ->
@@ -500,7 +501,7 @@ let test_a_present_pvc_disk_prevents_verified_absence () =
          Windtrap.fail "a present disk must produce a residue, not an inconclusive probe")
 ;;
 
-let%test "GCP disks: a pvc-* disk with the cluster label is attributable" =
+let%test "GCP disks: the cluster label, not the disk name, is the attribution" =
   test_attributable_pvc_disks_are_present ()
 ;;
 
