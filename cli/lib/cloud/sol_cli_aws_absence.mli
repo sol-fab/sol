@@ -1,5 +1,6 @@
 val observations
-  :  Sol_cli_config.target
+  :  ?previously_attributed:(string * string list) list
+  -> Sol_cli_config.target
   -> cluster_name:string
   -> Sol_cli_absence.observation list
 

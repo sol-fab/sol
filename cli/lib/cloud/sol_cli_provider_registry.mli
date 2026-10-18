@@ -39,7 +39,8 @@ val destruction
   -> Sol_cli_destruction.t
 
 val observations
-  :  Sol_cli_provider.t
+  :  ?previously_attributed:(string * string list) list
+  -> Sol_cli_provider.t
   -> Sol_cli_config.target
   -> cluster_name:string
   -> Sol_cli_absence.observation list

@@ -148,6 +148,7 @@ let with_calls
       ?(disks_out = "")
       ?(node_pools_err = "")
       ?(roles_out = "")
+      ?(previously_attributed = [])
       ~node_pools_out
       ~nats_out
       ~list_exit
@@ -162,7 +163,10 @@ let with_calls
     ~list_exit
     (fun () ->
        let observations =
-         Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
+         Sol_cli_gcp_absence.observations
+           ~previously_attributed
+           target
+           ~cluster_name:"acme-prod"
        in
        let log =
          match Sys.getenv_opt "PATH" with
@@ -471,11 +475,31 @@ let test_attributable_pvc_disks_are_present () =
            ~msg:
              "the cluster label attributes the PVC and labelled node disks; an unrelated \
               label, no label, or an unlabelled gke-* name is not attributed"
-           [ "pvc-2120bdaa\tacme-prod"; "gke-acme-prod-node-1\tacme-prod" ]
+           [ "gke-acme-prod-node-1"; "pvc-2120bdaa" ]
            p.found
        | Sol_cli_absence.Absent _ ->
          Windtrap.fail "an attributable pvc-* disk must be Present"
        | _ -> Windtrap.fail "the disk observation must be Present")
+;;
+
+let%test "GCP disks: a previously attributed disk survives label loss" =
+  with_calls
+    ~disks_out:"pvc-2120bdaa\n"
+    ~previously_attributed:[ "persistent disk", [ "pvc-2120bdaa" ] ]
+    ~node_pools_out:""
+    ~nats_out:""
+    ~list_exit:0
+    (fun ~log:_ ~observations ->
+       match only observations "persistent disk" with
+       | Sol_cli_absence.Present present ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the pre-destroy identity keeps the label-less disk attributable"
+           [ "pvc-2120bdaa" ]
+           present.found
+       | _ ->
+         Windtrap.fail
+           "a disk known before destruction must not become Absent when its label changes")
 ;;
 
 let test_a_present_pvc_disk_prevents_verified_absence () =
