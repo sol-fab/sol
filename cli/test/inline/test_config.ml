@@ -1438,6 +1438,54 @@ target:
            (List.mem_assoc "create_route53_zone" vars)))
 ;;
 
+(* The GCP cluster root has the same create_dns_zone flag as AWS. The durable
+   root owns the delegated zone, so Sol's own vars must select the existing
+   zone rather than letting the inventory classify a target-created zone as an
+   external prerequisite. *)
+let test_gcp_cluster_root_reuses_the_durable_zone () =
+  with_temp_dir (fun () ->
+    write
+      "sol.yml"
+      {|
+target:
+  base_domain: qual.example.test
+  dns_zone_ownership: sol
+  gcp:
+    project_id: sol-qualification
+|};
+    match Sol_cli_config.load_for_target ~target:"prod/gcp/us-central1" with
+    | Error e -> Windtrap.fail (Sol_cli_config.error_to_string e)
+    | Ok cfg ->
+      (match Sol_cli_terraform_vars.of_config ~workspace:"pluto" cfg with
+       | Error msg -> Windtrap.fail msg
+       | Ok vars ->
+         check_str_opt
+           "the GCP cluster root reuses the durable root's zone"
+           (Some "false")
+           (List.assoc_opt "create_dns_zone" vars)))
+;;
+
+let test_gcp_zone_var_is_always_false_without_a_base_domain () =
+  with_temp_dir (fun () ->
+    write
+      "sol.yml"
+      {|
+target:
+  gcp:
+    project_id: sol-qualification
+|};
+    match Sol_cli_config.load_for_target ~target:"prod/gcp/us-central1" with
+    | Error e -> Windtrap.fail (Sol_cli_config.error_to_string e)
+    | Ok cfg ->
+      (match Sol_cli_terraform_vars.of_config ~workspace:"pluto" cfg with
+       | Error msg -> Windtrap.fail msg
+       | Ok vars ->
+         check_str_opt
+           "a GCP target with no base_domain still prohibits a target-owned zone"
+           (Some "false")
+           (List.assoc_opt "create_dns_zone" vars)))
+;;
+
 let test_terraform_vars_workspace_name_and_ecr_repositories () =
   with_temp_dir (fun () ->
     write
@@ -2197,6 +2245,16 @@ let%test "sol.yml: terraform vars: the cluster root reuses the durable zone" =
 
 let%test "sol.yml: terraform vars: no zone setting without a base_domain" =
   test_no_zone_var_without_a_base_domain ()
+;;
+
+let%test "sol.yml: terraform vars: the GCP cluster root reuses the durable zone" =
+  test_gcp_cluster_root_reuses_the_durable_zone ()
+;;
+
+let%test
+    "sol.yml: terraform vars: GCP prohibits a target-owned zone without a base_domain"
+  =
+  test_gcp_zone_var_is_always_false_without_a_base_domain ()
 ;;
 
 let%test "sol.yml: terraform vars: GCS soft delete follows destroy_retention" =
