@@ -494,6 +494,9 @@ let class_names =
   ; "load balancer"
   ; "EBS volume"
   ; "ECR repository"
+  ; "authorization IAM policy"
+  ; "authorization IAM role"
+  ; "authorization workload role"
   ]
 ;;
 
@@ -557,6 +560,30 @@ let authorization_checks ~(target : Sol_cli_config.target) =
            "the target's environment names the authorization reconciler role")
       ~attributable:(fun line -> line = role_name)
       [ "iam"; "list-roles"; "--query"; "Roles[].RoleName"; "--output"; "text" ]
+  ; (* The authorization root creates one role per grant unit at
+       /sol/<environment>/ and names it sol-<environment>-<unit>. They are not
+       children of the reconciler role or the boundary policy, so the two
+       exact-name checks above do not see them. The path filter keeps other
+       environments' roles out even when their unit names overlap. *)
+    check
+      ~resource_class:"authorization workload role"
+      ~identity:(Printf.sprintf "sol-%s-* under /sol/%s/" target.env target.env)
+      ~attribution:
+        (Named_for_target
+           (Printf.sprintf
+              "the target's environment names the workload role prefix sol-%s- at \
+               /sol/%s/"
+              target.env
+              target.env))
+      ~attributable:(fun line ->
+        String.starts_with ~prefix:("sol-" ^ target.env ^ "-") line)
+      [ "iam"
+      ; "list-roles"
+      ; "--query"
+      ; Printf.sprintf "Roles[?Path=='/sol/%s/'].RoleName" target.env
+      ; "--output"
+      ; "text"
+      ]
   ]
 ;;
 
@@ -579,14 +606,16 @@ let observations (target : Sol_cli_config.target) ~cluster_name =
       List.map (fun c -> run ~check:c) (checks ~region:target.region ~cluster_name)
       @ [ ecr_observation ~region:target.region ~registry:(registry_prefix target) ]
     in
+    (* The authorization root's names are derived from the environment, not from
+       the current trust declaration. A prior apply can have created them and a
+       later target can have removed the trust, so an absent current declaration
+       is not evidence that they are gone. Observe them unconditionally; a
+       failed read is a scope failure, not absence. *)
     let observations =
-      if Sol_cli_provider_capabilities.authorization_trust target = None
-      then observations
-      else
-        observations
-        @ List.map
-            (fun check -> strict_authorization_observation ~check)
-            (authorization_checks ~target)
+      observations
+      @ List.map
+          (fun check -> strict_authorization_observation ~check)
+          (authorization_checks ~target)
     in
     observations @ durable_observations ~target
 ;;
