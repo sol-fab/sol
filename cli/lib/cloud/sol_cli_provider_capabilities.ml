@@ -1105,6 +1105,15 @@ let gcp_own_vars
        (Sol_cli_config.provider_field target "provisioner_impersonator"
         |> Option.map (fun member -> Printf.sprintf "[%S]" member))
   |> add_opt
+       "create_dns_zone"
+       (* The durable root owns and ensures the delegated zone for every declared
+          dns_zone_ownership, so the cluster root reuses it. It must never create
+          a second managed zone for base_domain: the inventory treats the zone as
+          the operator's durable prerequisite, not as target residue. *)
+       (match target.base_domain with
+        | Some domain when not (Sol_cli_string.is_blank domain) -> Some "false"
+        | Some _ | None -> None)
+  |> add_opt
        "gcs_soft_delete_retention_seconds"
        (Some
           (match Option.map String.trim target.destroy_retention with
