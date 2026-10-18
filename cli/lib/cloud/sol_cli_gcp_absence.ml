@@ -375,12 +375,8 @@ let unlistable =
 let observations (target : Sol_cli_config.target) ~cluster_name =
   match project_of target with
   | None ->
-    Unobservable
-      { resource_class = "the provider inventory"
-      ; reason = unlistable
-      ; checked_with = "gcloud (not run)"
-      }
-    :: durable_observations ~target ~cluster_name
+    Sol_cli_absence.scope_failure ~reason:unlistable
+    @ durable_observations ~target ~cluster_name
   | Some project ->
     let observations =
       List.map
@@ -393,11 +389,9 @@ let observations (target : Sol_cli_config.target) ~cluster_name =
 let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
   match project_of target with
   | None ->
-    Unobservable
-      { resource_class = "GKE cluster"
-      ; reason = unlistable
-      ; checked_with = "gcloud (not run)"
-      }
+    (match Sol_cli_absence.scope_failure ~reason:unlistable with
+     | [ observation ] -> observation
+     | _ -> assert false)
   | Some project ->
     run ~check:(cluster_check ~project ~region:target.region ~cluster_name)
 ;;

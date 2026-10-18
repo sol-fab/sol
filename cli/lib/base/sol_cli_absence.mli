@@ -1,3 +1,5 @@
+val scope_class : string
+
 type attribution =
   | Named_for_target of string
   | Within_target of string
@@ -46,4 +48,5 @@ val attribution_rule : attribution -> string
 val lines : string -> string list
 val not_found : needles:string list -> string -> bool
 val unresolved : reason:string -> observation list
+val scope_failure : reason:string -> observation list
 val durable_state_bucket : identity:string -> observation

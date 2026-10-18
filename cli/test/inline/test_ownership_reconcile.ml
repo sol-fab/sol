@@ -634,3 +634,20 @@ let%test "state identity: a GCP cluster with a name is identified" =
     Windtrap.failf "the wrong GCP resource supplied the cluster identity: %s" other
   | _ -> Windtrap.fail "the GCP cluster resource was not identified"
 ;;
+
+let%test "scope: a scope failure fails the destruction postcondition" =
+  match Sol_cli_absence.scope_failure ~reason:"the caller is in another account" with
+  | [ observation ] ->
+    (match Sol_cli_absence.to_sweep [ observation ] with
+     | Sol_cli_destroy_verification.Sweep_ran
+         { residues = [ residue ]; indeterminate = [] } ->
+       Windtrap.equal
+         Windtrap.bool
+         ~msg:"the violation says absence could not be established"
+         true
+         (Sol_cli_string.contains ~needle:"cannot establish absence" residue)
+     | Sol_cli_destroy_verification.Sweep_ran { residues = []; _ } ->
+       Windtrap.fail "a scope failure was degraded to an indeterminate probe"
+     | _ -> Windtrap.fail "a scope failure did not produce exactly one residue")
+  | _ -> Windtrap.fail "scope_failure must produce exactly one observation"
+;;

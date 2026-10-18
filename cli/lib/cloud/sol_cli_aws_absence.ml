@@ -458,7 +458,7 @@ let ecr_observation ~region ~registry =
 
 let observations (target : Sol_cli_config.target) ~cluster_name =
   match scope_binding target with
-  | Error reason -> Sol_cli_absence.unresolved ~reason
+  | Error reason -> Sol_cli_absence.scope_failure ~reason
   | Ok () ->
     List.map (fun c -> run ~check:c) (checks ~region:target.region ~cluster_name)
     @ [ ecr_observation ~region:target.region ~registry:(registry_prefix target) ]
@@ -468,11 +468,9 @@ let observations (target : Sol_cli_config.target) ~cluster_name =
 let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
   match scope_binding target with
   | Error reason ->
-    Unobservable
-      { resource_class = "EKS cluster"
-      ; reason
-      ; checked_with = "aws (not run: the target's AWS account could not be established)"
-      }
+    (match Sol_cli_absence.scope_failure ~reason with
+     | [ observation ] -> observation
+     | _ -> assert false)
   | Ok () -> run ~check:(cluster_check ~region:target.region ~cluster_name)
 ;;
 
