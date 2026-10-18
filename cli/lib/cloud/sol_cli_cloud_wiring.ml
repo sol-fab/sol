@@ -274,12 +274,13 @@ type state_cluster_identity =
   | Cluster_not_in_state
   | Cluster_named of string
   | Cluster_unnamed
+  | Cluster_ambiguous of string list
 
 let state_cluster_identity ~provider state =
   let prefixes = Sol_cli_provider_registry.substrate_addresses provider in
   let kind = Sol_cli_provider_registry.substrate_kind provider in
-  let substrate =
-    List.find_opt
+  let substrates =
+    List.filter
       (fun (resource : Sol_cli_cloud_destroy.resource) ->
          String.equal resource.kind kind
          && List.exists
@@ -287,12 +288,17 @@ let state_cluster_identity ~provider state =
               prefixes)
       (Sol_cli_cloud_destroy.resources state)
   in
-  match substrate with
-  | None -> Cluster_not_in_state
-  | Some resource ->
+  match substrates with
+  | [] -> Cluster_not_in_state
+  | [ resource ] ->
     (match resource.name with
      | Some name when not (Sol_cli_string.is_blank name) -> Cluster_named name
      | Some _ | None -> Cluster_unnamed)
+  | resources ->
+    Cluster_ambiguous
+      (List.map
+         (fun (resource : Sol_cli_cloud_destroy.resource) -> resource.address)
+         resources)
 ;;
 
 let cluster_identity_mismatch ~state_name ~declared =
@@ -342,6 +348,13 @@ let reconcile_ownership
           "the Terraform state represents a cluster but records no name, so its identity \
            cannot be compared with this target. Nothing is imported while that is \
            unknown."
+      | Cluster_ambiguous addresses ->
+        Error
+          (Printf.sprintf
+             "the Terraform state represents more than one cluster resource (%s), so its \
+              ownership cannot be attributed to one identity. Nothing is imported while \
+              that is unknown."
+             (String.concat ", " addresses))
     in
     let observations =
       Sol_cli_provider_registry.observations provider target_cfg ~cluster_name
@@ -1053,6 +1066,14 @@ let provable_absence_reconciliation
           reconciled: it represents a cluster but records no name, so the provider \
           observation cannot be attributed to it. Nothing was forgotten (a state entry \
           is only forgotten on a positively established absence).";
+       Ok Nothing_to_reconcile
+     | Cluster_ambiguous addresses ->
+       Sol_cli_report.warn
+         "warning: the state a provably absent substrate leaves behind was not \
+          reconciled: it represents more than one cluster resource (%s), so the provider \
+          observation cannot be attributed to one of them. Nothing was forgotten (a \
+          state entry is only forgotten on a positively established absence)."
+         (String.concat ", " addresses);
        Ok Nothing_to_reconcile
      | Cluster_not_in_state ->
        (match resolved with

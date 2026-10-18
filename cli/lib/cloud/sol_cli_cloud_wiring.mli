@@ -46,10 +46,13 @@ type state_cluster_identity =
   | Cluster_not_in_state
   | Cluster_named of string
   | Cluster_unnamed
+  | Cluster_ambiguous of string list
 
 (** The identity the cloud-root state represents for the substrate. Selection requires the
     provider's substrate address prefix *and* Terraform type, so a similarly-prefixed
-    object is not mistaken for the cluster. *)
+    object is not mistaken for the cluster. More than one matching substrate resource is
+    [Cluster_ambiguous], even when those resources record the same name: distinct
+    Terraform resources still represent distinct ownership. *)
 val state_cluster_identity
   :  provider:Sol_cli_provider.t
   -> Sol_cli_cloud_destroy.state_read
