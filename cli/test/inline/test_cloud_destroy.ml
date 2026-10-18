@@ -3859,37 +3859,46 @@ let pre_inventory_optional_failure =
 ;;
 
 let%test "destruction: required pre-destroy evidence blocks before any destruction" =
-  let deps, calls =
-    fake_deps
-      ~state:(Ok (show_json_resources gcp_cluster))
-      ~outputs:(Outputs_unavailable "no outputs")
-      ~observe_residue:(fun ~pre_destroy:_ -> [ pre_inventory_required_failure ])
-      ~verify_destruction:
-        (fun
-          ~pre_destroy:_
-          ~preparation:_
-          ~previously_attributed:_
-          ~pre_inventory_failures:_ ->
-        Windtrap.fail "verification must not run when required evidence is missing")
-      ()
-  in
-  (match execute ~deps with
-   | Destroy_blocked { guarantee } ->
-     Windtrap.equal
-       Windtrap.bool
-       ~msg:"the block names the missing identity evidence"
-       true
-       (Sol_cli_string.contains ~needle:"persistent disk" guarantee)
-   | _ -> Windtrap.fail "missing required identity evidence must block destruction");
-  Windtrap.equal Windtrap.int ~msg:"no authorization teardown" 0 calls.authorization;
-  Windtrap.equal Windtrap.int ~msg:"no platform teardown" 0 calls.platform;
-  Windtrap.equal Windtrap.int ~msg:"no substrate destroy" 0 calls.substrate;
-  Windtrap.equal Windtrap.int ~msg:"no verification" 0 calls.verify;
-  Windtrap.equal
-    (Windtrap.list Windtrap.string)
-    ~msg:"no release or substrate step ran"
-    []
-    calls.order
+  List.iter
+    (fun resource_class ->
+       let deps, calls =
+         fake_deps
+           ~state:(Ok (show_json_resources gcp_cluster))
+           ~outputs:(Outputs_unavailable "no outputs")
+           ~observe_residue:(fun ~pre_destroy:_ ->
+             [ Sol_cli_absence.Unobservable
+                 { resource_class
+                 ; reason = "permission denied"
+                 ; checked_with = "provider inventory"
+                 }
+             ])
+           ~verify_destruction:
+             (fun
+               ~pre_destroy:_
+               ~preparation:_
+               ~previously_attributed:_
+               ~pre_inventory_failures:_ ->
+             Windtrap.fail "verification must not run when required evidence is missing")
+           ()
+       in
+       (match execute ~deps with
+        | Destroy_blocked { guarantee } ->
+          Windtrap.equal
+            Windtrap.bool
+            ~msg:"the block names the missing identity evidence"
+            true
+            (Sol_cli_string.contains ~needle:resource_class guarantee)
+        | _ -> Windtrap.fail "missing required identity evidence must block destruction");
+       Windtrap.equal Windtrap.int ~msg:"no authorization teardown" 0 calls.authorization;
+       Windtrap.equal Windtrap.int ~msg:"no platform teardown" 0 calls.platform;
+       Windtrap.equal Windtrap.int ~msg:"no substrate destroy" 0 calls.substrate;
+       Windtrap.equal Windtrap.int ~msg:"no verification" 0 calls.verify;
+       Windtrap.equal
+         (Windtrap.list Windtrap.string)
+         ~msg:"no release or substrate step ran"
+         []
+         calls.order)
+    (Sol_cli_cloud_destroy.required_identity_classes ())
 ;;
 
 let%test "destruction: optional pre-destroy failure does not block cleanup" =
