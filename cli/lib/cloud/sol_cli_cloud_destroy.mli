@@ -10,6 +10,7 @@ type resource =
   ; member : string option
   ; secret_id : string option
   ; email : string option
+  ; url : string option
   }
 
 type state_read =
@@ -87,6 +88,7 @@ type outcome = private
       ; verification : Sol_cli_destroy_verification.observation option
       }
 
+val required_identity_classes : unit -> string list
 val failure_message : failure -> string
 val accept_unreleased_flag : string
 val exit_clean : int
@@ -109,9 +111,12 @@ type deps =
   ; accept_unreleased : bool
   ; destroy_substrate : unit -> (unit, string) result
   ; destroy_authorization : unit -> (string * (string * string list) list, string) result
+  ; observe_residue : pre_destroy:state_read -> Sol_cli_absence.observation list
   ; verify_destruction :
       pre_destroy:state_read
       -> preparation:preparation
+      -> previously_attributed:(string * string list) list
+      -> pre_inventory_failures:string list
       -> authorization_identities:(string * string list) list
       -> Sol_cli_destroy_verification.observation
   ; report : string -> unit

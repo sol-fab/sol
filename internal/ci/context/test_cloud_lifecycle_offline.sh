@@ -2091,7 +2091,7 @@ if (export STATE_RESIDUE_AFTER_DESTROY=1; run_destroy "$residue_state_log"); the
   exit 1
 fi
 assert_contains "the state residue was reported, by address" "$residue_state_log.out" \
-  'STILL REPRESENTS module.eks.aws_eks_cluster.this[0], aws_db_instance.postgres[0]' || exit 1
+  'STILL REPRESENTS module.eks.aws_eks_cluster.this[0], module.eks.aws_iam_openid_connect_provider.oidc_provider[0], aws_db_instance.postgres[0]' || exit 1
 
 destroy_tri_log="$tmp/destroy-can-i-indeterminate.log"
 rm -f "$FAIL_MARKER_DIR/bootstrap-window"
@@ -2114,11 +2114,16 @@ grep -qF 'no usable answer' "$destroy_tri_log.out" || {
 
 rm -f "$RDS_PREPARED_FILE"
 log="$tmp/destroy-absent.log"
-if ! (export OUTPUT_ABSENT=1; run_destroy "$log"); then
+if (export OUTPUT_ABSENT=1; run_destroy "$log"); then
   cat "$log.out" >&2
-  echo "destroy on an absent target must still succeed" >&2
+  echo "an absent target claimed verified absence while OIDC attribution was unknown" >&2
   exit 1
 fi
+grep -F 'OIDC provider' "$log.out" >/dev/null || {
+  echo "the absent-target destroy did not name the unknown OIDC attribution:" >&2
+  cat "$log.out" >&2
+  exit 1
+}
 grep -F 'prepare: cloud substrate is absent, nothing to prepare' "$log.out" >/dev/null
 if grep -F -- '-target=aws_db_instance.postgres' "$log" >/dev/null; then
   echo "destroy attempted RDS preparation on an absent cloud substrate" >&2

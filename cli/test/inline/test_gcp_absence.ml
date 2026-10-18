@@ -148,6 +148,7 @@ let with_calls
       ?(disks_out = "")
       ?(node_pools_err = "")
       ?(roles_out = "")
+      ?(previously_attributed = [])
       ~node_pools_out
       ~nats_out
       ~list_exit
@@ -162,7 +163,10 @@ let with_calls
     ~list_exit
     (fun () ->
        let observations =
-         Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
+         Sol_cli_gcp_absence.observations
+           ~previously_attributed
+           target
+           ~cluster_name:"acme-prod"
        in
        let log =
          match Sys.getenv_opt "PATH" with
@@ -471,11 +475,31 @@ let test_attributable_pvc_disks_are_present () =
            ~msg:
              "the cluster label attributes the PVC and labelled node disks; an unrelated \
               label, no label, or an unlabelled gke-* name is not attributed"
-           [ "pvc-2120bdaa\tacme-prod"; "gke-acme-prod-node-1\tacme-prod" ]
+           [ "gke-acme-prod-node-1"; "pvc-2120bdaa" ]
            p.found
        | Sol_cli_absence.Absent _ ->
          Windtrap.fail "an attributable pvc-* disk must be Present"
        | _ -> Windtrap.fail "the disk observation must be Present")
+;;
+
+let%test "GCP disks: a previously attributed disk survives label loss" =
+  with_calls
+    ~disks_out:"pvc-2120bdaa\n"
+    ~previously_attributed:[ "persistent disk", [ "pvc-2120bdaa" ] ]
+    ~node_pools_out:""
+    ~nats_out:""
+    ~list_exit:0
+    (fun ~log:_ ~observations ->
+       match only observations "persistent disk" with
+       | Sol_cli_absence.Present present ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the pre-destroy identity keeps the label-less disk attributable"
+           [ "pvc-2120bdaa" ]
+           present.found
+       | _ ->
+         Windtrap.fail
+           "a disk known before destruction must not become Absent when its label changes")
 ;;
 
 let test_a_present_pvc_disk_prevents_verified_absence () =
@@ -507,4 +531,235 @@ let%test "GCP disks: the cluster label, not the disk name, is the attribution" =
 
 let%test "GCP disks: an attributable PVC disk prevents verified absence" =
   test_a_present_pvc_disk_prevents_verified_absence ()
+;;
+
+let with_fake_regional_addresses ?(rule_exit = 0) ?(rule_err = "") ~addresses ~network f =
+  let dir = Filename.temp_file "sol-fake-regional-addresses-" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o755;
+  let log = Filename.concat dir "calls.log" in
+  let bin = Filename.concat dir "gcloud" in
+  let script =
+    Printf.sprintf
+      {|#!/bin/sh
+printf '%%s\n' "$*" >> %s
+case "$*" in
+  *"compute addresses list"*) printf '%%s' %s ;;
+  *"compute forwarding-rules describe"*)
+    if [ %d -ne 0 ]; then printf '%%s' %s >&2; exit %d; fi
+    printf '%%s\n' %s
+    ;;
+esac
+exit 0
+|}
+      (Filename.quote log)
+      (Filename.quote addresses)
+      rule_exit
+      (Filename.quote rule_err)
+      rule_exit
+      (Filename.quote network)
+  in
+  Out_channel.with_open_text bin (fun oc -> output_string oc script);
+  Unix.chmod bin 0o755;
+  let old_path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+  Unix.putenv "PATH" (dir ^ ":" ^ old_path);
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" old_path;
+      (try Sys.remove bin with
+       | _ -> ());
+      (try Sys.remove log with
+       | _ -> ());
+      try Unix.rmdir dir with
+      | _ -> ())
+    f
+;;
+
+let regional_address observations =
+  List.find
+    (fun observation -> String.equal (class_of observation) "regional address")
+    observations
+;;
+
+let%test
+    "GCP regional addresses: a forwarding rule in the target VPC attributes the address"
+  =
+  let addresses =
+    {|[{"name":"k8s2-abc","address":"1.2.3.4","users":["https://www.googleapis.com/compute/v1/projects/acme-project/regions/us-central1/forwardingRules/rule-1"]}]|}
+  in
+  let network =
+    "https://www.googleapis.com/compute/v1/projects/acme-project/global/networks/acme-prod"
+  in
+  with_fake_regional_addresses ~addresses ~network (fun () ->
+    let observations =
+      Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
+    in
+    match regional_address observations with
+    | Sol_cli_absence.Present present ->
+      Windtrap.equal
+        (Windtrap.list Windtrap.string)
+        ~msg:"the address used by the target's forwarding rule is reported"
+        [ "k8s2-abc" ]
+        present.found
+    | _ -> Windtrap.fail (Sol_cli_absence.report observations))
+;;
+
+let%test "GCP regional addresses: a prior identity survives when the users are gone" =
+  let addresses = {|[{"name":"k8s2-abc","address":"1.2.3.4","users":[]}]|} in
+  with_fake_regional_addresses
+    ~addresses
+    ~network:
+      "https://www.googleapis.com/compute/v1/projects/acme-project/global/networks/acme-prod"
+    (fun () ->
+       let observations =
+         Sol_cli_gcp_absence.observations
+           ~previously_attributed:[ "regional address", [ "k8s2-abc" ] ]
+           target
+           ~cluster_name:"acme-prod"
+       in
+       match regional_address observations with
+       | Sol_cli_absence.Present present ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the pre-destroy identity keeps the address attributable"
+           [ "k8s2-abc" ]
+           present.found
+       | _ -> Windtrap.fail "a prior regional address identity must remain Present")
+;;
+
+let%test "GCP regional addresses: a different VPC is not attributed" =
+  let addresses =
+    {|[{"name":"other-address","address":"5.6.7.8","users":["https://www.googleapis.com/compute/v1/projects/acme-project/regions/us-central1/forwardingRules/rule-2"]}]|}
+  in
+  with_fake_regional_addresses
+    ~addresses
+    ~network:
+      "https://www.googleapis.com/compute/v1/projects/acme-project/global/networks/other"
+    (fun () ->
+       let observations =
+         Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
+       in
+       match regional_address observations with
+       | Sol_cli_absence.Absent _ -> ()
+       | _ -> Windtrap.fail "a regional address in another VPC must not be attributed")
+;;
+
+let%test "GCP regional addresses: an absent users field is a genuine empty relationship" =
+  let addresses = {|[{"name":"k8s2-abc","address":"1.2.3.4"}]|} in
+  with_fake_regional_addresses
+    ~addresses
+    ~network:
+      "https://www.googleapis.com/compute/v1/projects/acme-project/global/networks/acme-prod"
+    (fun () ->
+       let observations =
+         Sol_cli_gcp_absence.observations
+           ~previously_attributed:[ "regional address", [ "k8s2-abc" ] ]
+           target
+           ~cluster_name:"acme-prod"
+       in
+       match regional_address observations with
+       | Sol_cli_absence.Present present ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the prior identity is preserved when users is absent"
+           [ "k8s2-abc" ]
+           present.found
+       | _ ->
+         Windtrap.fail
+           "an absent users field is the provider's empty repeated-field encoding")
+;;
+
+let%test "GCP regional addresses: a malformed users field is unknown" =
+  let addresses = {|[{"name":"k8s2-abc","address":"1.2.3.4","users":"not-a-list"}]|} in
+  with_fake_regional_addresses
+    ~addresses
+    ~network:
+      "https://www.googleapis.com/compute/v1/projects/acme-project/global/networks/acme-prod"
+    (fun () ->
+       let observations =
+         Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
+       in
+       match regional_address observations with
+       | Sol_cli_absence.Unobservable _ -> ()
+       | _ -> Windtrap.fail "a non-list users field must not become an empty relationship")
+;;
+
+let%test "GCP regional addresses: a non-string user is unknown" =
+  let addresses = {|[{"name":"k8s2-abc","address":"1.2.3.4","users":[123]}]|} in
+  with_fake_regional_addresses
+    ~addresses
+    ~network:
+      "https://www.googleapis.com/compute/v1/projects/acme-project/global/networks/acme-prod"
+    (fun () ->
+       let observations =
+         Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
+       in
+       match regional_address observations with
+       | Sol_cli_absence.Unobservable _ -> ()
+       | _ -> Windtrap.fail "a non-string user must not be silently discarded")
+;;
+
+let%test "GCP regional addresses: a failed forwarding-rule read is unknown" =
+  let addresses =
+    {|[{"name":"k8s2-abc","address":"1.2.3.4","users":["https://www.googleapis.com/compute/v1/projects/acme-project/regions/us-central1/forwardingRules/rule-1"]}]|}
+  in
+  with_fake_regional_addresses
+    ~addresses
+    ~network:""
+    ~rule_exit:254
+    ~rule_err:"permission denied"
+    (fun () ->
+       let observations =
+         Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
+       in
+       match regional_address observations with
+       | Sol_cli_absence.Unobservable u ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the provider's forwarding-rule error is preserved"
+           true
+           (Sol_cli_string.contains ~needle:"permission denied" u.reason)
+       | _ -> Windtrap.fail "a failed forwarding-rule read must be unknown")
+;;
+
+let with_failed_regional_address_list f =
+  let dir = Filename.temp_file "sol-fake-regional-address-list-fail-" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o755;
+  let bin = Filename.concat dir "gcloud" in
+  let script =
+    {|#!/bin/sh
+case "$*" in
+  *"compute addresses list"*) printf 'permission denied\n' >&2; exit 254 ;;
+esac
+exit 0
+|}
+  in
+  Out_channel.with_open_text bin (fun oc -> output_string oc script);
+  Unix.chmod bin 0o755;
+  let old_path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+  Unix.putenv "PATH" (dir ^ ":" ^ old_path);
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" old_path;
+      (try Sys.remove bin with
+       | _ -> ());
+      try Unix.rmdir dir with
+      | _ -> ())
+    f
+;;
+
+let%test "GCP regional addresses: a failed address listing is unknown" =
+  with_failed_regional_address_list (fun () ->
+    let observations =
+      Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
+    in
+    match regional_address observations with
+    | Sol_cli_absence.Unobservable u ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the provider's address-list error is preserved"
+        true
+        (Sol_cli_string.contains ~needle:"permission denied" u.reason)
+    | _ -> Windtrap.fail "a failed address listing must be unknown")
 ;;

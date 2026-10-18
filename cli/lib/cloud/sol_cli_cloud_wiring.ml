@@ -34,13 +34,31 @@ let verification_observation
       ~retention
       ~pre_destroy
       ~preparation
+      ~previously_attributed
+      ~pre_inventory_failures
       ~authorization_identities
   =
   let open Sol_cli_destroy_verification in
   let state = post_destroy_state ~infra_dir in
   let observations =
-    destruction.residue ~authorization_identities ~pre_destroy ~cluster ()
+    destruction.residue
+      ~previously_attributed
+      ~authorization_identities
+      ~pre_destroy
+      ~cluster
+      ()
   in
+  let failures =
+    List.map
+      (fun reason ->
+         Sol_cli_absence.Unobservable
+           { resource_class = Sol_cli_absence.scope_class
+           ; reason = "pre-destroy inventory: " ^ reason
+           ; checked_with = "the pre-destroy residue inventory"
+           })
+      pre_inventory_failures
+  in
+  let observations = observations @ failures in
   Sol_cli_report.app "%s" (Sol_cli_absence.report observations);
   let sweep = Sol_cli_absence.to_sweep observations in
   { state; sweep; retention = destruction.retention ~retention ~pre_destroy ~preparation }
@@ -360,7 +378,11 @@ let reconcile_ownership
              (String.concat ", " addresses))
     in
     let observations =
-      Sol_cli_provider_registry.observations provider target_cfg ~cluster_name
+      Sol_cli_provider_registry.observations
+        provider
+        target_cfg
+        ~cluster_name
+        ~pre_destroy:state
     in
     let dispositions =
       Sol_cli_ownership_reconciliation.dispositions
@@ -1437,8 +1459,14 @@ let destroy_deps
               | Not_declared -> Sol_cli_authorization_stage.outcome_to_string Not_declared
             in
             evidence, result.identities))
+    ; observe_residue =
+        (fun ~pre_destroy -> destruction.residue ~pre_destroy ~cluster:!cluster_ref ())
     ; verify_destruction =
-        (fun ~pre_destroy ~preparation ~authorization_identities ->
+        (fun ~pre_destroy
+          ~preparation
+          ~previously_attributed
+          ~pre_inventory_failures
+          ~authorization_identities ->
           verification_observation
             ~destruction
             ~infra_dir
@@ -1446,6 +1474,8 @@ let destroy_deps
             ~retention
             ~pre_destroy
             ~preparation
+            ~previously_attributed
+            ~pre_inventory_failures
             ~authorization_identities)
     ; report = (fun message -> Sol_cli_report.app "%s" message)
     ; warn = (fun message -> Sol_cli_report.warn "%s" message)

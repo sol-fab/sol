@@ -59,7 +59,11 @@ let benign_empty_list_warning stderr =
    subject may be the project, the caller's permission or the API's scope, not the
    resource. Reading that as absence is what allowed a bad scope to authorize state
    removal. *)
-let run ~check =
+let prior_for class_name prior =
+  List.assoc_opt class_name prior |> Option.value ~default:[]
+;;
+
+let run ?(previously_attributed = []) ~check () =
   match Sol_cli_process.run (Sol_cli_process.cmd ("gcloud" :: check.argv)) with
   | Ok { Sol_cli_process.stdout; stderr } ->
     (* An incomplete enumeration is unknown even when some matching resources were
@@ -72,10 +76,17 @@ let run ~check =
         ; reason = String.trim stderr
         ; checked_with = checked_with check.argv
         }
-    else
+    else (
+      let raw = lines stdout in
+      let prior = prior_for check.resource_class previously_attributed in
+      let attributed = List.filter check.attributable raw in
+      let prior_matches =
+        List.filter (fun line -> List.mem (check.normalize line) prior) raw
+      in
       ok_observation
         ~check
-        (lines stdout |> List.filter check.attributable |> List.map check.normalize)
+        (List.map check.normalize (List.rev_append attributed prior_matches)
+         |> List.sort_uniq String.compare))
   | Error (Sol_cli_process.Non_zero r) ->
     Unobservable
       { resource_class = check.resource_class
@@ -289,6 +300,10 @@ let checks ~project ~region ~cluster_name =
         match String.split_on_char '\t' line with
         | [ _name; label ] -> String.equal label cluster_name
         | _ -> false)
+      ~normalize:(fun line ->
+        match String.split_on_char '\t' line with
+        | name :: _ -> name
+        | [] -> line)
       (p
          [ "compute"
          ; "disks"
@@ -446,7 +461,14 @@ let class_names =
   ; "cert-manager DNS discovery project IAM binding"
   ; "authorization project IAM binding"
   ; "authorization secret IAM binding"
+  ; "regional address"
   ]
+;;
+
+let observed_classes () =
+  checks ~project:"coverage" ~region:"coverage" ~cluster_name:"coverage"
+  |> List.map (fun check -> check.resource_class)
+  |> fun classes -> classes @ [ "regional address" ]
 ;;
 
 let unlistable =
@@ -503,7 +525,7 @@ let authorization_checks ~project ~(target : Sol_cli_config.target) =
 ;;
 
 let strict_authorization_observation ~check =
-  match run ~check with
+  match run ~check () with
   | Unobservable u ->
     Unobservable
       { u with
@@ -684,11 +706,180 @@ let filter_to_prior prior observation =
   | observation -> observation
 ;;
 
+let regional_address_checked_with ~project ~region =
+  Printf.sprintf
+    "gcloud compute addresses list --project %s --regions %s --format=json, then gcloud \
+     compute forwarding-rules describe <rule> --project %s --region %s \
+     --format=value(network) for each user of an address"
+    project
+    region
+    project
+    region
+;;
+
+let forwarding_rule_name user =
+  match List.rev (String.split_on_char '/' user) with
+  | name :: _ -> name
+  | [] -> user
+;;
+
+let regional_address_observation
+      ?(previously_attributed = [])
+      ~project
+      ~region
+      ~cluster_name
+      ()
+  =
+  let resource_class = "regional address" in
+  let checked_with = regional_address_checked_with ~project ~region in
+  let prior = prior_for resource_class previously_attributed in
+  let open Result.Syntax in
+  let network_of_rule rule =
+    match
+      Sol_cli_process.run
+        (Sol_cli_process.cmd
+           [ "gcloud"
+           ; "compute"
+           ; "forwarding-rules"
+           ; "describe"
+           ; rule
+           ; "--project"
+           ; project
+           ; "--region"
+           ; region
+           ; "--format"
+           ; "value(network)"
+           ])
+    with
+    | Ok { Sol_cli_process.stdout; stderr } ->
+      if not (benign_empty_list_warning stderr)
+      then Error (String.trim stderr)
+      else Ok (String.trim stdout)
+    | Error (Sol_cli_process.Non_zero r) -> Error (String.trim r.stderr)
+    | Error _ -> Error "the gcloud CLI is unavailable"
+  in
+  match
+    Sol_cli_process.run
+      (Sol_cli_process.cmd
+         [ "gcloud"
+         ; "compute"
+         ; "addresses"
+         ; "list"
+         ; "--project"
+         ; project
+         ; "--regions"
+         ; region
+         ; "--format"
+         ; "json"
+         ])
+  with
+  | Error (Sol_cli_process.Non_zero r) ->
+    Unobservable { resource_class; reason = String.trim r.stderr; checked_with }
+  | Error _ ->
+    Unobservable
+      { resource_class; reason = "the gcloud CLI is unavailable"; checked_with }
+  | Ok { Sol_cli_process.stdout; stderr } ->
+    if not (benign_empty_list_warning stderr)
+    then Unobservable { resource_class; reason = String.trim stderr; checked_with }
+    else (
+      match Sol_cli_json.decode ~what:"the regional address listing" stdout with
+      | Error reason -> Unobservable { resource_class; reason; checked_with }
+      | Ok json ->
+        (match Sol_cli_json.list json with
+         | None ->
+           Unobservable
+             { resource_class
+             ; reason = "the regional address listing is not a list"
+             ; checked_with
+             }
+         | Some addresses ->
+           (match
+              Sol_cli_result.map_list
+                (fun address ->
+                   let* name =
+                     Sol_cli_json.require
+                       ~what:"a regional address"
+                       [ "name" ]
+                       Sol_cli_json.string
+                       address
+                   in
+                   if List.mem name prior
+                   then Ok (Some name)
+                   else (
+                     let users =
+                       match
+                         Sol_cli_json.optional
+                           ~what:"a regional address"
+                           [ "users" ]
+                           Sol_cli_json.list
+                           address
+                       with
+                       | Error reason -> Error reason
+                       | Ok None ->
+                         (* Compute Engine documents `users` as an output-only,
+                            repeated string field. Empty repeated fields are
+                            omitted from JSON, so an absent field is a genuinely
+                            empty relationship; a present non-list or a list with
+                            a non-string entry is malformed, not empty. *)
+                         Ok []
+                       | Ok (Some users) ->
+                         let rec strings acc = function
+                           | [] -> Ok (List.rev acc)
+                           | `String user :: rest -> strings (user :: acc) rest
+                           | _ -> Error "a regional address has a non-string users entry"
+                         in
+                         strings [] users
+                     in
+                     let* users = users in
+                     let rec attribute = function
+                       | [] -> Ok None
+                       | user :: rest ->
+                         let* network = network_of_rule (forwarding_rule_name user) in
+                         if String.ends_with ~suffix:("/" ^ cluster_name) network
+                         then Ok (Some name)
+                         else attribute rest
+                     in
+                     attribute users))
+                addresses
+            with
+            | Error reason -> Unobservable { resource_class; reason; checked_with }
+            | Ok found ->
+              let found =
+                List.filter_map (fun item -> item) found |> List.sort_uniq String.compare
+              in
+              let attribution =
+                Within_target
+                  (Printf.sprintf
+                     "the target's own VPC: a regional address used by a forwarding rule \
+                      in %s belongs to a service the target's cluster created"
+                     cluster_name)
+              in
+              (match found with
+               | [] ->
+                 Absent
+                   { resource_class
+                   ; identity = "addresses in the target's VPC"
+                   ; attribution
+                   ; checked_with
+                   }
+               | found ->
+                 Present
+                   { resource_class
+                   ; identity = "addresses in the target's VPC"
+                   ; found
+                   ; attribution
+                   ; checked_with
+                   }))))
+;;
+
 let observations
+      ?(previously_attributed = [])
       ?(authorization_identities = [])
+      ?(pre_destroy = Sol_cli_cloud_destroy.State_empty)
       (target : Sol_cli_config.target)
       ~cluster_name
   =
+  let _ = pre_destroy in
   match project_of target with
   | None ->
     Sol_cli_absence.scope_failure ~reason:unlistable
@@ -696,7 +887,7 @@ let observations
   | Some project ->
     let observations =
       List.map
-        (fun check -> run ~check)
+        (fun check -> run ~previously_attributed ~check ())
         (checks ~project ~region:target.region ~cluster_name)
     in
     (* The authorization root's names are derived from the environment, not from
@@ -719,6 +910,16 @@ let observations
           |> filter_to_prior authorization_identities
         ]
     in
+    let observations =
+      observations
+      @ [ regional_address_observation
+            ~previously_attributed
+            ~project
+            ~region:target.region
+            ~cluster_name
+            ()
+        ]
+    in
     derived_by_vpc ~cluster_name observations @ durable_observations ~target ~cluster_name
 ;;
 
@@ -729,7 +930,7 @@ let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
      | [ observation ] -> observation
      | _ -> assert false)
   | Some project ->
-    run ~check:(cluster_check ~project ~region:target.region ~cluster_name)
+    run ~check:(cluster_check ~project ~region:target.region ~cluster_name) ()
 ;;
 
 let unresolved = Sol_cli_absence.unresolved

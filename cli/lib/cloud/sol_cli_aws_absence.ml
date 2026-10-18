@@ -103,7 +103,11 @@ let scope_binding target =
     Error ("could not establish the active AWS account: " ^ String.trim reason)
 ;;
 
-let run ~check =
+let prior_for class_name prior =
+  List.assoc_opt class_name prior |> Option.value ~default:[]
+;;
+
+let run ?(previously_attributed = []) ~check () =
   let unobservable reason =
     Unobservable
       { resource_class = check.resource_class
@@ -136,12 +140,18 @@ let run ~check =
   match run_argv check.argv with
   | Error (`NotFound reason) | Error (`Failed reason) -> unobservable reason
   | Ok candidates ->
-    let candidates = List.filter check.attributable candidates in
+    let prior = prior_for check.resource_class previously_attributed in
+    let attributed = List.filter check.attributable candidates in
+    let prior_matches = List.filter (fun line -> List.mem line prior) candidates in
+    let candidates =
+      List.sort_uniq String.compare (List.rev_append attributed prior_matches)
+    in
     (match check.tagged_with with
      | None -> observed candidates
      | Some tag_argv ->
        let rec resolve acc = function
          | [] -> Ok (List.rev acc)
+         | line :: rest when List.mem line prior -> resolve (line :: acc) rest
          | line :: rest ->
            (match run_argv (tag_argv line) with
             | Ok [] -> resolve acc rest
@@ -175,30 +185,22 @@ let registry_prefix (target : Sol_cli_config.target) =
        if prefix = "" then None else Some prefix)
 ;;
 
-let cluster_tag_named cluster_name =
-  Printf.sprintf "Name=tag:kubernetes.io/cluster/%s,Values=owned,shared" cluster_name
+let cluster_tagged ?tagged_with ?checked_as ~cluster_name class_name argv =
+  check
+    ?tagged_with
+    ?checked_as
+    ~resource_class:class_name
+    ~identity:(Printf.sprintf "tagged kubernetes.io/cluster/%s" cluster_name)
+    ~attribution:
+      (Within_target
+         (Printf.sprintf
+            "the target's own cluster tag: %s marks what this cluster's controllers \
+             created,              and Sol writes it itself"
+            cluster_name))
+    ~attributable:(fun line -> line <> "")
+    argv
 ;;
 
-let ec2_tagged_argv ~region ~tag ~subcommand ~query =
-  [ "ec2"
-  ; subcommand
-  ; "--region"
-  ; region
-  ; "--filters"
-  ; tag
-  ; "--query"
-  ; query
-  ; "--output"
-  ; "text"
-  ]
-;;
-
-(* The cluster root names the VPC after the cluster and the subnets
-   `<cluster>-<suffix>`; it does not currently write the
-   `kubernetes.io/cluster/<cluster>` tag to them. Attribute a resource by the
-   cluster tag when present, and by the Name the provisioning actually writes
-   otherwise. The value comparison is exact or component-prefixed, so
-   `sol-a` does not match `sol-alpha`. *)
 let cluster_owned_tag ~region ~cluster_name resource_id =
   [ "ec2"
   ; "describe-tags"
@@ -221,31 +223,15 @@ let cluster_owned_tag ~region ~cluster_name resource_id =
 let cluster_owned ?checked_as ~region ~cluster_name ~resource_class ~identity argv =
   check
     ?checked_as
+    ~tagged_with:(fun resource_id -> cluster_owned_tag ~region ~cluster_name resource_id)
     ~resource_class
     ~identity
     ~attribution:
       (Within_target
          (Printf.sprintf
-            "the target's own cluster tag or a Name naming %s: the cluster root sets the \
-             VPC name to the cluster name and the subnet names to %s-<suffix>"
+            "the target's own cluster tag or a provisioned Name naming %s: %s marks what \
+             this cluster's controllers created, and Sol writes it itself"
             cluster_name
-            cluster_name))
-    ~attributable:(fun line -> line <> "")
-    ~tagged_with:(fun id -> cluster_owned_tag ~region ~cluster_name id)
-    argv
-;;
-
-let cluster_tagged ?tagged_with ?checked_as ~cluster_name class_name argv =
-  check
-    ?tagged_with
-    ?checked_as
-    ~resource_class:class_name
-    ~identity:(Printf.sprintf "tagged kubernetes.io/cluster/%s" cluster_name)
-    ~attribution:
-      (Within_target
-         (Printf.sprintf
-            "the target's own cluster tag: %s marks what this cluster's controllers \
-             created,              and Sol writes it itself"
             cluster_name))
     ~attributable:(fun line -> line <> "")
     argv
@@ -455,14 +441,30 @@ let checks ~region ~cluster_name =
       ; "--output"
       ; "text"
       ]
-  ; cluster_tagged
+  ; cluster_owned
+      ~region
       ~cluster_name
-      "EBS volume"
-      (ec2_tagged_argv
-         ~region
-         ~tag:(cluster_tag_named cluster_name)
-         ~subcommand:"describe-volumes"
-         ~query:"Volumes[].VolumeId")
+      ~resource_class:"EBS volume"
+      ~identity:
+        (Printf.sprintf
+           "tagged kubernetes.io/cluster/%s or named %s-*"
+           cluster_name
+           cluster_name)
+      ~checked_as:
+        (Printf.sprintf
+           "aws ec2 describe-volumes --region %s, then aws ec2 describe-tags --region %s \
+            --filters Name=resource-id,Values=<volume id> for each volume it returns"
+           region
+           region)
+      [ "ec2"
+      ; "describe-volumes"
+      ; "--region"
+      ; region
+      ; "--query"
+      ; "Volumes[].VolumeId"
+      ; "--output"
+      ; "text"
+      ]
   ]
 ;;
 
@@ -497,6 +499,7 @@ let class_names =
   ; "authorization IAM policy"
   ; "authorization IAM role"
   ; "authorization workload role"
+  ; "OIDC provider"
   ]
 ;;
 
@@ -524,6 +527,7 @@ let ecr_observation ~region ~registry =
            ; "--output"
            ; "text"
            ])
+      ()
   | None ->
     Not_attributable
       { resource_class = "ECR repository"
@@ -588,7 +592,7 @@ let authorization_checks ~(target : Sol_cli_config.target) =
 ;;
 
 let strict_authorization_observation ~check =
-  match run ~check with
+  match run ~check () with
   | Unobservable u ->
     Unobservable
       { u with
@@ -621,7 +625,89 @@ let filter_to_prior prior observation =
   | observation -> observation
 ;;
 
+let oidc_provider_urls pre_destroy =
+  Sol_cli_cloud_destroy.resources pre_destroy
+  |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+    if String.equal resource.kind "aws_iam_openid_connect_provider"
+    then resource.url
+    else None)
+  |> List.sort_uniq String.compare
+;;
+
+let oidc_url_suffix url =
+  let prefix = "https://" in
+  if String.starts_with ~prefix url
+  then String.sub url (String.length prefix) (String.length url - String.length prefix)
+  else url
+;;
+
+let oidc_provider_observation
+      ?(previously_attributed = [])
+      ~region
+      ~cluster_name
+      ~pre_destroy
+      ()
+  =
+  let urls =
+    match oidc_provider_urls pre_destroy with
+    | _ :: _ as urls -> Ok urls
+    | [] ->
+      (match
+         run_argv
+           [ "eks"
+           ; "describe-cluster"
+           ; "--region"
+           ; region
+           ; "--name"
+           ; cluster_name
+           ; "--query"
+           ; "cluster.identity.oidc.issuer"
+           ; "--output"
+           ; "text"
+           ]
+       with
+       | Ok [ url ] when String.trim url <> "" -> Ok [ String.trim url ]
+       | Ok _ -> Error "neither the state nor the cluster records an OIDC issuer"
+       | Error (`NotFound _) ->
+         (* An IAM OIDC provider outlives its EKS cluster. Empty Terraform state
+            and an absent cluster do not establish that no provider was created;
+            without an issuer or a prior identity it is unknown, not absence. *)
+         Error
+           "neither the state nor the cluster records an OIDC issuer, and an IAM OIDC \
+            provider can outlive the cluster"
+       | Error (`Failed reason) ->
+         Error ("the cluster's OIDC issuer could not be read: " ^ String.trim reason))
+  in
+  match urls with
+  | Error reason -> Not_attributable { resource_class = "OIDC provider"; reason }
+  | Ok urls ->
+    run
+      ~previously_attributed
+      ~check:
+        (check
+           ~resource_class:"OIDC provider"
+           ~identity:(String.concat ", " urls)
+           ~attribution:
+             (Named_for_target
+                "the target's own cluster issuer names the OIDC provider the cluster \
+                 root created")
+           ~attributable:(fun line ->
+             List.exists
+               (fun url -> String.ends_with ~suffix:(oidc_url_suffix url) line)
+               urls)
+           [ "iam"
+           ; "list-open-id-connect-providers"
+           ; "--query"
+           ; "OpenIDConnectProviderList[].Arn"
+           ; "--output"
+           ; "text"
+           ])
+      ()
+;;
+
 let observations
+      ?(previously_attributed = [])
+      ?(pre_destroy = Sol_cli_cloud_destroy.State_empty)
       ?(authorization_identities = [])
       (target : Sol_cli_config.target)
       ~cluster_name
@@ -630,8 +716,17 @@ let observations
   | Error reason -> Sol_cli_absence.scope_failure ~reason
   | Ok () ->
     let observations =
-      List.map (fun c -> run ~check:c) (checks ~region:target.region ~cluster_name)
+      List.map
+        (fun c -> run ~previously_attributed ~check:c ())
+        (checks ~region:target.region ~cluster_name)
       @ [ ecr_observation ~region:target.region ~registry:(registry_prefix target) ]
+      @ [ oidc_provider_observation
+            ~previously_attributed
+            ~region:target.region
+            ~cluster_name
+            ~pre_destroy
+            ()
+        ]
     in
     (* The authorization root's names are derived from the environment, not from
        the current trust declaration. A prior apply can have created them and a
@@ -655,7 +750,7 @@ let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
     (match Sol_cli_absence.scope_failure ~reason with
      | [ observation ] -> observation
      | _ -> assert false)
-  | Ok () -> run ~check:(cluster_check ~region:target.region ~cluster_name)
+  | Ok () -> run ~check:(cluster_check ~region:target.region ~cluster_name) ()
 ;;
 
 let unresolved = Sol_cli_absence.unresolved

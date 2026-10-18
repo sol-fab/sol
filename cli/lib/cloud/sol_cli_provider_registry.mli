@@ -39,7 +39,9 @@ val destruction
   -> Sol_cli_destruction.t
 
 val observations
-  :  ?authorization_identities:(string * string list) list
+  :  ?previously_attributed:(string * string list) list
+  -> ?pre_destroy:Sol_cli_cloud_destroy.state_read
+  -> ?authorization_identities:(string * string list) list
   -> Sol_cli_provider.t
   -> Sol_cli_config.target
   -> cluster_name:string
