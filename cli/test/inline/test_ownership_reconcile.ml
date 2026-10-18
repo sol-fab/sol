@@ -456,6 +456,19 @@ let state_of_resources resources =
     (Printf.sprintf {|{"values":{"root_module":{"resources":[%s]}}}|} resources)
 ;;
 
+let state_with_clusters names =
+  let resources =
+    names
+    |> List.mapi (fun index name ->
+      Printf.sprintf
+        {|{"address":"module.eks.aws_eks_cluster.this[%d]","type":"aws_eks_cluster","values":{"name":%S}}|}
+        index
+        name)
+    |> String.concat ","
+  in
+  Printf.sprintf {|{"values":{"root_module":{"resources":[%s]}}}|} resources
+;;
+
 let%test "state identity: a similarly-prefixed object is not the cluster" =
   let state =
     state_of_resources
@@ -480,6 +493,94 @@ let%test "state identity: a prefix match with another type is not a cluster" =
   with
   | Sol_cli_cloud_wiring.Cluster_not_in_state -> ()
   | _ -> Windtrap.fail "a non-cluster type must not supply a cluster identity"
+;;
+
+(* Distinct Terraform resources are distinct ownership even when their recorded names are
+   equal. Resolving that ambiguity by name would let one cluster's absence authorize
+   forgetting the other's state. *)
+let%test "state identity: multiple cluster resources are ambiguous, even with one name" =
+  let state =
+    Sol_cli_cloud_destroy.inventory_of_show_json
+      (state_with_clusters [ "acme-prod"; "acme-prod" ])
+  in
+  match
+    Sol_cli_cloud_wiring.state_cluster_identity ~provider:Sol_cli_provider.Aws state
+  with
+  | Sol_cli_cloud_wiring.Cluster_ambiguous addresses ->
+    Windtrap.equal
+      (Windtrap.list Windtrap.string)
+      ~msg:"both substrate resources are named in the ambiguity"
+      [ "module.eks.aws_eks_cluster.this[0]"; "module.eks.aws_eks_cluster.this[1]" ]
+      addresses
+  | _ ->
+    Windtrap.fail
+      "two substrate resources must be ambiguous even when their names are identical"
+;;
+
+let%test "recovery: an ambiguous state cluster identity refuses before importing" =
+  let state = state_with_clusters [ "acme-prod"; "other-cluster" ] in
+  with_fake_aws_script aws_saying_nothing
+  @@ fun () ->
+  with_fake_terraform ~stdout:state ~exit_code:0 (fun ~log ~infra ->
+    match reconcile ~infra ~act:true with
+    | Ok _ ->
+      Windtrap.fail "a state representing more than one cluster must not reconcile"
+    | Error message ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the refusal names the first cluster resource"
+        true
+        (Sol_cli_string.contains ~needle:"module.eks.aws_eks_cluster.this[0]" message);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"and the second cluster resource"
+        true
+        (Sol_cli_string.contains ~needle:"module.eks.aws_eks_cluster.this[1]" message);
+      Windtrap.equal
+        (Windtrap.list Windtrap.string)
+        ~msg:"no import was attempted"
+        []
+        (imports log))
+;;
+
+let%test "destroy: an ambiguous state cluster identity never runs state rm" =
+  let state_json = state_with_clusters [ "acme-prod"; "other-cluster" ] in
+  let state = Sol_cli_cloud_destroy.inventory_of_show_json state_json in
+  with_fake_aws_script aws_saying_nothing
+  @@ fun () ->
+  with_fake_terraform ~stdout:state_json ~exit_code:0 (fun ~log ~infra ->
+    let base = Filename.concat infra "run-log" in
+    Unix.mkdir base 0o755;
+    let run_log = Sol_cli_run_log.create ~base ~prefix:"test" () in
+    match
+      Sol_cli_cloud_wiring.provable_absence_reconciliation
+        ~assets:(assets ())
+        ~run_log
+        ~provider:Sol_cli_provider.Aws
+        ~target_cfg:target
+        ~infra_dir:infra
+        ~platform_dir:infra
+        ~platform_backend:[]
+        ~var_files:[]
+        ~vars:[ "cluster_name=acme-prod" ]
+        ~state
+    with
+    | Ok Sol_cli_cloud_destroy.Nothing_to_reconcile ->
+      let calls =
+        try In_channel.with_open_text log In_channel.input_all with
+        | Sys_error _ -> ""
+      in
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"no state entry was forgotten while the cluster identity was ambiguous"
+        false
+        (Sol_cli_string.contains ~needle:"state rm" calls)
+    | Ok (Sol_cli_cloud_destroy.Reconciled _) ->
+      Windtrap.fail "an ambiguous state cluster identity authorized state removal"
+    | Error message ->
+      Windtrap.failf
+        "an ambiguous identity is a refusal to forget, not a failed run: %s"
+        message)
 ;;
 
 let with_fake_gcloud_script script f =
