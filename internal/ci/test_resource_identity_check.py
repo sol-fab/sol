@@ -9,8 +9,6 @@ ROOT = Path(__file__).resolve().parents[2]
 GUARD = ROOT / "internal/ci/check_resource_identity.py"
 COPIED = [
     "cli/lib/cloud/sol_cli_resource_identity.ml",
-    "cli/lib/cloud/sol_cli_gcp_absence.ml",
-    "cli/lib/cloud/sol_cli_aws_absence.ml",
     "platform/cloud/gcp/cluster/main.tf",
     "platform/cloud/gcp/cluster/variables.tf",
     "platform/cloud/aws/cluster/main.tf",
@@ -79,15 +77,6 @@ def main():
         sql_entry.replace('\n      ~import_identity:(cluster_name ^ "-postgres")', ""),
     )
     cases.append(("a Direct entry whose import identity was removed", tmp))
-
-    tmp = scratch()
-    mutate(
-        tmp,
-        "cli/lib/cloud/sol_cli_resource_identity.ml",
-        sql_entry,
-        sql_entry.replace('~resource_class:"Cloud SQL instance"', '~resource_class:"A class the inventory never reports"'),
-    )
-    cases.append(("a mapping naming a class no inventory reports", tmp))
 
     tmp = scratch()
     mutate(
@@ -190,8 +179,8 @@ def main():
     print(
         "test_resource_identity_check: the guard accepts the real tree and rejects an unregistered "
         "directly managed resource, a Direct entry without an import identity or an observed name, "
-        "a Direct entry on a counted resource with no instance key, a mapping naming a class no "
-        "inventory reports, a stale entry, and a class-level rule that stopped covering its family"
+        "a Direct entry on a counted resource with no instance key, "
+        "a stale entry, and a class-level rule that stopped covering its family"
     )
     return 0
 

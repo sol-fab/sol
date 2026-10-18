@@ -18,8 +18,6 @@ IMPORT = re.compile(r'~import_identity:\s*(?P<value>"[^"]*"|[^\n;]*)')
 CLASS = re.compile(r'~resource_class:\s*(?P<value>"[^"]*")')
 OBSERVED = re.compile(r'~observed_as:\s*(?P<value>"[^"]*"|[^\n;]*)')
 TYPE_RULE = re.compile(r'terraform_type\s*=\s*"(?P<value>[^"]*)"')
-CLASS_NAMES = re.compile(r'class_names\s*=\s*\[(?P<body>[^\]]*)\]', re.S)
-CLASS_NAME = re.compile(r'"(?P<value>[^"]+)"')
 
 
 def unquote(value):
@@ -49,12 +47,6 @@ def registry(path):
     return text, entries, type_rules
 
 
-def inventory_classes(path):
-    text = path.read_text() if path.exists() else ""
-    match = CLASS_NAMES.search(text)
-    if not match:
-        return []
-    return [m.group("value") for m in CLASS_NAME.finditer(match.group("body"))]
 
 
 def main(argv):
@@ -157,18 +149,8 @@ def main(argv):
                     "have (FND-0070)"
                 )
 
-    compared = set()
-    for provider in ("gcp", "aws"):
-        path = root / f"cli/lib/cloud/sol_cli_{provider}_absence.ml"
-        compared.update(inventory_classes(path))
-    for address, entry in sorted(entries.items()):
-        resource_class = entry["resource_class"]
-        if resource_class and resource_class not in compared:
-            problems.append(
-                f"the registry entry for {address} names the class {resource_class!r}, which no "
-                "provider inventory reports: the inventory maps what it finds back to an address "
-                "by class and name, so a class it never reports cannot be matched (FND-0070)"
-            )
+    # Executable probe coverage is checked against these recovery mappings by the
+    # compiled CLI tests. Source text cannot establish which probes actually run.
 
     if problems:
         for problem in problems:
@@ -177,7 +159,7 @@ def main(argv):
     print(
         f"{NAME}: {checked} declared terraform resource(s) carry an ownership kind, every Direct "
         "one an import identity and the provider name the inventory reports, no stale entry, and "
-        "every class a mapping names is one an inventory reports"
+        "compiled CLI tests independently check executable observation coverage"
     )
     return 0
 

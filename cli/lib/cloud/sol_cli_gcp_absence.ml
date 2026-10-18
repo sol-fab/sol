@@ -441,43 +441,13 @@ let relinquished_residue_probes =
   [ "google_service_networking_connection.sql", "service-networking peering connection" ]
 ;;
 
-let class_names =
-  [ "GKE cluster"
-  ; "GKE node pool"
-  ; "VPC network"
-  ; "subnetwork"
-  ; "Cloud Router"
-  ; "Cloud NAT"
-  ; "Cloud SQL instance"
-  ; "reserved global address"
-  ; "Artifact Registry repository"
-  ; "service account"
-  ; "custom role"
-  ; "storage bucket"
-  ; "persistent disk"
-  ; "firewall rule"
-  ; "forwarding rule"
-  ; "provisioner project IAM binding"
-  ; "cert-manager DNS discovery project IAM binding"
-  ; "authorization project IAM binding"
-  ; "authorization secret IAM binding"
-  ; "regional address"
-  ]
-;;
-
-let observed_classes () =
-  checks ~project:"coverage" ~region:"coverage" ~cluster_name:"coverage"
-  |> List.map (fun check -> check.resource_class)
-  |> fun classes -> classes @ [ "regional address" ]
-;;
-
 let unlistable =
   "the target declares no gcp.project_id, so the provider could not be listed -- an \
    inventory that did not run cannot establish absence"
 ;;
 
-let authorization_checks ~project ~(target : Sol_cli_config.target) =
-  let account_id = "sol-" ^ target.env ^ "-authorization" in
+let authorization_checks ~project ~environment =
+  let account_id = "sol-" ^ environment ^ "-authorization" in
   let email = account_id ^ "@" ^ project ^ ".iam.gserviceaccount.com" in
   let role =
     "projects/"
@@ -487,7 +457,7 @@ let authorization_checks ~project ~(target : Sol_cli_config.target) =
         (function
           | '-' -> '_'
           | c -> c)
-        target.env
+        environment
     ^ "_authorization"
   in
   [ identity_check
@@ -600,8 +570,7 @@ let secret_binding_members ~project text =
    target added to one is: deleting the reconciler or the workload identity does
    not necessarily remove the secret's policy entry. Enumerate the environment's
    secrets and read each policy; a failed read is UNKNOWN, never absence. *)
-let authorization_secret_bindings ~project ~environment =
-  let resource_class = "authorization secret IAM binding" in
+let authorization_secret_bindings ~resource_class ~project ~environment () =
   let identity =
     Printf.sprintf
       "secret IAM bindings on secrets named sol-%s-* in %s"
@@ -683,10 +652,6 @@ let strict_authorization observation =
   | observation -> observation
 ;;
 
-let prior_for class_name prior =
-  List.assoc_opt class_name prior |> Option.value ~default:[]
-;;
-
 let filter_to_prior prior observation =
   match observation with
   | Present present ->
@@ -728,9 +693,9 @@ let regional_address_observation
       ~project
       ~region
       ~cluster_name
+      ~resource_class
       ()
   =
-  let resource_class = "regional address" in
   let checked_with = regional_address_checked_with ~project ~region in
   let prior = prior_for resource_class previously_attributed in
   let open Result.Syntax in
@@ -872,6 +837,55 @@ let regional_address_observation
                    }))))
 ;;
 
+(* The executable sequence is also the advertised inventory. Specialized
+   observers declare their class here and receive that identity when executed. *)
+let probes
+      ~previously_attributed
+      ~authorization_identities
+      ~project
+      ~region
+      ~cluster_name
+      ~environment
+  =
+  List.map
+    (fun check ->
+       Some check.resource_class, fun () -> run ~previously_attributed ~check ())
+    (checks ~project ~region ~cluster_name)
+  @ List.map
+      (fun check ->
+         ( Some check.resource_class
+         , fun () ->
+             strict_authorization_observation ~check
+             |> filter_to_prior authorization_identities ))
+      (authorization_checks ~project ~environment)
+  @ [ (let resource_class = "authorization secret IAM binding" in
+       ( Some resource_class
+       , fun () ->
+           strict_authorization
+             (authorization_secret_bindings ~resource_class ~project ~environment ())
+           |> filter_to_prior authorization_identities ))
+    ; (let resource_class = "regional address" in
+       ( Some resource_class
+       , regional_address_observation
+           ~previously_attributed
+           ~project
+           ~region
+           ~cluster_name
+           ~resource_class ))
+    ]
+;;
+
+let observed_classes () =
+  probes
+    ~previously_attributed:[]
+    ~authorization_identities:[]
+    ~project:"coverage"
+    ~region:"coverage"
+    ~cluster_name:"coverage"
+    ~environment:"coverage"
+  |> List.filter_map fst
+;;
+
 let observations
       ?(previously_attributed = [])
       ?(authorization_identities = [])
@@ -887,38 +901,14 @@ let observations
   | Some project ->
     let observations =
       List.map
-        (fun check -> run ~previously_attributed ~check ())
-        (checks ~project ~region:target.region ~cluster_name)
-    in
-    (* The authorization root's names are derived from the environment, not from
-       the current trust declaration. A prior apply can have created them and a
-       later target can have removed the trust, so an absent current declaration
-       is not evidence that they are gone. Observe them unconditionally; a
-       failed read is a scope failure, not absence. *)
-    let observations =
-      observations
-      @ List.map
-          (fun check ->
-             strict_authorization_observation ~check
-             |> filter_to_prior authorization_identities)
-          (authorization_checks ~project ~target)
-    in
-    let observations =
-      observations
-      @ [ strict_authorization
-            (authorization_secret_bindings ~project ~environment:target.env)
-          |> filter_to_prior authorization_identities
-        ]
-    in
-    let observations =
-      observations
-      @ [ regional_address_observation
-            ~previously_attributed
-            ~project
-            ~region:target.region
-            ~cluster_name
-            ()
-        ]
+        (fun (_, observe) -> observe ())
+        (probes
+           ~previously_attributed
+           ~authorization_identities
+           ~project
+           ~region:target.region
+           ~cluster_name
+           ~environment:target.env)
     in
     derived_by_vpc ~cluster_name observations @ durable_observations ~target ~cluster_name
 ;;
@@ -935,14 +925,8 @@ let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
 
 let unresolved = Sol_cli_absence.unresolved
 
-let authorization_state_identities
-      ~(target : Sol_cli_config.target)
-      (state : Sol_cli_cloud_destroy.state_read)
-  =
+let authorization_state_identities ~target:_ (state : Sol_cli_cloud_destroy.state_read) =
   let resources = Sol_cli_cloud_destroy.resources state in
-  let project =
-    Option.value (Sol_cli_config.provider_field target "project_id") ~default:""
-  in
   let service_accounts =
     resources
     |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
@@ -952,7 +936,7 @@ let authorization_state_identities
     resources
     |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
       if String.equal resource.kind "google_project_iam_custom_role"
-      then Option.map (fun name -> "projects/" ^ project ^ "/roles/" ^ name) resource.name
+      then resource.name
       else None)
   in
   let project_bindings =
