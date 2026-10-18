@@ -620,3 +620,17 @@ let%test "recovery: a custom role in another project is Unmapped" =
     Windtrap.failf "a custom role in another project was imported as %s" candidate.address
   | _ -> Windtrap.fail "a custom role in another project must be Unmapped"
 ;;
+
+let%test "state identity: a GCP cluster with a name is identified" =
+  let state =
+    state_of_resources
+      {|{"address":"google_container_cluster.main","type":"google_container_cluster","values":{"name":"sol-qual"}}|}
+  in
+  match
+    Sol_cli_cloud_wiring.state_cluster_identity ~provider:Sol_cli_provider.Gcp state
+  with
+  | Sol_cli_cloud_wiring.Cluster_named "sol-qual" -> ()
+  | Sol_cli_cloud_wiring.Cluster_named other ->
+    Windtrap.failf "the wrong GCP resource supplied the cluster identity: %s" other
+  | _ -> Windtrap.fail "the GCP cluster resource was not identified"
+;;
