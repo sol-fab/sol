@@ -329,6 +329,35 @@ let checks ~region ~cluster_name =
       ; "--output"
       ; "text"
       ]
+  ; (* The EKS module creates its cluster, node, and remote-access security
+       groups independently of the managed node group. If the cluster's state
+       is lost they can remain as orphaned EC2 resources; the RDS security
+       group check above does not see them. *)
+    check
+      ~resource_class:"EKS security group"
+      ~identity:
+        (Printf.sprintf
+           "%s-cluster-*, %s-node-*, %s-remote-access-*"
+           cluster_name
+           cluster_name
+           cluster_name)
+      ~attribution:(Named_for_target (named_for_cluster cluster_name))
+      ~attributable:(fun line ->
+        List.exists
+          (fun prefix -> String.starts_with ~prefix line)
+          [ cluster_name ^ "-cluster-"
+          ; cluster_name ^ "-node-"
+          ; cluster_name ^ "-remote-access-"
+          ])
+      [ "ec2"
+      ; "describe-security-groups"
+      ; "--region"
+      ; region
+      ; "--query"
+      ; "SecurityGroups[].GroupName"
+      ; "--output"
+      ; "text"
+      ]
   ; cluster_owned
       ~region
       ~cluster_name
@@ -540,6 +569,7 @@ let class_names =
   ; "ECR repository"
   ; "OIDC provider"
   ; "elastic IP"
+  ; "EKS security group"
   ]
 ;;
 
