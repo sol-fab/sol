@@ -80,7 +80,7 @@ type gate_failure =
    refuse to roll workloads against an unapplied schema. What decides is whether the workspace
    carries migrations at all — and that is decided before any cluster call, so a target with
    none performs no migration-specific Kubernetes work of any kind. *)
-let migration_prerequisite ctx ~plan:_ ~live =
+let migration_prerequisite ctx ~(plan : Sol_cli_deployment_plan.t) ~live =
   let dir =
     Filename.concat ctx.facts.Sol_cli_workspace_model.root Sol_cli_migration.default_dir
   in
@@ -115,32 +115,15 @@ let migration_prerequisite ctx ~plan:_ ~live =
          target strings would put this target's database operations in two namespaces (#1424).
          The class Secret names come from the identity's target for the same reason. *)
       let database =
-        Sol_cli_database_setup_run.identity_of_config
+        Sol_cli_database_setup_run.identity
           ~workspace:ctx.execution.workspace
-          ctx.resolved_config
+          ~config:ctx.resolved_config
+          ~database:plan.database
       in
       let target = database.Sol_cli_database_setup_render.target in
       let namespace = Sol_cli_database_setup_render.database_namespace database in
-      (* A different question from the identity's ("which resource is the target's database"):
-         this asks whether Sol provisions it, and only the CA mount depends on the answer. It
-         resolves the config again rather than adding a second public shape for the identity,
-         which is the duplication #1424 removed. `resolve` is pure.
-
-         An unresolvable binding refuses the deploy. Reading it as "not Sol-provisioned" would
-         quietly skip the CA mount and proceed as if the database belonged to someone else,
-         which is the fail-open shape this boundary removes (#1469); the decision cannot be
-         made from a discarded error. Nothing is applied: this resolves before the migration
-         gate reconciles operator bindings or reads cluster state. *)
-      let* provisions_database =
-        Sol_cli_resource_binding.provisions_of_config ctx.resolved_config ~typ:"postgres"
-        |> Result.map_error (fun message ->
-          Refused
-            (Printf.sprintf
-               "\n\
-                error: cannot determine whether target %s provisions its database, so \
-                the migration gate cannot decide whether to mount its CA ConfigMap: %s"
-               ctx.target_name
-               message))
+      let provisions_database =
+        Sol_cli_resource_binding.postgres_is_managed plan.database
       in
       let ca_configmap =
         if provisions_database
@@ -219,7 +202,7 @@ let substrate_prerequisite ctx ~plan ~live =
   else if live
   then
     (* Only the units that declared the database this target provisions get the allowance.
-       The plan already carries that answer in [db_ca_target] — the same field the renderer
+       The plan already carries that answer in [database]'s published-CA target — the same field the renderer
        uses to mount the setup step's CA ConfigMap — so this gate does not resolve the
        bindings again. A unit that consumes no database, or one bound externally, is not
        widened, and no fact is required on its behalf. *)

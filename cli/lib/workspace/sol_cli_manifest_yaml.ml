@@ -61,7 +61,7 @@ module Workload_spec = struct
     ; (* 2b: the `<target>-dml-creds` Secret this unit reads `POSTGRES_URL` from, when it
          consumes the target's database resource. [None] for a unit that does not, so a unit
          that merely declares `POSTGRES_URL` keeps reading its own Secret. The name is
-         computed by the deploy renderer from the plan's [db_uses_target], so the writer
+         computed by the deploy renderer from the plan's [database]'s credential target, so the writer
          ({!Sol_cli_database_setup_render}) and this reader share one definition. *)
       db_dml_creds_name : string option
     }

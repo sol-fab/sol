@@ -40,37 +40,30 @@ let of_resource (r : Sol_cli_config.resource) =
          })
 ;;
 
-let resolve (cfg : Sol_cli_config.t) =
-  let rec go acc = function
-    | [] -> Ok (List.rev acc)
-    | r :: rest ->
-      (match of_resource r with
-       | Error _ as error -> error
-       | Ok binding -> go (binding :: acc) rest)
-  in
-  match go [] (Sol_cli_config.resources cfg) with
-  | Error _ as error -> error
-  | Ok bindings ->
-    (* v1 supports one database per target, and the limit is on the effective graph — the
-       resources that survive `omit` — not on what a unit consumes. The delivered class
-       Secrets are named for the target, so a consumer cannot tell two databases apart
-       whatever their ownership: two Sol-provisioned databases, two external ones, and a
-       Sol-provisioned plus an external one are the same ambiguity. Rejecting it here, where
-       the effective graph is resolved, is what keeps it from surfacing later as a delivery
-       failure or as an external dependency whose derived delivery was silently skipped. *)
-    let databases = List.filter (fun b -> String.equal b.typ "postgres") bindings in
-    (match databases with
-     | _ :: _ :: _ ->
-       Error
-         (Printf.sprintf
-            "this target's effective resource graph declares %d PostgreSQL resources \
-             (%s). v1 supports one database per target: the delivered credential Secrets \
-             are named for the target, so two databases cannot be told apart by their \
-             consumers. Omit the ones this target does not use"
-            (List.length databases)
-            (String.concat ", " (List.map (fun b -> b.resource) databases)))
-     | _ -> Ok bindings)
+let postgres_binding bindings =
+  let databases = List.filter (fun b -> String.equal b.typ "postgres") bindings in
+  match databases with
+  | _ :: _ :: _ ->
+    Error
+      (Printf.sprintf
+         "this target's effective resource graph declares %d PostgreSQL resources (%s). \
+          v1 supports one database per target: the delivered credential Secrets are \
+          named for the target, so two databases cannot be told apart by their \
+          consumers. Omit the ones this target does not use"
+         (List.length databases)
+         (String.concat ", " (List.map (fun b -> b.resource) databases)))
+  | [ database ] -> Ok (Some database)
+  | [] -> Ok None
 ;;
+
+let resolve_resources resources =
+  let open Result.Syntax in
+  let* bindings = Sol_cli_result.map_list of_resource resources in
+  (* Generic graph validation and PostgreSQL selection share this cardinality rule. *)
+  Result.map (fun _ -> bindings) (postgres_binding bindings)
+;;
+
+let resolve (cfg : Sol_cli_config.t) = resolve_resources (Sol_cli_config.resources cfg)
 
 let provisions bindings ~typ =
   List.exists
@@ -78,34 +71,125 @@ let provisions bindings ~typ =
     bindings
 ;;
 
-(** Whether Sol provisions a [typ] resource in the config's effective graph. The decision
-    refuses when that graph cannot be resolved: reading the error as "not Sol-provisioned"
-    would skip the CA mount and treat the database as someone else's, which is the fail-open
-    shape this boundary removes (#1469). Callers that need the answer apply their own message;
-    the resolution error is preserved. *)
-let provisions_of_config (cfg : Sol_cli_config.t) ~typ =
-  match resolve cfg with
-  | Ok bindings -> Ok (provisions bindings ~typ)
-  | Error _ as error -> error
-;;
-
 let of_type bindings ~typ = List.filter (fun b -> String.equal b.typ typ) bindings
 
-let provisioned_database bindings =
-  List.find_opt
-    (fun b -> String.equal b.typ "postgres" && b.ownership = Sol_cli_config.Ownership_sol)
-    bindings
+(** PostgreSQL selection after binding validation. External credentials are complete
+    by construction. Local development publishes class credentials without the
+    managed setup Job or its CA. *)
+type postgres_credentials =
+  { ddl : string
+  ; dml : string
+  }
+
+type external_postgres =
+  { resource : string
+  ; store : string
+  ; credentials : postgres_credentials
+  }
+
+type postgres =
+  | No_postgres
+  | Managed_postgres of string
+  | External_postgres of external_postgres
+  | Local_postgres of string
+
+type postgres_trust =
+  | Published_ca
+  | Connection_trust
+
+type postgres_use =
+  | No_postgres_use
+  | Postgres_use of
+      { target : string
+      ; trust : postgres_trust
+      }
+
+let ddl_class = "ddl"
+let dml_class = "dml"
+
+let postgres bindings =
+  let open Result.Syntax in
+  let* binding = postgres_binding bindings in
+  match binding with
+  | None -> Ok No_postgres
+  | Some binding when binding.ownership = Sol_cli_config.Ownership_sol ->
+    Ok (Managed_postgres binding.resource)
+  | Some binding ->
+    let* store =
+      match binding.store with
+      | Some store when String.trim store <> "" -> Ok store
+      | _ ->
+        Error
+          (Printf.sprintf
+             "the externally bound database %S names no store"
+             binding.resource)
+    in
+    let credential name =
+      match List.assoc_opt name binding.credentials with
+      | Some path when String.trim path <> "" -> Ok path
+      | _ ->
+        Error
+          (Printf.sprintf
+             "the externally bound database %S names no remote path for the %S \
+              credential class (binding.credentials.%s)"
+             binding.resource
+             name
+             name)
+    in
+    let* ddl = credential ddl_class in
+    let* dml = credential dml_class in
+    (* PostgreSQL currently delivers complete URL credentials by class. Refuse
+       additional connection/trust sources rather than dropping declared inputs. *)
+    let unsupported =
+      List.map (fun (key, _) -> "connection." ^ key) binding.connection
+      @ List.map (fun (key, _) -> "keys." ^ key) binding.keys
+      @ (binding.credentials
+         |> List.filter_map (fun (name, _) ->
+           if name = ddl_class || name = dml_class
+           then None
+           else Some ("credentials." ^ name)))
+    in
+    let* () =
+      match unsupported with
+      | [] -> Ok ()
+      | keys ->
+        Error
+          (Printf.sprintf
+             "the externally bound database %S declares unsupported PostgreSQL inputs \
+              (%s). This delivery supports only complete DDL/DML URL credentials; \
+              separate connection or private CA material cannot be delivered"
+             binding.resource
+             (String.concat ", " keys))
+    in
+    Ok
+      (External_postgres
+         { resource = binding.resource; store; credentials = { ddl; dml } })
 ;;
 
-(* The one home for "which postgres resource is the target's": a provisioned database is
-   authoritative when Sol owns one; otherwise the single external postgres is the target's.
-   [resolve] has already refused a graph with more than one postgres resource, so [None]
-   here means the target simply has no database. *)
-let target_database bindings =
-  match provisioned_database bindings with
-  | Some database -> Some database
-  | None ->
-    (match of_type bindings ~typ:"postgres" with
-     | [ database ] -> Some database
-     | _ -> None)
+let resolve_postgres config = Result.bind (resolve config) postgres
+
+let postgres_resource = function
+  | No_postgres -> None
+  | Managed_postgres resource | Local_postgres resource -> Some resource
+  | External_postgres binding -> Some binding.resource
+;;
+
+let postgres_is_managed = function
+  | Managed_postgres _ -> true
+  | No_postgres | External_postgres _ | Local_postgres _ -> false
+;;
+
+let postgres_trust = function
+  | Managed_postgres _ -> Published_ca
+  | No_postgres | External_postgres _ | Local_postgres _ -> Connection_trust
+;;
+
+let postgres_use_target = function
+  | No_postgres_use -> None
+  | Postgres_use { target; _ } -> Some target
+;;
+
+let postgres_use_ca_target = function
+  | Postgres_use { target; trust = Published_ca } -> Some target
+  | No_postgres_use | Postgres_use { trust = Connection_trust; _ } -> None
 ;;

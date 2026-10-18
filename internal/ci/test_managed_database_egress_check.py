@@ -119,7 +119,7 @@ def main():
     mutate(
         tmp,
         "cli/lib/deploy/sol_cli_substrate.ml",
-        "match spec.db_ca_target with\n    | None -> None",
+        "match Sol_cli_resource_binding.postgres_use_ca_target spec.database with\n    | None -> None",
         "match Some () with\n    | None -> None",
     )
     cases.append(("all-workloads-widened-to-the-database", tmp, "not scoped to the units"))

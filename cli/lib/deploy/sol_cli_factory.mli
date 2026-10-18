@@ -13,8 +13,7 @@ val plan_of_services
   -> ?image_refs:(string * string) list
   -> ?inventory:Sol_cli_manifest.service list
   -> ?target:string
-  -> ?target_database:string
-  -> ?provisioned_database:string
+  -> database:Sol_cli_resource_binding.postgres
   -> Sol_cli_manifest.service list
   -> (Sol_cli_deployment_plan.t, string) result
 
@@ -31,8 +30,7 @@ type request =
   ; declared : Sol_cli_config.declared option
   ; platform_shape : Sol_cli_profile.platform_shape
   ; target : string option
-  ; target_database : string option
-  ; provisioned_database : string option
+  ; database : Sol_cli_resource_binding.postgres
   }
 
 val run

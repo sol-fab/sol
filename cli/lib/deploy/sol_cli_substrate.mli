@@ -1,6 +1,6 @@
 val namespaces : Sol_cli_deployment_plan.t -> string list
 
-(** The units that declared the database this target provisions. [db_ca_target] is the plan's
+(** The units that declared the database this target provisions. [database]'s published-CA target is the plan's
     single "consumes the managed database" signal; a unit that consumes no database is not
     included, so no allowance is widened to it. A unit bound to an external database is also
     not included: Sol owns no destination fact for it, and this contract does not infer one. *)

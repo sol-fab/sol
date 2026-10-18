@@ -74,17 +74,9 @@ type service_spec =
   ; called_by : service_call list
   ; extra_labels : (string * string) list
   ; progressive_delivery : Sol_cli_toml.progressive_delivery option
-  ; (* 2b: the target whose postgres resource this unit consumes, whatever its ownership.
-       Routes the unit's `POSTGRES_URL` to `<target>-dml-creds`; see the implementation
-       comment. [None] when the unit consumes no database. *)
-    db_uses_target : string option
-    (** What this unit **declared** it uses ([uses: [app_db]]) -- the requirement, not its
-        resolution. The release record carries it so a rollback re-resolves it against the
-        *current* target's authorities and bindings (#1422). *)
+  ; database : Sol_cli_resource_binding.postgres_use
   ; uses : string list
-  ; (* 2d: the target whose *Sol-provisioned* database this unit consumes, if any; gates the
-       CA ConfigMap mount, which exists only where Sol's setup step writes it. *)
-    db_ca_target : string option
+    (** Historical application requirements; rollback resolves them against current bindings. *)
   }
 
 type profile_claim =
@@ -133,7 +125,7 @@ type resource_delivery =
   { target : string
   ; resource : string
   ; store : string
-  ; credentials : (string * string) list
+  ; credentials : Sol_cli_resource_binding.postgres_credentials
   ; migration_namespace : string
   ; dml_namespaces : string list
   }
@@ -152,10 +144,12 @@ type t =
   ; profile : profile_claim option
   ; contract : Sol_cli_release_id.contract_fact list
   ; contract_changes : contract_change list
+  ; database : Sol_cli_resource_binding.postgres
   ; resource_delivery : resource_delivery option
   }
 
 type plan_error =
+  | Invalid_resource_binding of string
   | Toml_error of Sol_cli_toml.parse_error
   | Invalid_persistence of
       { workload : string
@@ -224,16 +218,6 @@ val service_uses_resource_type
     are not written a Sol credential: only the Sol-provisioned resource's consumers are. *)
 val service_uses_resource : Sol_cli_config.declared option -> string -> string -> bool
 
-(** The target whose database the service consumes, by the one rule both the plan and
-    `sol secret set` use. [None] when it declares no use of the resource the target resolved
-    as its database. *)
-val db_uses_target
-  :  Sol_cli_config.declared option
-  -> target:string option
-  -> target_database:string option
-  -> string
-  -> string option
-
 (** A `uses:` ref's resource name, when the ref names a resource at all. *)
 val resource_name_of_ref : string -> string option
 
@@ -283,7 +267,12 @@ val of_services_result
   -> ?image_refs:(string * string) list
   -> ?inventory:Sol_cli_manifest.service list
   -> ?target:string
-  -> ?target_database:string
-  -> ?provisioned_database:string
+  -> database:Sol_cli_resource_binding.postgres
   -> Sol_cli_manifest.service list
   -> (t, plan_error) result
+
+val database_for_uses
+  :  target:string option
+  -> database:Sol_cli_resource_binding.postgres
+  -> string list
+  -> Sol_cli_resource_binding.postgres_use

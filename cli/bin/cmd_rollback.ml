@@ -91,22 +91,17 @@ let run_locked ~lease ~ctx ~local ?config ~workspace ~facts release_id
      provisions that database. A local rollback has no target binding and keeps the
      workspace runtime Secret path. *)
   (* Which namespace the migration read runs in, and -- against a target -- the target whose
-     class Secret names it reads. **One** `identity_of_config` call supplies both, so the
+     class Secret names it reads. **One** resolved selection supplies both, so the
      namespace and the Secret names cannot disagree (#1424). A local rollback has no target;
      {!Sol_cli_migration_job.local_namespace} explains why its namespace stays inventory-derived. *)
   let* namespace, target, provisions =
     match config with
     | Some config ->
-      let database = Sol_cli_database_setup_run.identity_of_config ~workspace config in
-      (* A different question from the identity's ("which resource is the target's database"):
-         this asks whether Sol provisions it, and only the CA mount depends on the answer. It
-         resolves the config again rather than adding a second public shape for the identity,
-         which is the duplication #1424 removed. `resolve` is pure. *)
-      let provisions =
-        match Sol_cli_resource_binding.resolve config with
-        | Ok bindings -> Sol_cli_resource_binding.provisions bindings ~typ:"postgres"
-        | Error _ -> false
+      let* selection = Sol_cli_resource_binding.resolve_postgres config in
+      let database =
+        Sol_cli_database_setup_run.identity ~workspace ~config ~database:selection
       in
+      let provisions = Sol_cli_resource_binding.postgres_is_managed selection in
       Ok
         ( Sol_cli_database_setup_render.database_namespace database
         , Some database.Sol_cli_database_setup_render.target

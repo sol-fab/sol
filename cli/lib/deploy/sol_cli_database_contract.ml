@@ -146,20 +146,16 @@ let project ~definition ~requested_target ~config ~(facts : Sol_cli_workspace_mo
       | Sol_cli_deploy_selection.Refused message -> message
       | Preflight (profile, findings) -> Sol_cli_profile_preflight.report profile findings)
   in
-  let* bindings = Sol_cli_resource_binding.resolve config in
-  (* Binding resolution above refuses errors before the existing identity owner is used.
-     Identity names the database; the resolved binding separately determines ownership. *)
-  let id = Sol_cli_database_setup_run.identity_of_config ~workspace config in
-  let binding = Sol_cli_resource_binding.target_database bindings in
-  let provisioned =
-    Option.is_some (Sol_cli_resource_binding.provisioned_database bindings)
-  in
+  let selection = plan.Sol_cli_deployment_plan.database in
+  let id = Sol_cli_database_setup_run.identity ~workspace ~config ~database:selection in
+  let binding = Sol_cli_resource_binding.postgres_resource selection in
+  let provisioned = Sol_cli_resource_binding.postgres_is_managed selection in
   let database =
     option
-      (fun (binding : Sol_cli_resource_binding.t) ->
+      (fun resource ->
          let namespace = R.database_namespace id in
          fields
-           [ "resource", string binding.resource
+           [ "resource", string resource
            ; "ownership", string (if provisioned then "sol" else "external")
            ; ( "credential_authority"
              , if provisioned
@@ -185,9 +181,9 @@ let project ~definition ~requested_target ~config ~(facts : Sol_cli_workspace_mo
   let workload (s : P.service_spec) =
     let subject = s.domain ^ "/" ^ s.source_name in
     let* database =
-      match s.db_uses_target, binding with
+      match Sol_cli_resource_binding.postgres_use_target s.database, binding with
       | None, _ -> Ok `Null
-      | Some _, Some binding -> Ok (string binding.Sol_cli_resource_binding.resource)
+      | Some _, Some binding -> Ok (string binding)
       | Some _, None -> Error "consumer has no resolved target database"
     in
     let namespace = P.namespace_to_string s.namespace
@@ -202,14 +198,17 @@ let project ~definition ~requested_target ~config ~(facts : Sol_cli_workspace_mo
           ; "declared_uses", strings s.uses
           ; "database", database
           ; ( "consuming_containers"
-            , if Option.is_some s.db_uses_target
+            , if Option.is_some (Sol_cli_resource_binding.postgres_use_target s.database)
               then strings [ M.workload_container_name name ]
               else strings [] )
           ; ( "credential"
             , option
                 (fun target -> reference ~namespace ~name:(R.dml_creds_name target))
-                s.db_uses_target )
-          ; "ca", option (fun target -> ca ~namespace ~target) s.db_ca_target
+                (Sol_cli_resource_binding.postgres_use_target s.database) )
+          ; ( "ca"
+            , option
+                (fun target -> ca ~namespace ~target)
+                (Sol_cli_resource_binding.postgres_use_ca_target s.database) )
           ] )
   in
   let* workloads = Sol_cli_result.map_list workload plan.services in

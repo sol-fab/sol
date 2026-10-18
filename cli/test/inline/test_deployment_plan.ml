@@ -152,7 +152,8 @@ let test_k8s_name_rejects_invalid_characters () =
     Windtrap.fail "expected name error"
   | Error (Sol_cli_deployment_plan.Unsupported_availability _) ->
     Windtrap.fail "expected name error"
-  | Error (Sol_cli_deployment_plan.Incompatible_contract_change _) ->
+  | Error (Sol_cli_deployment_plan.Incompatible_contract_change _)
+  | Error (Sol_cli_deployment_plan.Invalid_resource_binding _) ->
     Windtrap.fail "expected name error"
 ;;
 
@@ -168,7 +169,8 @@ let test_k8s_name_rejects_empty () =
     Windtrap.fail "expected name error"
   | Error (Sol_cli_deployment_plan.Unsupported_availability _) ->
     Windtrap.fail "expected name error"
-  | Error (Sol_cli_deployment_plan.Incompatible_contract_change _) ->
+  | Error (Sol_cli_deployment_plan.Incompatible_contract_change _)
+  | Error (Sol_cli_deployment_plan.Invalid_resource_binding _) ->
     Windtrap.fail "expected name error"
 ;;
 
@@ -186,7 +188,8 @@ let test_k8s_name_rejects_overlong () =
     Windtrap.fail "expected name error"
   | Error (Sol_cli_deployment_plan.Unsupported_availability _) ->
     Windtrap.fail "expected name error"
-  | Error (Sol_cli_deployment_plan.Incompatible_contract_change _) ->
+  | Error (Sol_cli_deployment_plan.Incompatible_contract_change _)
+  | Error (Sol_cli_deployment_plan.Invalid_resource_binding _) ->
     Windtrap.fail "expected name error"
 ;;
 
@@ -206,7 +209,8 @@ let test_namespace_rejects_invalid_domain () =
     Windtrap.fail "expected name error"
   | Error (Sol_cli_deployment_plan.Unsupported_availability _) ->
     Windtrap.fail "expected name error"
-  | Error (Sol_cli_deployment_plan.Incompatible_contract_change _) ->
+  | Error (Sol_cli_deployment_plan.Incompatible_contract_change _)
+  | Error (Sol_cli_deployment_plan.Invalid_resource_binding _) ->
     Windtrap.fail "expected name error"
 ;;
 
@@ -227,7 +231,8 @@ let test_namespace_rejects_overlong () =
     Windtrap.fail "expected name error"
   | Error (Sol_cli_deployment_plan.Unsupported_availability _) ->
     Windtrap.fail "expected name error"
-  | Error (Sol_cli_deployment_plan.Incompatible_contract_change _) ->
+  | Error (Sol_cli_deployment_plan.Incompatible_contract_change _)
+  | Error (Sol_cli_deployment_plan.Invalid_resource_binding _) ->
     Windtrap.fail "expected name error"
 ;;
 
@@ -307,8 +312,7 @@ let sample_plan () : Sol_cli_deployment_plan.t =
     ; extra_labels = []
     ; progressive_delivery = None
     ; uses = []
-    ; db_uses_target = None
-    ; db_ca_target = None
+    ; database = Sol_cli_resource_binding.No_postgres_use
     }
   in
   { workspace = "myworkspace"
@@ -324,6 +328,7 @@ let sample_plan () : Sol_cli_deployment_plan.t =
   ; profile = None
   ; contract = []
   ; contract_changes = []
+  ; database = Sol_cli_resource_binding.No_postgres
   ; resource_delivery = None
   }
 ;;
@@ -416,6 +421,7 @@ let test_to_json_mode_strings () =
       ; profile = None
       ; contract = []
       ; contract_changes = []
+      ; database = Sol_cli_resource_binding.No_postgres
       ; resource_delivery = None
       }
     in
@@ -771,8 +777,7 @@ let make_worker_spec name domain =
   ; extra_labels = []
   ; progressive_delivery = None
   ; uses = []
-  ; db_uses_target = None
-  ; db_ca_target = None
+  ; database = Sol_cli_resource_binding.No_postgres_use
   }
 ;;
 
@@ -1164,6 +1169,7 @@ let test_of_services_result_surfaces_toml_parse_error () =
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~workspace:"myworkspace"
         ~env
@@ -1190,7 +1196,8 @@ let test_of_services_result_surfaces_toml_parse_error () =
       Windtrap.fail "expected TOML error, got persistence error"
     | Error (Sol_cli_deployment_plan.Unsupported_availability _) ->
       Windtrap.fail "expected TOML error, got availability error"
-    | Error (Sol_cli_deployment_plan.Incompatible_contract_change _) ->
+    | Error (Sol_cli_deployment_plan.Incompatible_contract_change _)
+    | Error (Sol_cli_deployment_plan.Invalid_resource_binding _) ->
       Windtrap.fail "expected TOML error, got contract-change error")
 ;;
 
@@ -1238,6 +1245,7 @@ let test_a_scoped_plan_carries_the_whole_workspace_group_set () =
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~workspace:"myworkspace"
         ~env:deploy_env
@@ -1267,6 +1275,7 @@ let test_a_group_the_workspace_no_longer_declares_is_not_reported () =
     write_file (Filename.concat notify.dir "sol.toml") "";
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~workspace:"myworkspace"
         ~env:deploy_env
@@ -1318,6 +1327,7 @@ let test_sol_yml_scale_overrides_toml_replicas_on_resolved_target () =
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
@@ -1344,6 +1354,7 @@ let test_sol_yml_scale_falls_back_to_scale_min_when_no_max () =
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
@@ -1367,6 +1378,7 @@ let test_no_resolved_config_uses_toml_replicas () =
     write_file "app/payments/charge_svc/sol.toml" "[infra.scale]\nreplicas = 2\n";
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
@@ -1392,6 +1404,7 @@ let test_no_matching_sol_yml_service_uses_toml_replicas () =
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
@@ -1420,6 +1433,7 @@ let test_toml_volumes_carry_into_service_spec () =
        access_mode = \"ReadWriteOnce\"\n";
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
@@ -1460,6 +1474,7 @@ let test_multi_replica_volume_fails_after_scale_resolution () =
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
@@ -1491,6 +1506,7 @@ let test_zero_replica_volume_fails () =
        size = \"10Gi\"\n";
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
@@ -1515,6 +1531,7 @@ let plan_for_fn toml =
       }
     in
     Sol_cli_deployment_plan.of_services_result
+      ~database:Sol_cli_resource_binding.No_postgres
       ~platform_shape:Sol_cli_profile.Local
       ~facts:(facts ())
       ~workspace:"myworkspace"
@@ -1567,6 +1584,7 @@ let test_function_volume_fails () =
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
@@ -1603,6 +1621,7 @@ calls = ["checkout/checkout_svc"]
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
@@ -1650,6 +1669,7 @@ calls = ["checkout/missing_svc"]
 |};
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
@@ -1682,6 +1702,7 @@ calls = ["checkout/checkout_svc"]
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
@@ -1728,6 +1749,7 @@ calls = ["checkout/checkout_svcc"]
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
@@ -1788,6 +1810,7 @@ calls = ["payments/charge_svc"]
     let plan ?(selected = [ charge_svc_service ]) () =
       match
         Sol_cli_deployment_plan.of_services_result
+          ~database:Sol_cli_resource_binding.No_postgres
           ~platform_shape:Sol_cli_profile.Local
           ~facts:(facts ())
           ~workspace:"myworkspace"
@@ -1871,6 +1894,7 @@ config = { CHECKOUT_SVC_URL = "http://example.invalid" }
     in
     match
       Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
         ~platform_shape:Sol_cli_profile.Local
         ~facts:(facts ())
         ~workspace:"myworkspace"
@@ -2262,7 +2286,7 @@ let test_the_ca_mount_follows_the_sol_provisioned_resource () =
         ~facts:(facts ())
         ~declared
         ~target:"prod-aws-us-east-1"
-        ~provisioned_database:"app_db"
+        ~database:(Sol_cli_resource_binding.Managed_postgres "app_db")
         [ unit "charge_svc"; unit "legacy_svc"; unit "plain_svc" ]
     with
     | Error err -> Windtrap.fail (Sol_cli_deployment_plan.plan_error_to_string err)
@@ -2378,7 +2402,7 @@ let test_the_reader_routes_on_the_capability_not_the_key_name () =
          in
          write_file (Filename.concat s.dir "sol.toml") body)
       units;
-    let plan ~provisioned_database =
+    let plan ~database =
       match
         Sol_cli_deployment_plan.of_services_result
           ~platform_shape:Sol_cli_profile.Local
@@ -2387,8 +2411,7 @@ let test_the_reader_routes_on_the_capability_not_the_key_name () =
           ~facts:(facts ())
           ~declared
           ~target:"prod-aws-us-east-1"
-          ~target_database:"app_db"
-          ?provisioned_database
+          ~database
           units
       with
       | Error err -> Windtrap.fail (Sol_cli_deployment_plan.plan_error_to_string err)
@@ -2414,7 +2437,7 @@ let test_the_reader_routes_on_the_capability_not_the_key_name () =
     let ca = Sol_cli_database_setup_render.ca_configmap_name "prod-aws-us-east-1" in
     (* Sol provisions the target's database: the consumer reads the DML class Secret and
        mounts the CA Sol publishes. *)
-    let sol = plan ~provisioned_database:(Some "app_db") in
+    let sol = plan ~database:(Sol_cli_resource_binding.Managed_postgres "app_db") in
     let charge = workload sol "charge_svc" in
     Windtrap.equal
       Windtrap.bool
@@ -2448,7 +2471,15 @@ let test_the_reader_routes_on_the_capability_not_the_key_name () =
        || has ("name: " ^ ca) plain);
     (* The same target with the database bound externally: the reader is ownership-neutral,
        but Sol publishes no CA ConfigMap for a database it does not own (2d). *)
-    let external_plan = plan ~provisioned_database:None in
+    let external_plan =
+      plan
+        ~database:
+          (Sol_cli_resource_binding.External_postgres
+             { resource = "app_db"
+             ; store = "external"
+             ; credentials = { ddl = "ddl"; dml = "dml" }
+             })
+    in
     let external_charge = workload external_plan "charge_svc" in
     Windtrap.equal
       Windtrap.bool
@@ -2464,10 +2495,11 @@ let test_the_reader_routes_on_the_capability_not_the_key_name () =
        database the target provisions? Assert [db_ca_target] directly across the plan shapes,
        so its meaning is not inferred only from the CA mount the renderer happens to build. *)
     let db_ca_target plan name =
-      (List.find
-         (fun (s : Sol_cli_deployment_plan.service_spec) -> s.source_name = name)
-         plan.Sol_cli_deployment_plan.services)
-        .db_ca_target
+      Sol_cli_resource_binding.postgres_use_ca_target
+        (List.find
+           (fun (s : Sol_cli_deployment_plan.service_spec) -> s.source_name = name)
+           plan.Sol_cli_deployment_plan.services)
+          .database
     in
     let check_target label expected plan name =
       Windtrap.equal
@@ -2520,34 +2552,32 @@ let test_target_database_selects_one_external_and_refuses_two () =
     }
   in
   let selected bindings =
-    Sol_cli_resource_binding.target_database bindings
-    |> Option.map (fun (b : Sol_cli_resource_binding.t) -> b.resource)
+    Sol_cli_resource_binding.postgres bindings
+    |> Result.map Sol_cli_resource_binding.postgres_resource
+  in
+  let external_binding resource =
+    { (binding ~ownership:Sol_cli_config.Ownership_external resource) with
+      store = Some "store"
+    ; credentials = [ "ddl", "ddl-path"; "dml", "dml-path" ]
+    }
   in
   Windtrap.equal
-    (Windtrap.option Windtrap.string)
-    ~msg:"one externally bound postgres is the target's database"
-    (Some "legacy_db")
-    (selected [ binding ~ownership:Sol_cli_config.Ownership_external "legacy_db" ]);
+    (Windtrap.result (Windtrap.option Windtrap.string) Windtrap.string)
+    ~msg:"one external database resolves its resource and complete delivery"
+    (Ok (Some "legacy_db"))
+    (selected [ external_binding "legacy_db" ]);
+  List.iter
+    (fun bindings ->
+       match selected bindings with
+       | Error _ -> ()
+       | Ok _ -> Windtrap.fail "ambiguous database graph must be refused")
+    [ [ binding "app_db"; external_binding "legacy_db" ]
+    ; [ external_binding "first_db"; external_binding "second_db" ]
+    ];
   Windtrap.equal
-    (Windtrap.option Windtrap.string)
-    ~msg:"a Sol-provisioned database is authoritative beside an external one"
-    (Some "app_db")
-    (selected
-       [ binding "app_db"
-       ; binding ~ownership:Sol_cli_config.Ownership_external "legacy_db"
-       ]);
-  Windtrap.equal
-    (Windtrap.option Windtrap.string)
-    ~msg:"two externally bound postgres resources are ambiguous, so nothing routes"
-    None
-    (selected
-       [ binding ~ownership:Sol_cli_config.Ownership_external "first_db"
-       ; binding ~ownership:Sol_cli_config.Ownership_external "second_db"
-       ]);
-  Windtrap.equal
-    (Windtrap.option Windtrap.string)
-    ~msg:"and no postgres resource routes nothing"
-    None
+    (Windtrap.result (Windtrap.option Windtrap.string) Windtrap.string)
+    ~msg:"explicitly absent database"
+    (Ok None)
     (selected [])
 ;;
 
@@ -2616,8 +2646,7 @@ let test_database_delivery_selects_every_consumer_and_no_nonconsumer () =
           ~facts:(facts ())
           ~declared
           ~target:"prod-aws-us-east-1"
-          ~target_database:"app_db"
-          ~provisioned_database:"app_db"
+          ~database:(Sol_cli_resource_binding.Managed_postgres "app_db")
           units
       with
       | Error err -> Windtrap.fail (Sol_cli_deployment_plan.plan_error_to_string err)
@@ -2635,7 +2664,13 @@ let test_database_delivery_selects_every_consumer_and_no_nonconsumer () =
     in
     let ns domain = namespace_string ~workspace:"myworkspace" ~domain in
     let selected =
-      Sol_cli_database_setup_run.dml_namespaces ~declared:(Some declared) ~binding plan
+      Sol_cli_database_setup_run.dml_namespaces
+        ~declared:(Some declared)
+        ~database:
+          (match Sol_cli_resource_binding.postgres [ binding ] with
+           | Ok db -> db
+           | Error e -> Windtrap.fail e)
+        plan
     in
     Windtrap.equal
       (Windtrap.list Windtrap.string)
@@ -2662,4 +2697,21 @@ let%test
     "2b/#1481: the delivery selects the binding's consumers, never the sanitized identity"
   =
   test_database_delivery_selects_every_consumer_and_no_nonconsumer ()
+;;
+
+let%test
+    "a PostgreSQL selection without its target cannot silently lose credential routing"
+  =
+  match
+    Sol_cli_deployment_plan.of_services_result
+      ~workspace:"ws"
+      ~env:deploy_env
+      ~facts:(facts ())
+      ~platform_shape:Sol_cli_profile.Local
+      ~database:(Sol_cli_resource_binding.Managed_postgres "app_db")
+      []
+  with
+  | Error (Sol_cli_deployment_plan.Invalid_resource_binding _) -> ()
+  | Error error -> Windtrap.fail (Sol_cli_deployment_plan.plan_error_to_string error)
+  | Ok _ -> Windtrap.fail "a database selection without target identity was accepted"
 ;;

@@ -116,8 +116,7 @@ let ledger_spec : Sol_cli_deployment_plan.service_spec =
   ; extra_labels = [ "team", "payments" ]
   ; progressive_delivery = None
   ; uses = []
-  ; db_uses_target = None
-  ; db_ca_target = None
+  ; database = Sol_cli_resource_binding.No_postgres_use
   }
 ;;
 
@@ -171,8 +170,7 @@ let billing_spec : Sol_cli_deployment_plan.service_spec =
                ]
            })
   ; uses = []
-  ; db_uses_target = None
-  ; db_ca_target = None
+  ; database = Sol_cli_resource_binding.No_postgres_use
   }
 ;;
 
@@ -201,6 +199,7 @@ let gate_plan : Sol_cli_deployment_plan.t =
   ; profile = None
   ; contract = []
   ; contract_changes = []
+  ; database = Sol_cli_resource_binding.No_postgres
   ; resource_delivery = None
   }
 ;;
@@ -2799,7 +2798,7 @@ let test_rollback_restores_recorded_requirements () =
       ; store = Some "vault"
       ; keys = []
       ; connection = []
-      ; credentials = []
+      ; credentials = [ "ddl", "external/ddl"; "dml", "external/dml" ]
       }
   in
   let target = "prod-aws-us-east-1" in
@@ -2827,17 +2826,20 @@ let test_rollback_restores_recorded_requirements () =
        ~msg:
          "(a) a requirement the release declared survives today's declaration dropping it"
        (Some target)
-       (spec_of specs "ledger_svc").db_uses_target;
+       (Sol_cli_resource_binding.postgres_use_target
+          (spec_of specs "ledger_svc").database);
      Windtrap.equal
        (Windtrap.option Windtrap.string)
        ~msg:"(b) and the CA follows the *current* ownership, which provisions it"
        (Some target)
-       (spec_of specs "ledger_svc").db_ca_target;
+       (Sol_cli_resource_binding.postgres_use_ca_target
+          (spec_of specs "ledger_svc").database);
      Windtrap.equal
        (Windtrap.option Windtrap.string)
        ~msg:"and a unit that declared nothing gets neither"
        None
-       (spec_of specs "billing_svc").db_uses_target);
+       (Sol_cli_resource_binding.postgres_use_target
+          (spec_of specs "billing_svc").database));
   (* (b) the same recorded requirement, resolved against a *different* current binding: the
      reader signal stands (an external owner still delivers a class Secret) and the CA does not,
      because Sol provisions nothing. This is the resolution being current. *)
@@ -2852,12 +2854,14 @@ let test_rollback_restores_recorded_requirements () =
        (Windtrap.option Windtrap.string)
        ~msg:"(b) an externally bound current target still delivers the class Secret"
        (Some target)
-       (spec_of specs "ledger_svc").db_uses_target;
+       (Sol_cli_resource_binding.postgres_use_target
+          (spec_of specs "ledger_svc").database);
      Windtrap.equal
        (Windtrap.option Windtrap.string)
        ~msg:"(b) and mounts no CA, because Sol provisions nothing there"
        None
-       (spec_of specs "ledger_svc").db_ca_target);
+       (Sol_cli_resource_binding.postgres_use_ca_target
+          (spec_of specs "ledger_svc").database));
   (* (c) the current target cannot resolve its bindings at all. The rollback must refuse: the
      old code answered "no bindings", which renders a workload with no dependency. *)
   (match
@@ -2912,7 +2916,7 @@ let test_rollback_restores_recorded_requirements () =
       (Windtrap.option Windtrap.string)
       ~msg:"and a path-shaped requirement resolves through the deploy's own ref decode"
       (Some target)
-      (spec_of specs "ledger_svc").db_uses_target
+      (Sol_cli_resource_binding.postgres_use_target (spec_of specs "ledger_svc").database)
 ;;
 
 let%test "2b: a rollback restores recorded requirements against current bindings" =

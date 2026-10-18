@@ -24,22 +24,60 @@ type t =
     ownership). *)
 val resolve : Sol_cli_config.t -> (t list, string) result
 
+(** Resolve an already selected effective resource graph (also used by local planning). *)
+val resolve_resources : Sol_cli_config.resource list -> (t list, string) result
+
 (** Whether the resolved graph has a resource of this type that Sol provisions. *)
 val provisions : t list -> typ:string -> bool
-
-(** Whether Sol provisions a [typ] resource, resolving the config itself. Fails with the
-    resolution error rather than reading an unresolvable graph as "not Sol-provisioned": the
-    caller's CA-mount decision must not be made from a discarded error (#1469). *)
-val provisions_of_config : Sol_cli_config.t -> typ:string -> (bool, string) result
 
 (** The resolved bindings of one type. *)
 val of_type : t list -> typ:string -> t list
 
-(** The single provisioned database, when there is one. *)
-val provisioned_database : t list -> t option
+(** PostgreSQL selection after binding validation. External credentials are complete
+    by construction. Local development publishes class credentials without the
+    managed setup Job or its CA. *)
+type postgres_credentials =
+  { ddl : string
+  ; dml : string
+  }
 
-(** The resource a target's database consumers read: the provisioned database when Sol owns
-    one, otherwise the single externally bound postgres resource. [None] when there is no
-    postgres resource at all — [resolve] has already refused a graph with more than one, so
-    there is no ambiguous case left for a consumer's `POSTGRES_URL` to fall through. *)
-val target_database : t list -> t option
+type external_postgres =
+  { resource : string
+  ; store : string
+  ; credentials : postgres_credentials
+  }
+
+type postgres =
+  | No_postgres
+  | Managed_postgres of string
+  | External_postgres of external_postgres
+  | Local_postgres of string
+
+(** [Connection_trust] retains the connection contract; it does not assert that
+    external databases need no private CA or add a CA-delivery capability. *)
+type postgres_trust =
+  | Published_ca
+  | Connection_trust
+
+type postgres_use =
+  | No_postgres_use
+  | Postgres_use of
+      { target : string
+      ; trust : postgres_trust
+      }
+
+(** Credential-class vocabulary shared by resolution and rendering. *)
+val ddl_class : string
+
+val dml_class : string
+
+(** Validates complete external URL classes and refuses additional connection/trust
+    inputs for which the current PostgreSQL delivery has no implementation. *)
+val postgres : t list -> (postgres, string) result
+
+val resolve_postgres : Sol_cli_config.t -> (postgres, string) result
+val postgres_resource : postgres -> string option
+val postgres_is_managed : postgres -> bool
+val postgres_trust : postgres -> postgres_trust
+val postgres_use_target : postgres_use -> string option
+val postgres_use_ca_target : postgres_use -> string option

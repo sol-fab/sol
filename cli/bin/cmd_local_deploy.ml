@@ -444,7 +444,7 @@ let apply_local_secret_values ~secret_values (plan : Sol_cli_deployment_plan.t) 
           (* 2b: a consumer's `POSTGRES_URL` comes from the class Secret the renderer already
              names in the pod's `secretKeyRef`; locally that Secret carries the local
              cluster's Postgres. *)
-          match spec.db_uses_target with
+          match Sol_cli_resource_binding.postgres_use_target spec.database with
           | None -> Ok (if changed then unit_address :: changed_units else changed_units)
           | Some target ->
             let class_secret = Sol_cli_database_setup_render.dml_creds_name target in

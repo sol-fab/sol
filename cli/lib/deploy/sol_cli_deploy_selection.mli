@@ -33,8 +33,8 @@ val unit_input_owners
   -> (string * input_owner) list
 
 (** Whether the unit declared it consumes the target's database, by
-    [Sol_cli_deployment_plan.db_uses_target] — the function the plan itself uses to fill
-    [spec.db_uses_target]. Reads the workspace's `uses:` edge, not the unit's secret keys. *)
+    [Sol_cli_deployment_plan.database_for_uses] — the function the plan itself uses to fill
+    [spec.database]. Reads the workspace's `uses:` edge, not the unit's secret keys. *)
 val unit_consumes_target_database
   :  config:Sol_cli_config.t
   -> unit_name:string

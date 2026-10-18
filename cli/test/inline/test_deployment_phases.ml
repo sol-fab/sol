@@ -79,8 +79,7 @@ let svc_spec : Sol_cli_deployment_plan.service_spec =
   ; extra_labels = []
   ; progressive_delivery = None
   ; uses = []
-  ; db_uses_target = None
-  ; db_ca_target = None
+  ; database = Sol_cli_resource_binding.No_postgres_use
   }
 ;;
 
@@ -115,8 +114,7 @@ let worker_spec : Sol_cli_deployment_plan.service_spec =
   ; extra_labels = []
   ; progressive_delivery = None
   ; uses = []
-  ; db_uses_target = None
-  ; db_ca_target = None
+  ; database = Sol_cli_resource_binding.No_postgres_use
   }
 ;;
 
@@ -151,8 +149,7 @@ let fn_spec : Sol_cli_deployment_plan.service_spec =
   ; extra_labels = []
   ; progressive_delivery = None
   ; uses = []
-  ; db_uses_target = None
-  ; db_ca_target = None
+  ; database = Sol_cli_resource_binding.No_postgres_use
   }
 ;;
 
@@ -194,6 +191,7 @@ let make_plan ?(env = customer_env) services : Sol_cli_deployment_plan.t =
   ; profile = None
   ; contract = []
   ; contract_changes = []
+  ; database = Sol_cli_resource_binding.No_postgres
   ; resource_delivery = None
   }
 ;;
@@ -2660,15 +2658,19 @@ let%test
   let open Sol_cli_config in
   let sol = binding ~ownership:Ownership_sol ~typ:"postgres" ~resource:"app_db" in
   let externally_bound =
-    binding ~ownership:Ownership_external ~typ:"postgres" ~resource:"reports_db"
+    { (binding ~ownership:Ownership_external ~typ:"postgres" ~resource:"reports_db") with
+      store = Some "vault"
+    ; credentials = [ "ddl", "external/ddl"; "dml", "external/dml" ]
+    }
   in
   Windtrap.equal
     (Windtrap.option Windtrap.string)
     ~msg:"a Sol-owned postgres resource is the provisioned database"
     (Some "app_db")
-    (Option.map
-       (fun b -> b.Sol_cli_resource_binding.resource)
-       (Sol_cli_resource_binding.provisioned_database [ sol ]));
+    (match Sol_cli_resource_binding.postgres [ sol ] with
+     | Ok (Managed_postgres resource) -> Some resource
+     | Ok _ -> Windtrap.fail "expected managed PostgreSQL"
+     | Error message -> Windtrap.fail message);
   Windtrap.equal
     Windtrap.bool
     ~msg:"an externally bound postgres resource is not provisioned"
@@ -2678,9 +2680,10 @@ let%test
     (Windtrap.option Windtrap.string)
     ~msg:"an externally bound postgres resource is not the provisioned database"
     None
-    (Option.map
-       (fun b -> b.Sol_cli_resource_binding.resource)
-       (Sol_cli_resource_binding.provisioned_database [ externally_bound ]));
+    (match Sol_cli_resource_binding.postgres [ externally_bound ] with
+     | Ok (External_postgres { resource = "reports_db"; _ }) -> None
+     | Ok _ -> Windtrap.fail "external database lost its ownership or identity"
+     | Error message -> Windtrap.fail message);
   let service name uses =
     { name
     ; typ = None
@@ -2762,19 +2765,23 @@ let count_occurrences needle text =
 (* The resolved target-scoped delivery the plan carries, built the way the plan builds it:
    the identity fields are the name-safe forms the plan passes. *)
 let delivery_of_binding ?(store = Some "vault-production") credentials =
-  Sol_cli_database_setup_run.resource_delivery
-    ~target:"payments"
-    ~resource:"app-db"
-    ~migration_namespace:"myapp-payments"
-    ~dml_namespaces:[ "myapp-comms" ]
-    (external_binding ~store credentials)
+  let open Result.Syntax in
+  let* database =
+    Sol_cli_resource_binding.postgres [ external_binding ~store credentials ]
+  in
+  match database with
+  | External_postgres binding ->
+    Ok
+      (Sol_cli_database_setup_run.resource_delivery
+         ~target:"payments"
+         ~resource:"app-db"
+         ~migration_namespace:"myapp-payments"
+         ~dml_namespaces:[ "myapp-comms" ]
+         binding)
+  | _ -> Error "expected external postgres selection"
 ;;
 
-let delivery_docs delivery =
-  match Sol_cli_database_setup_run.external_credential_docs delivery with
-  | Ok docs -> docs
-  | Error message -> Windtrap.fail message
-;;
+let delivery_docs = Sol_cli_database_setup_run.external_credential_docs
 
 let test_external_database_delivers_the_class_secrets () =
   let binding =

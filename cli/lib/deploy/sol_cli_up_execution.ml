@@ -30,14 +30,24 @@ let local_plan
      function from the same target string. `sol local deploy` writes that Secret; there is no
      second "is this unit a consumer" decision anywhere. The stand-in target is the workspace
      name, so a workspace that later gains a real target path changes nothing here. *)
-  let target_database =
-    match
-      List.filter
-        (fun (resource : Sol_cli_config.resource) -> resource.typ = Some "postgres")
-        declared.resources
-    with
-    | [ resource ] -> Some resource.name
-    | _ -> None
+  let open Result.Syntax in
+  let* bindings =
+    Sol_cli_resource_binding.resolve_resources
+      (List.filter
+         (fun (resource : Sol_cli_config.resource) -> not resource.omit)
+         declared.resources)
+    |> Result.map_error (fun message ->
+      Sol_cli_deployment_plan.Invalid_resource_binding message)
+  in
+  let* selection =
+    Sol_cli_resource_binding.postgres bindings
+    |> Result.map_error (fun message ->
+      Sol_cli_deployment_plan.Invalid_resource_binding message)
+  in
+  let database =
+    match Sol_cli_resource_binding.postgres_resource selection with
+    | Some resource -> Sol_cli_resource_binding.Local_postgres resource
+    | None -> Sol_cli_resource_binding.No_postgres
   in
   Sol_cli_deployment_plan.of_services_result
     ~requested_scope
@@ -47,7 +57,7 @@ let local_plan
     ~declared
     ~platform_shape:Sol_cli_profile.Local
     ~target:(Sol_cli_kubernetes_name.sanitize_name workspace)
-    ?target_database
+    ~database
     services
 ;;
 

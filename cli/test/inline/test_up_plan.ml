@@ -124,6 +124,7 @@ let plans () =
   in
   let target =
     Sol_cli_deployment_plan.of_services_result
+      ~database:Sol_cli_resource_binding.No_postgres
       ~workspace:"ws"
       ~env
       ~facts
@@ -313,7 +314,9 @@ let test_local_plan_routes_the_database_credential_like_the_cloud () =
     check_bool
       "the local plan's consumer carries the sanitized stand-in target"
       true
-      (charge_svc.Sol_cli_deployment_plan.db_uses_target = Some "ci-smoke");
+      (Sol_cli_resource_binding.postgres_use_target
+         charge_svc.Sol_cli_deployment_plan.database
+       = Some "ci-smoke");
     (* The local platform's PostgreSQL is in-cluster (`postgresql`), and the ordinary
        NetworkPolicy already admits that namespace. The managed-database allowance is for a
        database the *target* provisions and publishes a destination fact for, so the local
@@ -322,7 +325,9 @@ let test_local_plan_routes_the_database_credential_like_the_cloud () =
     check_bool
       "the local plan claims no target-provisioned database for the managed-egress gate"
       true
-      (charge_svc.Sol_cli_deployment_plan.db_ca_target = None);
+      (Sol_cli_resource_binding.postgres_use_ca_target
+         charge_svc.Sol_cli_deployment_plan.database
+       = None);
     let rendered =
       match
         Sol_cli_deployment_render.render_spec
@@ -454,7 +459,9 @@ let test_input_ownership_is_one_decision () =
     check_bool
       "the plan routes POSTGRES_URL from the target's database"
       true
-      (charge.Sol_cli_deployment_plan.db_uses_target = Some "ws");
+      (Sol_cli_resource_binding.postgres_use_target
+         charge.Sol_cli_deployment_plan.database
+       = Some "ws");
     (* The two callers must reach the one decision with the *same* declared set. The plan
        gate reads [spec.secrets], which is built from the unit's `sol.toml`; `sol secret set`
        reads that same `sol.toml` through the workspace model. Assert the plan's set is the
@@ -746,10 +753,10 @@ let test_external_database_plans_for_gitops_with_a_delivery () =
          "app-db"
          delivery.resource;
        Windtrap.equal
-         Windtrap.int
-         ~msg:"with both class paths"
-         2
-         (List.length delivery.credentials))
+         (Windtrap.pair Windtrap.string Windtrap.string)
+         ~msg:"with the DDL and DML paths in their respective classes"
+         ("secret/app-db-migrator", "secret/app-db-app")
+         (delivery.credentials.ddl, delivery.credentials.dml))
 ;;
 
 let%test "1423: a Sol-provisioned database emitted to GitOps is refused at plan" =
@@ -904,4 +911,45 @@ let%test "#1403: the local shape leaves the transport to the renderer" =
 
 let%test "#1403: sol local deploy plans the local shape" =
   test_local_plan_declares_the_local_shape ()
+;;
+
+let%test
+    "local PostgreSQL planning refuses an ambiguous graph instead of dropping routing"
+  =
+  with_workspace workspace (fun () ->
+    let facts =
+      Sol_cli_workspace_model.load ~root:(Sys.getcwd ())
+      |> fail_on_error "workspace model"
+    in
+    let declared =
+      Sol_cli_config.load_declared ~root:(Sys.getcwd ())
+      |> Result.map_error Sol_cli_config.error_to_string
+      |> fail_on_error "declaration"
+    in
+    let database =
+      List.find
+        (fun (r : Sol_cli_config.resource) -> r.typ = Some "postgres")
+        declared.resources
+    in
+    let declared =
+      { declared with
+        resources = { database with name = "second_db" } :: declared.resources
+      }
+    in
+    match
+      Sol_cli_up_execution.local_plan
+        ~requested_scope:"workspace"
+        ~workspace:"ws"
+        ~sha:"sha"
+        ~facts
+        ~declared
+        (Sol_cli_workspace_model.services facts)
+    with
+    | Error (Sol_cli_deployment_plan.Invalid_resource_binding message) ->
+      check_bool
+        "the resolution error names the ambiguity"
+        true
+        (Sol_cli_string.contains ~needle:"PostgreSQL resources" message)
+    | Error error -> Windtrap.fail (Sol_cli_deployment_plan.plan_error_to_string error)
+    | Ok _ -> Windtrap.fail "ambiguous local databases silently lost credential routing")
 ;;

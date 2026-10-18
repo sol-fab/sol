@@ -243,7 +243,7 @@ let check_complete_plan (config : Sol_cli_config.t) plan workloads =
       (fun (spec : P.service_spec) ->
          let doc = rendered ~plan spec in
          let database =
-           match spec.db_uses_target with
+           match Sol_cli_resource_binding.postgres_use_target spec.database with
            | None -> `Null
            | Some _ ->
              let resource =
@@ -349,7 +349,7 @@ let test_render provider () =
              workloads
          in
          let doc = rendered ~plan spec in
-         if spec.db_uses_target = None
+         if Sol_cli_resource_binding.postgres_use_target spec.database = None
          then
            check
              "nonconsumer declared explicitly"
@@ -400,7 +400,9 @@ let test_render provider () =
            let cm =
              R.ca_configmap_doc
                ~ns:(str (field "namespace" expected))
-               ~target:(Option.get spec.db_ca_target)
+               ~target:
+                 (Option.get
+                    (Sol_cli_resource_binding.postgres_use_ca_target spec.database))
                ~ca_cert:"fixture CA"
              |> fun doc -> Sol_cli_yaml.render [ doc ] |> documents |> List.hd
            in
@@ -420,7 +422,10 @@ let test_render provider () =
                 (matches ca (set "data" (`Assoc [ "ca.crt", `String "fixture CA" ]) cm)))))
       plan.services;
     let id =
-      Sol_cli_database_setup_run.identity_of_config ~workspace:plan.workspace config
+      Sol_cli_database_setup_run.identity
+        ~workspace:plan.workspace
+        ~config
+        ~database:plan.database
     in
     let database = field "database" projection in
     let migration = field "migration" database in

@@ -703,13 +703,16 @@ let verify_workload_secret ~ctx (spec : Sol_cli_deployment_plan.service_spec) =
      elsewhere. Asking the one routing function keeps this from re-deriving the capability
      filter the plan already applies. *)
   let db_dml_creds_name =
-    Option.map Sol_cli_database_setup_render.dml_creds_name spec.db_uses_target
+    Option.map
+      Sol_cli_database_setup_render.dml_creds_name
+      (Sol_cli_resource_binding.postgres_use_target spec.database)
   in
   let unit_secret_name = Sol_cli_manifest.workload_secret_name name in
   let required =
     Sol_cli_manifest.required_secret_keys
       ~transport
-      ~db_uses_target:(Option.is_some spec.db_uses_target)
+      ~db_uses_target:
+        (Option.is_some (Sol_cli_resource_binding.postgres_use_target spec.database))
       (List.map fst spec.secrets)
     |> List.filter (fun key ->
       String.equal

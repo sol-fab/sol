@@ -2562,7 +2562,7 @@ let external_postgres_binding store =
    ; store = Some store
    ; keys = []
    ; connection = []
-   ; credentials = []
+   ; credentials = [ "ddl", "external/ddl"; "dml", "external/dml" ]
    }
    : Sol_cli_config.resource_binding)
 ;;
