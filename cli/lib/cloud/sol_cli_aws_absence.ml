@@ -463,6 +463,35 @@ let checks ~region ~cluster_name =
          ~tag:(cluster_tag_named cluster_name)
          ~subcommand:"describe-volumes"
          ~query:"Volumes[].VolumeId")
+  ; (* An elastic IP is not a child of the VPC: releasing it is a separate
+       provider action, so a VPC-absent observation does not prove it gone. The
+       VPC module names the NAT EIPs <cluster>-<az>, and the Name fallback is
+       fail-closed. *)
+    cluster_owned
+      ~region
+      ~cluster_name
+      ~resource_class:"elastic IP"
+      ~identity:
+        (Printf.sprintf
+           "tagged kubernetes.io/cluster/%s or named %s-*"
+           cluster_name
+           cluster_name)
+      ~checked_as:
+        (Printf.sprintf
+           "aws ec2 describe-addresses --region %s, then aws ec2 describe-tags --region \
+            %s --filters Name=resource-id,Values=<allocation id> for each address it \
+            returns"
+           region
+           region)
+      [ "ec2"
+      ; "describe-addresses"
+      ; "--region"
+      ; region
+      ; "--query"
+      ; "Addresses[].AllocationId"
+      ; "--output"
+      ; "text"
+      ]
   ]
 ;;
 
@@ -494,6 +523,7 @@ let class_names =
   ; "load balancer"
   ; "EBS volume"
   ; "ECR repository"
+  ; "elastic IP"
   ]
 ;;
 
