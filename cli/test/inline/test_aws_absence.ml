@@ -238,6 +238,7 @@ let observation_of class_name observations =
    list by the cluster tag before looking at the resource, so a Name-tagged VPC
    was invisible. *)
 let with_inventory_script
+      ?(eip_tags = "")
       ~vpc_tags
       ~subnet_tags
       ~vpc_cluster_tagged
@@ -278,6 +279,9 @@ case "$1 $2" in
         ;;
     esac
     ;;
+  "ec2 describe-addresses")
+    printf 'eipalloc-123\n'
+    ;;
   "ec2 describe-tags")
     case " $* " in
       *"Values=vpc-123"*)
@@ -286,6 +290,11 @@ case "$1 $2" in
         esac
         ;;
       *"Values=subnet-123"*)
+        case %s in
+          *"acme-prod"*|*"owned"*|*"shared"*) printf '%%s' %s ;;
+        esac
+        ;;
+      *"Values=eipalloc-123"*)
         case %s in
           *"acme-prod"*|*"owned"*|*"shared"*) printf '%%s' %s ;;
         esac
@@ -302,6 +311,8 @@ exit 0
       (Filename.quote vpc_tags)
       (Filename.quote subnet_tags)
       (Filename.quote subnet_tags)
+      (Filename.quote eip_tags)
+      (Filename.quote eip_tags)
   in
   Out_channel.with_open_text bin (fun oc -> output_string oc script);
   Unix.chmod bin 0o755;
@@ -367,6 +378,28 @@ let%test "AWS subnet inventory: a Name-tagged subnet is Present" =
            [ "subnet-123" ]
            present.found
        | _ -> Windtrap.fail "a subnet named for the cluster must be Present")
+;;
+
+let%test "AWS elastic IP inventory: a Name-tagged allocation is Present" =
+  with_inventory_script
+    ~vpc_tags:""
+    ~subnet_tags:""
+    ~eip_tags:"acme-prod-a\n"
+    ~vpc_cluster_tagged:false
+    ~subnet_cluster_tagged:false
+    (fun ~log:_ ~observations ->
+       match
+         List.find_opt
+           (fun observation -> String.equal (class_of observation) "elastic IP")
+           observations
+       with
+       | Some (Sol_cli_absence.Present present) ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the elastic IP named for the cluster is reported"
+           [ "eipalloc-123" ]
+           present.found
+       | _ -> Windtrap.fail "an elastic IP named for the cluster must be Present")
 ;;
 
 let%test "AWS VPC inventory: a cluster-tagged VPC is Present" =

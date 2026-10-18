@@ -19,6 +19,12 @@ printf 'aws %s\n' "$*" >>"$LIFECYCLE_LOG"
     fi
     exit 0
   fi
+  if [ "$1 $2" = "ec2 describe-tags" ]; then
+    case " $* " in
+      *"Values=eipalloc-residual"*) printf 'owned\n' ;;
+    esac
+    exit 0
+  fi
   case "$1 $2" in
     "configure export-credentials")
       if [ "${FAIL_CREDENTIALS:-}" = 1 ]; then
