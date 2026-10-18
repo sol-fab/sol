@@ -93,9 +93,14 @@ let test_sweep () =
     verdict.violations;
   Windtrap.equal
     Windtrap.bool
-    ~msg:"and does not by itself block an otherwise-verified result"
-    true
+    ~msg:"an inconclusive required observation cannot be verified"
+    false
     (is_verified verdict);
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"the verdict preserves the inconclusive observation"
+    [ "the peering could not be checked" ]
+    verdict.unknowns;
   Windtrap.equal
     Windtrap.bool
     ~msg:
@@ -112,17 +117,17 @@ let test_sweep () =
 ;;
 
 let test_sweep_not_run_is_not_absence () =
-  let observation = observation ~sweep:Sweep_not_run () in
+  let verdict = classify (observation ~sweep:Sweep_not_run ()) in
   Windtrap.equal
     Windtrap.bool
-    ~msg:"a sweep that did not run does not establish residue absence"
+    ~msg:"a sweep that did not run does not establish destruction"
     false
-    (residue_absence_established observation);
+    (is_verified verdict);
   Windtrap.equal
     (Windtrap.list Windtrap.string)
-    ~msg:"the missing inventory is named"
+    ~msg:"the verdict names the missing inventory"
     [ "the residue inventory did not run" ]
-    (inconclusive_probes observation)
+    verdict.unknowns
 ;;
 
 let test_gcp_not_found_subject_must_match () =

@@ -97,7 +97,10 @@ let verdict observations =
     | Unobservable { resource_class; reason; _ } ->
       unknown
       := Printf.sprintf "%s could not be observed: %s" resource_class reason :: !unknown
-    | Absent _ | External _ | Not_attributable _ -> ());
+    | Not_attributable { resource_class; reason } ->
+      unknown
+      := Printf.sprintf "%s could not be attributed: %s" resource_class reason :: !unknown
+    | Absent _ | External _ -> ());
   match List.rev !present, List.rev !unknown with
   | _ :: _, unknown -> Some_present (List.rev !present @ unknown)
   | [], [] -> All_absent
@@ -129,20 +132,6 @@ let to_sweep observations =
            (attribution_rule attribution)
            checked_with
          :: !residues
-    | Unobservable { resource_class; reason; checked_with }
-      when String.equal resource_class scope_class ->
-      (* A scope failure invalidates the whole inventory, not one residue probe. It
-         must fail the destruction postcondition rather than degrade to a probe that
-         did not run: an inventory taken in the wrong project or account cannot
-         establish absence. *)
-      residues
-      := Printf.sprintf
-           "%s could not be observed, so this inventory cannot establish absence: %s \
-            (checked with: %s)"
-           resource_class
-           reason
-           checked_with
-         :: !residues
     | Unobservable { resource_class; reason; checked_with } ->
       indeterminate
       := Printf.sprintf
@@ -151,7 +140,11 @@ let to_sweep observations =
            reason
            checked_with
          :: !indeterminate
-    | Absent _ | External _ | Not_attributable _ -> ());
+    | Not_attributable { resource_class; reason } ->
+      indeterminate
+      := Printf.sprintf "%s could not be attributed: %s" resource_class reason
+         :: !indeterminate
+    | Absent _ | External _ -> ());
   match List.rev !residues, List.rev !indeterminate with
   | [], [] -> Sol_cli_destroy_verification.Sweep_ran { residues = []; indeterminate = [] }
   | residues, indeterminate ->

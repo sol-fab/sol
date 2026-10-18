@@ -2130,81 +2130,104 @@ let test_residue_the_state_does_not_own_is_not_absence () =
     (matches_regex (Str.regexp_string "reached verified absence") message)
 ;;
 
-let test_inconclusive_residue_probe_is_unknown () =
+let assert_unestablished_verification ~reason verification =
   let deps, _ =
     fake_deps
       ~state:(Ok (show_json_resources gcp_cluster))
-      ~verify_destruction:(fun ~pre_destroy:_ ~preparation:_ ->
-        { Sol_cli_destroy_verification.state = State_absent
-        ; sweep =
-            Sweep_ran
-              { residues = []
-              ; indeterminate =
-                  [ "the GCP residue check could not establish the target's project, so \
-                     the service-networking peering check was not run"
-                  ]
-              }
-        ; retention = Retention_not_required "this fixture declares no retention"
-        })
+      ~verify_destruction:(fun ~pre_destroy:_ ~preparation:_ -> verification)
       ()
   in
   let outcome = execute ~deps in
-  let message = completion_message outcome in
   (match outcome with
-   | Destroy_succeeded _ ->
+   | Destroy_failed
+       { failure = Verification_failed message; verification = Some observed; _ } ->
+     let verdict = Sol_cli_destroy_verification.classify observed in
      Windtrap.equal
        Windtrap.bool
-       ~msg:"the summary never claims verified absence while a probe did not run"
+       ~msg:"the verification verdict is not established"
        false
-       (matches_regex (Str.regexp_string "reached verified absence") message);
+       (Sol_cli_destroy_verification.is_verified verdict);
      Windtrap.equal
        Windtrap.bool
-       ~msg:"it says so plainly instead"
+       ~msg:"the verdict preserves the required observation's diagnostic"
        true
-       (matches_regex (Str.regexp_string "residue absence is NOT established") message
-        && matches_regex (Str.regexp_string "peering check was not run") message)
-   | _ ->
-     Windtrap.fail
-       "the destruction completed, but the verification outcome is what is reported");
+       (List.exists
+          (fun unknown -> Sol_cli_string.contains ~needle:reason unknown)
+          verdict.unknowns);
+     Windtrap.equal
+       Windtrap.string
+       ~msg:"the command failure comes from the authoritative verdict"
+       (Sol_cli_destroy_verification.verdict_message verdict)
+       message
+   | _ -> Windtrap.fail "incomplete verification must produce Verification_failed");
   Windtrap.equal
     Windtrap.int
-    ~msg:"and the exit status reports that absence was not established"
+    ~msg:"the command exits nonzero"
     exit_failure
-    (exit_code outcome)
+    (exit_code outcome);
+  let message = completion_message outcome in
+  List.iter
+    (fun claim ->
+       Windtrap.equal
+         Windtrap.bool
+         ~msg:("the completion message never claims " ^ claim)
+         false
+         (Sol_cli_string.contains ~needle:claim message))
+    [ "verified absence"; "absent and verified" ];
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the completion message names the unresolved observation"
+    true
+    (Sol_cli_string.contains ~needle:reason message)
+;;
+
+let test_inconclusive_residue_probe_is_unknown () =
+  List.iter
+    (fun resource_class ->
+       assert_unestablished_verification
+         ~reason:"AccessDenied: cannot observe required resources"
+         { Sol_cli_destroy_verification.state = State_absent
+         ; sweep =
+             Sol_cli_absence.to_sweep
+               [ Sol_cli_absence.Unobservable
+                   { resource_class
+                   ; reason = "AccessDenied: cannot observe required resources"
+                   ; checked_with = "aws ec2 describe-volumes"
+                   }
+               ]
+         ; retention = Retention_not_required "this fixture declares no retention"
+         })
+    [ "EBS volume"; Sol_cli_absence.scope_class ]
+;;
+
+let test_unattributable_resource_is_unknown () =
+  let observations =
+    [ Sol_cli_absence.Not_attributable
+        { resource_class = "ECR repository"
+        ; reason = "the target's registry path is unknown"
+        }
+    ]
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"missing attribution is not an explicit contract exclusion"
+    false
+    (Sol_cli_absence.permits_absence_claim (Sol_cli_absence.verdict observations));
+  assert_unestablished_verification
+    ~reason:"the target's registry path is unknown"
+    { Sol_cli_destroy_verification.state = State_absent
+    ; sweep = Sol_cli_absence.to_sweep observations
+    ; retention = Retention_not_required "fixture"
+    }
 ;;
 
 let test_a_sweep_that_did_not_run_is_not_absence () =
-  let deps, _ =
-    fake_deps
-      ~state:(Ok (show_json_resources gcp_cluster))
-      ~verify_destruction:(fun ~pre_destroy:_ ~preparation:_ ->
-        { Sol_cli_destroy_verification.state = State_absent
-        ; sweep = Sweep_not_run
-        ; retention = Retention_not_required "this fixture declares no retention"
-        })
-      ()
-  in
-  let outcome = execute ~deps in
-  let message = completion_message outcome in
-  (match outcome with
-   | Destroy_succeeded _ ->
-     Windtrap.equal
-       Windtrap.bool
-       ~msg:"a sweep that did not run never claims verified absence"
-       false
-       (matches_regex (Str.regexp_string "reached verified absence") message);
-     Windtrap.equal
-       Windtrap.bool
-       ~msg:"it says the residue inventory did not run"
-       true
-       (matches_regex (Str.regexp_string "residue absence is NOT established") message
-        && matches_regex (Str.regexp_string "residue inventory did not run") message)
-   | _ -> Windtrap.fail "the destruction itself completed; the verification is incomplete");
-  Windtrap.equal
-    Windtrap.int
-    ~msg:"and the exit status is nonzero"
-    exit_failure
-    (exit_code outcome)
+  assert_unestablished_verification
+    ~reason:"the residue inventory did not run"
+    { Sol_cli_destroy_verification.state = State_absent
+    ; sweep = Sweep_not_run
+    ; retention = Retention_not_required "this fixture declares no retention"
+    }
 ;;
 
 let absence_rule = Sol_cli_absence.Named_for_target "the target's own cluster name"
@@ -2322,7 +2345,22 @@ let test_an_external_resource_is_not_residue () =
     Windtrap.bool
     ~msg:"a resource the contract keeps alive is not this target's residue"
     true
-    (Sol_cli_absence.permits_absence_claim (Sol_cli_absence.verdict observations))
+    (Sol_cli_absence.permits_absence_claim (Sol_cli_absence.verdict observations));
+  let verification =
+    { Sol_cli_destroy_verification.state = State_absent
+    ; sweep = Sol_cli_absence.to_sweep observations
+    ; retention = Retention_not_required "fixture"
+    }
+  in
+  let deps, _ =
+    fake_deps ~verify_destruction:(fun ~pre_destroy:_ ~preparation:_ -> verification) ()
+  in
+  let outcome = execute ~deps in
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"an explicit contract exclusion does not prevent successful destruction"
+    exit_clean
+    (exit_code outcome)
 ;;
 
 let test_the_report_explains_attribution () =
@@ -3219,6 +3257,10 @@ let%test "failure policy: residue the state does not own is not absence" =
 
 let%test "failure policy: an inconclusive residue probe is an unknown" =
   test_inconclusive_residue_probe_is_unknown ()
+;;
+
+let%test "failure policy: missing resource attribution is unknown" =
+  test_unattributable_resource_is_unknown ()
 ;;
 
 let%test "failure policy: a sweep that did not run is not absence" =

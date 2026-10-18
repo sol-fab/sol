@@ -76,6 +76,7 @@ cat >"$tmp/work/sol/environments.yml" <<'EOF'
 prod:
   targets:
     aws/us-east-1:
+      registry: 111122223333.dkr.ecr.us-east-1.amazonaws.com/work
       # ADR 0003: a production-profile target makes terraform_vars inject the
       # Ready/Production invariant rds_deletion_protection=true, which is exactly
       # the policy the Destroy policy must override after PrepareDestroy (finding 15).
