@@ -113,13 +113,50 @@ let type_rules =
   ]
 ;;
 
-let gcp ~cluster_name =
+let gcp ~cluster_name ~project_id =
+  let project =
+    match project_id with
+    | Some project when not (Sol_cli_string.is_blank project) ->
+      Some (String.trim project)
+    | Some _ | None -> None
+  in
+  let service_account account =
+    match project with
+    | Some project ->
+      let email = account ^ "@" ^ project ^ ".iam.gserviceaccount.com" in
+      email, "projects/" ^ project ^ "/serviceAccounts/" ^ email
+    | None -> "", ""
+  in
+  let provisioner_observed, provisioner_import =
+    service_account (cluster_name ^ "-provisioner")
+  in
+  let loki_observed, loki_import = service_account (cluster_name ^ "-loki") in
+  let thanos_observed, thanos_import = service_account (cluster_name ^ "-thanos") in
+  let cert_manager_observed, cert_manager_import =
+    service_account (cluster_name ^ "-cert-manager")
+  in
   let underscored =
     String.map
       (function
         | '-' -> '_'
         | c -> c)
       cluster_name
+  in
+  let custom_role role_id =
+    match project with
+    | Some project ->
+      let name = "projects/" ^ project ^ "/roles/" ^ role_id in
+      name, name
+    | None -> "", ""
+  in
+  let cluster_access_observed, cluster_access_import =
+    custom_role ("sol_" ^ underscored ^ "_cluster_access")
+  in
+  let dns_records_observed, dns_records_import =
+    custom_role ("sol_" ^ underscored ^ "_cert_manager_dns_records")
+  in
+  let dns_discovery_observed, dns_discovery_import =
+    custom_role ("sol_" ^ underscored ^ "_cert_manager_dns_discovery")
   in
   [ entry
       "google_compute_network.main"
@@ -207,53 +244,51 @@ let gcp ~cluster_name =
       "google_service_account.provisioner"
       direct
       ~resource_class:"service account"
-      ~observed_as:(cluster_name ^ "-provisioner@")
+      ~observed_as:provisioner_observed
       ~identity:(cluster_name ^ "-provisioner")
-      ~import_identity:(cluster_name ^ "-provisioner")
+      ~import_identity:provisioner_import
   ; entry
       "google_service_account.loki[0]"
       direct
       ~resource_class:"service account"
-      ~observed_as:(cluster_name ^ "-loki@")
+      ~observed_as:loki_observed
       ~identity:(cluster_name ^ "-loki")
-      ~import_identity:(cluster_name ^ "-loki")
+      ~import_identity:loki_import
   ; entry
       "google_service_account.thanos[0]"
       direct
       ~resource_class:"service account"
-      ~observed_as:(cluster_name ^ "-thanos@")
+      ~observed_as:thanos_observed
       ~identity:(cluster_name ^ "-thanos")
-      ~import_identity:(cluster_name ^ "-thanos")
+      ~import_identity:thanos_import
   ; entry
       "google_service_account.cert_manager"
       direct
       ~resource_class:"service account"
-      ~observed_as:(cluster_name ^ "-cert-manager@")
+      ~observed_as:cert_manager_observed
       ~identity:(cluster_name ^ "-cert-manager")
-      ~import_identity:(cluster_name ^ "-cert-manager")
+      ~import_identity:cert_manager_import
   ; entry
       "google_project_iam_custom_role.provisioner_cluster_access"
       direct
       ~resource_class:"custom role"
-      ~observed_as:("sol_" ^ underscored ^ "_cluster_access")
+      ~observed_as:cluster_access_observed
       ~identity:("sol_" ^ underscored ^ "_cluster_access")
-      ~import_identity:("projects/-/roles/sol_" ^ underscored ^ "_cluster_access")
+      ~import_identity:cluster_access_import
   ; entry
       "google_project_iam_custom_role.cert_manager_dns_records"
       direct
       ~resource_class:"custom role"
-      ~observed_as:("sol_" ^ underscored ^ "_cert_manager_dns_records")
+      ~observed_as:dns_records_observed
       ~identity:("sol_" ^ underscored ^ "_cert_manager_dns_records")
-      ~import_identity:
-        ("projects/-/roles/sol_" ^ underscored ^ "_cert_manager_dns_records")
+      ~import_identity:dns_records_import
   ; entry
       "google_project_iam_custom_role.cert_manager_dns_discovery"
       direct
       ~resource_class:"custom role"
-      ~observed_as:("sol_" ^ underscored ^ "_cert_manager_dns_discovery")
+      ~observed_as:dns_discovery_observed
       ~identity:("sol_" ^ underscored ^ "_cert_manager_dns_discovery")
-      ~import_identity:
-        ("projects/-/roles/sol_" ^ underscored ^ "_cert_manager_dns_discovery")
+      ~import_identity:dns_discovery_import
   ; entry
       "google_storage_bucket.loki"
       external_by_contract

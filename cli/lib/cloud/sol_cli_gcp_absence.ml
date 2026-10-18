@@ -6,21 +6,18 @@ type check =
   ; attribution : attribution
   ; argv : string list
   ; attributable : string -> bool
+  ; normalize : string -> string
   }
 
 let identity_check
       ?(attributable = fun _ -> true)
+      ?(normalize = fun line -> line)
       ~resource_class
       ~identity
       ~attribution
       argv
   =
-  { resource_class; identity; attribution; argv; attributable }
-;;
-
-let not_found =
-  Sol_cli_absence.not_found
-    ~needles:[ "not found"; "notfound"; "does not exist"; "was not found" ]
+  { resource_class; identity; attribution; argv; attributable; normalize }
 ;;
 
 let checked_with argv = "gcloud " ^ String.concat " " argv
@@ -45,21 +42,40 @@ let ok_observation ~check found =
       }
 ;;
 
+(* gcloud can report a scope failure as a warning on an otherwise successful empty
+   listing (for example, a nonexistent project). The one benign warning is the
+   filter-key notice gcloud emits when the result is empty. Any other stderr on an empty
+   result is unknown, not absence. *)
+let benign_empty_list_warning stderr =
+  lines stderr
+  |> List.for_all (fun line ->
+    String.starts_with
+      ~prefix:"WARNING: The following filter keys were not present in any resource"
+      line)
+;;
+
+(* Every GCP probe is an enumeration command. An empty successful listing is absence;
+   a nonzero listing is not, even when the provider's message contains "not found": the
+   subject may be the project, the caller's permission or the API's scope, not the
+   resource. Reading that as absence is what allowed a bad scope to authorize state
+   removal. *)
 let run ~check =
   match Sol_cli_process.run (Sol_cli_process.cmd ("gcloud" :: check.argv)) with
-  | Ok { Sol_cli_process.stdout; _ } ->
-    ok_observation ~check (lines stdout |> List.filter check.attributable)
-  | Error (Sol_cli_process.Non_zero r) when not_found r.stderr ->
-    Absent
-      { resource_class = check.resource_class
-      ; identity = check.identity
-      ; attribution = check.attribution
-      ; checked_with =
-          Printf.sprintf
-            "%s (gcloud reports it does not exist: %s)"
-            (checked_with check.argv)
-            (String.trim r.stderr)
-      }
+  | Ok { Sol_cli_process.stdout; stderr } ->
+    (* An incomplete enumeration is unknown even when some matching resources were
+       returned: presence may be real, but the collection cannot authorize a destructive
+       reconciliation decision. *)
+    if not (benign_empty_list_warning stderr)
+    then
+      Unobservable
+        { resource_class = check.resource_class
+        ; reason = String.trim stderr
+        ; checked_with = checked_with check.argv
+        }
+    else
+      ok_observation
+        ~check
+        (lines stdout |> List.filter check.attributable |> List.map check.normalize)
   | Error (Sol_cli_process.Non_zero r) ->
     Unobservable
       { resource_class = check.resource_class
@@ -90,13 +106,22 @@ let names_the_cluster cluster_name =
     cluster_name
 ;;
 
-let cluster_check ~project ~cluster_name =
+let cluster_check ~project ~region ~cluster_name =
   identity_check
     ~resource_class:"GKE cluster"
     ~identity:cluster_name
     ~attribution:(Named_for_target (names_the_cluster cluster_name))
     ~attributable:(fun line -> line = cluster_name)
-    [ "--project"; project; "container"; "clusters"; "list"; "--format"; "value(name)" ]
+    [ "--project"
+    ; project
+    ; "container"
+    ; "clusters"
+    ; "list"
+    ; "--region"
+    ; region
+    ; "--format"
+    ; "value(name)"
+    ]
 ;;
 
 let checks ~project ~region ~cluster_name =
@@ -111,7 +136,17 @@ let checks ~project ~region ~cluster_name =
         || (prefix <> "" && Sol_cli_string.contains ~needle:prefix line))
       argv
   in
-  [ cluster_check ~project ~cluster_name
+  let role_prefix =
+    "sol_"
+    ^ String.map
+        (function
+          | '-' -> '_'
+          | c -> c)
+        cluster_name
+    ^ "_"
+  in
+  let project_roles = "projects/" ^ project ^ "/roles/" in
+  [ cluster_check ~project ~region ~cluster_name
   ; identity_check
       ~resource_class:"GKE node pool"
       ~identity:(cluster_name ^ "-*")
@@ -168,7 +203,15 @@ let checks ~project ~region ~cluster_name =
   ; named
       ~resource_class:"Cloud SQL instance"
       ~identity:(cluster_name ^ "-postgres")
-      (p [ "sql"; "instances"; "list"; "--format"; "value(name)" ])
+      (p
+         [ "sql"
+         ; "instances"
+         ; "list"
+         ; "--filter"
+         ; "region:" ^ region
+         ; "--format"
+         ; "value(name)"
+         ])
   ; named
       ~resource_class:"reserved global address"
       ~identity:(cluster_name ^ "-sql-peering")
@@ -192,26 +235,16 @@ let checks ~project ~region ~cluster_name =
       (p [ "iam"; "service-accounts"; "list"; "--format"; "value(email)" ])
   ; identity_check
       ~resource_class:"custom role"
-      ~identity:
-        ("sol_"
-         ^ String.map
-             (function
-               | '-' -> '_'
-               | c -> c)
-             cluster_name
-         ^ "_*")
+      ~identity:(role_prefix ^ "*")
       ~attribution:(Named_for_target (names_the_cluster cluster_name))
       ~attributable:(fun line ->
-        Sol_cli_string.contains
-          ~needle:
-            ("sol_"
-             ^ String.map
-                 (function
-                   | '-' -> '_'
-                   | c -> c)
-                 cluster_name
-             ^ "_")
-          line)
+        if String.starts_with ~prefix:"projects/" line
+        then
+          String.starts_with ~prefix:project_roles line
+          && Sol_cli_string.contains ~needle:role_prefix line
+        else Sol_cli_string.contains ~needle:role_prefix line)
+      ~normalize:(fun line ->
+        if String.starts_with ~prefix:"projects/" line then line else project_roles ^ line)
       (p [ "iam"; "roles"; "list"; "--format"; "value(name)" ])
   ; named
       ~resource_class:"storage bucket"
@@ -342,12 +375,8 @@ let unlistable =
 let observations (target : Sol_cli_config.target) ~cluster_name =
   match project_of target with
   | None ->
-    Unobservable
-      { resource_class = "the provider inventory"
-      ; reason = unlistable
-      ; checked_with = "gcloud (not run)"
-      }
-    :: durable_observations ~target ~cluster_name
+    Sol_cli_absence.scope_failure ~reason:unlistable
+    @ durable_observations ~target ~cluster_name
   | Some project ->
     let observations =
       List.map
@@ -360,12 +389,11 @@ let observations (target : Sol_cli_config.target) ~cluster_name =
 let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
   match project_of target with
   | None ->
-    Unobservable
-      { resource_class = "GKE cluster"
-      ; reason = unlistable
-      ; checked_with = "gcloud (not run)"
-      }
-  | Some project -> run ~check:(cluster_check ~project ~cluster_name)
+    (match Sol_cli_absence.scope_failure ~reason:unlistable with
+     | [ observation ] -> observation
+     | _ -> assert false)
+  | Some project ->
+    run ~check:(cluster_check ~project ~region:target.region ~cluster_name)
 ;;
 
 let unresolved = Sol_cli_absence.unresolved

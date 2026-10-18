@@ -51,10 +51,12 @@ val substrate_absence
   -> Sol_cli_absence.observation
 
 val substrate_addresses : Sol_cli_provider.t -> string list
+val substrate_kind : Sol_cli_provider.t -> string
 
 val resource_identity
   :  Sol_cli_provider.t
   -> cluster_name:string
+  -> project_id:string option
   -> Sol_cli_resource_identity.entry list
 
 val credentials

@@ -2535,10 +2535,12 @@ let test_recovery_refuses_an_ambiguous_match () =
         ~observed_as:"qual-1-postgres"
         ~ownership:Sol_cli_resource_identity.Direct
         ~import_identity:"qual-1-postgres"
-    ; recovery_entry
+    ; (* The same exact provider name from a second address is a real ambiguity; a
+         substring overlap is not, and must not be imported as if it were. *)
+      recovery_entry
         "provider.two"
         ~resource_class:"Cloud SQL instance"
-        ~observed_as:"qual-1"
+        ~observed_as:"qual-1-postgres"
         ~ownership:Sol_cli_resource_identity.Direct
         ~import_identity:"qual-1-postgres"
     ]

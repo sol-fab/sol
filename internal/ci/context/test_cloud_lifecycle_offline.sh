@@ -1659,8 +1659,8 @@ if grep -F 'state-rm' "$stale_unidentified_log" >/dev/null; then
   grep -F 'state-rm' "$stale_unidentified_log" >&2
   exit 1
 fi
-grep -F 'cluster name is neither declared nor resolved' "$stale_unidentified_log.out" >/dev/null || {
-  echo "INFRA-082: an unidentifiable substrate did not refuse the reconciliation:" >&2
+grep -F 'cluster name could not be established from Terraform state' "$stale_unidentified_log.out" >/dev/null || {
+  echo "INFRA-082: an unidentifiable substrate did not report why it refused the reconciliation:" >&2
   cat "$stale_unidentified_log.out" >&2
   exit 1
 }

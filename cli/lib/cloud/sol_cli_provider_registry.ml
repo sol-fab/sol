@@ -10,6 +10,15 @@ let substrate_addresses = function
   | Sol_cli_provider.Byo -> []
 ;;
 
+(* The Terraform type of the substrate resource. State selection must require both the
+   address prefix and this type, so a similarly-prefixed object cannot be read as the
+   cluster whose identity scopes a destructive decision. *)
+let substrate_kind = function
+  | Sol_cli_provider.Aws -> "aws_eks_cluster"
+  | Sol_cli_provider.Gcp -> "google_container_cluster"
+  | Sol_cli_provider.Byo -> ""
+;;
+
 let byo_no_root =
   "the byo driver owns no cloud Terraform root: it is bring-your-own infrastructure, so \
    Sol has no provider lifecycle to run for it (DEC-051)"
@@ -213,10 +222,10 @@ let substrate_absence provider target ~cluster_name =
       }
 ;;
 
-let resource_identity provider ~cluster_name =
+let resource_identity provider ~cluster_name ~project_id =
   match provider with
   | Sol_cli_provider.Aws -> Sol_cli_resource_identity.aws ~cluster_name
-  | Sol_cli_provider.Gcp -> Sol_cli_resource_identity.gcp ~cluster_name
+  | Sol_cli_provider.Gcp -> Sol_cli_resource_identity.gcp ~cluster_name ~project_id
   | Sol_cli_provider.Byo -> []
 ;;
 

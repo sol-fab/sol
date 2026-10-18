@@ -46,8 +46,13 @@ sol destroy <target> --apply     # authorize removal
 ```
 
 Destroy removes Sol-owned workloads before their substrate and independently
-verifies absence. It fails closed when state or ownership is unknown. Installation
-resources have a separate lifetime and are removed with `sol uninstall`.
+verifies absence. It fails closed when state or ownership is unknown. Absence is
+claimed only for a scope Sol can name: the GCP project, or the AWS account declared
+by the target's role ARNs with the active caller in that account. A failed provider
+enumeration is unknown, never absence. An AWS target that declares no role ARN
+cannot establish its account, so destroy refuses to claim absence until one is
+declared. Installation resources have a separate lifetime and are removed with
+`sol uninstall`.
 
 ## Database migrations and secrets
 
