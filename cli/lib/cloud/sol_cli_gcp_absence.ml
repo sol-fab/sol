@@ -565,6 +565,10 @@ let secret_binding_members ~project text =
   Ok (List.concat found)
 ;;
 
+let secret_binding_identity ~secret ~role ~member =
+  Printf.sprintf "%s: %s -> %s" (Filename.basename secret) role member
+;;
+
 (* The authorization root puts secret IAM members on durable environment
    secrets. The secrets themselves are not target residue, but a grant the
    target added to one is: deleting the reconciler or the workload identity does
@@ -626,7 +630,7 @@ let authorization_secret_bindings ~resource_class ~project ~environment () =
                  let found =
                    bindings
                    |> List.map (fun (role, member) ->
-                     Printf.sprintf "%s: %s -> %s" secret role member)
+                     secret_binding_identity ~secret ~role ~member)
                  in
                  read (List.rev_append found acc) rest))
       in
@@ -956,7 +960,7 @@ let authorization_state_identities ~target:_ (state : Sol_cli_cloud_destroy.stat
       then (
         match resource.secret_id, resource.role, resource.member with
         | Some secret, Some role, Some member ->
-          Some (Printf.sprintf "%s: %s -> %s" (Filename.basename secret) role member)
+          Some (secret_binding_identity ~secret ~role ~member)
         | _ -> None)
       else None)
   in

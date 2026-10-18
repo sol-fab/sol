@@ -511,3 +511,44 @@ let%test "authorization: GCP role surviving state removal is residue, not absenc
     Windtrap.fail
       "a surviving role named by pre-destroy state must block verified absence"
 ;;
+
+let%test "authorization: GCP secret bindings retain state identity for provider names" =
+  let identities =
+    Sol_cli_authorization_stage.identities_of_state
+      ~target:gcp_target_without_trust
+      (gcp_authorization_state ())
+  in
+  List.iter
+    (fun secret ->
+       with_fake_command
+         "gcloud"
+         (gcp_script
+            ~secrets:(secret ^ "\n")
+            ~secret_policy:gcp_secret_policy
+            ~service_accounts:""
+            ~roles:""
+            ())
+       @@ fun () ->
+       let observations =
+         Sol_cli_gcp_absence.observations
+           ~authorization_identities:identities
+           gcp_target_without_trust
+           ~cluster_name:"acme-prod"
+       in
+       match find_class "authorization secret IAM binding" observations with
+       | Some (Sol_cli_absence.Present present as observation) ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           [ "sol-prod-db-password: roles/secretmanager.secretAccessor -> \
+              serviceAccount:acme-project.svc.id.goog[app/charge-svc]"
+           ]
+           present.found;
+         Windtrap.equal
+           Windtrap.bool
+           false
+           (Sol_cli_absence.permits_absence_claim
+              (Sol_cli_absence.verdict [ observation ]))
+       | _ ->
+         Windtrap.fail ("a surviving secret IAM binding must block absence: " ^ secret))
+    [ "sol-prod-db-password"; "projects/acme-project/secrets/sol-prod-db-password" ]
+;;
