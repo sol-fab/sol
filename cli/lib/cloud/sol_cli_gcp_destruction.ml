@@ -56,32 +56,63 @@ let gcp_prepare_destroy_result ~guarded run_log infra_dir var_files vars state
         | Ok () -> Prepared ()))
 ;;
 
-let verify_gcp_destroy_preparation_result infra_dir =
-  let* state = read_cloud_state infra_dir in
+let sql_instance_address = "google_sql_database_instance.postgres"
+let gke_cluster_address = "google_container_cluster.main"
+
+(* The eligibility decision uses Terraform's resource identity, not the instance key: the
+   Cloud SQL instance is counted, so its state address is `...[0]` while the capability
+   names the resource. Verification must use the same decision, or it silently checks a
+   bare address that can never appear and reads a still-enabled guard as absent. *)
+let find_guarded state address =
+  List.find_opt
+    (fun (resource : Sol_cli_cloud_destroy.resource) ->
+       Sol_cli_terraform_plan.same_resource address resource.address)
+    (Sol_cli_cloud_destroy.resources state)
+;;
+
+let verify_guards ~state =
   let open Sol_cli_cloud_destroy in
   let guard address =
-    Option.bind (find_address state address) (fun resource ->
-      resource.deletion_protection)
+    match find_guarded state address with
+    | None -> Ok None
+    | Some resource ->
+      (match resource.deletion_protection with
+       | Some value -> Ok (Some value)
+       | None ->
+         Error
+           (Printf.sprintf
+              "%s has no deletion_protection in its state representation, so its \
+               deletion guard cannot be verified"
+              resource.address))
   in
-  if
-    find_address state "google_sql_database_instance.postgres" = None
-    && find_address state "google_container_cluster.main" = None
-  then Error "GCP destroy preparation ran but no guarded resource is in state"
+  let* sql = guard sql_instance_address in
+  let* gke = guard gke_cluster_address in
+  if sql = None && gke = None
+  then
+    Error
+      "GCP destroy preparation ran but no guarded resource is in state under the \
+       resource identities this target declares"
   else
     let* () =
-      match guard "google_sql_database_instance.postgres" with
+      match sql with
       | Some true ->
         Error "Cloud SQL deletion protection is still enabled after preparation"
       | Some false | None -> Ok ()
     in
     let* () =
-      match guard "google_container_cluster.main" with
+      match gke with
       | Some true -> Error "GKE deletion protection is still enabled after preparation"
       | Some false | None -> Ok ()
     in
-    Sol_cli_report.app
-      "  verify preparation: Cloud SQL and GKE deletion protection disabled.";
     Ok ()
+;;
+
+let verify_gcp_destroy_preparation_result infra_dir =
+  let* state = read_cloud_state infra_dir in
+  let* () = verify_guards ~state in
+  Sol_cli_report.app
+    "  verify preparation: Cloud SQL and GKE deletion protection disabled.";
+  Ok ()
 ;;
 
 let observe_retention ~retention =
