@@ -589,8 +589,8 @@ let ecr_probe ~region ~repositories ~prefix =
          ~attribution:
            (Named_for_target
               (Printf.sprintf
-                 "the target's declared registry names its workspace prefix %s, and \
-                  the cluster root names its repositories %s/<service>"
+                 "the target's declared registry names its workspace prefix %s, and the \
+                  cluster root names its repositories %s/<service>"
                  prefix
                  prefix))
          ~attributable:(fun line ->
@@ -601,7 +601,6 @@ let ecr_probe ~region ~repositories ~prefix =
       , "the pre-destroy Terraform state names no ECR repositories and the target \
          declares no registry, so Sol cannot distinguish \"this target created none\" \
          from \"the ownership record was lost\"; reported rather than guessed" )
-;;
 ;;
 
 let authorization_checks ~env =
@@ -646,8 +645,7 @@ let authorization_checks ~env =
                /sol/%s/"
               env
               env))
-      ~attributable:(fun line ->
-        String.starts_with ~prefix:("sol-" ^ env ^ "-") line)
+      ~attributable:(fun line -> String.starts_with ~prefix:("sol-" ^ env ^ "-") line)
       [ "iam"
       ; "list-roles"
       ; "--query"
@@ -693,7 +691,6 @@ let filter_to_prior prior observation =
 ;;
 
 let oidc_resource_class = "OIDC provider"
-;;
 
 let oidc_provider_urls pre_destroy =
   Sol_cli_cloud_destroy.resources pre_destroy
@@ -782,7 +779,11 @@ let probes ~region ~cluster_name ~repositories ~prefix =
 
 let observed_classes () =
   let generic =
-    probes ~region:"coverage" ~cluster_name:"coverage" ~repositories:[] ~prefix:(Some "coverage")
+    probes
+      ~region:"coverage"
+      ~cluster_name:"coverage"
+      ~repositories:[]
+      ~prefix:(Some "coverage")
     @ List.map (fun check -> Ok check) (authorization_checks ~env:"coverage")
     |> List.filter_map (function
       | Ok check -> Some check.resource_class
@@ -792,6 +793,7 @@ let observed_classes () =
      from state or the live cluster before the standard tag/name probe can run. *)
   generic @ [ oidc_resource_class ]
 ;;
+
 let observations
       ?(previously_attributed = [])
       ?(pre_destroy = Sol_cli_cloud_destroy.State_empty)
@@ -799,8 +801,6 @@ let observations
       (target : Sol_cli_config.target)
       ~cluster_name
   =
-
-
   match scope_binding target with
   | Error reason -> Sol_cli_absence.scope_failure ~reason
   | Ok () ->

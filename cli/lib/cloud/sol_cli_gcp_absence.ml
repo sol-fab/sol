@@ -446,7 +446,6 @@ let observed_classes () =
   |> List.map (fun check -> check.resource_class)
   |> fun classes -> classes @ [ "regional address" ]
 ;;
-;;
 
 let unlistable =
   "the target declares no gcp.project_id, so the provider could not be listed -- an \
