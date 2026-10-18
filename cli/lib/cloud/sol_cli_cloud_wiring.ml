@@ -34,10 +34,13 @@ let verification_observation
       ~retention
       ~pre_destroy
       ~preparation
+      ~authorization_identities
   =
   let open Sol_cli_destroy_verification in
   let state = post_destroy_state ~infra_dir in
-  let observations = destruction.residue ~pre_destroy ~cluster in
+  let observations =
+    destruction.residue ~authorization_identities ~pre_destroy ~cluster ()
+  in
   Sol_cli_report.app "%s" (Sol_cli_absence.report observations);
   let sweep = Sol_cli_absence.to_sweep observations in
   { state; sweep; retention = destruction.retention ~retention ~pre_destroy ~preparation }
@@ -1422,20 +1425,28 @@ let destroy_deps
                  ())))
     ; destroy_authorization =
         (fun () ->
-          Sol_cli_authorization_stage.destroy ~assets ~run_log ~target:target_cfg
-          |> Result.map (function
-            | Sol_cli_authorization_stage.Established ->
-              "authorization: the reconciler identity and its fence were removed"
-            | Not_declared -> Sol_cli_authorization_stage.outcome_to_string Not_declared))
+          Sol_cli_authorization_stage.destroy_with_identities
+            ~assets
+            ~run_log
+            ~target:target_cfg
+          |> Result.map (fun (result : Sol_cli_authorization_stage.destroy_result) ->
+            let evidence =
+              match result.outcome with
+              | Sol_cli_authorization_stage.Established ->
+                "authorization: the reconciler identity and its fence were removed"
+              | Not_declared -> Sol_cli_authorization_stage.outcome_to_string Not_declared
+            in
+            evidence, result.identities))
     ; verify_destruction =
-        (fun ~pre_destroy ~preparation ->
+        (fun ~pre_destroy ~preparation ~authorization_identities ->
           verification_observation
             ~destruction
             ~infra_dir
             ~cluster:!cluster_ref
             ~retention
             ~pre_destroy
-            ~preparation)
+            ~preparation
+            ~authorization_identities)
     ; report = (fun message -> Sol_cli_report.app "%s" message)
     ; warn = (fun message -> Sol_cli_report.warn "%s" message)
     }

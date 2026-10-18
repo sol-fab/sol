@@ -6,6 +6,10 @@ type resource =
   ; deletion_protection : bool option
   ; final_snapshot_identifier : string option
   ; skip_final_snapshot : bool option
+  ; role : string option
+  ; member : string option
+  ; secret_id : string option
+  ; email : string option
   }
 
 type state_read =
@@ -104,10 +108,11 @@ type deps =
   ; release_workloads : unit -> Sol_cli_workload_scope.release
   ; accept_unreleased : bool
   ; destroy_substrate : unit -> (unit, string) result
-  ; destroy_authorization : unit -> (string, string) result
+  ; destroy_authorization : unit -> (string * (string * string list) list, string) result
   ; verify_destruction :
       pre_destroy:state_read
       -> preparation:preparation
+      -> authorization_identities:(string * string list) list
       -> Sol_cli_destroy_verification.observation
   ; report : string -> unit
   ; warn : string -> unit

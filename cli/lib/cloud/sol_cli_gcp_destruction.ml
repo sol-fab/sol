@@ -198,7 +198,7 @@ let destruction ctx : Sol_cli_destruction.t =
   ; retention =
       (fun ~retention ~pre_destroy:_ ~preparation:_ -> observe_retention ~retention)
   ; residue =
-      (fun ~pre_destroy ~cluster ->
+      (fun ?(authorization_identities = []) ~pre_destroy ~cluster () ->
         match
           Sol_cli_destruction.residue_cluster_name
             ~kind:"google_container_cluster"
@@ -206,7 +206,11 @@ let destruction ctx : Sol_cli_destruction.t =
             ~cluster
             ~target_cfg:ctx.target
         with
-        | Some cluster_name -> Sol_cli_gcp_absence.observations ctx.target ~cluster_name
+        | Some cluster_name ->
+          Sol_cli_gcp_absence.observations
+            ~authorization_identities
+            ctx.target
+            ~cluster_name
         | None ->
           Sol_cli_gcp_absence.unresolved
             ~reason:
