@@ -1465,7 +1465,7 @@ target:
            (List.assoc_opt "create_dns_zone" vars)))
 ;;
 
-let test_no_gcp_zone_var_without_a_base_domain () =
+let test_gcp_zone_var_is_always_false_without_a_base_domain () =
   with_temp_dir (fun () ->
     write
       "sol.yml"
@@ -1480,10 +1480,10 @@ target:
       (match Sol_cli_terraform_vars.of_config ~workspace:"pluto" cfg with
        | Error msg -> Windtrap.fail msg
        | Ok vars ->
-         check_bool
-           "a GCP target with no base_domain passes no zone setting"
-           false
-           (List.mem_assoc "create_dns_zone" vars)))
+         check_str_opt
+           "a GCP target with no base_domain still prohibits a target-owned zone"
+           (Some "false")
+           (List.assoc_opt "create_dns_zone" vars)))
 ;;
 
 let test_terraform_vars_workspace_name_and_ecr_repositories () =
@@ -2251,8 +2251,10 @@ let%test "sol.yml: terraform vars: the GCP cluster root reuses the durable zone"
   test_gcp_cluster_root_reuses_the_durable_zone ()
 ;;
 
-let%test "sol.yml: terraform vars: no GCP zone setting without a base_domain" =
-  test_no_gcp_zone_var_without_a_base_domain ()
+let%test
+    "sol.yml: terraform vars: GCP prohibits a target-owned zone without a base_domain"
+  =
+  test_gcp_zone_var_is_always_false_without_a_base_domain ()
 ;;
 
 let%test "sol.yml: terraform vars: GCS soft delete follows destroy_retention" =

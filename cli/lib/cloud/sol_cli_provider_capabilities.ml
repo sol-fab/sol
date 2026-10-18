@@ -1103,10 +1103,10 @@ let gcp_own_vars
        (* The durable root owns and ensures the delegated zone for every declared
           dns_zone_ownership, so the cluster root reuses it. It must never create
           a second managed zone for base_domain: the inventory treats the zone as
-          the operator's durable prerequisite, not as target residue. *)
-       (match target.base_domain with
-        | Some domain when not (Sol_cli_string.is_blank domain) -> Some "false"
-        | Some _ | None -> None)
+          the operator's durable prerequisite, not as target residue. The choice
+          is unconditional: leaving the variable unset would fall back to the
+          root's create_dns_zone=true default for a target without base_domain. *)
+       (Some "false")
   |> add_opt
        "gcs_soft_delete_retention_seconds"
        (Some
