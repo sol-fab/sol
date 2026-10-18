@@ -209,6 +209,7 @@ type calls =
   ; mutable reconcile : int
   ; mutable platform : int
   ; mutable remove : int
+  ; mutable authorization : int
   ; mutable substrate : int
   ; mutable verify : int
   ; mutable reports : string list
@@ -234,6 +235,7 @@ let fake_deps
       ?(platform = fun () -> Ok ())
       ?(release_workloads = fun () -> Sol_cli_workload_scope.Workloads_released)
       ?(accept_unreleased = false)
+      ?(destroy_authorization = fun () -> Ok ())
       ?(destroy_substrate = fun () -> Ok ())
       ?(verify_destruction = fun ~pre_destroy:_ ~preparation:_ -> verified_observation)
       ()
@@ -248,6 +250,7 @@ let fake_deps
     ; reconcile = 0
     ; platform = 0
     ; remove = 0
+    ; authorization = 0
     ; substrate = 0
     ; verify = 0
     ; reports = []
@@ -312,6 +315,11 @@ let fake_deps
           calls.order <- "release" :: calls.order;
           release_workloads ())
     ; accept_unreleased
+    ; destroy_authorization =
+        (fun () ->
+          calls.authorization <- calls.authorization + 1;
+          calls.order <- "authorization" :: calls.order;
+          destroy_authorization ())
     ; destroy_substrate =
         (fun () ->
           calls.substrate <- calls.substrate + 1;
@@ -414,7 +422,7 @@ let test_a_provably_absent_substrate_accounts_for_stale_state () =
   Windtrap.equal
     (Windtrap.list Windtrap.string)
     ~msg:"the reconciliation runs before the substrate is destroyed"
-    [ "reconcile-absence"; "substrate" ]
+    [ "reconcile-absence"; "authorization"; "substrate" ]
     (List.rev calls.order)
 ;;
 
@@ -1749,7 +1757,7 @@ let test_the_workloads_are_released_before_the_substrate_is_destroyed () =
   Windtrap.equal
     (Windtrap.list Windtrap.string)
     ~msg:"the workloads that hold the managed database's sessions are released first"
-    [ "release"; "substrate" ]
+    [ "release"; "authorization"; "substrate" ]
     (List.rev calls.order)
 ;;
 
@@ -1768,7 +1776,7 @@ let test_a_target_with_no_substrate_has_no_release_to_run () =
     ~msg:
       "the release is not attempted at all, so it neither warns nor waits on a cluster \
        that is not there"
-    [ "substrate" ]
+    [ "authorization"; "substrate" ]
     (List.rev calls.order);
   Windtrap.equal Windtrap.int ~msg:"the substrate destroy still ran" 1 calls.substrate;
   Windtrap.equal
@@ -3487,4 +3495,58 @@ let test_rds_identity_is_the_counted_address () =
 
 let%test "verification: RDS identity uses the counted Terraform address (BUG-209)" =
   test_rds_identity_is_the_counted_address ()
+;;
+
+let%test "authorization destroy runs before the substrate" =
+  let deps, calls = fake_deps () in
+  (match Sol_cli_cloud_destroy.execute ~deps with
+   | Sol_cli_cloud_destroy.Destroy_succeeded _ -> ()
+   | _ -> Windtrap.fail "the default fixture must reach verified absence");
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"the authorization root was destroyed once"
+    1
+    calls.authorization;
+  Windtrap.equal Windtrap.int ~msg:"the substrate was destroyed once" 1 calls.substrate;
+  let order = List.rev calls.order in
+  let index name =
+    let rec go position = function
+      | [] -> Windtrap.failf "the %s phase did not run" name
+      | item :: rest ->
+        if String.equal item name then position else go (position + 1) rest
+    in
+    go 0 order
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the authorization root is destroyed before the substrate it may serve"
+    true
+    (index "authorization" < index "substrate")
+;;
+
+let%test "an authorization destroy failure blocks the substrate destroy" =
+  let deps, calls =
+    fake_deps
+      ~destroy_authorization:(fun () ->
+        Error "the authorization root's state still represents a role")
+      ()
+  in
+  match Sol_cli_cloud_destroy.execute ~deps with
+  | Sol_cli_cloud_destroy.Destroy_failed
+      { failure = Authorization_destroy_failed message; _ } ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the diagnostic preserves the stage's reason"
+      true
+      (Sol_cli_string.contains ~needle:"still represents" message);
+    Windtrap.equal
+      Windtrap.int
+      ~msg:"the substrate was not destroyed after the authorization refusal"
+      0
+      calls.substrate
+  | Sol_cli_cloud_destroy.Destroy_failed { failure; _ } ->
+    Windtrap.failf
+      "the authorization failure was classified as %s"
+      (Sol_cli_cloud_destroy.failure_message failure)
+  | _ -> Windtrap.fail "an authorization destroy failure must fail destruction"
 ;;

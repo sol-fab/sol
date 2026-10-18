@@ -334,6 +334,46 @@ let class_names =
   ]
 ;;
 
+let authorization_checks ~project ~(target : Sol_cli_config.target) =
+  let account_id = "sol-" ^ target.env ^ "-authorization" in
+  let email = account_id ^ "@" ^ project ^ ".iam.gserviceaccount.com" in
+  let role =
+    "projects/"
+    ^ project
+    ^ "/roles/sol_"
+    ^ String.map
+        (function
+          | '-' -> '_'
+          | c -> c)
+        target.env
+    ^ "_authorization"
+  in
+  [ identity_check
+      ~resource_class:"authorization service account"
+      ~identity:email
+      ~attribution:
+        (Named_for_target
+           "the target's environment names the authorization reconciler identity")
+      ~attributable:(fun line -> line = email)
+      [ "--project"
+      ; project
+      ; "iam"
+      ; "service-accounts"
+      ; "list"
+      ; "--format"
+      ; "value(email)"
+      ]
+  ; identity_check
+      ~resource_class:"authorization custom role"
+      ~identity:role
+      ~attribution:
+        (Named_for_target
+           "the target's environment names the authorization reconciler role")
+      ~attributable:(fun line -> line = role)
+      [ "--project"; project; "iam"; "roles"; "list"; "--format"; "value(name)" ]
+  ]
+;;
+
 let unlistable =
   "the target declares no gcp.project_id, so the provider could not be listed -- an \
    inventory that did not run cannot establish absence"
@@ -353,6 +393,13 @@ let observations (target : Sol_cli_config.target) ~cluster_name =
       List.map
         (fun check -> run ~check)
         (checks ~project ~region:target.region ~cluster_name)
+    in
+    let observations =
+      if Sol_cli_provider_capabilities.authorization_trust target = None
+      then observations
+      else
+        observations
+        @ List.map (fun check -> run ~check) (authorization_checks ~project ~target)
     in
     derived_by_vpc ~cluster_name observations @ durable_observations ~target ~cluster_name
 ;;

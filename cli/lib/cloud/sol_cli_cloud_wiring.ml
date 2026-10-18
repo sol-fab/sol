@@ -1327,6 +1327,15 @@ let destroy_deps
                     verdict)))
     ; release_workloads = release_workloads_result
     ; accept_unreleased
+    ; destroy_authorization =
+        (fun () ->
+          Sol_cli_authorization_stage.destroy ~assets ~run_log ~target:target_cfg
+          |> Result.map (fun outcome ->
+            Sol_cli_report.app
+              "  %s"
+              (Sol_cli_authorization_stage.outcome_to_string outcome))
+          |> Result.map_error (fun message ->
+            Printf.sprintf "the authorization root was not destroyed: %s" message))
     ; destroy_substrate =
         (fun () ->
           destruction.before_substrate_destroy ();

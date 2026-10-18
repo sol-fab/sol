@@ -1289,6 +1289,13 @@ let capabilities_of = function
   | Sol_cli_provider.Byo -> byo
 ;;
 
+let authorization_trust (target : Sol_cli_config.target) =
+  let capabilities = capabilities_of target.provider in
+  match Sol_cli_config.provider_field target capabilities.authorization_trust_field with
+  | Some value when not (Sol_cli_string.is_blank value) -> Some value
+  | Some _ | None -> None
+;;
+
 let validate_target provider (target : Sol_cli_config.target) =
   match provider with
   | Sol_cli_provider.Gcp ->

@@ -11,6 +11,8 @@ val fence
   -> target:Sol_cli_config.target
   -> (outcome, string) result
 
+val verify_destroyed_state : string -> (unit, string) result
+
 val destroy
   :  assets:Sol_cli_platform_assets.t
   -> run_log:Sol_cli_run_log.t
