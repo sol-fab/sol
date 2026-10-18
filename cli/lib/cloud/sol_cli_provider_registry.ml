@@ -203,12 +203,26 @@ let destruction provider context =
     }
 ;;
 
-let observations ?(previously_attributed = []) provider target ~cluster_name =
+let observations
+      ?(previously_attributed = [])
+      ?(pre_destroy = Sol_cli_cloud_destroy.State_empty)
+      provider
+      target
+      ~cluster_name
+  =
   match provider with
   | Sol_cli_provider.Aws ->
-    Sol_cli_aws_absence.observations ~previously_attributed target ~cluster_name
+    Sol_cli_aws_absence.observations
+      ~previously_attributed
+      ~pre_destroy
+      target
+      ~cluster_name
   | Sol_cli_provider.Gcp ->
-    Sol_cli_gcp_absence.observations ~previously_attributed target ~cluster_name
+    Sol_cli_gcp_absence.observations
+      ~previously_attributed
+      ~pre_destroy
+      target
+      ~cluster_name
   | Sol_cli_provider.Byo -> []
 ;;
 

@@ -219,6 +219,42 @@ let cluster_tagged ?tagged_with ?checked_as ~cluster_name class_name argv =
     argv
 ;;
 
+let cluster_owned_tag ~region ~cluster_name resource_id =
+  [ "ec2"
+  ; "describe-tags"
+  ; "--region"
+  ; region
+  ; "--filters"
+  ; "Name=resource-id,Values=" ^ resource_id
+  ; "--query"
+  ; Printf.sprintf
+      "Tags[?(Key=='kubernetes.io/cluster/%s' && (Value=='' || Value=='owned' || \
+       Value=='shared')) || (Key=='Name' && (Value=='%s' || starts_with(Value, '%s-')))]"
+      cluster_name
+      cluster_name
+      cluster_name
+  ; "--output"
+  ; "text"
+  ]
+;;
+
+let cluster_owned ?checked_as ~region ~cluster_name ~resource_class ~identity argv =
+  check
+    ?checked_as
+    ~tagged_with:(fun resource_id -> cluster_owned_tag ~region ~cluster_name resource_id)
+    ~resource_class
+    ~identity
+    ~attribution:
+      (Within_target
+         (Printf.sprintf
+            "the target's own cluster tag or a provisioned Name naming %s: %s marks what \
+             this cluster's controllers created, and Sol writes it itself"
+            cluster_name
+            cluster_name))
+    ~attributable:(fun line -> line <> "")
+    argv
+;;
+
 let cluster_check ~region ~cluster_name =
   check
     ~resource_class:"EKS cluster"
@@ -391,14 +427,30 @@ let checks ~region ~cluster_name =
       ; "--output"
       ; "text"
       ]
-  ; cluster_tagged
+  ; cluster_owned
+      ~region
       ~cluster_name
-      "EBS volume"
-      (ec2_tagged_argv
-         ~region
-         ~tag:(cluster_tag_named cluster_name)
-         ~subcommand:"describe-volumes"
-         ~query:"Volumes[].VolumeId")
+      ~resource_class:"EBS volume"
+      ~identity:
+        (Printf.sprintf
+           "tagged kubernetes.io/cluster/%s or named %s-*"
+           cluster_name
+           cluster_name)
+      ~checked_as:
+        (Printf.sprintf
+           "aws ec2 describe-volumes --region %s, then aws ec2 describe-tags --region %s \
+            --filters Name=resource-id,Values=<volume id> for each volume it returns"
+           region
+           region)
+      [ "ec2"
+      ; "describe-volumes"
+      ; "--region"
+      ; region
+      ; "--query"
+      ; "Volumes[].VolumeId"
+      ; "--output"
+      ; "text"
+      ]
   ]
 ;;
 
@@ -430,6 +482,7 @@ let class_names =
   ; "load balancer"
   ; "EBS volume"
   ; "ECR repository"
+  ; "OIDC provider"
   ]
 ;;
 
@@ -508,8 +561,88 @@ let strict_authorization_observation ~check =
   | observation -> observation
 ;;
 
+let oidc_provider_urls pre_destroy =
+  Sol_cli_cloud_destroy.resources pre_destroy
+  |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+    if String.equal resource.kind "aws_iam_openid_connect_provider"
+    then resource.url
+    else None)
+  |> List.sort_uniq String.compare
+;;
+
+let oidc_url_suffix url =
+  let prefix = "https://" in
+  if String.starts_with ~prefix url
+  then String.sub url (String.length prefix) (String.length url - String.length prefix)
+  else url
+;;
+
+let oidc_provider_observation
+      ?(previously_attributed = [])
+      ~region
+      ~cluster_name
+      ~pre_destroy
+      ()
+  =
+  let urls =
+    match oidc_provider_urls pre_destroy with
+    | _ :: _ as urls -> Ok urls
+    | [] ->
+      (match
+         run_argv
+           [ "eks"
+           ; "describe-cluster"
+           ; "--region"
+           ; region
+           ; "--name"
+           ; cluster_name
+           ; "--query"
+           ; "cluster.identity.oidc.issuer"
+           ; "--output"
+           ; "text"
+           ]
+       with
+       | Ok [ url ] when String.trim url <> "" -> Ok [ String.trim url ]
+       | Ok _ -> Error "neither the state nor the cluster records an OIDC issuer"
+       | Error (`NotFound _) ->
+         (match pre_destroy with
+          | Sol_cli_cloud_destroy.State_empty -> Ok []
+          | Sol_cli_cloud_destroy.State_represented _
+          | Sol_cli_cloud_destroy.State_unreadable _ ->
+            Error "neither the state nor the cluster records an OIDC issuer")
+       | Error (`Failed reason) ->
+         Error ("the cluster's OIDC issuer could not be read: " ^ String.trim reason))
+  in
+  match urls with
+  | Error reason -> Not_attributable { resource_class = "OIDC provider"; reason }
+  | Ok urls ->
+    run
+      ~previously_attributed
+      ~check:
+        (check
+           ~resource_class:"OIDC provider"
+           ~identity:(String.concat ", " urls)
+           ~attribution:
+             (Named_for_target
+                "the target's own cluster issuer names the OIDC provider the cluster \
+                 root created")
+           ~attributable:(fun line ->
+             List.exists
+               (fun url -> String.ends_with ~suffix:(oidc_url_suffix url) line)
+               urls)
+           [ "iam"
+           ; "list-open-id-connect-providers"
+           ; "--query"
+           ; "OpenIDConnectProviderList[].Arn"
+           ; "--output"
+           ; "text"
+           ])
+      ()
+;;
+
 let observations
       ?(previously_attributed = [])
+      ?(pre_destroy = Sol_cli_cloud_destroy.State_empty)
       (target : Sol_cli_config.target)
       ~cluster_name
   =
@@ -521,6 +654,13 @@ let observations
         (fun c -> run ~previously_attributed ~check:c ())
         (checks ~region:target.region ~cluster_name)
       @ [ ecr_observation ~region:target.region ~registry:(registry_prefix target) ]
+      @ [ oidc_provider_observation
+            ~previously_attributed
+            ~region:target.region
+            ~cluster_name
+            ~pre_destroy
+            ()
+        ]
     in
     let observations =
       if Sol_cli_provider_capabilities.authorization_trust target = None

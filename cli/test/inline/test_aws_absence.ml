@@ -335,3 +335,196 @@ let%test "EKS absence: a caller in another account is Unobservable" =
 let%test "EKS absence: an empty listing in the target's account is Absent" =
   test_matching_aws_account_can_establish_absence ()
 ;;
+
+let with_ebs_inventory ?(tags = "") ~volumes f =
+  let dir = Filename.temp_file "sol-fake-ebs-" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o755;
+  let log = Filename.concat dir "calls.log" in
+  let bin = Filename.concat dir "aws" in
+  let script =
+    Printf.sprintf
+      {|#!/bin/sh
+printf '%%s\n' "$*" >> %s
+case "$1 $2" in
+  "sts get-caller-identity") printf '111122223333\n' ;;
+  "ec2 describe-volumes") printf '%%s' %s ;;
+  "ec2 describe-tags") printf '%%s' %s ;;
+esac
+exit 0
+|}
+      (Filename.quote log)
+      (Filename.quote volumes)
+      (Filename.quote tags)
+  in
+  Out_channel.with_open_text bin (fun oc -> output_string oc script);
+  Unix.chmod bin 0o755;
+  let old_path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+  Unix.putenv "PATH" (dir ^ ":" ^ old_path);
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" old_path;
+      (try Sys.remove bin with
+       | _ -> ());
+      (try Sys.remove log with
+       | _ -> ());
+      try Unix.rmdir dir with
+      | _ -> ())
+    f
+;;
+
+let ebs observations =
+  List.find
+    (fun observation -> String.equal (class_of observation) "EBS volume")
+    observations
+;;
+
+let%test "AWS EBS inventory: a previously identified untagged volume is Present" =
+  with_ebs_inventory ~volumes:"vol-abc\n" (fun () ->
+    let observations =
+      Sol_cli_aws_absence.observations
+        ~previously_attributed:[ "EBS volume", [ "vol-abc" ] ]
+        target
+        ~cluster_name:"acme-prod"
+    in
+    match ebs observations with
+    | Sol_cli_absence.Present present ->
+      Windtrap.equal
+        (Windtrap.list Windtrap.string)
+        ~msg:"the pre-destroy identity keeps an untagged volume attributable"
+        [ "vol-abc" ]
+        present.found
+    | _ ->
+      Windtrap.fail
+        "a volume known before destruction must not disappear when its tag is removed")
+;;
+
+let%test "AWS EBS inventory: an untagged volume without a prior identity is Absent" =
+  with_ebs_inventory ~volumes:"vol-abc\n" (fun () ->
+    let observations =
+      Sol_cli_aws_absence.observations target ~cluster_name:"acme-prod"
+    in
+    match ebs observations with
+    | Sol_cli_absence.Absent _ -> ()
+    | _ -> Windtrap.fail "an untagged volume with no prior identity is not this target's")
+;;
+
+let%test "AWS EBS inventory: the cluster tag still attributes a volume" =
+  with_ebs_inventory ~volumes:"vol-abc\n" ~tags:"owned\n" (fun () ->
+    let observations =
+      Sol_cli_aws_absence.observations target ~cluster_name:"acme-prod"
+    in
+    match ebs observations with
+    | Sol_cli_absence.Present present ->
+      Windtrap.equal
+        (Windtrap.list Windtrap.string)
+        ~msg:"the cluster tag attributes the volume"
+        [ "vol-abc" ]
+        present.found
+    | _ -> Windtrap.fail "a cluster-tagged volume must be Present")
+;;
+
+let oidc_state url =
+  Sol_cli_cloud_destroy.inventory_of_show_json
+    (Printf.sprintf
+       {|{"values":{"root_module":{"resources":[{"address":"module.eks.aws_iam_openid_connect_provider.oidc_provider[0]","type":"aws_iam_openid_connect_provider","values":{"url":%S}}]}}}|}
+       url)
+;;
+
+let with_oidc_inventory ?(issuer = "") ~providers f =
+  let dir = Filename.temp_file "sol-fake-oidc-" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o755;
+  let log = Filename.concat dir "calls.log" in
+  let bin = Filename.concat dir "aws" in
+  let script =
+    Printf.sprintf
+      {|#!/bin/sh
+printf '%%s\n' "$*" >> %s
+case "$1 $2" in
+  "sts get-caller-identity") printf '111122223333\n' ;;
+  "eks describe-cluster") printf '%%s' %s ;;
+  "iam list-open-id-connect-providers") printf '%%s' %s ;;
+esac
+exit 0
+|}
+      (Filename.quote log)
+      (Filename.quote issuer)
+      (Filename.quote providers)
+  in
+  Out_channel.with_open_text bin (fun oc -> output_string oc script);
+  Unix.chmod bin 0o755;
+  let old_path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+  Unix.putenv "PATH" (dir ^ ":" ^ old_path);
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" old_path;
+      (try Sys.remove bin with
+       | _ -> ());
+      (try Sys.remove log with
+       | _ -> ());
+      try Unix.rmdir dir with
+      | _ -> ())
+    f
+;;
+
+let oidc observations =
+  List.find
+    (fun observation -> String.equal (class_of observation) "OIDC provider")
+    observations
+;;
+
+let%test "AWS OIDC inventory: the state's issuer attributes the provider" =
+  let url = "https://oidc.eks.us-east-1.amazonaws.com/id/ABC" in
+  let arn =
+    "arn:aws:iam::111122223333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/ABC"
+  in
+  with_oidc_inventory ~providers:(arn ^ "\n") (fun () ->
+    let observations =
+      Sol_cli_aws_absence.observations
+        ~pre_destroy:(oidc_state url)
+        target
+        ~cluster_name:"acme-prod"
+    in
+    match oidc observations with
+    | Sol_cli_absence.Present present ->
+      Windtrap.equal
+        (Windtrap.list Windtrap.string)
+        ~msg:"the provider ARN is the found identity"
+        [ arn ]
+        present.found
+    | _ -> Windtrap.fail "the state's OIDC issuer must attribute the provider")
+;;
+
+let%test "AWS OIDC inventory: a different issuer is not this target's provider" =
+  let url = "https://oidc.eks.us-east-1.amazonaws.com/id/ABC" in
+  let other =
+    "arn:aws:iam::111122223333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/OTHER"
+  in
+  with_oidc_inventory ~providers:(other ^ "\n") (fun () ->
+    let observations =
+      Sol_cli_aws_absence.observations
+        ~pre_destroy:(oidc_state url)
+        target
+        ~cluster_name:"acme-prod"
+    in
+    match oidc observations with
+    | Sol_cli_absence.Absent _ -> ()
+    | _ -> Windtrap.fail "a different OIDC issuer must not be attributed")
+;;
+
+let%test "AWS OIDC inventory: the cluster issuer is a fallback when the state is empty" =
+  let url = "https://oidc.eks.us-east-1.amazonaws.com/id/FALLBACK" in
+  let arn =
+    "arn:aws:iam::111122223333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/FALLBACK"
+  in
+  with_oidc_inventory ~issuer:(url ^ "\n") ~providers:(arn ^ "\n") (fun () ->
+    let observations =
+      Sol_cli_aws_absence.observations target ~cluster_name:"acme-prod"
+    in
+    match oidc observations with
+    | Sol_cli_absence.Present _ -> ()
+    | _ ->
+      Windtrap.fail
+        "the cluster issuer must attribute the provider when the state is empty")
+;;

@@ -6,6 +6,7 @@ type resource =
   ; deletion_protection : bool option
   ; final_snapshot_identifier : string option
   ; skip_final_snapshot : bool option
+  ; url : string option
   }
 
 type state_read =

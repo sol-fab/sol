@@ -558,7 +558,11 @@ let destruction ctx : Sol_cli_destruction.t =
             ~target_cfg:ctx.target
         with
         | Some cluster_name ->
-          Sol_cli_aws_absence.observations ~previously_attributed ctx.target ~cluster_name
+          Sol_cli_aws_absence.observations
+            ~previously_attributed
+            ~pre_destroy
+            ctx.target
+            ~cluster_name
         | None ->
           Sol_cli_aws_absence.unresolved
             ~reason:

@@ -6,6 +6,7 @@ type resource =
   ; deletion_protection : bool option
   ; final_snapshot_identifier : string option
   ; skip_final_snapshot : bool option
+  ; url : string option
   }
 
 type state_read =
@@ -49,6 +50,7 @@ let resource_of_json json =
       ; deletion_protection
       ; final_snapshot_identifier = string_attr "final_snapshot_identifier" values
       ; skip_final_snapshot
+      ; url = string_attr "url" values
       }
   | None, _ ->
     Error
@@ -396,6 +398,43 @@ let collect_pre_inventory_failures observations =
   |> List.sort_uniq String.compare
 ;;
 
+(* Identity continuity is required only for resources whose provider-side
+   ownership signal can disappear while the resource survives: controller-created
+   disks and addresses, load balancers, the OIDC provider, and a failure of the
+   whole enumeration scope. Terraform-managed roots have a durable state identity
+   and do not need a pre-destroy identity to establish their final absence. *)
+let required_identity_class = function
+  | "persistent disk"
+  | "EBS volume"
+  | "elastic IP"
+  | "load balancer"
+  | "global address"
+  | "regional address"
+  | "forwarding rule"
+  | "OIDC provider" -> true
+  | class_name -> String.equal class_name Sol_cli_absence.scope_class
+;;
+
+let required_pre_inventory_failures observations =
+  observations
+  |> List.filter_map (function
+    | Sol_cli_absence.Unobservable observation
+      when required_identity_class observation.resource_class ->
+      Some (observation.resource_class ^ ": " ^ observation.reason)
+    | Sol_cli_absence.Not_attributable observation
+      when required_identity_class observation.resource_class ->
+      Some (observation.resource_class ^ ": " ^ observation.reason)
+    | _ -> None)
+  |> List.sort_uniq String.compare
+;;
+
+let optional_pre_inventory_failures observations =
+  let required = required_pre_inventory_failures observations in
+  List.filter
+    (fun failure -> not (List.mem failure required))
+    (collect_pre_inventory_failures observations)
+;;
+
 let execute ~deps =
   let read_state () =
     match deps.observe_state () with
@@ -455,20 +494,19 @@ let execute ~deps =
           (fail
              (Release_unestablished (Sol_cli_workload_scope.failure_to_string failure)))
   in
-  let destroy_and_verify ~cloud_exists ~cleanup ~preparation =
+  let destroy_and_verify
+        ~cloud_exists
+        ~cleanup
+        ~preparation
+        ~previously_attributed
+        ~pre_inventory_failures
+    =
     if cloud_exists
     then
       deps.report
         (Printf.sprintf
            "  lifecycle phase: %s"
            (Sol_cli_cloud_lifecycle.phase_to_string Sol_cli_cloud_lifecycle.Destroying));
-    (* Capture the provider identities that exist before anything is destroyed. The
-       post-destroy inventory reuses them, so a resource that is still present but has
-       lost its label or tag is not silently read as absent. A pre-inventory that could
-       not run is carried into the verdict as unknown, not ignored. *)
-    let pre_observations = deps.observe_residue ~pre_destroy:!state in
-    let previously_attributed = collect_previously_attributed pre_observations in
-    let pre_inventory_failures = collect_pre_inventory_failures pre_observations in
     match deps.destroy_authorization () with
     | Error message -> fail ~cleanup (Authorization_not_removed message)
     | Ok evidence ->
@@ -534,7 +572,34 @@ let execute ~deps =
          (Printf.sprintf
             "  lifecycle phase: %s"
             (Sol_cli_cloud_lifecycle.phase_to_string phase));
-       if Sol_cli_cloud_lifecycle.ready_policy_applies phase
+       (* Capture provider identities before the platform, workloads or substrate are
+          touched. The post-destroy inventory reuses them, so a resource that survives
+          without its current label or tag is still attributed. Required evidence is
+          checked before the first destructive operation; optional observation failures
+          are reported and left to the post-destroy inventory. *)
+       let pre_observations = deps.observe_residue ~pre_destroy:!state in
+       let previously_attributed = collect_previously_attributed pre_observations in
+       let required_failures = required_pre_inventory_failures pre_observations in
+       let optional_failures = optional_pre_inventory_failures pre_observations in
+       List.iter
+         (fun failure ->
+            deps.report
+              (Printf.sprintf
+                 "  warning: the pre-destroy inventory could not observe %s; the \
+                  post-destroy inventory will decide."
+                 failure))
+         optional_failures;
+       let require_identity_evidence = !substrate <> Substrate_absent in
+       if require_identity_evidence && required_failures <> []
+       then
+         block
+           (Printf.sprintf
+              "the pre-destroy identity evidence required to verify this target's \
+               controller-created resources could not be established: %s. Nothing was \
+               destroyed, because without those identities Sol could not later establish \
+               absence for the resources they describe."
+              (String.concat "; " required_failures))
+       else if Sol_cli_cloud_lifecycle.ready_policy_applies phase
        then
          fail
            (Preparation_refused
@@ -603,9 +668,19 @@ let execute ~deps =
                              it is removed with the substrate; destruction continues and \
                              the absence check decides whether anything is left"
                             message);
-                       destroy_and_verify ~cloud_exists ~cleanup ~preparation
+                       destroy_and_verify
+                         ~cloud_exists
+                         ~cleanup
+                         ~preparation
+                         ~previously_attributed
+                         ~pre_inventory_failures:required_failures
                      | Cleanup_not_needed | Cleanup_succeeded ->
-                       destroy_and_verify ~cloud_exists ~cleanup ~preparation))))))
+                       destroy_and_verify
+                         ~cloud_exists
+                         ~cleanup
+                         ~preparation
+                         ~previously_attributed
+                         ~pre_inventory_failures:required_failures))))))
 ;;
 
 let guard_preparation_policy ~addresses : Sol_cli_terraform_plan.policy =
