@@ -210,6 +210,7 @@ type calls =
   ; mutable platform : int
   ; mutable remove : int
   ; mutable substrate : int
+  ; mutable authorization : int
   ; mutable verify : int
   ; mutable reports : string list
   ; mutable order : string list
@@ -235,6 +236,8 @@ let fake_deps
       ?(release_workloads = fun () -> Sol_cli_workload_scope.Workloads_released)
       ?(accept_unreleased = false)
       ?(destroy_substrate = fun () -> Ok ())
+      ?(destroy_authorization =
+        fun () -> Ok "authorization: the reconciler identity and its fence were removed")
       ?(verify_destruction = fun ~pre_destroy:_ ~preparation:_ -> verified_observation)
       ()
   =
@@ -249,6 +252,7 @@ let fake_deps
     ; platform = 0
     ; remove = 0
     ; substrate = 0
+    ; authorization = 0
     ; verify = 0
     ; reports = []
     ; order = []
@@ -317,6 +321,10 @@ let fake_deps
           calls.substrate <- calls.substrate + 1;
           calls.order <- "substrate" :: calls.order;
           destroy_substrate ())
+    ; destroy_authorization =
+        (fun () ->
+          calls.authorization <- calls.authorization + 1;
+          destroy_authorization ())
     ; verify_destruction =
         (fun ~pre_destroy ~preparation ->
           calls.verify <- calls.verify + 1;
@@ -3489,4 +3497,127 @@ let test_rds_identity_is_the_counted_address () =
 
 let%test "verification: RDS identity uses the counted Terraform address (BUG-209)" =
   test_rds_identity_is_the_counted_address ()
+;;
+
+let test_authorization_teardown_is_required_for_success () =
+  let deps, calls =
+    fake_deps
+      ~destroy_authorization:(fun () -> Error "the authorization root destroy failed")
+      ()
+  in
+  let outcome = execute ~deps in
+  (match outcome with
+   | Destroy_failed
+       { failure = Authorization_not_removed message; verification = None; _ } ->
+     Windtrap.equal
+       Windtrap.bool
+       ~msg:"the failure carries the authorization stage's own error"
+       true
+       (Sol_cli_string.contains ~needle:"authorization root destroy failed" message);
+     Windtrap.equal
+       Windtrap.int
+       ~msg:"and the command does not exit 0"
+       1
+       (exit_code outcome)
+   | Destroy_succeeded _ ->
+     Windtrap.fail
+       "a failed authorization teardown must not be reported as a verified destroy"
+   | _ -> Windtrap.fail "expected the authorization failure to fail the destroy");
+  Windtrap.equal Windtrap.int ~msg:"the teardown ran exactly once" 1 calls.authorization;
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"the substrate is left standing after an authorization failure"
+    0
+    calls.substrate
+;;
+
+let test_authorization_teardown_evidence_is_reported () =
+  let deps, calls = fake_deps () in
+  let outcome = execute ~deps in
+  Windtrap.equal Windtrap.int ~msg:"the destroy still succeeds" 0 (exit_code outcome);
+  Windtrap.equal Windtrap.int ~msg:"the teardown ran exactly once" 1 calls.authorization;
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"its evidence is part of the success report"
+    true
+    (List.exists
+       (fun report -> Sol_cli_string.contains ~needle:"reconciler identity" report)
+       calls.reports)
+;;
+
+let%test "authorization: a failed teardown fails the destroy postcondition" =
+  test_authorization_teardown_is_required_for_success ()
+;;
+
+let%test "authorization: a successful teardown is reported before completion" =
+  test_authorization_teardown_evidence_is_reported ()
+;;
+
+let guarded_state resources = inventory_of_show_json (show_json_resources resources)
+
+let counted_sql ?deletion_protection () =
+  Printf.sprintf
+    {|{"address":"google_sql_database_instance.postgres[0]","type":"google_sql_database_instance","values":{%s}}|}
+    (match deletion_protection with
+     | None -> {|"deletion_protection":null|}
+     | Some value -> Printf.sprintf {|"deletion_protection":%b|} value)
+;;
+
+let gke ?(deletion_protection = false) () =
+  Printf.sprintf
+    {|{"address":"google_container_cluster.main","type":"google_container_cluster","values":{"deletion_protection":%b}}|}
+    deletion_protection
+;;
+
+let expect_guard_error ?(contains = "") state =
+  match Sol_cli_gcp_destruction.verify_guards ~state with
+  | Ok () -> Windtrap.fail "the guard verification unexpectedly succeeded"
+  | Error message ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:("the guard refusal names: " ^ contains)
+      true
+      (Sol_cli_string.contains ~needle:contains message)
+;;
+
+let test_counted_cloud_sql_guard_is_verified () =
+  (* The configuration counts the SQL instance, so its state address is [0]. Looking up the
+     bare address finds nothing and must never be read as "protection is off". *)
+  expect_guard_error
+    ~contains:"Cloud SQL deletion protection is still enabled"
+    (guarded_state (counted_sql ~deletion_protection:true ()));
+  (match
+     Sol_cli_gcp_destruction.verify_guards
+       ~state:(guarded_state (counted_sql ~deletion_protection:false ()))
+   with
+   | Ok () -> ()
+   | Error message -> Windtrap.failf "a lowered counted guard must verify: %s" message);
+  expect_guard_error ~contains:"cannot be verified" (guarded_state (counted_sql ()));
+  expect_guard_error
+    ~contains:"GKE deletion protection is still enabled"
+    (guarded_state (gke ~deletion_protection:true ()));
+  (match
+     Sol_cli_gcp_destruction.verify_guards
+       ~state:(guarded_state (gke ~deletion_protection:false ()))
+   with
+   | Ok () -> ()
+   | Error message -> Windtrap.failf "a lowered GKE guard must verify: %s" message);
+  (match
+     Sol_cli_gcp_destruction.verify_guards
+       ~state:
+         (guarded_state
+            (counted_sql ~deletion_protection:false ()
+             ^ ","
+             ^ gke ~deletion_protection:false ()))
+   with
+   | Ok () -> ()
+   | Error message -> Windtrap.failf "both lowered guards must verify: %s" message);
+  expect_guard_error
+    ~contains:"no guarded resource is in state"
+    (guarded_state
+       {|{"address":"google_sql_database.postgres","type":"google_sql_database","values":{}}|})
+;;
+
+let%test "GCP preparation: the counted Cloud SQL guard is verified, not assumed" =
+  test_counted_cloud_sql_guard_is_verified ()
 ;;

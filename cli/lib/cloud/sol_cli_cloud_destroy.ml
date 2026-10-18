@@ -181,6 +181,7 @@ type failure =
   | Platform_destroy_failed of string
   | Substrate_destroy_failed of string
   | Verification_failed of string
+  | Authorization_not_removed of string
   | Elevated_access_not_removed of string
   | Release_unestablished of string
 
@@ -217,6 +218,11 @@ let failure_message = function
   | Platform_destroy_failed message -> message
   | Substrate_destroy_failed message -> message
   | Verification_failed message -> message
+  | Authorization_not_removed message ->
+    Printf.sprintf
+      "the authorization reconciler identity and its fence were not torn down, so the \
+       substrate was left standing and destruction did not reach its postcondition: %s"
+      message
   | Elevated_access_not_removed message -> message
   | Release_unestablished message ->
     Printf.sprintf
@@ -288,6 +294,7 @@ type deps =
   ; release_workloads : unit -> Sol_cli_workload_scope.release
   ; accept_unreleased : bool
   ; destroy_substrate : unit -> (unit, string) result
+  ; destroy_authorization : unit -> (string, string) result
   ; verify_destruction :
       pre_destroy:state_read
       -> preparation:preparation
@@ -439,19 +446,23 @@ let execute ~deps =
         (Printf.sprintf
            "  lifecycle phase: %s"
            (Sol_cli_cloud_lifecycle.phase_to_string Sol_cli_cloud_lifecycle.Destroying));
-    match deps.destroy_substrate () with
-    | Error message -> fail ~cleanup (Substrate_destroy_failed message)
-    | Ok () ->
-      deps.report "\nVerifying teardown...";
-      let observation = deps.verify_destruction ~pre_destroy:!state ~preparation in
-      let verdict = Sol_cli_destroy_verification.classify observation in
-      if Sol_cli_destroy_verification.is_verified verdict
-      then succeed ~cleanup ~verification:observation preparation
-      else
-        fail
-          ~cleanup
-          ~verification:observation
-          (Verification_failed (Sol_cli_destroy_verification.verdict_message verdict))
+    match deps.destroy_authorization () with
+    | Error message -> fail ~cleanup (Authorization_not_removed message)
+    | Ok evidence ->
+      deps.report ("  " ^ evidence);
+      (match deps.destroy_substrate () with
+       | Error message -> fail ~cleanup (Substrate_destroy_failed message)
+       | Ok () ->
+         deps.report "\nVerifying teardown...";
+         let observation = deps.verify_destruction ~pre_destroy:!state ~preparation in
+         let verdict = Sol_cli_destroy_verification.classify observation in
+         if Sol_cli_destroy_verification.is_verified verdict
+         then succeed ~cleanup ~verification:observation preparation
+         else
+           fail
+             ~cleanup
+             ~verification:observation
+             (Verification_failed (Sol_cli_destroy_verification.verdict_message verdict)))
   in
   match deps.require_credentials () with
   | Error message -> fail (Credentials_failed message)

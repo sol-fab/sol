@@ -110,6 +110,7 @@ type t =
   ; scoped_identities : string list
   ; authorization_reconciler_field : string
   ; authorization_trust_field : string
+  ; authorization_destroy_trust_placeholder : string
   ; authorization_root_vars :
       Sol_cli_config.target -> ((string * string) list, string) result
   ; authorization_fence_addresses : string list
@@ -159,6 +160,7 @@ val aws : t
 val gcp : t
 val byo : t
 val capabilities_of : Sol_cli_provider.t -> t
+val authorization_trust : Sol_cli_config.target -> string option
 val validate_target : Sol_cli_provider.t -> Sol_cli_config.target -> (unit, string) result
 val owns_root : Sol_cli_provider.t -> bool
 val provider_console_url : Sol_cli_config.target -> string option

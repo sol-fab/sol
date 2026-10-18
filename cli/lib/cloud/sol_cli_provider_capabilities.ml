@@ -119,6 +119,7 @@ type t =
   ; scoped_identities : string list
   ; authorization_reconciler_field : string
   ; authorization_trust_field : string
+  ; authorization_destroy_trust_placeholder : string
   ; authorization_root_vars :
       Sol_cli_config.target -> ((string * string) list, string) result
   ; authorization_fence_addresses : string list
@@ -984,6 +985,8 @@ let aws : t =
       ]
   ; authorization_reconciler_field = "reconciler_role_arn"
   ; authorization_trust_field = "reconciler_trust_principal_arn"
+  ; authorization_destroy_trust_placeholder =
+      "arn:aws:iam::000000000000:role/sol-destroy-placeholder"
   ; authorization_root_vars = aws_authorization_root_vars
   ; authorization_fence_addresses =
       [ "aws_iam_policy.workload_boundary"
@@ -1213,6 +1216,8 @@ let gcp : t =
   ; scoped_identities = []
   ; authorization_reconciler_field = "reconciler_service_account"
   ; authorization_trust_field = "reconciler_trust_principal"
+  ; authorization_destroy_trust_placeholder =
+      "user:sol-destroy-placeholder@example.invalid"
   ; authorization_root_vars = gcp_authorization_root_vars
   ; authorization_fence_addresses =
       [ "google_service_account.reconciler"
@@ -1274,6 +1279,7 @@ let byo : t =
   ; scoped_identities = []
   ; authorization_reconciler_field = ""
   ; authorization_trust_field = ""
+  ; authorization_destroy_trust_placeholder = ""
   ; authorization_root_vars = (fun _ -> Ok [])
   ; authorization_fence_addresses = []
   ; authorization_reconciler = (fun _ -> Error byo_no_root)
@@ -1287,6 +1293,13 @@ let capabilities_of = function
   | Sol_cli_provider.Aws -> aws
   | Sol_cli_provider.Gcp -> gcp
   | Sol_cli_provider.Byo -> byo
+;;
+
+let authorization_trust (target : Sol_cli_config.target) =
+  let capabilities = capabilities_of target.provider in
+  match Sol_cli_config.provider_field target capabilities.authorization_trust_field with
+  | Some value when not (Sol_cli_string.is_blank value) -> Some value
+  | Some _ | None -> None
 ;;
 
 let validate_target provider (target : Sol_cli_config.target) =

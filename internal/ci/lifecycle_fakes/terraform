@@ -198,6 +198,12 @@ JSON
         ;;
     esac
     case " $* " in
+      *cloud/gcp/authorization*|*cloud/aws/authorization*)
+        printf '{"values":{"root_module":{"resources":[]}}}\n'
+        exit 0
+        ;;
+    esac
+    case " $* " in
       *cloud/gcp/platform*|*cloud/aws/platform*)
         if [ "${PARTIAL_INSTALL:-}" = 1 ]; then
           if [ "${CRD_SERVED:-}" = 1 ]; then

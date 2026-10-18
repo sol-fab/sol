@@ -372,6 +372,59 @@ let unlistable =
    inventory that did not run cannot establish absence"
 ;;
 
+let authorization_checks ~project ~(target : Sol_cli_config.target) =
+  let account_id = "sol-" ^ target.env ^ "-authorization" in
+  let email = account_id ^ "@" ^ project ^ ".iam.gserviceaccount.com" in
+  let role =
+    "projects/"
+    ^ project
+    ^ "/roles/sol_"
+    ^ String.map
+        (function
+          | '-' -> '_'
+          | c -> c)
+        target.env
+    ^ "_authorization"
+  in
+  [ identity_check
+      ~resource_class:"authorization service account"
+      ~identity:email
+      ~attribution:
+        (Named_for_target
+           "the target's environment names the authorization reconciler identity")
+      ~attributable:(fun line -> line = email)
+      ~normalize:(fun line -> line)
+      [ "--project"
+      ; project
+      ; "iam"
+      ; "service-accounts"
+      ; "list"
+      ; "--format"
+      ; "value(email)"
+      ]
+  ; identity_check
+      ~resource_class:"authorization custom role"
+      ~identity:role
+      ~attribution:
+        (Named_for_target
+           "the target's environment names the authorization reconciler role")
+      ~attributable:(fun line -> line = role)
+      ~normalize:(fun line -> line)
+      [ "--project"; project; "iam"; "roles"; "list"; "--format"; "value(name)" ]
+  ]
+;;
+
+let strict_authorization_observation ~check =
+  match run ~check with
+  | Unobservable u ->
+    Unobservable
+      { u with
+        resource_class = Sol_cli_absence.scope_class
+      ; reason = check.resource_class ^ ": " ^ u.reason
+      }
+  | observation -> observation
+;;
+
 let observations (target : Sol_cli_config.target) ~cluster_name =
   match project_of target with
   | None ->
@@ -382,6 +435,15 @@ let observations (target : Sol_cli_config.target) ~cluster_name =
       List.map
         (fun check -> run ~check)
         (checks ~project ~region:target.region ~cluster_name)
+    in
+    let observations =
+      if Sol_cli_provider_capabilities.authorization_trust target = None
+      then observations
+      else
+        observations
+        @ List.map
+            (fun check -> strict_authorization_observation ~check)
+            (authorization_checks ~project ~target)
     in
     derived_by_vpc ~cluster_name observations @ durable_observations ~target ~cluster_name
 ;;
