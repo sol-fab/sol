@@ -256,35 +256,61 @@ let with_called_by (specs : Sol_cli_deployment_plan.service_spec list) =
     { spec with called_by })
 ;;
 
-let service_specs_of_release ?config (release : Sol_cli_release.t) =
+(* Historical dependency names must still have current authorities. This checks
+   availability, not today's service declarations: the release owns the uses edges. *)
+let validate_resource_requirements
+      ~(config : Sol_cli_config.t)
+      (release : Sol_cli_release.t)
+  =
+  let available =
+    Sol_cli_config.resources config
+    |> List.map (fun (r : Sol_cli_config.resource) -> r.name)
+  in
+  let* required =
+    release.workloads
+    |> List.concat_map (fun (w : Sol_cli_release.recorded_workload) -> w.spec.uses)
+    |> Sol_cli_result.map_list (fun reference ->
+      match Sol_cli_deployment_plan.resource_name_of_ref reference with
+      | Some resource -> Ok resource
+      | None ->
+        Error
+          (Printf.sprintf
+             "cannot restore release %s: invalid resource requirement %S"
+             release.release_id
+             reference))
+  in
+  let missing =
+    required
+    |> List.filter (fun resource -> not (List.mem resource available))
+    |> List.sort_uniq String.compare
+  in
+  match missing with
+  | [] -> Ok ()
+  | _ ->
+    Error
+      (Printf.sprintf
+         "cannot restore release %s: target %s no longer provides its required resources \
+          (%s)"
+         release.release_id
+         config.target.name
+         (String.concat ", " missing))
+;;
+
+let service_specs_of_release ?database (release : Sol_cli_release.t) =
   (* A rollback restores the release's **recorded** requirements against the **current** target's
      authorities and bindings. The release answers "what did this version require?"; the target
      answers "where does that credential come from today?". Neither is asked the other's question,
      which is the conflation this prevents (#1422).
 
-     A resolution failure **refuses**. Widening it into "no bindings" is the fail-open defect: the
-     rollback would render a workload with no database dependency rather than saying it cannot
-     tell. *)
+     The caller resolves the selection before acquiring mutation authority. This
+     projection accepts that selection, so migration reads, class delivery and
+     restored workloads never re-interpret the current configuration. *)
   let database_targets =
-    match config with
-    | None -> Ok (fun _ -> Sol_cli_resource_binding.No_postgres_use)
-    | Some config ->
-      let* database =
-        Sol_cli_resource_binding.resolve_postgres config
-        |> Result.map_error (fun message ->
-          Printf.sprintf
-            "the rollback cannot resolve target %s's resource bindings, so the released \
-             workloads' declared requirements cannot be resolved against it: %s"
-            config.Sol_cli_config.target.name
-            message)
-      in
-      let target =
-        Sol_cli_kubernetes_name.sanitize_name config.Sol_cli_config.target.name
-      in
-      (* Requirements are historical; selection and trust are the current target's. *)
-      Ok (Sol_cli_deployment_plan.database_for_uses ~target:(Some target) ~database)
+    match database with
+    | None -> fun _ -> Sol_cli_resource_binding.No_postgres_use
+    | Some (target, database) ->
+      Sol_cli_deployment_plan.database_for_uses ~target:(Some target) ~database
   in
-  let* database_targets = database_targets in
   let rec go acc = function
     | [] -> Ok (List.rev acc)
     | (w : Sol_cli_release.recorded_workload) :: rest ->
@@ -1205,7 +1231,7 @@ let pointer_report_to_string ~(release : Sol_cli_release.t) = function
 ;;
 
 type transaction_deps =
-  { config : Sol_cli_config.t option
+  { database : (string * Sol_cli_resource_binding.postgres) option
   ; ensure_held : unit -> (unit, string) result
   ; applied_migrations : unit -> (int list, string) result
   ; apply : (Sol_cli_deployment_plan.service_spec * string) list -> (unit, string) result
@@ -1252,7 +1278,7 @@ let execute
     | Error e -> Error (migration_check_error_to_string e)
     | Ok () -> Ok ()
   in
-  let* specs = service_specs_of_release ?config:deps.config release in
+  let* specs = service_specs_of_release ?database:deps.database release in
   let* () = deps.ensure_held () in
   let* () =
     match deps.apply specs with
