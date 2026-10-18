@@ -386,6 +386,25 @@ let%test "AWS VPC inventory: a cluster-tagged VPC is Present" =
        | _ -> Windtrap.fail "a cluster-tagged VPC must be Present")
 ;;
 
+let%test "AWS VPC inventory: the tag read covers the cluster tag and the Name" =
+  with_inventory_script
+    ~vpc_tags:""
+    ~subnet_tags:""
+    ~vpc_cluster_tagged:false
+    ~subnet_cluster_tagged:false
+    (fun ~log ~observations:_ ->
+       let tag_calls = arguments_of ~log ~contains:"ec2 describe-tags" in
+       Windtrap.equal
+         Windtrap.bool
+         ~msg:"the VPC tag read attributes either the cluster tag or the provisioned Name"
+         true
+         (List.exists
+            (fun call ->
+               Sol_cli_string.contains ~needle:"kubernetes.io/cluster/acme-prod" call
+               && Sol_cli_string.contains ~needle:"starts_with(Value, 'acme-prod-')" call)
+            tag_calls))
+;;
+
 let aws_not_found_needles = [ "notfound"; "not found"; "does not exist"; "no such" ]
 let gcp_not_found_needles = [ "not found"; "notfound"; "does not exist"; "was not found" ]
 
