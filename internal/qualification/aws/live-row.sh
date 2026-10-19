@@ -1165,21 +1165,6 @@ phase_app() {
   require_target_terraform_var_file || return 1
   ensure_contexts || return 1
   verify_identity_boundary || return 1
-  # The CA family records an independent observation authority before the
-  # migration step. With the read-only transport it uses the qualifier identity;
-  # a TRANSPORT=0 run observes through the deploy identity, never the product's
-  # own report.
-  if [ "$TRANSPORT" = 1 ] && [ ! -f "$QUALIFIER_KUBECONFIG" ]; then
-    phase_transport || return 1
-  fi
-  if [ "$TRANSPORT" = 1 ]; then
-    CA_KUBECONFIG="$QUALIFIER_KUBECONFIG"
-    CA_CONTEXT="$CLUSTER-qualifier"
-  else
-    CA_KUBECONFIG="$DEPLOY_KUBECONFIG"
-    CA_CONTEXT="$CLUSTER-deploy"
-  fi
-  record_ca_authority || return 1
   app_require_published_images || return 1
   say "runner: release $SOL_BUNDLE_VERSION names $SOL_RUNNER_IMAGE; the publisher publishes nothing"
   capture_state
@@ -1227,6 +1212,23 @@ phase_app() {
       return 1
     fi
   fi
+  # The observation RoleBindings are namespace-scoped: the transport cannot bind
+  # them until Sol's first deploy has created the declared application namespaces.
+  # Establish it after that deploy (which moves no workload) and before the
+  # migration step, so the CA family's migration observation has an independent
+  # read authority. With TRANSPORT=0 the same observations use the deploy
+  # identity, never the product's own report.
+  if [ "$TRANSPORT" = 1 ] && [ ! -f "$QUALIFIER_KUBECONFIG" ]; then
+    phase_transport || return 1
+  fi
+  if [ "$TRANSPORT" = 1 ]; then
+    CA_KUBECONFIG="$QUALIFIER_KUBECONFIG"
+    CA_CONTEXT="$CLUSTER-qualifier"
+  else
+    CA_KUBECONFIG="$DEPLOY_KUBECONFIG"
+    CA_CONTEXT="$CLUSTER-deploy"
+  fi
+  record_ca_authority || return 1
   say "app-deploy-migrate"
   # The qualifier brackets the row's normal migration step: it runs the verified
   # candidate's own `migrate apply`, captures the actual Job and observes its CA
@@ -1254,9 +1256,6 @@ phase_app() {
     fi
   done
   say "  the deploy established the scoped deploy RBAC in every namespace it entered"
-  if [ "$TRANSPORT" = 1 ] && [ ! -f "$QUALIFIER_KUBECONFIG" ]; then
-    phase_transport || return 1
-  fi
   if [ "$TRANSPORT" = 1 ]; then
     export KUBECONFIG_TRANSPORT="$QUALIFIER_KUBECONFIG"
     if ! run app-transaction bash "$ROOT/internal/qualification/aws/transport-transaction.sh" "$LOG_DIR"; then

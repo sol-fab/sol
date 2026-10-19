@@ -1309,6 +1309,22 @@ exists "and the application's own logs are captured for the record" "$TMP/apptra
 exists "for the worker too" "$TMP/apptransport.logs/app-worker.log"
 establish_at="$(grep -n 'transport-establish' "$TMP/apptransport.out" | head -1 | cut -d: -f1)"
 transaction_at="$(grep -n 'app-transaction' "$TMP/apptransport.out" | head -1 | cut -d: -f1)"
+gate_at="$(grep -n 'app-deploy-gate' "$TMP/apptransport.out" | head -1 | cut -d: -f1)"
+migrate_at="$(grep -n 'app-deploy-migrate' "$TMP/apptransport.out" | head -1 | cut -d: -f1)"
+if [ -n "$gate_at" ] && [ -n "$establish_at" ] && [ "$gate_at" -lt "$establish_at" ]; then
+  ok "and establishment follows the deploy that creates the observation namespaces"
+else
+  no "and establishment follows the deploy that creates the observation namespaces" \
+    "app-deploy-gate before transport-establish" \
+    "gate at ${gate_at:-none}, establish at ${establish_at:-none}"
+fi
+if [ -n "$establish_at" ] && [ -n "$migrate_at" ] && [ "$establish_at" -lt "$migrate_at" ]; then
+  ok "and establishment precedes the migration observation"
+else
+  no "and establishment precedes the migration observation" \
+    "transport-establish before app-deploy-migrate" \
+    "establish at ${establish_at:-none}, migrate at ${migrate_at:-none}"
+fi
 if [ -n "$establish_at" ] && [ -n "$transaction_at" ] && [ "$establish_at" -lt "$transaction_at" ]; then
   ok "and establishment precedes the transaction"
 else

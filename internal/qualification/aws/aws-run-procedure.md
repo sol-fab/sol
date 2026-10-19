@@ -213,8 +213,15 @@ confirm the qualifier can open the transport. Evidence:
 the transport identity separately from the identities under qualification, and shows none of
 the latter holds `pods/portforward` before or after.
 
-**`app`** — Sol's work with the digests the cloud phase published: set the runtime secrets,
-`sol migrate apply <target>`, `sol deploy <target> --registry <registry> --image-ref
+The observation reads (`deployments`, `jobs`, `configmaps`) are namespace-scoped RoleBindings,
+so they can be bound only after Sol has created the declared application namespaces. `app`
+therefore establishes the transport after its first deploy — which moves no workload — and
+before the migration observation. The standalone `transport` phase refuses on a fresh target
+rather than binding those reads cluster-wide: the phase name is a diagnostic/re-run entry point
+for a target whose declared namespaces already exist, not a pre-deploy step.
+
+**`app`** — Sol's work with the digests the cloud phase published: `sol migrate apply <target>`,
+`sol deploy <target> --registry <registry> --image-ref
 <unit>=<repo>@sha256:<digest>` for every selected unit, then drive the representative
 transaction through the transport (`transport-transaction.sh`, port-forward to the private
 `ClusterIP`). Evidence: `app-transaction.log`, `transport-port-forward.log`,
