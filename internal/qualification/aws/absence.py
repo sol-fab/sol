@@ -857,6 +857,23 @@ def check_s3_bucket(runner: Runner, runtime: Runtime) -> Observation:
 
 
 
+_AWS_CLI_ERROR_PREFIX = "aws: [ERROR]: "
+
+
+def aws_error_is(stderr: str, operation: str, code: str) -> bool:
+    """True only for the provider's own error answer for ``operation`` and ``code``.
+
+    The CLI may prefix the diagnostic with ``aws: [ERROR]: ``. A permission error
+    that happens to quote the code (for example AccessDenied naming the role) is a
+    failed observation, not the provider's answer about the requested resource, so
+    only a line that starts with the operation and code matches.
+    """
+    line = stderr.strip()
+    if line.startswith(_AWS_CLI_ERROR_PREFIX):
+        line = line[len(_AWS_CLI_ERROR_PREFIX):]
+    return line.startswith(f"An error occurred ({code}) when calling the {operation} operation:")
+
+
 def check_kafka_secret(runner: Runner, runtime: Runtime) -> Observation:
     # Exact DescribeSecret avoids ListSecrets' eventual consistency and includes
     # scheduled deletions. Metadata only: qualification never records SecretString.
@@ -868,8 +885,8 @@ def check_kafka_secret(runner: Runner, runtime: Runtime) -> Observation:
     reads.queries.append(argv)
     reads.raw.append(result.stdout if result.returncode == 0 else result.stderr)
     attribution = "the target's exact native Kafka authority name in the bound account/region"
-    if not result.timed_out and result.returncode != 0 and result.stderr.strip().startswith(
-        "An error occurred (ResourceNotFoundException) when calling the DescribeSecret operation:"
+    if not result.timed_out and result.returncode != 0 and aws_error_is(
+        result.stderr, "DescribeSecret", "ResourceNotFoundException"
     ):
         return observation("kafka-secret", [], name, attribution, reads)
     if result.timed_out or result.returncode != 0:

@@ -8,12 +8,18 @@ type check =
   ; attributable : string -> bool
   ; tagged_with : (string -> string list) option
   ; checked_as : string
+  ; (* A targeted read (one named cluster, one named Secret) answers
+       not-found for exactly the resource it was asked about, so that answer
+       is absence. An enumeration's not-found may name the account, region,
+       caller or filter instead, so it stays Unobservable. *)
+    not_found_is_absence : bool
   }
 
 let check
       ?(attributable = fun _ -> true)
       ?tagged_with
       ?checked_as
+      ?(not_found_is_absence = false)
       ~resource_class
       ~identity
       ~attribution
@@ -26,6 +32,7 @@ let check
   ; attributable
   ; tagged_with
   ; checked_as = Option.value checked_as ~default:("aws " ^ String.concat " " argv)
+  ; not_found_is_absence
   }
 ;;
 
@@ -133,11 +140,13 @@ let run ?(previously_attributed = []) ~check () =
         ; checked_with = check.checked_as
         }
   in
-  (* The top-level probes are enumerations. A failed enumeration is unknown, even when
-     the provider's message contains "not found": the subject may be the account, region,
-     caller or filter, not the resource. Only a successful empty listing establishes
-     absence. *)
+  (* An enumeration's failure is unknown, even when the provider's message contains
+     "not found": the subject may be the account, region, caller or filter, not the
+     resource. Only a successful empty listing establishes absence. A targeted read
+     asks about one named resource, so its not-found answer is the absence of that
+     resource; `not_found_is_absence` names that difference at the check. *)
   match run_argv check.argv with
+  | Error (`NotFound _) when check.not_found_is_absence -> observed []
   | Error (`NotFound reason) | Error (`Failed reason) -> unobservable reason
   | Ok candidates ->
     let prior = prior_for check.resource_class previously_attributed in
@@ -282,6 +291,7 @@ let checks ~region ~cluster_name =
       ~identity:cluster_name
       ~attribution:(Within_target "an EKS node group of the target's own cluster")
       ~attributable:(fun line -> line <> "")
+      ~not_found_is_absence:true
       [ "eks"
       ; "list-nodegroups"
       ; "--cluster-name"
