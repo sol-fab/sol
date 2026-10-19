@@ -262,10 +262,20 @@ let native_read resource decode json =
     | Job -> "JobList", "batch/v1"
     | Configmap -> "ConfigMapList", "v1"
   in
-  if optional_text "kind" json <> Some expected_list
+  (* `kubectl get <resource> --field-selector ... -o json` returns the generic
+     `List` envelope (`apiVersion: v1`), not the typed `JobList`/`ConfigMapList`.
+     Both carry the same `items`; accept either, and check each envelope's own
+     API version. *)
+  let kind = optional_text "kind" json in
+  if kind <> Some expected_list && kind <> Some "List"
   then Present (decode json)
   else (
-    if string "apiVersion" json <> version then invalid "wrong list API version";
+    let api_version = string "apiVersion" json in
+    (match kind with
+     | Some expected when expected = expected_list ->
+       if api_version <> version then invalid "wrong list API version"
+     | Some "List" -> if api_version <> "v1" then invalid "wrong generic list API version"
+     | _ -> assert false);
     let metadata = required "metadata" json in
     ignore (string "resourceVersion" metadata);
     (match optional "continue" metadata with

@@ -775,6 +775,16 @@ let test_manifest_and_secrecy () =
       (E.verify_manifest ~directory ~run ~obligations ~required_captures:[] manifest))
 ;;
 
+let test_generic_list_envelope () =
+  let read q =
+    let reply = baseline "aws" q in
+    if q.K.resource = K.Configmap
+    then modify_stdout (set "kind" (`String "List")) reply
+    else reply
+  in
+  run_read read (fun _ _ _ _ outcomes -> all "PASS" outcomes)
+;;
+
 let () =
   Alcotest.run
     "Kubernetes CA qualification"
@@ -783,6 +793,7 @@ let () =
           (fun (name, test) -> Alcotest.test_case name `Quick test)
           [ "one shared AWS/GCP observer", test_shared
           ; "multiple namespaces and direct object schemas", test_namespaces_and_objects
+          ; "generic List envelope from kubectl", test_generic_list_envelope
           ; "container and volume chain", test_mounts
           ; "one broken consumer among healthy neighbours", test_single_consumer_failure
           ; "candidate CA key and ConfigMap identity", test_projection
