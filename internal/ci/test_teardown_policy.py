@@ -81,21 +81,21 @@ def main() -> int:
         aws_policy == aws_expected,
     )
     check(
-        "the AWS policy has 18 disposable classes and one durable class",
-        sum(1 for expected in aws_policy.values() if expected == "absent") == 18
+        "the AWS policy has 19 disposable classes and one durable class",
+        sum(1 for expected in aws_policy.values() if expected == "absent") == 19
         and sum(1 for expected in aws_policy.values() if expected == "present") == 1,
     )
 
     gcp_expected = gcp_inventory_classes()
     gcp_policy = policy_classes(policy, "gcp")
-    check("the GCP inventory declares 23 classes", len(gcp_expected) == 23)
+    check("the GCP inventory declares 24 classes", len(gcp_expected) == 24)
     check(
         "the GCP policy matches every inventory class and its expectation",
         gcp_policy == gcp_expected,
     )
     check(
-        "the GCP policy has 18 disposable classes",
-        sum(1 for expected in gcp_policy.values() if expected == "absent") == 18,
+        "the GCP policy has 19 disposable classes",
+        sum(1 for expected in gcp_policy.values() if expected == "absent") == 19,
     )
     for scope in ("scope-caller", "scope-project", "scope-region"):
         check(f"the GCP policy requires {scope} to be present", gcp_policy.get(scope) == "present")

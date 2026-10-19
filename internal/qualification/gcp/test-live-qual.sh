@@ -19,6 +19,11 @@ cp -R "$HERE/fixtures" "$ROOT/internal/qualification/gcp/"
 cp "$REPO/internal/qualification/sol-under-test.sh" "$ROOT/internal/qualification/"
 cp "$REPO/internal/qualification/candidate-binding.sh" "$ROOT/internal/qualification/"
 cp "$REPO/internal/qualification/attempt.sh" "$ROOT/internal/qualification/"
+cp "$REPO/internal/qualification/kafka-delivery.py" "$ROOT/internal/qualification/"
+cp "$REPO/internal/qualification/state-evidence.py" "$ROOT/internal/qualification/"
+cp "$REPO/internal/qualification/application-secret-refusal.sh" "$ROOT/internal/qualification/"
+mkdir -p "$ROOT/internal/qualification/fixtures"
+cp -R "$REPO/internal/qualification/fixtures/application-secret-refusal" "$ROOT/internal/qualification/fixtures/"
 cp "$REPO/internal/qualification/transaction.py" "$ROOT/internal/qualification/"
 cat >"$ROOT/internal/qualification/database-contract-binding.py" <<'STUB'
 #!/usr/bin/env python3
@@ -142,6 +147,10 @@ printf 'sol %s [runner=%s] [setup=%s]\n' "$*" "${SOL_MIGRATION_RUNNER_IMAGE:-uns
 if [ -n "${STUB_SOL_SLEEP:-}" ]; then sleep "$STUB_SOL_SLEEP"; fi
 case "$1" in
   deploy)
+    if [ "${2:-}" = probe/byo/qualification ]; then
+      printf 'error: pluto-payments/secret-probe-secrets does not hold the required non-empty secret key(s): SOL_API_KEY.\n'
+      exit "${STUB_SECRET_PROBE_RC:-1}"
+    fi
     # The cloud phase's bootstrap deploy names a tag (no digest exists before the Artifact
     # Registry repositories do); the app phase's deploy pins digests.
     if printf '%s\n' "$*" | grep -qF -- '--image-tag'; then
@@ -291,7 +300,7 @@ case "$*" in
       printf "ERROR: (gcloud) The caller does not have permission\n" >&2; exit 1
     fi
     if [ "${STUB_STATE_WITH_OUTPUTS:-0}" = "1" ]; then
-      printf '{"version":4,"serial":7,"resources":[],"outputs":{"postgres_url":{"value":"postgresql://postgres:qual-secret@10.172.0.3/app","type":"string","sensitive":true}}}\n'
+      printf '{"version":4,"serial":7,"resources":[],"outputs":{"kafka_authority":{"value":{"secret_name":"sol-kafka-test-cluster","reference":"projects/sol-qualification/secrets/sol-kafka-test-cluster","username":"sol-workloads","mechanism":"SCRAM-SHA-256"}},"postgres_url":{"value":"postgresql://postgres:qual-secret@10.172.0.3/app","type":"string","sensitive":true}}}\n'
       exit 0
     fi
     printf '{"version":4,"serial":7,"resources":[]}\n'; exit 0 ;;
@@ -393,6 +402,20 @@ case "$*" in
     esac
     exit 0 ;;
   *"compute networks list"*)    printf "default\n"; exit 0 ;;
+  *"secrets versions access"*)
+    if [ "${STUB_KAFKA_DELIVERY:-ok}" = denied ]; then printf 'denied' >&2; exit 1; fi
+    printf testpass; exit 0 ;;
+  *"secrets list"*"--format=json"*)
+    case "${STUB_KAFKA_SECRET:-absent}" in
+      present) printf '[{"name":"projects/123/secrets/sol-kafka-test-cluster"}]\n' ;;
+      disabled) printf '[{"name":"projects/123/secrets/sol-kafka-test-cluster","labels":{"version-state":"DISABLED"}}]\n' ;;
+      permission) printf 'PERMISSION_DENIED: secret metadata forbidden\n' >&2; exit 1 ;;
+      malformed) printf '{}\n' ;;
+      wrong-shape) printf '[{"name":null}]\n' ;;
+      unrelated) printf '[{"name":"projects/123/secrets/sol-kafka-another-cluster"}]\n' ;;
+      *) printf '[]\n' ;;
+    esac
+    exit 0 ;;
   *"secrets list"*)
     if [ "${STUB_SECRETS_LIST_FAIL:-0}" = "1" ]; then
       printf 'ERROR: (gcloud.secrets.list) PERMISSION_DENIED: Permission denied\n' >&2
@@ -541,6 +564,30 @@ kubectl_log_to="$ARGV_LOG"
 case " $* " in *"get --raw /readyz"*) kubectl_log_to="${API_PROBE_LOG:-$ARGV_LOG}" ;; esac
 printf 'kubectl %s [kubeconfig=%s]\n' "$*" "${KUBECONFIG:-none}" >>"$kubectl_log_to"
 case "$*" in
+  *"get deployments -n "*" -o json"*)
+    ns=""; prev=""
+    for word in "$@"; do [ "$prev" != -n ] || ns="$word"; prev="$word"; done
+    case "$ns" in
+      pluto-payments) name=orders-svc ;;
+      pluto-comms) name=fulfilment-worker ;;
+      *) printf '{"items":[]}\n'; exit 0 ;;
+    esac
+    printf '{"items":[{"metadata":{"name":"%s"},"spec":{"template":{"spec":{"containers":[{"env":[{"name":"KAFKA_SASL_PASSWORD","valueFrom":{"secretKeyRef":{"name":"target-kafka-creds","key":"KAFKA_SASL_PASSWORD"}}}],"volumeMounts":[{"name":"kafka-ca"}]}],"volumes":[{"name":"kafka-ca","secret":{"secretName":"target-kafka-creds","items":[{"key":"KAFKA_SSL_CA_CERT"}]}}]}}}}]}\n' "$name"
+    exit 0 ;;
+  *"get secret "*" -o json"*)
+    case "$*" in
+      *"get secret redpanda-users "*)
+        if [ "${STUB_NO_BROKER_CRED:-0}" = 1 ] || [ "${STUB_UNREADABLE_BROKER_CRED:-0}" = 1 ]; then exit 1; fi
+        printf '{"data":{"users.txt":"%s"}}\n' "$(printf sol-workloads:testpass:SCRAM-SHA-256 | base64 -w0)" ;;
+      *"get secret redpanda-default-cert "*)
+        printf '{"data":{"ca.crt":"%s"}}\n' "$(printf ca-certificate-for-tests | base64 -w0)" ;;
+      *"get secret target-kafka-creds "*)
+        value=testpass
+        [ "${STUB_KAFKA_DELIVERY:-ok}" != mismatch ] || value=wrongpass
+        printf '{"data":{"KAFKA_SASL_PASSWORD":"%s","KAFKA_SSL_CA_CERT":"%s"}}\n' "$(printf %s "$value" | base64 -w0)" "$(printf ca-certificate-for-tests | base64 -w0)" ;;
+      *) exit 1 ;;
+    esac
+    exit 0 ;;
   *" port-forward "*)
     # The application transaction owns a real port-forward's lifecycle, so the
     # stub must stay alive until the harness stops it. A separate mode models a
@@ -1042,12 +1089,12 @@ has "and the TypeScript units" "order_svc: {}" "$TARGET_FILE"
 # A durable target requires an authority for every key its units need; the durable shape's
 # authenticated Kafka makes KAFKA_SASL_PASSWORD/KAFKA_SSL_CA_CERT required for each included
 # unit, so the written target must declare them or `sol check` refuses.
-has "the durable target maps the platform Kafka keys the included OCaml units need" \
+lacks "the durable target delegates Kafka credentials to the resource binding" \
   "payments/orders_svc:" "$TARGET_FILE"
-has "for the worker too" "comms/fulfilment_worker:" "$TARGET_FILE"
-has "and the TypeScript units the row includes" "demo_ts/order_svc:" "$TARGET_FILE"
-has "and its worker" "demo_ts/fulfillment_worker:" "$TARGET_FILE"
-has "with the platform as the authority" "authority: sol" "$TARGET_FILE"
+lacks "no worker Kafka authority mapping remains" "comms/fulfilment_worker:" "$TARGET_FILE"
+lacks "no TypeScript Kafka authority mapping remains" "demo_ts/order_svc:" "$TARGET_FILE"
+lacks "no TypeScript worker Kafka authority mapping remains" "demo_ts/fulfillment_worker:" "$TARGET_FILE"
+lacks "no competing operator authority remains" "authority: sol" "$TARGET_FILE"
 lacks "but does not map a unit the target omits" "payments/charge_svc:" "$TARGET_FILE"
 has "Sol validates the declarations in this phase" "sol check" "$TMP/cloud-ok.argv"
 has "installation lifecycle is exercised through Sol" "sol deploy $TARGET --registry" "$TMP/cloud-ok.argv"
@@ -1080,48 +1127,19 @@ has "and the attempt identity too" "attempt: $ATTEMPT" "$TMP/cloud-ok.logs/evide
 present "$TMP/cloud-ok.logs/inventory-pre.identity" \
   "the provider inventory carries the attempt, target and state key"
 
-printf '\nscenario: the harness supplies the platform credential the install names, then resumes\n'
+printf '\nscenario: managed credential failure is never repaired by qualification\n'
 run_case credential-boundary cloud STUB_APPLY_CREDENTIAL_MISSING=1
-is "exit 0" "$(cat "$TMP/credential-boundary.rc")" "0"
-has "the harness creates the documented Secret in the namespace the install named" \
-  "create secret generic redpanda-users -n redpanda" "$TMP/credential-boundary.argv"
-has "with the SASL user the workload renderer names" "sol-workloads:" "$TMP/credential-boundary.argv"
-has "and the SCRAM mechanism the durable layer declares" "SCRAM-SHA-256" "$TMP/credential-boundary.argv"
-has "bound to the run's own kubeconfig" \
-  "[kubeconfig=$TMP/credential-boundary.logs/run-kubeconfig.yaml]" "$TMP/credential-boundary.argv"
-if [ "$(grep -c 'sol deploy' "$TMP/credential-boundary.argv")" -ge 2 ]; then
-  ok "and resumes the deploy once the prerequisite exists"
-else
-  no "and resumes the deploy once the prerequisite exists" "two whole-target deploy invocations" \
-    "$(grep -c 'sol deploy' "$TMP/credential-boundary.argv")"
-fi
-has "the run record states the credential was supplied" \
-  "platform_credential: redpanda/redpanda-users" "$TMP/credential-boundary.logs/prerequisites.txt"
-has "and that this run generated it" "platform_credential_source: generated-for-this-run" \
-  "$TMP/credential-boundary.logs/prerequisites.txt"
-lacks "and never records the value" "SCRAM-SHA-256" "$TMP/credential-boundary.logs/prerequisites.txt"
-present "$TMP/credential-boundary.logs/state/platform.tfstate" \
-  "the resumed apply's platform root is still credited in the bundle"
+is "credential initialization failure blocks the row" "$(cat "$TMP/credential-boundary.rc")" "1"
+lacks "the harness never creates the broker credential" "create secret generic redpanda-users" "$TMP/credential-boundary.argv"
+lacks "the harness never uses application secret writes" "secret set" "$TMP/credential-boundary.argv"
 
 printf '\nscenario: a state object that cannot be read is recorded, not demanded\n'
-run_case credential-boundary-nostate cloud STUB_APPLY_CREDENTIAL_MISSING=1 STUB_STATE_UNREADABLE=1
+run_case credential-boundary-nostate cloud STUB_STATE_UNREADABLE=1
 lacks "an unreadable state object does not by itself make the bundle incomplete" \
   "bundle member missing or empty: state/platform.tfstate" "$TMP/credential-boundary-nostate.out"
 has "the manifest reports what the run holds" "terraform state (platform)  MISSING" \
   "$TMP/credential-boundary-nostate.logs/evidence-manifest.txt"
 has "and the read that could not establish it is kept" "COULD NOT READ" "$TMP/credential-boundary-nostate.out"
-
-printf '\nscenario: a platform credential the harness cannot supply fails the run\n'
-run_case credential-refused cloud STUB_APPLY_CREDENTIAL_MISSING=1 STUB_SECRET_CREATE_FAILS=1
-if [ "$(cat "$TMP/credential-refused.rc")" != "0" ]; then
-  ok "the install does not proceed without the prerequisite the harness stands in for"
-else
-  no "the install does not proceed without the prerequisite the harness stands in for" "non-zero" "0"
-fi
-has "and the failure names the input the harness could not create" "redpanda/redpanda-users" \
-  "$TMP/credential-refused.out"
-lacks "and the harness does not claim a successful platform apply" "platform-apply ok" \
-  "$TMP/credential-refused.logs/cloud-apply.log"
 
 printf '\nscenario: a repeated invocation cannot reuse an occupied disposable target\n'
 run_case occupied cloud STUB_STATE_PRESENT=1
@@ -1261,29 +1279,14 @@ is "the app phase exits 0 when every step succeeds" "$(cat "$TMP/app-ok.rc")" "0
 printf '\nscenario: an absent broker credential refuses the app phase\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_NO_BROKER_CRED=1 run_case app-nobroker app
 is "the app phase refuses an absent broker credential" "$(cat "$TMP/app-nobroker.rc")" "1"
-has "and names the Secret it needs" "redpanda/redpanda-users" "$TMP/app-nobroker.out"
-has "and gives the command that creates it" \
-  "kubectl create secret generic redpanda-users -n redpanda" "$TMP/app-nobroker.out"
-has "and records the refusal as an observed absence" \
-  "refused: the durable shape requires the platform broker credential Secret redpanda/redpanda-users, which is absent" \
-  "$TMP/app-nobroker.logs/prerequisites.txt"
-lacks "and never records skipping the authenticated transport as acceptable" \
-  "scoped_out" "$TMP/app-nobroker.logs/prerequisites.txt"
-lacks "and supplies no Kafka platform secret" \
-  "app-secret-platform-KAFKA_SASL_PASSWORD" "$TMP/app-nobroker.argv"
-# A read that fails without saying not-found is not an absent Secret: the phase must distinguish
-# it, refuse, and keep the failed read's own evidence.
-printf '\nscenario: an unreadable broker credential refuses the app phase\n'
+has "missing broker input fails the independent comparison" \
+  "Kafka authority/delivery observation failed" "$TMP/app-nobroker.out"
+lacks "missing input never causes credential writes" "secret set" "$TMP/app-nobroker.argv"
+lacks "missing input never causes broker Secret creation" "create secret generic redpanda-users" "$TMP/app-nobroker.argv"
+printf '\nscenario: an unreadable broker input also refuses the app phase\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_UNREADABLE_BROKER_CRED=1 run_case app-broker-unreadable app
-is "the app phase refuses an unreadable broker credential" "$(cat "$TMP/app-broker-unreadable.rc")" "1"
-has "and says it could not establish presence" \
-  "could not establish whether redpanda/redpanda-users exists" "$TMP/app-broker-unreadable.out"
-has "and keeps the failed read's own error" "Forbidden" "$TMP/app-broker-unreadable.out"
-has "and records the read as unobservable, not absent" \
-  "platform_secret_keys: unobservable (the redpanda-users read failed without saying not-found)" \
-  "$TMP/app-broker-unreadable.logs/prerequisites.txt"
-lacks "and does not report absence it did not establish" \
-  "redpanda/redpanda-users is absent" "$TMP/app-broker-unreadable.logs/prerequisites.txt"
+is "an unreadable input blocks qualification" "$(cat "$TMP/app-broker-unreadable.rc")" "1"
+has "unknown input is never accepted" "Kafka authority/delivery observation failed" "$TMP/app-broker-unreadable.out"
 cp "$TMP/bin/curl" "$TMP/bin/curl.transaction"
 mv "$TMP/bin/curl.delegation" "$TMP/bin/curl"
 cp "$TMP/bin/curl" "$TMP/bin/curl.delegation"
@@ -1367,8 +1370,8 @@ has "and every selected workload is pinned by digest" \
 has "including the TypeScript namespace's service" \
   "--image-ref order_svc=us-central1-docker.pkg.dev/sol-qualification/test-cluster/pluto/order-svc@sha256:" \
   "$TMP/app-ok.argv"
-lacks "no mutable tag is passed to a profile that requires immutable artifacts" \
-  "--image-tag" "$TMP/app-ok.argv"
+lacks "the main deployment never uses a mutable workload tag" \
+  "--image-tag qual-" "$TMP/app-ok.argv"
 lacks "no operator POSTGRES_URL is set for the migration path" \
   "secret set POSTGRES_URL" "$TMP/app-ok.argv"
 # The image a deploy resolves is the release's own, so what must hold is that the bundle
@@ -1378,25 +1381,19 @@ has "the database setup image is pinned by digest in the release bundle (#1402, 
   "postgres@sha256:" "$INSTALL/share/sol/$VERSION/setup-image"
 has "and the harness hands no ambient override, which an installed release would refuse" \
   "[setup=unset]" "$TMP/app-ok.argv"
-has "and the Kafka credential and CA as platform Job inputs" \
-  "secret set qual/gcp/us-central1 @platform/KAFKA_SSL_CA_CERT" "$TMP/app-ok.argv"
-has "the value arrives with --from-stdin, so the CLI needs no terminal" \
-  "@platform/KAFKA_SSL_CA_CERT --from-stdin" "$TMP/app-ok.argv"
+lacks "Kafka delivery never uses the application secret CLI" "secret set" "$TMP/app-ok.argv"
+has "the provider authority matches broker and consumers" '"consumer_password_and_ca_match": true' "$TMP/app-ok.logs/kafka-delivery.json"
 lacks "no removed --target/--domain surface is used" \
   "--domain" "$TMP/app-ok.argv"
 lacks "no secret value is passed on a command line" \
   "testpass" "$TMP/app-ok.argv"
-has "the supplied keys are recorded without their values" \
-  "secret_values: never recorded" "$TMP/app-ok.logs/prerequisites.txt"
+has "the observation records no credentials" \
+  "never recorded" "$TMP/app-ok.logs/kafka-delivery.json"
 has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
   "database_delivery: qual-gcp-us-central1-ddl-creds@pluto-comms (migration Job, as the deploy declared it), qual-gcp-us-central1-dml-creds@pluto-payments (unit consumer)" \
   "$TMP/app-ok.logs/prerequisites.txt"
-# The row supplies the platform credential and applies migrations before its steady-state
-# deploy, so it does not stage the refusal each gate produces; the gates are scoped out of what
-# the row records, not bypassed by it.
-has "the secret-stop observation is scoped out, naming why the row does not stage it" \
-  "scoped_out: \"Sol refuses absent operator secrets\" (this row supplies the credential before its steady-state deploy; #1403)" \
-  "$TMP/app-ok.logs/prerequisites.txt"
+has "a real application-secret refusal is observed" \
+  "application_secret_refusal: declared SOL_API_KEY was absent" "$TMP/app-ok.logs/prerequisites.txt"
 has "and the migration-gate observation too" \
   "scoped_out: \"A deploy refuses to move workloads against an unapplied migration\" (this row applies migrations before its steady-state deploy)" \
   "$TMP/app-ok.logs/prerequisites.txt"
@@ -1407,7 +1404,7 @@ has "and the bundle's digest-pinned migration runner" \
 lacks "the app target selects no profile, so the row claims none of its guarantees" "profile:" "$TARGET_FILE"
 has "the app target declares the durable shape it does not derive from a profile" \
   "shape: durable" "$TARGET_FILE"
-has "and maps the Kafka authority the durable shape's units require" \
+lacks "the target does not compete with the Kafka binding authority" \
   "KAFKA_SASL_PASSWORD:" "$TARGET_FILE"
 has "but it still declares the durable installation the cloud phase created" \
   "dns_zone_ownership: sol" "$TARGET_FILE"
@@ -1947,6 +1944,22 @@ for mode in permission transport invalid; do
   is "the structured verdict does not claim absence ($mode)" \
     "$(jq -r .verdict "$verdict_json")" "NOT ABSENT"
 done
+
+printf '\nscenario: durable Kafka authority participates in independent teardown\n'
+for secret_mode in present disabled permission malformed wrong-shape; do
+  run_case "kafka-secret-$secret_mode" destroy "STUB_KAFKA_SECRET=$secret_mode"
+  is "$secret_mode blocks independent verified absence" "$(cat "$TMP/kafka-secret-$secret_mode.rc")" "1"
+  if [ "$secret_mode" = present ] || [ "$secret_mode" = disabled ]; then expected=PRESENT; else expected=UNKNOWN; fi
+  is "$secret_mode has the required explicit state" \
+    "$(jq -r '.classes[] | select(.class == "kafka-secret") | .state' "$TMP/kafka-secret-$secret_mode.logs/gcp-inventory-verdict.json")" "$expected"
+done
+run_case kafka-secret-unrelated destroy STUB_KAFKA_SECRET=unrelated
+is "another target's secret is excluded" "$(cat "$TMP/kafka-secret-unrelated.rc")" "0"
+run_mutated_case kafka-secret-omitted destroy \
+  '/provider_enumerate kafka-secret /,/gcloud secrets list --project/d'
+is "deleting the secret observation fails teardown" "$(cat "$TMP/kafka-secret-omitted.rc")" "1"
+is "an omitted secret observation is unknown" \
+  "$(jq -r '.classes[] | select(.class == "kafka-secret") | .state' "$TMP/kafka-secret-omitted.logs/gcp-inventory-verdict.json")" UNKNOWN
 
 printf '\nscenario: every inventory row is one tab-separated line per declared class\n'
 run_case inventory-row-shape destroy
@@ -2586,6 +2599,16 @@ printf '\nscenario: the identity phase needs a target credential like every othe
 run_case identity-nocred identity
 is "it exits 2 with no run kubeconfig" "$(cat "$TMP/identity-nocred.rc")" "2"
 has "and says why" "no run kubeconfig" "$TMP/identity-nocred.out"
+
+printf '\nscenario: provider authority and delivered values cannot disagree\n'
+for delivery_mode in denied mismatch; do
+  STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case "kafka-delivery-$delivery_mode" app "STUB_KAFKA_DELIVERY=$delivery_mode"
+  is "$delivery_mode blocks application qualification" "$(cat "$TMP/kafka-delivery-$delivery_mode.rc")" "1"
+  lacks "no credential writes repair $delivery_mode" "secret set" "$TMP/kafka-delivery-$delivery_mode.argv"
+done
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-secret-false-success app STUB_SECRET_PROBE_RC=0
+is "false success of a missing application secret fails qualification" "$(cat "$TMP/app-secret-false-success.rc")" "1"
+lacks "captured state metadata excludes database credentials" "qual-secret" "$TMP/app-ok.logs/state/cloud.tfstate"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = "0" ] || exit 1

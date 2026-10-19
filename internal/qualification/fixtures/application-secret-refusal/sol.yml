@@ -1,0 +1,8 @@
+# A declaration-only specimen: the row supplies the candidate's real app image.
+# It must refuse before applying a workload; no separate image is built.
+project: pluto
+services:
+  secret_probe_fn:
+    type: fn
+    path: app/payments/secret_probe_fn
+    language: ocaml

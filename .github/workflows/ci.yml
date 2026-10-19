@@ -323,6 +323,10 @@ jobs:
         if: needs.classify.outputs.kind != 'docs-only'
         run: internal/qualification/gcp/test-live-qual.sh
 
+      - name: Kafka authority/delivery observer test
+        if: needs.classify.outputs.kind != 'docs-only'
+        run: python3 internal/qualification/test_kafka_delivery.py
+
       - name: AWS row harness test
         if: needs.classify.outputs.kind != 'docs-only'
         run: internal/qualification/aws/test-live-row.sh

@@ -1,0 +1,5 @@
+[service]
+schedule = "0 0 1 1 *"
+
+[infra.env]
+secrets = ["SOL_API_KEY"]

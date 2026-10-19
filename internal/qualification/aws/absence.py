@@ -83,6 +83,7 @@ RESIDUE_CLASSES = [
     "security-group",
     "load-balancer",
     "ecr-repository",
+    "kafka-secret",
     "iam-role",
     "iam-policy",
     "s3-bucket",
@@ -855,6 +856,41 @@ def check_s3_bucket(runner: Runner, runtime: Runtime) -> Observation:
     )
 
 
+
+def check_kafka_secret(runner: Runner, runtime: Runtime) -> Observation:
+    # Exact DescribeSecret avoids ListSecrets' eventual consistency and includes
+    # scheduled deletions. Metadata only: qualification never records SecretString.
+    name = "sol-kafka-" + runtime.cluster
+    argv = ["secretsmanager", "describe-secret", "--secret-id", name,
+            "--region", runtime.region, "--output", "json"]
+    result = runner(argv)
+    reads = Reads(runner)
+    reads.queries.append(argv)
+    reads.raw.append(result.stdout if result.returncode == 0 else result.stderr)
+    attribution = "the target's exact native Kafka authority name in the bound account/region"
+    if not result.timed_out and result.returncode != 0 and result.stderr.strip().startswith(
+        "An error occurred (ResourceNotFoundException) when calling the DescribeSecret operation:"
+    ):
+        return observation("kafka-secret", [], name, attribution, reads)
+    if result.timed_out or result.returncode != 0:
+        return unknown("kafka-secret", name, attribution,
+                       "secret metadata read failed: " + result.stderr.strip(), reads)
+    try:
+        data = json.loads(result.stdout)
+        require(isinstance(data, dict) and data.get("Name") == name,
+                "secret metadata did not identify the requested authority")
+        pending = data.get("DeletedDate") is not None
+        if pending:
+            require(isinstance(data["DeletedDate"], (str, int, float))
+                    and not isinstance(data["DeletedDate"], bool), "invalid deletion date")
+    except (ValueError, ShapeError) as error:
+        return unknown("kafka-secret", name, attribution, str(error), reads)
+    found = observation("kafka-secret", [name], name, attribution, reads)
+    if pending:
+        found.detail = "pending deletion; physical absence is not established"
+    return found
+
+
 def check_cloudwatch_dashboard(runner: Runner, runtime: Runtime) -> Observation:
     return prefix_observation(
         runner,
@@ -883,6 +919,7 @@ RESIDUE_CHECKS: list[Callable[[Runner, Runtime], Observation]] = [
     check_security_group,
     check_load_balancer,
     check_ecr_repository,
+    check_kafka_secret,
     check_iam_role,
     check_iam_policy,
     check_s3_bucket,
@@ -973,6 +1010,10 @@ def evaluate(runtime: Runtime, runner: Runner) -> Report:
         ]
         return Report(identity, observations, [])
     observations = [check(runner, runtime) for check in RESIDUE_CHECKS]
+    for required in RESIDUE_CLASSES:
+        if sum(item.resource_class == required for item in observations) != 1:
+            observations.append(Observation(required, UNKNOWN, "", "",
+                                            "required class was omitted or observed more than once"))
     if runtime.prior is None or runtime.prior_error:
         for item in observations:
             if item.resource_class in CONTINUITY_CLASSES:

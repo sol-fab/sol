@@ -131,18 +131,13 @@ command's output.
    set to a real receiver only when pursuing G1–G3, and the run records G as blocked otherwise.
 9. Explicit operator authorization for the live run and the release
    version (§7.6).
-10. The production profile's **pre-platform broker credential**. The whole-target deploy creates the
-   `redpanda` namespace in its prerequisite stage, then checks the `redpanda-users` Secret
-   exists before the platform apply and stops naming it when absent
-   (`docs/deployment/production-bootstrap.md` § *Production Kafka transport (SASL_SSL)*). The
-   harness stands in for
-   the operator: it generates a run-scoped `sol-workloads` SCRAM credential (or uses
-   `KAFKA_SASL_PASSWORD` when the operator supplies one), creates the Secret with the
-   documented `kubectl create secret generic redpanda-users -n redpanda` shape at that
-   boundary, records that it supplied the input without its value in `prerequisites.txt`, and
-   re-runs the whole-target deploy to resume — the same ordered steps the bootstrap guide gives the
-   operator. The credential never enters the repository, Terraform state, a command line or a
-   run log.
+10. Read access to this target's Kafka authority in AWS Secrets Manager, plus the
+   cluster-access identity's existing broker/consumer Secret reads. Sol generates and
+   persists the credential and projects it into Redpanda and declared consumers. The
+   harness never generates, replaces, or writes these credentials. `kafka-delivery.json`
+   records comparisons without values; the application transaction proves authentication
+   and message processing. Terraform state remains sensitive and remote; captured state
+   evidence contains only public references and input-presence metadata.
 
 ### Expected resources and cost-bearing steps
 
@@ -184,9 +179,8 @@ names no digest yet, so Sol reconciles the durable installation, the cluster and
 target's release names — and then refuses at the immutable-artifact gate with `Deployment
 incomplete.`, before any workload moves (issue #1473). The phase succeeds on the reconciled
 environment (`The environment for <target> is reconciled.`) **and** that refusal, not on the
-deploy's exit code. When the deploy stops at the pre-platform `redpanda-users` credential, create
-the Secret with the run's generated or operator-supplied `sol-workloads` SCRAM credential, record
-the supplied input, and re-run the same deploy to resume. Before publishing, establish the
+deploy's exit code. A Kafka authority or initialization failure blocks the run; the
+harness never repairs it with operator-supplied credentials. Before publishing, establish the
 cold-start boundary from the cluster as **namespace absence**, over the complete set of namespaces
 the target's selected units declare (derived from the candidate-bound build context, never from a
 fixed pair of names): a namespaced workload or release cannot exist without its namespace, so
@@ -204,8 +198,7 @@ with in `publisher-identity.txt`, and refuses to publish at all when the ARN is 
 session cannot be assumed. `docker inspect` each image for its digest,
 and preview the whole target with `sol plan <target> --var-file <tfvars> --image-ref
 <unit>=<repo>@sha256:<digest>`; build the deploy/access/operator kubeconfigs; capture nodes and the
-cluster root state. Evidence: `cloud-apply.log`, `cloud-apply-resume.log`,
-`platform-credential.log`, `cold-start-namespaces.txt`, `cold-start-namespaces-*.err`, `cloud-plan.log`, `publisher-identity.txt`,
+cluster root credential-free metadata. Evidence: `cloud-apply.log`, `cold-start-namespaces.txt`, `cold-start-namespaces-*.err`, `cloud-plan.log`, `publisher-identity.txt`,
 `ecr-sol-repositories-before.txt`, `ecr-sol-repositories-after.txt`, `prerequisites.txt`,
 `k8s-nodes.txt`, `state/cloud.tfstate`, and the verbatim `lifecycle phase:` line per invocation.
 Rows: I1, I2, I4, A, F1, F2.

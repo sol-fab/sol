@@ -50,10 +50,15 @@ with (root/'calls.jsonl').open('a') as f: f.write(json.dumps(a)+'\\n')
 state=json.loads((root/'state.json').read_text())
 if 'rollout' in a or 'wait' in a:
  print('unexpected workload activation/readiness',file=sys.stderr);sys.exit(91)
+if os.environ.get('SECRET_PROBE') and 'configmap' in a:
+ lease=root/'lease.json'
+ if 'delete' in a: lease.unlink(missing_ok=True);sys.exit(0)
+ if lease.exists() and any(x.startswith('sol-boundary-lease-') for x in a): print(lease.read_text());sys.exit(0)
+ print('Error from server (NotFound): configmaps not found',file=sys.stderr);sys.exit(1)
 if 'get' in a and 'secret' in a:
  i=a.index('secret'); name=a[i+1]; ns=a[a.index('-n')+1]
  key=ns+'/'+name
- if key not in state: print('NotFound',file=sys.stderr);sys.exit(1)
+ if key not in state: print('Error from server (NotFound): secrets not found' if os.environ.get('SECRET_PROBE') else 'NotFound',file=sys.stderr);sys.exit(1)
  print(json.dumps(state[key]));sys.exit(0)
 if 'get' in a and 'externalsecrets' in a: sys.exit(0)
 if 'patch' in a:
@@ -69,8 +74,14 @@ if 'patch' in a:
    state[key]['data'][op['path'][6:]]=op['value']
  (root/'state.json').write_text(json.dumps(state))
  print('secret patched');sys.exit(0)
-if 'apply' in a or 'create' in a:
- assert 'kind: Namespace' in pathlib.Path(a[a.index('-f')+1]).read_text()
+if 'apply' in a or 'create' in a or (os.environ.get('SECRET_PROBE') and 'replace' in a):
+ document=pathlib.Path(a[a.index('-f')+1]).read_text()
+ if os.environ.get('SECRET_PROBE'):
+  if document.lstrip().startswith('{'):
+   item=json.loads(document);assert item['kind']=='ConfigMap'
+   item['metadata']['resourceVersion']='1';(root/'lease.json').write_text(json.dumps(item));sys.exit(0)
+  assert not any('kind: '+kind in document for kind in ('Deployment','StatefulSet','CronJob','Job','Secret'))
+ else: assert 'kind: Namespace' in document
  sys.exit(0)
 print('unsupported Kubernetes operation: '+repr(a),file=sys.stderr);sys.exit(90)
 ''')
@@ -139,6 +150,16 @@ print('unsupported Kubernetes operation: '+repr(a),file=sys.stderr);sys.exit(90)
         require(refused.returncode != 0 and 'could not read' not in refused.stderr, 'invalid key reached input')
         calls = [json.loads(line) for line in (root / 'calls.jsonl').read_text().splitlines()]
         require(not any('rollout' in call or 'wait' in call for call in calls), 'write path restarted or waited on workloads')
+        # This is the same declaration-only specimen the live provider rows use.
+        # Its real deploy must reach the app-secret boundary, never a workload apply.
+        script = Path(__file__).resolve().parents[2] / 'internal/qualification/application-secret-refusal.sh'
+        evidence = root / 'application-secret-refusal.log'
+        (binary / 'docker').write_text('#!/bin/sh\n[ \"$1 $2\" = \"manifest inspect\" ] || exit 91\necho {}\n')
+        (binary / 'docker').chmod(0o700)
+        probe = subprocess.run(['bash', str(script), sol, 'existing',
+                                'example.invalid/app@sha256:'+'a'*64, str(evidence)],
+                               env=dict(environment, SECRET_PROBE='1'), text=True, capture_output=True, timeout=30)
+        require(probe.returncode == 0, 'real application-secret specimen failed: '+probe.stderr+'\n'+evidence.read_text())
         print('ok: all workload shapes preserve writes-only behavior and reject invalid input before reading')
 
 

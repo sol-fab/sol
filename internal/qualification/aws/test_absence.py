@@ -53,6 +53,7 @@ CLUSTER_TAG = {"Key": f"kubernetes.io/cluster/{CLUSTER}", "Value": "owned"}
 # target. Kept beside each other so adding a class without a fixture fails the
 # suite rather than passing unnoticed.
 PRESENT_FIXTURES: dict[str, tuple[tuple[str, str], object]] = {
+    "kafka-secret": (("secretsmanager", "describe-secret"), {"Name": "sol-kafka-" + CLUSTER}),
     "eks-cluster": (("eks", "list-clusters"), {"clusters": [CLUSTER]}),
     "rds-instance": (
         ("rds", "describe-db-instances"),
@@ -165,6 +166,8 @@ class FakeAws:
         code = self.returncodes.get(key, 0)
         if code != 0:
             return absence.ReadResult(argv, code, "", "stub provider failure")
+        if key == ("secretsmanager", "describe-secret") and key not in self.responses:
+            return absence.ReadResult(argv, 255, "", "An error occurred (ResourceNotFoundException) when calling the DescribeSecret operation: Secrets Manager can't find the specified secret.")
         value = self.responses.get(key, {})
         text = value if isinstance(value, str) else json.dumps(value)
         return absence.ReadResult(argv, 0, text, "")
@@ -195,6 +198,42 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
     check("every declared residue class is observed", sorted(states(report)) == sorted(absence.RESIDUE_CLASSES))
     check("a clean account passes", report.ok)
     check("every class is ABSENT when nothing is attributable", set(states(report).values()) == {absence.ABSENT})
+
+    print("absence: Kafka authority cannot escape the independent verdict")
+    key = ("secretsmanager", "describe-secret")
+    for label, value in [
+        ("pending deletion", {"Name": "sol-kafka-" + CLUSTER, "DeletedDate": 1700000000}),
+        ("scheduled date already passed", {"Name": "sol-kafka-" + CLUSTER, "DeletedDate": 1}),
+    ]:
+        fake = FakeAws()
+        fake.set(key, value)
+        evidence = absence.evaluate(RUNTIME, fake)
+        check(label + " is present, never absence", not evidence.ok and states(evidence)["kafka-secret"] == absence.PRESENT)
+    for label, value in [("malformed", "not json"), ("missing identity", {}),
+                         ("wrong identity", {"Name": "another-secret"}),
+                         ("bad deletion marker", {"Name": "sol-kafka-" + CLUSTER, "DeletedDate": []})]:
+        fake = FakeAws()
+        fake.set(key, value)
+        evidence = absence.evaluate(RUNTIME, fake)
+        check(label + " is unknown", not evidence.ok and states(evidence)["kafka-secret"] == absence.UNKNOWN)
+    for failure in ("fail", "hang"):
+        fake = FakeAws()
+        getattr(fake, failure)(key)
+        evidence = absence.evaluate(RUNTIME, fake)
+        check(failure + " cannot prove secret absence", not evidence.ok and states(evidence)["kafka-secret"] == absence.UNKNOWN)
+    def denied_with_notfound(argv):
+        if argv[:2] == list(key):
+            return absence.ReadResult(argv, 255, "", "AccessDenied: An error occurred (ResourceNotFoundException) when calling the DescribeSecret operation: denied")
+        return FakeAws()(argv)
+    check("a denied read mentioning not-found is still unknown",
+          states(absence.evaluate(RUNTIME, denied_with_notfound))["kafka-secret"] == absence.UNKNOWN)
+    original_checks = absence.RESIDUE_CHECKS
+    try:
+        absence.RESIDUE_CHECKS = [probe for probe in original_checks if probe != absence.check_kafka_secret]
+        evidence = absence.evaluate(RUNTIME, FakeAws())
+        check("omitting the Kafka probe fails the actual verdict", not evidence.ok and states(evidence)["kafka-secret"] == absence.UNKNOWN)
+    finally:
+        absence.RESIDUE_CHECKS = original_checks
 
     print("absence: independently captured identities survive tag and cluster loss")
     with tempfile.TemporaryDirectory() as scratch:
@@ -379,7 +418,7 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
         all(call[i + 1] == REGION for call in runner.calls for i, word in enumerate(call[:-1]) if word == "--region"),
     )
     check("no call smuggles a shell metacharacter", all(all(";" not in word and "|" not in word for word in call) for call in runner.calls))
-    check("every call starts with the provider program", all(call[0] in {"eks", "rds", "ec2", "elbv2", "ecr", "iam", "s3api", "cloudwatch", "logs", "sts", "route53"} for call in runner.calls))
+    check("every call starts with the provider program", all(call[0] in {"eks", "rds", "ec2", "elbv2", "ecr", "iam", "s3api", "cloudwatch", "logs", "sts", "route53", "secretsmanager"} for call in runner.calls))
 
     print("absence: the evidence bundle is complete")
     with tempfile.TemporaryDirectory() as scratch:
@@ -433,6 +472,7 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
         stub.write_text(
             "#!/bin/sh\n"
             'case "$1 $2" in\n'
+            '  "secretsmanager describe-secret") echo "An error occurred (ResourceNotFoundException) when calling the DescribeSecret operation: not found" >&2; exit 255 ;;\n'
             f"{cases}\n"
             "  *) printf '{}\\n' ;;\n"
             "esac\n"
