@@ -7,7 +7,7 @@ Sol, whether the target's disposable resources are actually gone. Sol's destroy
 exit code, its Terraform state and Sol's own absence report are not that
 decision; this module makes the decision from provider reads alone.
 
-Every required disposable class gets one read, an expected JSON shape and an
+Every required disposable class gets provider reads, expected JSON shapes and an
 attribution predicate that says which returned resources belong to *this*
 target (its cluster tag, its cluster-name prefix, or its registry path). A
 class is:
@@ -28,7 +28,8 @@ rather than trusting a server-side tag filter: an empty tag search is not proof
 of absence when the query itself might be wrong. Attribution then has to hold
 after the target has disappeared, so it is derived from the target's declared
 identities (``kubernetes.io/cluster/<cluster>`` tags, the cluster-name prefix in
-resource names, the target's registry path) and never from live containment.
+resource names, the target's registry path) or the provider identities independently
+captured while those ownership facts hold.
 
 Durable prerequisites and explicitly retained resources are observed
 separately and are excluded from the residue verdict: a delegation zone or a
@@ -39,7 +40,7 @@ Usage:
                        [--registry-prefix P] [--base-domain B]
                        [--retention none|final-snapshot]
                        [--attempt A] [--target T] [--state-key K]
-                       [--candidate FILE]
+                       [--candidate FILE] --prior FILE
                        [--bound 30] [--aws-command aws]
 
 The structured verdict (``aws-inventory-verdict.json``) names the candidate it
@@ -58,7 +59,7 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Sequence
 
 PRESENT = "PRESENT"
@@ -78,6 +79,8 @@ RESIDUE_CLASSES = [
     "nat-gateway",
     "elastic-ip",
     "ebs-volume",
+    "oidc-provider",
+    "security-group",
     "load-balancer",
     "ecr-repository",
     "iam-role",
@@ -94,8 +97,8 @@ CLUSTER_TAG_PREFIX = "kubernetes.io/cluster/"
 LIMITATIONS = [
     "attribution is by the target's declared identities: the "
     f"{CLUSTER_TAG_PREFIX}<cluster> tag, the cluster name as a name component, or the target's "
-    "registry path. A resource that carries none of those after teardown cannot be attributed "
-    "to the target and is not counted as its residue.",
+    "registry path. Independently captured EBS, EIP, load-balancer and security-group identities and the EKS issuer "
+    "are retained in this attempt's evidence across teardown; loss of tags does not erase ownership.",
     "the verdict is read-only. Teardown itself is Sol's `sol destroy <target> --apply`; "
     "this observer never mutates the provider and never infers absence from Sol's exit code or "
     "Terraform state.",
@@ -128,6 +131,8 @@ class Runtime:
     target: str = ""
     state_key: str = ""
     candidate: dict[str, str] | None = None
+    prior: dict[str, Any] | None = None
+    prior_error: str = ""
 
 
 def load_candidate(path: str) -> dict[str, str]:
@@ -174,6 +179,7 @@ class Observation:
     detail: str
     queries: list[list[str]] = field(default_factory=list)
     raw: list[str] = field(default_factory=list)
+    resources: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -333,6 +339,7 @@ def observation(
             f"{len(found)} live resource(s) attributable to this target: {', '.join(found[:8])}",
             reads.queries,
             reads.raw,
+            resources=found,
         )
     return Observation(
         resource_class,
@@ -505,8 +512,8 @@ def check_nat_gateway(runner: Runner, runtime: Runtime) -> Observation:
 
 def check_elastic_ip(runner: Runner, runtime: Runtime) -> Observation:
     reads = Reads(runner)
-    identity = f"elastic IPs tagged for cluster {runtime.cluster}"
-    attribution = f"the target's {CLUSTER_TAG_PREFIX}{runtime.cluster} tag, or a Name naming it"
+    identity = f"elastic IP allocations independently attributed to cluster {runtime.cluster}"
+    attribution = "current target ownership or an independently captured EIP allocation ID"
     argv = ["ec2", "describe-addresses", "--region", runtime.region, "--output", "json"]
     parsed, reason = reads.json(argv)
     if parsed is None:
@@ -515,8 +522,9 @@ def check_elastic_ip(runner: Runner, runtime: Runtime) -> Observation:
     try:
         addresses = as_list(parsed, "Addresses")
         for address in addresses:
-            if cluster_owned(address, runtime):
-                found.append(require_str(address, "PublicIp", "an elastic IP"))
+            allocation = require_str(address, "AllocationId", "an elastic IP")
+            if cluster_owned(address, runtime) or allocation in prior_ids(runtime, "elastic-ip"):
+                found.append(allocation)
     except ShapeError as error:
         return unknown("elastic-ip", identity, attribution, str(error), reads)
     return observation("elastic-ip", found, identity, attribution, reads)
@@ -524,8 +532,8 @@ def check_elastic_ip(runner: Runner, runtime: Runtime) -> Observation:
 
 def check_ebs_volume(runner: Runner, runtime: Runtime) -> Observation:
     reads = Reads(runner)
-    identity = f"EBS volumes tagged for cluster {runtime.cluster}"
-    attribution = f"the target's {CLUSTER_TAG_PREFIX}{runtime.cluster} tag, or a Name naming it"
+    identity = f"EBS volumes independently attributed to cluster {runtime.cluster}"
+    attribution = "current target ownership or an independently captured EBS volume ID"
     argv = ["ec2", "describe-volumes", "--region", runtime.region, "--output", "json"]
     parsed, reason = reads.json(argv)
     if parsed is None:
@@ -534,17 +542,142 @@ def check_ebs_volume(runner: Runner, runtime: Runtime) -> Observation:
     try:
         volumes = as_list(parsed, "Volumes")
         for volume in volumes:
-            if cluster_owned(volume, runtime):
+            if cluster_owned(volume, runtime) or volume.get("VolumeId") in prior_ids(runtime, "ebs-volume"):
                 found.append(require_str(volume, "VolumeId", "an EBS volume"))
     except ShapeError as error:
         return unknown("ebs-volume", identity, attribution, str(error), reads)
     return observation("ebs-volume", found, identity, attribution, reads)
 
 
+def prior_ids(runtime: Runtime, resource_class: str) -> list[str]:
+    return (runtime.prior or {}).get("resources", {}).get(resource_class, [])
+
+
+def check_security_group(runner: Runner, runtime: Runtime) -> Observation:
+    reads = Reads(runner)
+    identity = f"security groups of cluster {runtime.cluster}"
+    attribution = "cluster ownership tags, target RDS name, or independently captured group ID"
+    parsed, reason = reads.json(["ec2", "describe-security-groups", "--region", runtime.region, "--output", "json"])
+    if parsed is None:
+        return unknown("security-group", identity, attribution, reason, reads)
+    try:
+        found = []
+        for group in as_list(parsed, "SecurityGroups"):
+            group_id = require_str(group, "GroupId", "a security group")
+            tags = tag_map(group)
+            if (cluster_owned(group, runtime)
+                    or tags.get("aws:eks:cluster-name") == runtime.cluster
+                    or group.get("GroupName") == runtime.cluster + "-rds"
+                    or group_id in prior_ids(runtime, "security-group")):
+                found.append(group_id)
+    except (ShapeError, AttributeError) as error:
+        return unknown("security-group", identity, attribution, str(error), reads)
+    return observation("security-group", found, identity, attribution, reads)
+
+
+def check_oidc_provider(runner: Runner, runtime: Runtime) -> Observation:
+    reads = Reads(runner)
+    identity = f"IAM OIDC provider for cluster {runtime.cluster}"
+    attribution = "exact EKS issuer captured independently before cluster destruction"
+    parsed, reason = reads.json(["iam", "list-open-id-connect-providers", "--output", "json"])
+    if parsed is None:
+        return unknown("oidc-provider", identity, attribution, reason, reads)
+    try:
+        arns = [require_str(item, "Arn", "an OIDC provider")
+                for item in as_list(parsed, "OpenIDConnectProviderList")]
+        issuers = prior_ids(runtime, "oidc-provider")
+        if arns and not issuers:
+            return unknown("oidc-provider", identity, attribution,
+                           "no independently captured EKS issuer; surviving providers cannot be attributed", reads)
+        found = [arn for arn in arns if arn in issuers]
+    except ShapeError as error:
+        return unknown("oidc-provider", identity, attribution, str(error), reads)
+    return observation("oidc-provider", found, identity, attribution, reads)
+
+
+CONTINUITY_CLASSES = ("ebs-volume", "security-group", "oidc-provider", "elastic-ip", "load-balancer")
+
+
+def capture_scope(runtime: Runtime) -> dict[str, Any]:
+    return {name: getattr(runtime, name) for name in
+            ("cluster", "region", "account", "attempt", "target", "state_key", "candidate")}
+
+
+def load_prior(path: str, runtime: Runtime) -> dict[str, Any]:
+    with open(path, encoding="utf-8") as handle:
+        document = json.load(handle)
+    if (not isinstance(document, dict) or document.get("schema") != 1
+            or document.get("scope") != capture_scope(runtime)):
+        raise ValueError("independent identity capture does not match this attempt, target, account, region and candidate")
+    resources = document.get("resources")
+    if not isinstance(resources, dict) or set(resources) != set(CONTINUITY_CLASSES):
+        raise ValueError("independent identity capture omits a required resource class")
+    for values in resources.values():
+        if not isinstance(values, list) or not all(isinstance(v, str) and v for v in values):
+            raise ValueError("independent identity capture contains invalid resource identities")
+    return document
+
+
+def capture(runtime: Runtime, runner: Runner, path: str, *, initial: bool = False) -> None:
+    """Read before mutation; append identities to existing attempt evidence on retries."""
+    if os.path.exists(path):
+        runtime = replace(runtime, prior=load_prior(path, runtime))
+    identity = observe_identity(runner, runtime)
+    if not identity.ok:
+        raise ValueError(identity.detail + "\n" + "\n".join(identity.raw))
+    reads = Reads(runner)
+    # Read the cluster list first: only an exact absent name permits skipping describe.
+    parsed, reason = reads.json(["eks", "list-clusters", "--region", runtime.region, "--output", "json"])
+    if parsed is None:
+        raise ValueError(reason + "\n" + "\n".join(reads.raw))
+    clusters = as_list(parsed, "clusters")
+    require(all(isinstance(v, str) for v in clusters), "invalid EKS cluster list")
+    issuers = prior_ids(runtime, "oidc-provider")[:]
+    if runtime.cluster in clusters:
+        parsed, reason = reads.json(["eks", "describe-cluster", "--name", runtime.cluster,
+                                    "--region", runtime.region, "--output", "json"])
+        if parsed is None:
+            raise ValueError(reason + "\n" + "\n".join(reads.raw))
+        require(isinstance(parsed, dict) and isinstance(parsed.get("cluster"), dict), "missing EKS cluster")
+        cluster = parsed["cluster"]
+        require(cluster.get("name") == runtime.cluster, "EKS returned another cluster")
+        expected_arn = f"arn:aws:eks:{runtime.region}:{runtime.account}:cluster/{runtime.cluster}"
+        require(cluster.get("arn") == expected_arn, "EKS cluster ARN does not match the target scope")
+        identity_data = cluster.get("identity", {})
+        require(isinstance(identity_data, dict) and isinstance(identity_data.get("oidc"), dict), "missing EKS OIDC identity")
+        issuer = require_str(identity_data["oidc"], "issuer", "the EKS OIDC identity")
+        require(re.fullmatch(r"https://oidc\.eks\." + re.escape(runtime.region) + r"\.amazonaws\.com/id/[A-Za-z0-9]+", issuer),
+                "EKS issuer is not in the target region")
+        issuers.append(f"arn:aws:iam::{runtime.account}:oidc-provider/{issuer.removeprefix('https://')}")
+    resources = {"oidc-provider": sorted(set(issuers))}
+    runtime = replace(runtime, prior={"resources": {**(runtime.prior or {}).get("resources", {}), **resources}})
+    capture_reads = [{"queries": reads.queries, "raw": reads.raw}]
+    checks = [check_ebs_volume, check_security_group, check_elastic_ip, check_load_balancer]
+    # Before provisioning there may be no EKS issuer to capture. Record that fact,
+    # without claiming OIDC absence or excluding unrelated account providers.
+    # Strict recapture before teardown and final verification still require attribution.
+    if not initial or issuers:
+        checks.append(check_oidc_provider)
+    for check in checks:
+        result = check(runner, runtime)
+        if result.state == UNKNOWN:
+            raise ValueError(f"{result.resource_class}: {result.detail}\n" + "\n".join(result.raw))
+        resources[result.resource_class] = sorted(set(prior_ids(runtime, result.resource_class) + result.resources))
+        capture_reads.append({"queries": result.queries, "raw": result.raw})
+    document = {"schema": 1, "scope": capture_scope(runtime), "resources": resources,
+                "reads": (runtime.prior or {}).get("reads", []) + capture_reads}
+    # Replace only after every required read succeeds; a failed recapture cannot erase evidence.
+    temporary = path + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(document, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    os.replace(temporary, path)
+
+
 def check_load_balancer(runner: Runner, runtime: Runtime) -> Observation:
     reads = Reads(runner)
-    identity = f"load balancers tagged for cluster {runtime.cluster}"
-    attribution = f"the target's {CLUSTER_TAG_PREFIX}{runtime.cluster} tag, or a name naming it"
+    identity = f"load balancers independently attributed to cluster {runtime.cluster}"
+    attribution = "current target ownership or an independently captured load-balancer ARN"
     argv = ["elbv2", "describe-load-balancers", "--region", runtime.region, "--output", "json"]
     parsed, reason = reads.json(argv)
     if parsed is None:
@@ -555,10 +688,10 @@ def check_load_balancer(runner: Runner, runtime: Runtime) -> Observation:
         for balancer in balancers:
             arn = require_str(balancer, "LoadBalancerArn", "a load balancer")
             name = balancer.get("LoadBalancerName")
-            tagged = False
+            tagged = arn in prior_ids(runtime, "load-balancer")
             if isinstance(name, str) and mentions(name, runtime.cluster):
                 tagged = True
-            else:
+            elif not tagged:
                 tags_argv = [
                     "elbv2",
                     "describe-tags",
@@ -746,6 +879,8 @@ RESIDUE_CHECKS: list[Callable[[Runner, Runtime], Observation]] = [
     check_nat_gateway,
     check_elastic_ip,
     check_ebs_volume,
+    check_oidc_provider,
+    check_security_group,
     check_load_balancer,
     check_ecr_repository,
     check_iam_role,
@@ -838,6 +973,11 @@ def evaluate(runtime: Runtime, runner: Runner) -> Report:
         ]
         return Report(identity, observations, [])
     observations = [check(runner, runtime) for check in RESIDUE_CHECKS]
+    if runtime.prior is None or runtime.prior_error:
+        for item in observations:
+            if item.resource_class in CONTINUITY_CLASSES:
+                item.state = UNKNOWN
+                item.detail = runtime.prior_error or "independent pre-teardown identity capture is missing"
     return Report(identity, observations, observe_durable(runner, runtime))
 
 
@@ -1022,6 +1162,13 @@ def main(argv: list[str]) -> int:
     collect_parser.add_argument("--bound", type=float, default=30.0)
     collect_parser.add_argument("--aws-command", default="aws")
 
+    collect_parser.add_argument("--prior", required=True, help="independent pre-teardown capture from this attempt")
+    capture_parser = subparsers.add_parser("capture", help="capture independent identities before teardown")
+    add_runtime_arguments(capture_parser)
+    capture_parser.add_argument("--prior", required=True)
+    capture_parser.add_argument("--initial", action="store_true", help="capture before provisioning, when an EKS issuer may not exist yet")
+    capture_parser.add_argument("--bound", type=float, default=30.0)
+    capture_parser.add_argument("--aws-command", default="aws")
     arguments = parser.parse_args(argv)
 
     try:
@@ -1029,7 +1176,19 @@ def main(argv: list[str]) -> int:
     except (OSError, ValueError) as error:
         print(f"absence: {error}", file=sys.stderr)
         return 2
-    report = collect(runtime, subprocess_runner(arguments.bound, arguments.aws_command), arguments.dir)
+    runner = subprocess_runner(arguments.bound, arguments.aws_command)
+    if arguments.command == "capture":
+        try:
+            capture(runtime, runner, arguments.prior, initial=arguments.initial)
+        except (OSError, ValueError, ShapeError) as error:
+            print(f"absence: identity capture failed: {error}", file=sys.stderr)
+            return 1
+        return 0
+    try:
+        runtime = replace(runtime, prior=load_prior(arguments.prior, runtime))
+    except (OSError, ValueError) as error:
+        runtime = replace(runtime, prior_error=str(error))
+    report = collect(runtime, runner, arguments.dir)
     for observation in report.observations:
         print(f"  {observation.resource_class}: {observation.state} ({observation.detail})", flush=True)
     for observation in report.durable:
