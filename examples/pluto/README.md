@@ -203,34 +203,17 @@ In `sol/environments.yml`, the `pilot` environment selects the
 `production-single-region` profile; `prod` deliberately does not, because an
 environment's name never makes a production claim.
 
-The profile runs Kafka as SASL_SSL. The broker's SASL users Secret is a
-pre-platform operator input: `sol deploy` creates the `redpanda` namespace
-in its prerequisite stage, then stops before the privileged platform apply if
-the Secret is absent, naming it and the command that creates it. On a fresh
-target the order is `sol deploy pilot/aws/us-east-1`, create the Secret when
-the run names it, then `sol deploy pilot/aws/us-east-1` again to resume.
-Supply the platform Job inputs to the reserved target scope, then set the
-application values separately for each unit that declares them. Database access
-is not a platform input: the deploy delivers `<target>-dml-creds` to a unit that
-declares `uses: [app_db]` and `<target>-ddl-creds` to the migration Job, so there
-is no `POSTGRES_URL` to supply here:
+The profile runs Kafka as SASL_SSL. Sol provisions a stable credential in the
+provider secret store and installs the broker's delivery Secret before the chart.
+Declared Kafka consumers and contract Jobs receive the password and CA through
+resource-owned Secret references; no operator credential seeding is required.
+Database consumers similarly receive the deploy-delivered DML class Secret, and
+migration Jobs receive the DDL class Secret. Application `secrets:` mappings must
+not override these resource-owned inputs.
 
-```bash
-kubectl create secret generic redpanda-users -n redpanda \
-  --from-literal=users.txt="sol-workloads:$KAFKA_SASL_PASSWORD:SCRAM-SHA-256"
-printf '%s' "$KAFKA_SASL_PASSWORD" \
-  | sol secret set pilot/aws/us-east-1 @platform/KAFKA_SASL_PASSWORD --from-stdin
-kubectl get secret redpanda-default-cert -n redpanda -o jsonpath='{.data.ca\.crt}' \
-  | base64 -d > ca.crt
-sol secret set pilot/aws/us-east-1 @platform/KAFKA_SSL_CA_CERT --from-file ca.crt
-printf '%s' "$KAFKA_SASL_PASSWORD" \
-  | sol secret set pilot/aws/us-east-1 payments/charge_svc/KAFKA_SASL_PASSWORD --from-stdin
-sol secret set pilot/aws/us-east-1 payments/charge_svc/KAFKA_SSL_CA_CERT --from-file ca.crt
-```
-
-Repeat the final two unit-scoped commands for each other declared TLS workload.
-The `@platform` writes only populate `sol-secrets` for Sol's internal Jobs and
-never copy values into application Secrets.
+If an existing broker's credential authority is lost, deployment refuses automatic
+regeneration. Restore the recorded authority rather than choosing a new password;
+automatic rotation is unsupported.
 
 See [production bootstrap](../../docs/deployment/production-bootstrap.md) for the
 full procedure.

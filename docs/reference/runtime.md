@@ -115,7 +115,7 @@ provider store and the chart-owned CA from Kubernetes, then writes
 `KAFKA_SASL_PASSWORD` and `KAFKA_SSL_CA_CERT` atomically to `<target>-kafka-creds` in each
 namespace that declares a Kafka consumer. A TLS contract Job reads only those two
 keys from the same Secret. External Kafka keeps its ESO-delivered Secret. A
-non-consumer receives neither, and `sol secret set` refuses both keys whether
+non-consumer receives neither, and `sol secret set` refuses both keys
 as application inputs. `sol secret set` accepts only `DOMAIN/UNIT/KEY` addresses.
 Database connections are not a platform input either: a unit that declares
 `uses: [app_db]` reads the deploy-delivered `<target>-dml-creds` class Secret,
