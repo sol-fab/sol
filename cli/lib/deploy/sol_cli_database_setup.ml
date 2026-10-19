@@ -123,6 +123,10 @@ BEGIN
   END IF;
 %s
 %s
+EXCEPTION WHEN OTHERS THEN
+  -- Dynamic role SQL contains passwords: preserve the original code/message,
+  -- but replace its sensitive execution context before it reaches any logs.
+  RAISE EXCEPTION USING ERRCODE = SQLSTATE, MESSAGE = SQLERRM;
 END
 $$;
 GRANT USAGE ON SCHEMA public TO %s, %s;

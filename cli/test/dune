@@ -256,3 +256,17 @@
  (deps ../bin/main.exe test_secret_write_contract.py)
  (action
   (run python3 %{dep:test_secret_write_contract.py} %{dep:../bin/main.exe})))
+
+(executable
+ (name print_database_setup)
+ (modules print_database_setup)
+ (libraries sol_cli))
+
+(rule
+ (alias ci-integration-pg)
+ (deps print_database_setup.exe test_database_setup_postgres.py)
+ (action
+  (run
+   python3
+   %{dep:test_database_setup_postgres.py}
+   %{dep:print_database_setup.exe})))
