@@ -779,7 +779,14 @@ let test_generic_list_envelope () =
   let read q =
     let reply = baseline "aws" q in
     if q.K.resource = K.Configmap
-    then modify_stdout (set "kind" (`String "List")) reply
+    then
+      modify_stdout
+        (fun json ->
+           set
+             "metadata"
+             (at [] (set "resourceVersion" (`String "")) (field "metadata" json))
+             (set "kind" (`String "List") json))
+        reply
     else reply
   in
   run_read read (fun _ _ _ _ outcomes -> all "PASS" outcomes)

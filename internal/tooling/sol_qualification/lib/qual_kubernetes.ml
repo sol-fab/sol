@@ -277,7 +277,11 @@ let native_read resource decode json =
      | Some "List" -> if api_version <> "v1" then invalid "wrong generic list API version"
      | _ -> assert false);
     let metadata = required "metadata" json in
-    ignore (string "resourceVersion" metadata);
+    (* A generic `List` from a field-selected read carries an empty collection
+       resourceVersion; the item's own identity is what this read observes. *)
+    (match optional "resourceVersion" metadata with
+     | Some (`String _) -> ()
+     | _ -> invalid "list has no resourceVersion");
     (match optional "continue" metadata with
      | None | Some (`String "") -> ()
      | _ -> invalid "incomplete list continuation");
