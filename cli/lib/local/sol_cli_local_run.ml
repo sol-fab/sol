@@ -178,14 +178,9 @@ let entry_in_unit ~root ~unit_dir ~package_path ~package_json =
 let dev_registry_url = "http://localhost:8081"
 
 let dev_env =
-  [ "KAFKA_BROKERS", "localhost:9092"
-  ; "SCHEMA_REGISTRY_URL", dev_registry_url
-  ; "REDPANDA_ADMIN_URL", "http://localhost:9644"
-  ; "POSTGRES_URL", "postgresql://postgres:dev@localhost:5432/dev"
-  ; "LOKI_URL", "http://localhost:3100"
+  [ "LOKI_URL", "http://localhost:3100"
   ; "PUSHGATEWAY_URL", "http://localhost:9091"
   ; "TEMPO_URL", "http://localhost:4318"
-  ; "KAFKA_SECURITY_PROTOCOL", "plaintext"
   ; (* Bare local processes have no projected ServiceAccount token, so they opt
        in explicitly to the shared-key caller path (DEC-063). Deployed units
        never set this: the key is reserved in sol.toml and sol secret set. *)
@@ -211,13 +206,24 @@ let set_env key value env =
   replace env
 ;;
 
-let secret_keys_of_workload workload =
-  match workload.Sol_cli_workspace_model.config with
-  | Ok config -> Ok config.Sol_cli_toml.secret_keys
-  | Error error -> Error (Sol_cli_toml.parse_error_to_string error)
-;;
-
-let local_secret_env ~secret_values ~secret_keys ~unit_address =
+let local_secret_env ~secret_values ~secret_keys ~database_consumer ~unit_address =
+  let* () =
+    let resource_keys =
+      Sol_cli_manifest.required_secret_keys
+        ~transport:Sol_cli_manifest.Sasl_ssl
+        ~db_uses_target:true
+        []
+    in
+    match List.find_opt (fun key -> List.mem key resource_keys) secret_keys with
+    | None -> Ok ()
+    | Some key ->
+      Error
+        (Printf.sprintf
+           "%s is a resource connection input, not an application secret. Declare the \
+            resource in uses; local execution supplies only the connections the unit \
+            consumes."
+           key)
+  in
   let unit_values =
     Option.value ~default:[] (List.assoc_opt unit_address secret_values)
   in
@@ -240,7 +246,7 @@ let local_secret_env ~secret_values ~secret_keys ~unit_address =
        ^ ".env.")
   | [] ->
     let values =
-      "POSTGRES_URL" :: "SOL_API_KEY" :: secret_keys
+      (if database_consumer then "POSTGRES_URL" :: secret_keys else secret_keys)
       |> List.sort_uniq String.compare
       |> List.filter_map (fun key -> Option.map (fun value -> key, value) (find key))
     in
@@ -351,6 +357,19 @@ let workload_of (facts : Sol_cli_workspace_model.t) (svc : Sol_cli_manifest.serv
 ;;
 
 let plan ?(secret_values = []) ~root ~facts services =
+  let* declared =
+    Sol_cli_config.load_declared ~root
+    |> Result.map_error (fun error ->
+      [ "workspace", Sol_cli_config.error_to_string error ])
+  in
+  let* () =
+    Sol_cli_config.validate_service_uses
+      ~path:(Filename.concat root "sol.yml")
+      ~resources:declared.resources
+      ~services:declared.services
+    |> Result.map_error (fun error ->
+      [ "workspace", Sol_cli_config.error_to_string error ])
+  in
   let base_env = runtime_environment () @ dev_env in
   let resolved =
     services
@@ -358,13 +377,45 @@ let plan ?(secret_values = []) ~root ~facts services =
       match workload_of facts svc with
       | None -> Error (label svc, "is not part of this workspace")
       | Some workload ->
-        (match secret_keys_of_workload workload with
-         | Error message -> Error (label svc, message)
-         | Ok secret_keys ->
+        (match workload.config with
+         | Error error -> Error (label svc, Sol_cli_toml.parse_error_to_string error)
+         | Ok config ->
+           let secret_keys = config.Sol_cli_toml.secret_keys in
+           let database_consumer =
+             Sol_cli_resource_binding.service_uses_resource_type
+               (Some declared)
+               svc.name
+               "postgres"
+           in
+           let kafka_consumer =
+             Sol_cli_resource_binding.consumes_kafka
+               (Some declared)
+               svc.name
+               ~topics:config.topics
+           in
+           let resource_env =
+             (if database_consumer
+              then
+                [ ( "POSTGRES_URL"
+                  , Sol_cli_local_platform.postgres_url ~host:"localhost" ~port:5432 )
+                ]
+              else [])
+             @
+             if kafka_consumer
+             then
+               [ "KAFKA_BROKERS", "localhost:9092"
+               ; "SCHEMA_REGISTRY_URL", dev_registry_url
+               ; "REDPANDA_ADMIN_URL", "http://localhost:9644"
+               ; "KAFKA_SECURITY_PROTOCOL", "plaintext"
+               ]
+             else []
+           in
+           let base_env = base_env @ resource_env in
            (match
               local_secret_env
                 ~secret_values
                 ~secret_keys
+                ~database_consumer
                 ~unit_address:(svc.domain ^ "/" ^ svc.name)
             with
             | Error message -> Error (label svc, message)

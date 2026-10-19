@@ -623,34 +623,6 @@ let pp_summary fmt t =
       Format.fprintf fmt "  %s@\n" (contract_change_to_string change))
 ;;
 
-let resource_name_of_ref ref =
-  match String.split_on_char '/' ref |> List.filter (( <> ) "") |> List.rev with
-  | name :: _ -> Some name
-  | [] -> None
-;;
-
-let service_uses_resource_type declared service_name typ =
-  match declared with
-  | None -> false
-  | Some cfg ->
-    let resources = cfg.Sol_cli_config.resources in
-    (match
-       cfg.Sol_cli_config.services
-       |> List.find_opt (fun (service : Sol_cli_config.service) ->
-         service.name = service_name)
-     with
-     | None -> false
-     | Some service ->
-       service.uses
-       |> List.exists (fun ref ->
-         match resource_name_of_ref ref with
-         | None -> false
-         | Some name ->
-           resources
-           |> List.exists (fun (resource : Sol_cli_config.resource) ->
-             resource.name = name && resource.typ = Some typ)))
-;;
-
 (** What a unit **declared** it uses -- the requirement, not its resolution. A rollback
     re-resolves these against the current target's authorities and bindings, so this is what the
     release record stores (#1422). The declaration's order is not semantic, and the content id is
@@ -679,13 +651,22 @@ let service_uses_resource declared service_name resource_name =
      with
      | None -> false
      | Some service ->
-       List.exists (fun ref -> resource_name_of_ref ref = Some resource_name) service.uses)
+       List.exists
+         (fun ref ->
+            Sol_cli_resource_binding.resource_name_of_ref ref = Some resource_name)
+         service.uses)
 ;;
 
 let derive_consumer_groups ?declared workspace services =
   List.filter_map
     (fun s ->
-       match s.primitive, service_uses_resource_type declared s.source_name "kafka" with
+       match
+         ( s.primitive
+         , Sol_cli_resource_binding.service_uses_resource_type
+             declared
+             s.source_name
+             "kafka" )
+       with
        | Worker, true -> Some (s.domain, s.source_name)
        | _ -> None)
     services
@@ -1012,7 +993,10 @@ let profile_claim ~declared ~services ~topics ~migrations ~whole_workspace =
       let service_uses typ =
         services
         |> List.exists (fun service ->
-          service_uses_resource_type declared service.source_name typ)
+          Sol_cli_resource_binding.service_uses_resource_type
+            declared
+            service.source_name
+            typ)
       in
       { profile
       ; requirements
@@ -1038,7 +1022,9 @@ let profile_claim ~declared ~services ~topics ~migrations ~whole_workspace =
 let database_for_uses ~target ~database uses =
   match target, Sol_cli_resource_binding.postgres_resource database with
   | Some target, Some resource
-    when List.exists (fun ref -> resource_name_of_ref ref = Some resource) uses ->
+    when List.exists
+           (fun ref -> Sol_cli_resource_binding.resource_name_of_ref ref = Some resource)
+           uses ->
     Sol_cli_resource_binding.Postgres_use
       { target; trust = Sol_cli_resource_binding.postgres_trust database }
   | _ -> Sol_cli_resource_binding.No_postgres_use
@@ -1215,7 +1201,8 @@ let of_services_result
     in
     let kafka_durability_config =
       match platform_shape with
-      | Sol_cli_profile.Durable when service_uses_resource_type declared svc.name "kafka"
+      | Sol_cli_profile.Durable
+        when Sol_cli_resource_binding.service_uses_resource_type declared svc.name "kafka"
         -> [ "SOL_KAFKA_DURABILITY", "single-broker-loss" ]
       | _ -> []
     in
@@ -1227,7 +1214,7 @@ let of_services_result
     let service_config = List.remove_assoc "SOL_KAFKA_DURABILITY" toml.env_config in
     let language = sol_yml_language ~declared ~service_name:svc.name in
     let consumes_kafka =
-      toml.topics <> [] || service_uses_resource_type declared svc.name "kafka"
+      Sol_cli_resource_binding.consumes_kafka declared svc.name ~topics:toml.topics
     in
     let spec =
       { domain = svc.domain

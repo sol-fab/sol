@@ -204,22 +204,10 @@ val primitive_of_string : string -> (primitive, string) result
 val effective_rollout_strategy : service_spec -> effective_rollout_strategy
 val effective_rollout_strategy_to_string : effective_rollout_strategy -> string
 
-(** Whether a declared service uses a resource of [typ], read from its [uses]
-    declaration. Already asked for kafka; the database setup step asks it for postgres to
-    find the namespaces that receive the DML credential. *)
-val service_uses_resource_type
-  :  Sol_cli_config.declared option
-  -> string
-  -> string
-  -> bool
-
 (** Whether a declared service's [uses] names one specific resource. The database setup
     step asks this, rather than the type form, so an externally bound database's consumers
     are not written a Sol credential: only the Sol-provisioned resource's consumers are. *)
 val service_uses_resource : Sol_cli_config.declared option -> string -> string -> bool
-
-(** A `uses:` ref's resource name, when the ref names a resource at all. *)
-val resource_name_of_ref : string -> string option
 
 (** What a unit **declared** it uses -- the requirement, not its resolution (#1422). The
     declaration's *order* is not semantic: the release content id is order-insensitive under a

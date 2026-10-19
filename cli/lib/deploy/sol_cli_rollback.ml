@@ -270,7 +270,7 @@ let validate_resource_requirements
     release.workloads
     |> List.concat_map (fun (w : Sol_cli_release.recorded_workload) -> w.spec.uses)
     |> Sol_cli_result.map_list (fun reference ->
-      match Sol_cli_deployment_plan.resource_name_of_ref reference with
+      match Sol_cli_resource_binding.resource_name_of_ref reference with
       | Some resource -> Ok resource
       | None ->
         Error

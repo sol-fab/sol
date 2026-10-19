@@ -81,3 +81,19 @@ val postgres_is_managed : postgres -> bool
 val postgres_trust : postgres -> postgres_trust
 val postgres_use_target : postgres_use -> string option
 val postgres_use_ca_target : postgres_use -> string option
+
+(** Declared dependency interpretation shared by deployment and local host execution.
+    Target resolution validates cloud references before these projections are used. *)
+val resource_name_of_ref : string -> string option
+
+val service_uses_resource_type
+  :  Sol_cli_config.declared option
+  -> string
+  -> string
+  -> bool
+
+val consumes_kafka
+  :  Sol_cli_config.declared option
+  -> string
+  -> topics:string list
+  -> bool

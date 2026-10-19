@@ -193,3 +193,35 @@ let postgres_use_ca_target = function
   | Postgres_use { target; trust = Published_ca } -> Some target
   | No_postgres_use | Postgres_use { trust = Connection_trust; _ } -> None
 ;;
+
+let resource_name_of_ref ref =
+  match String.split_on_char '/' ref |> List.filter (( <> ) "") |> List.rev with
+  | name :: _ -> Some name
+  | [] -> None
+;;
+
+let service_uses_resource_type declared service_name typ =
+  match declared with
+  | None -> false
+  | Some cfg ->
+    let resources = cfg.Sol_cli_config.resources in
+    (match
+       cfg.Sol_cli_config.services
+       |> List.find_opt (fun (service : Sol_cli_config.service) ->
+         service.name = service_name && not service.omit)
+     with
+     | None -> false
+     | Some service ->
+       service.uses
+       |> List.exists (fun ref ->
+         match resource_name_of_ref ref with
+         | None -> false
+         | Some name ->
+           resources
+           |> List.exists (fun (resource : Sol_cli_config.resource) ->
+             resource.name = name && resource.typ = Some typ && not resource.omit)))
+;;
+
+let consumes_kafka declared service_name ~topics =
+  topics <> [] || service_uses_resource_type declared service_name "kafka"
+;;
