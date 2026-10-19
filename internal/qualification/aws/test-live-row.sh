@@ -758,6 +758,9 @@ authority = request.get("submission_authority")
 if not isinstance(authority, dict) or not authority.get("principal"):
     print("stub CA driver: the request carries no submission authority", file=sys.stderr)
     raise SystemExit(1)
+if authority == request.get("authority"):
+    print("stub CA driver: the submission and observation identities are the same", file=sys.stderr)
+    raise SystemExit(1)
 PY
 fi
 [ -n "${LOG_DIR:-}" ] && printf '%s\n' "$phase" >>"$LOG_DIR/ca-phases.txt"
@@ -1313,6 +1316,12 @@ has "the transport is established before Sol moves the workload" \
   "establish test-cluster qualifier us-east-1 pluto-payments" "$TMP/apptransport.establish"
 has "and it observes the database namespace the deploy declared for the migration Job" \
   "sol-db-qualreg-aws-us-east-1" "$TMP/apptransport.establish"
+has "and the migration receipt is checked against the deploy identity that submitted it" \
+  "assumed-role/deploy/session" "$TMP/apptransport.logs/ca-submission-authority.json"
+lacks "never the qualifier that observed it" \
+  "assumed-role/qualifier/session" "$TMP/apptransport.logs/ca-submission-authority.json"
+has "while the observation authority stays the qualifier" \
+  "assumed-role/qualifier/session" "$TMP/apptransport.logs/ca-authority.json"
 has "and the transaction uses the qualifier's kubeconfig" \
   "KUBECONFIG_TRANSPORT=$TMP/apptransport.logs/kubeconfig-qualifier.yaml" "$TMP/apptransport.transport"
 lacks "never the deploy identity's kubeconfig" \

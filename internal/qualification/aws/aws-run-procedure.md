@@ -219,7 +219,9 @@ therefore establishes the transport after its first deploy — which moves no wo
 before the migration observation. It binds the app namespace, the worker namespace, and the
 database namespace the deploy declares in its `sol-database-identity:` line, because the
 migration Job and its CA ConfigMap live there; the row reads that declaration instead of
-deriving the namespace name. The standalone `transport` phase refuses on a fresh target
+deriving the namespace name. Establishment runs on every `app` invocation, including a resumed
+attempt: a kubeconfig left by an earlier attempt does not show that this attempt's observation
+set is bound, and establishment is idempotent. The standalone `transport` phase refuses on a fresh target
 rather than binding those reads cluster-wide: the phase name is a diagnostic/re-run entry point
 for a target whose declared namespaces already exist, not a pre-deploy step.
 
