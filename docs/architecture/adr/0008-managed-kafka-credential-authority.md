@@ -49,9 +49,13 @@ committed/generated configuration files. Preserve original provider error codes 
 while redacting sensitive values. Keep KAFKA_SSL_CA_CERT in Secret delivery, including mounted
 CA material, as the existing resource contract requires.
 
-Terraform binary plans can contain state values. Whether protected transient binary execution
-plans are permitted under this decision requires explicit clarification before implementation;
-ordinary displayed plans and Sol's public planning artifacts remain value-free in either case.
+Terraform state and saved binary plans are authorized sensitive execution surfaces. Binary plans
+must live outside diagnostic archives, shared CI artifact directories and caches, in private
+0700 directories with 0600 files. Clean up on success, failure and handled interruption; report
+cleanup failures without reading or exposing contents. A hard kill or machine crash can leave
+artifacts behind: keep those private under the host's temporary-file retention policy and document
+safe operator cleanup after confirming the operation is no longer running. Do not promise
+unconditional deletion. Tests must establish permissions, cleanup and public-output confidentiality.
 
 ### Initialization, reuse and recovery
 
