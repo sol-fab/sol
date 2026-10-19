@@ -3,8 +3,9 @@
     External Kafka keeps its existing ESO delivery, and local Kafka is deliberately
     plaintext, so neither is written here. For a managed binding this reads the
     authoritative credential from the provider and the chart-owned CA from Kubernetes,
-    then writes only the two required keys to `<target>-kafka-creds` in each namespace
-    that declares a Kafka consumer. *)
+    then writes both required keys atomically to `<target>-kafka-creds` in each
+    namespace that declares a Kafka consumer. Failure reports namespaces already
+    updated; retrying reconciles the remainder. *)
 
 val run
   :  ctx:Sol_cli_kube_destination.context

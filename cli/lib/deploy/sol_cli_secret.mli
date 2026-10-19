@@ -110,15 +110,14 @@ val read_secret_key
   -> key:string
   -> (string, string) result
 
-(** Write a target-delivered key to a named Secret in each namespace, refusing any
-    destination Sol does not own. Used for resource-owned projections such as
-    `<target>-kafka-creds`. *)
-val set_target_key
+(** Atomically write the selected keys to a named Secret per namespace, preserving
+    unrelated keys and refusing destinations Sol does not own or ESO writes. Errors
+    identify earlier namespaces updated without rollback. *)
+val set_target_keys
   :  ctx:Sol_cli_kube_destination.context
   -> namespaces:string list
   -> secret_name:string
-  -> key:string
-  -> value:string
+  -> values:(string * string) list
   -> (string list, string) result
 
 val platform_secret_keys : string list

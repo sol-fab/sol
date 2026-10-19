@@ -9,4 +9,13 @@
    (source_tree ../../../internal/fixtures/venus)))
  (preprocess
   (pps ppx_windtrap))
- (libraries windtrap sol_cli sol_cli_test_support unix yojson str yaml logs))
+ (libraries
+  windtrap
+  sol_cli
+  sol_cli_test_support
+  unix
+  yojson
+  str
+  yaml
+  logs
+  base64))

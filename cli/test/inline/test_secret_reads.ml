@@ -55,11 +55,6 @@ if [ "$verb" = "patch" ]; then
     patch-not-found)
       echo 'Error from server (NotFound): secrets "charge-svc-secrets" not found' >&2
       exit 1 ;;
-    patch-create-race)
-      if [ "$(grep -c 'patch-args' %s)" = "1" ]; then
-        echo 'Error from server (NotFound): secrets "charge-svc-secrets" not found' >&2
-        exit 1
-      fi ;;
   esac
   exit 0
 fi
@@ -228,7 +223,6 @@ exit 0
     log
     log
     log
-    log
 ;;
 
 let with_fake_kubectl ~mode f =
@@ -330,12 +324,11 @@ let test_verify_rejects_an_absent_secret () =
 let test_target_set_writes_only_the_named_secret () =
   with_fake_kubectl ~mode:"owned-unit" (fun ~calls ~manifests:_ ->
     match
-      Sol_cli_secret.set_target_key
+      Sol_cli_secret.set_target_keys
         ~ctx
         ~namespaces:[ "payments"; "orders" ]
         ~secret_name:"charge-svc-secrets"
-        ~key:"KAFKA_SASL_PASSWORD"
-        ~value:"kafka-sasl"
+        ~values:[ "KAFKA_SASL_PASSWORD", "kafka-sasl" ]
     with
     | Error message -> Windtrap.failf "target secret set failed: %s" message
     | Ok _ ->
@@ -1214,10 +1207,8 @@ let%test "1392: a class output Secret owned by its ExternalSecret passes" =
   test_class_output_owned_by_its_external_secret_passes ()
 ;;
 
-(* #1426: the other half of the lost update is an object that does not exist yet. `kubectl
-   patch` fails `NotFound` on it, so the write creates; a concurrent writer that created it
-   first races the create to `AlreadyExists`, and the patch is retried against the winner's
-   object — which merges this key rather than overwriting the winner's. *)
+(* #1426: an absent Secret is created first. A concurrent creator is re-read
+   and ownership checked before a key-scoped patch, preserving its other keys. *)
 let test_absent_secret_is_created () =
   with_fake_kubectl ~mode:"patch-not-found" (fun ~calls ~manifests:_ ->
     match
@@ -1232,9 +1223,14 @@ let test_absent_secret_is_created () =
     | Ok _ ->
       Windtrap.equal
         Windtrap.bool
-        ~msg:"after the patch misses, the Secret is created"
+        ~msg:"the absent Secret is created"
         true
-        (Sol_cli_string.contains ~needle:"create " (calls ())))
+        (Sol_cli_string.contains ~needle:"create " (calls ()));
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"no unguarded patch of a concurrent creator"
+        false
+        (Sol_cli_string.contains ~needle:"patch-args" (calls ())))
 ;;
 
 let test_create_race_retries_the_patch () =
@@ -1258,14 +1254,12 @@ let test_create_race_retries_the_patch () =
       in
       Windtrap.equal
         Windtrap.bool
-        ~msg:
-          "the racing create is followed by exactly one retried patch (Ok proves it won)"
+        ~msg:"the racing create is followed by one guarded patch"
         true
-        (count "patch-args" = 2);
+        (count "patch-args" = 1);
       Windtrap.equal
         Windtrap.bool
-        ~msg:
-          "the retry rebuilds from a fresh read, so it carries the identity precondition"
+        ~msg:"the fresh read supplies the identity precondition"
         true
         (count "/metadata/labels/app.kubernetes.io~1managed-by" = 1))
 ;;
@@ -1294,7 +1288,7 @@ let test_rewriting_the_same_value_is_a_no_op () =
         (Sol_cli_string.contains ~needle:"patch-args" (calls ())))
 ;;
 
-let%test "1426: a write to an absent Secret creates it after the patch misses" =
+let%test "1426: an absent Secret is created without an unguarded patch" =
   test_absent_secret_is_created ()
 ;;
 

@@ -45,20 +45,14 @@ let run ~ctx ~(target : Sol_cli_config.target) ~kafka ~services =
           ~target:(Sol_cli_kubernetes_name.sanitize_name target.name)
       in
       let* _ =
-        Sol_cli_secret.set_target_key
+        Sol_cli_secret.set_target_keys
           ~ctx
           ~namespaces
           ~secret_name
-          ~key:Sol_cli_manifest.kafka_sasl_password_key
-          ~value:password
-      in
-      let* _ =
-        Sol_cli_secret.set_target_key
-          ~ctx
-          ~namespaces
-          ~secret_name
-          ~key:Sol_cli_manifest.kafka_ca_secret_key
-          ~value:ca
+          ~values:
+            [ Sol_cli_manifest.kafka_sasl_password_key, password
+            ; Sol_cli_manifest.kafka_ca_secret_key, ca
+            ]
       in
       Sol_cli_report.app
         "Kafka: delivered the managed credential to %s in %s."

@@ -40,64 +40,6 @@ let validate_key key =
   else Ok ()
 ;;
 
-type object_metadata =
-  { name : string
-  ; namespace : string
-  ; labels : (string * string) list
-  }
-
-type kubernetes_secret =
-  { api_version : string
-  ; kind : string
-  ; metadata : object_metadata
-  ; secret_type : string
-  ; data : (string * string) list
-  ; string_data : (string * string) list
-  }
-
-let render_secret_manifest secret =
-  let quoted_map pairs =
-    Sol_cli_yaml.map (List.map (fun (k, v) -> k, Sol_cli_yaml.quoted v) pairs)
-  in
-  let data =
-    match secret.data with
-    | [] -> []
-    | pairs -> [ "data", quoted_map pairs ]
-  in
-  Sol_cli_yaml.(
-    render
-      [ document
-          (map
-             ([ "apiVersion", string secret.api_version
-              ; "kind", string secret.kind
-              ; ( "metadata"
-                , map
-                    ([ "name", string secret.metadata.name
-                     ; "namespace", string secret.metadata.namespace
-                     ]
-                     @
-                     if secret.metadata.labels = []
-                     then []
-                     else [ "labels", quoted_map secret.metadata.labels ]) )
-              ; "type", string secret.secret_type
-              ]
-              @ data
-              @ [ "stringData", quoted_map secret.string_data ]))
-      ])
-;;
-
-let named_secret_manifest ~labels ~secret_name ~existing_data ~namespace ~key ~value =
-  let data = List.filter (fun (k, _) -> k <> key) existing_data in
-  render_secret_manifest
-    { api_version = "v1"
-    ; kind = "Secret"
-    ; metadata = { name = secret_name; namespace; labels }
-    ; secret_type = "Opaque"
-    ; data
-    ; string_data = [ key, value ]
-    }
-;;
-
 let apply_manifest ~ctx ?(redact = []) yaml =
   Sol_cli_fs.with_temp_file ~prefix:"sol-secret-" ~suffix:".yaml" yaml (fun path ->
     Sol_cli_kubectl.apply ~ctx ~file:path
@@ -289,13 +231,13 @@ let failure_says failure needle =
   | Sol_cli_process.Spawn_failed _ | Sol_cli_process.Timeout _ -> false
 ;;
 
-(** A key-scoped write: one JSON patch adds just this key to the live object's `data` (or
+(** A key-scoped write: one JSON patch atomically adds the selected keys to the live object's `data` (or
     creates `data` when the object has none), so a concurrent writer of a *different* key is
     merged, not overwritten.
 
     The old write re-applied a whole-object manifest built from a snapshot read before the
     other writer ran, so whichever applied last restored the other's old value (#1426). The
-    patch cannot do that: it names one path.
+    patch cannot do that: it names only the selected paths.
 
     `data` is the field, matching the delete path (`/data/<key>`), so the module has one
     encoding — standard base64, the Secret's stored form — rather than mixing `data` and the
@@ -306,9 +248,11 @@ let failure_says failure needle =
     label, so under the strict rule there is no window between "this Secret is Sol's" and the
     write. The permissive runtime rule allows an *absent* label, which a single `test` cannot
     express, so an unlabeled runtime Secret is written without it — the patch can still only
-    add this one key, and the object had no owner to take from. *)
-let secret_key_patch ~json ~key ~value =
-  let value_b64 = Base64.encode_exn value in
+    add the selected keys, and the object had no owner to take from. *)
+let secret_keys_patch ~json ~values =
+  let encoded =
+    List.map (fun (key, value) -> key, `String (Base64.encode_exn value)) values
+  in
   let test_label =
     match List.assoc_opt "app.kubernetes.io/managed-by" (labels_of json) with
     | Some (`String "sol") ->
@@ -320,54 +264,56 @@ let secret_key_patch ~json ~key ~value =
       ]
     | _ -> []
   in
-  let add_key =
+  (* Adding an absent /data map would replace keys introduced since the read.
+     Refuse that stale snapshot; the next deployment can reconcile the fresh object. *)
+  let* test_version =
+    if has_data_field json
+    then Ok []
+    else
+      let* version = secret_resource_version json in
+      match version with
+      | Some version ->
+        Ok
+          [ `Assoc
+              [ "op", `String "test"
+              ; "path", `String "/metadata/resourceVersion"
+              ; "value", `String version
+              ]
+          ]
+      | None -> Error "Secret metadata has no resourceVersion"
+  in
+  let add_keys =
     if has_data_field json
     then
-      [ `Assoc
-          [ "op", `String "add"
-          ; "path", `String ("/data/" ^ key)
-          ; "value", `String value_b64
-          ]
-      ]
+      List.map
+        (fun (key, value) ->
+           `Assoc
+             [ "op", `String "add"; "path", `String ("/data/" ^ key); "value", value ])
+        encoded
     else
-      [ `Assoc
-          [ "op", `String "add"
-          ; "path", `String "/data"
-          ; "value", `Assoc [ key, `String value_b64 ]
-          ]
-      ]
+      [ `Assoc [ "op", `String "add"; "path", `String "/data"; "value", `Assoc encoded ] ]
   in
-  Yojson.Safe.to_string (`List (test_label @ add_key))
+  Ok (Yojson.Safe.to_string (`List (test_label @ test_version @ add_keys)))
 ;;
 
-let create_named_secret ~ctx ~namespace ~secret_name ~key ~value =
-  let manifest =
-    named_secret_manifest
-      ~labels:[ "app.kubernetes.io/managed-by", "sol" ]
-      ~secret_name
-      ~existing_data:[]
-      ~namespace
-      ~key
-      ~value
-  in
+let create_named_secret ~ctx ~namespace ~secret_name ~values =
+  let manifest = unit_secret_manifest ~secret_name ~namespace values in
   Sol_cli_fs.with_temp_file ~prefix:"sol-secret-" ~suffix:".yaml" manifest (fun path ->
     Sol_cli_kubectl.create ~ctx ~file:path)
 ;;
 
-(** Patch the one key; on a missing object create it; if a concurrent writer created it first
+(** Patch the selected keys atomically; on a missing object create it; if a concurrent writer created it first
     (the create races to `AlreadyExists`), **re-read** and retry once.
 
-    The retry re-reads rather than reusing the first body: we read the object as absent, so the
-    first patch carries no `test` op, but the object that won the create is not the one we read.
-    Rebuilding from the fresh json attaches the same identity precondition a normal write has,
-    and re-runs the ownership rule — a winner that is not Sol's is refused instead of written. *)
-let write_named_secret_key
+    An absent object is created first, never patched without ownership evidence. If
+    another writer wins creation, rebuilding from a fresh read re-runs the ownership
+    rule and attaches the normal identity precondition before any patch. *)
+let write_named_secret_keys
       ~allow_unlabeled_runtime
       ~ctx
       ~namespace
       ~secret_name
-      ~key
-      ~value
+      ~values
       ~existing
   =
   let verify_owner =
@@ -375,12 +321,18 @@ let write_named_secret_key
     then verify_runtime_secret_owner
     else verify_sol_managed_secret
   in
-  let redact message = Sol_cli_process.apply_redactions [ value ] message in
+  let redact message =
+    let confidential =
+      List.concat_map (fun (_, value) -> [ value; Base64.encode_exn value ]) values
+    in
+    Sol_cli_process.apply_redactions confidential message
+  in
   let patch_once json =
+    let* patch = secret_keys_patch ~json ~values in
     Sol_cli_fs.with_temp_file
       ~prefix:"sol-secret-patch-"
       ~suffix:".json"
-      (secret_key_patch ~json ~key ~value)
+      patch
       (fun file ->
          Sol_cli_kubectl.patch_file
            ~ctx
@@ -390,36 +342,43 @@ let write_named_secret_key
            ~patch_type:"json"
            ~file)
   in
-  let rec attempt retries json =
+  let failure_message failure =
+    Error
+      (redact
+         (Printf.sprintf
+            "could not write Secret %s/%s: %s"
+            namespace
+            secret_name
+            (Sol_cli_process.error_to_string failure)))
+  in
+  let rec create retries =
+    match create_named_secret ~ctx ~namespace ~secret_name ~values with
+    | Error message -> Error (redact message)
+    | Ok (Ok _) -> Ok ()
+    | Ok (Error failure) when failure_says failure "AlreadyExists" && retries > 0 ->
+      let* fresh = get_named_secret_json ~ctx ~name:secret_name namespace in
+      let* () = verify_owner fresh in
+      (match fresh with
+       | Some json -> patch (retries - 1) json
+       | None ->
+         Error
+           (Printf.sprintf
+              "Secret %s/%s disappeared after concurrent creation; retry the operation"
+              namespace
+              secret_name))
+    | Ok (Error failure) -> failure_message failure
+  and patch retries json =
     match patch_once json with
     | Error message -> Error (redact message)
     | Ok (Ok _) -> Ok ()
     | Ok (Error failure) when failure_says failure "NotFound" && retries > 0 ->
-      (match create_named_secret ~ctx ~namespace ~secret_name ~key ~value with
-       | Error message -> Error (redact message)
-       | Ok (Ok _) -> Ok ()
-       | Ok (Error failure) when failure_says failure "AlreadyExists" && retries > 0 ->
-         let* fresh = get_named_secret_json ~ctx ~name:secret_name namespace in
-         let* () = verify_owner fresh in
-         attempt (retries - 1) (Option.value fresh ~default:`Null)
-       | Ok (Error failure) ->
-         Error
-           (redact
-              (Printf.sprintf
-                 "could not write Secret %s/%s: %s"
-                 namespace
-                 secret_name
-                 (Sol_cli_process.error_to_string failure))))
-    | Ok (Error failure) ->
-      Error
-        (redact
-           (Printf.sprintf
-              "could not write Secret %s/%s: %s"
-              namespace
-              secret_name
-              (Sol_cli_process.error_to_string failure)))
+      create retries
+    | Ok (Error failure) -> failure_message failure
   in
-  attempt 1 (Option.value existing ~default:`Null)
+  (* Never patch an object we read as absent: a concurrent creator could own it. *)
+  match existing with
+  | None -> create 1
+  | Some json -> patch 1 json
 ;;
 
 let require_namespaces namespaces =
@@ -541,16 +500,22 @@ let verify_platform_secret_destinations ~ctx ~namespaces =
     verify_runtime_secret_owner existing)
 ;;
 
-let set_named_key
+let set_named_keys
       ?(allow_unlabeled_runtime = false)
       ~ctx
       ~namespace
       ~secret_name
-      ~key
-      ~value
+      ~values
       ()
   =
-  let* () = validate_key key in
+  let* () =
+    List.fold_left
+      (fun result (key, _) ->
+         let* () = result in
+         validate_key key)
+      (Ok ())
+      values
+  in
   let* () = ensure_namespace ~ctx namespace in
   let* () = refuse_external_secret_target ~ctx ~namespace ~secret_name in
   let* existing = get_named_secret_json ~ctx ~name:secret_name namespace in
@@ -559,30 +524,42 @@ let set_named_key
     then verify_runtime_secret_owner existing
     else verify_sol_managed_secret existing
   in
-  (* "Changed" is this one key's stored value against what is about to be written — not a
+  (* "Changed" compares only the selected keys against what is about to be written — not a
      before/after of the whole object, which is the read-modify-write shape #1426 removed. A
      value another tool stored with different base64 padding reads as changed here, which only
      costs a redundant patch of the same logical value. *)
   let unchanged =
     match existing with
     | Some json ->
-      List.assoc_opt key (data_keys json) = Some (`String (Base64.encode_exn value))
+      List.for_all
+        (fun (key, value) ->
+           List.assoc_opt key (data_keys json) = Some (`String (Base64.encode_exn value)))
+        values
     | None -> false
   in
   if unchanged
   then Ok false
   else
     let* () =
-      write_named_secret_key
+      write_named_secret_keys
         ~allow_unlabeled_runtime
         ~ctx
         ~namespace
         ~secret_name
-        ~key
-        ~value
+        ~values
         ~existing
     in
     Ok true
+;;
+
+let set_named_key ?allow_unlabeled_runtime ~ctx ~namespace ~secret_name ~key ~value () =
+  set_named_keys
+    ?allow_unlabeled_runtime
+    ~ctx
+    ~namespace
+    ~secret_name
+    ~values:[ key, value ]
+    ()
 ;;
 
 let set_unit_key ~ctx ~namespace ~secret_name ~key ~value =
@@ -631,31 +608,35 @@ let set_platform_key ~ctx ~namespaces ~key ~value =
     Ok (List.rev !changed)
 ;;
 
-(** Write a target-delivered key to a named Secret in each namespace. The destination
-    guard runs before every write, so an object another manager owns is refused rather than
-    overwritten. This is the writer for resource-owned projections such as
-    `<target>-kafka-creds`; `sol secret set` must never reach these keys. *)
-let set_target_key ~ctx ~namespaces ~secret_name ~key ~value =
-  let* () = validate_key key in
+(** Write a target projection atomically per namespace. A failed namespace leaves
+    earlier writes intact; the diagnostic identifies them so retrying is explicit. *)
+let set_target_keys ~ctx ~namespaces ~secret_name ~values =
   let* () = require_namespaces namespaces in
   let changed = ref [] in
   let* () =
     iter_namespaces namespaces ~f:(fun namespace ->
-      let* () =
-        assert_destination_is_sol ~ctx ~resource:"secret" ~namespace ~name:secret_name
-      in
       let* is_changed =
-        set_named_key
-          ~allow_unlabeled_runtime:true
-          ~ctx
-          ~namespace
-          ~secret_name
-          ~key
-          ~value
-          ()
+        set_named_keys ~ctx ~namespace ~secret_name ~values ()
+        |> Result.map_error (fun message ->
+          Printf.sprintf
+            "Secret projection %s/%s failed: %s"
+            namespace
+            secret_name
+            message)
       in
       if is_changed then changed := namespace :: !changed;
       Ok ())
+    |> Result.map_error (fun message ->
+      match List.rev !changed with
+      | [] -> message
+      | namespaces ->
+        Printf.sprintf
+          "%s\n\
+           Secret %s was already updated in namespace(s): %s. These writes were not \
+           rolled back. Retry to reconcile the remaining namespaces."
+          message
+          secret_name
+          (String.concat ", " namespaces))
   in
   Ok (List.rev !changed)
 ;;
