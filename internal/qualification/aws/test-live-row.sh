@@ -268,6 +268,7 @@ class_read() {
       "rds describe-db-snapshots" | "ec2 describe-instances" | "ec2 describe-vpcs" | \
       "ec2 describe-nat-gateways" | "ec2 describe-addresses" | "ec2 describe-volumes" | \
       "elbv2 describe-load-balancers" | "elbv2 describe-tags" | "ecr describe-repositories" | \
+      "iam list-open-id-connect-providers" | "ec2 describe-security-groups" | \
       "iam list-roles" | "iam list-policies" | "s3api list-buckets" | \
       "cloudwatch list-dashboards" | "logs describe-log-groups")
       return 0
@@ -386,11 +387,13 @@ case "$1 $2" in
     ;;
   "ec2 describe-addresses")
     if [ "${STUB_LIVE_EIP:-0}" = "1" ]; then
-      printf '{"Addresses":[{"PublicIp":"198.51.100.5","Tags":[{"Key":"kubernetes.io/cluster/test-cluster","Value":"owned"}]}]}\n'
+      printf '{"Addresses":[{"AllocationId":"eipalloc-live","PublicIp":"198.51.100.5","Tags":[{"Key":"kubernetes.io/cluster/test-cluster","Value":"owned"}]}]}\n'
     else
       printf '{"Addresses":[]}\n'
     fi
     ;;
+  "iam list-open-id-connect-providers") printf '{"OpenIDConnectProviderList":[]}\n' ;;
+  "ec2 describe-security-groups") printf '{"SecurityGroups":[]}\n' ;;
   "ec2 describe-volumes")
     if [ "${STUB_LIVE_VOLUME:-0}" = "1" ]; then
       printf '{"Volumes":[{"VolumeId":"vol-live","State":"available","Tags":[{"Key":"kubernetes.io/cluster/test-cluster","Value":"owned"}]}]}\n'
@@ -903,6 +906,24 @@ PY
   echo "$?" >"$TMP/$name.rc"
 }
 
+seed_independent_capture() {
+  local phase="$1"
+  # Standalone observations/destruction represent an existing attempt with captured identities.
+  if { [ "$phase" = verify ] || [ "$phase" = destroy ]; } && [ "${STUB_NO_CAPTURE:-0}" != 1 ]; then
+    mkdir -p "$LOG_DIR"
+    printf 'attempt=%s\nrow=qualreg\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
+    python3 - "$LOG_DIR/aws-pre-teardown-identities.json" "$INSTALL/candidate.json" "$ATTEMPT" <<'PYTHON'
+import json, sys
+candidate = json.load(open(sys.argv[2]))
+identity = {key: candidate[key] for key in ("version", "revision", "bundle_sha256", "runner_image")}
+json.dump({"schema": 1, "scope": {"cluster": "test-cluster", "region": "us-east-1",
+    "account": "123456789012", "attempt": sys.argv[3], "target": "qualreg/aws/us-east-1",
+    "state_key": "sol/qualreg/aws/us-east-1/cloud.tfstate", "candidate": identity},
+    "resources": {key: [] for key in ("ebs-volume", "security-group", "oidc-provider", "elastic-ip", "load-balancer")}}, open(sys.argv[1], "w"))
+PYTHON
+  fi
+}
+
 run_phase() {
   local name="$1" phase="$2"
   shift 2
@@ -950,6 +971,7 @@ PY
     *) STUB_ECR_LIFECYCLE=0 ;;
   esac
   export STUB_ECR_LIFECYCLE
+  seed_independent_capture "$phase"
   if [ -n "${PRESEED_FOREIGN_ATTEMPT:-}" ]; then
     mkdir -p "$LOG_DIR"
     printf 'attempt=%s\n' "$PRESEED_FOREIGN_ATTEMPT" >"$LOG_DIR/attempt.txt"
@@ -985,6 +1007,7 @@ run_phase_closed_stdout() {
   : >"$ESTABLISH_LOG"
   : >"$TERRAFORM_LOG"
   rm -rf "$LOG_DIR"
+  seed_independent_capture "$phase"
   env PATH="$TMP/bin:$PATH" \
     WORKSPACE="$WORKSPACE" TARGET=qualreg/aws/us-east-1 ECR_REGISTRY="$ECR" \
     CLUSTER=test-cluster DEPLOY_ROLE_ARN=arn:aws:iam::1:role/deploy \
@@ -1749,6 +1772,21 @@ has "and the inventory carries the attempt, target and state key" "attempt=$ATTE
 has "with the target" "target=qualreg/aws/us-east-1" "$TMP/identitydestroy.logs/aws-inventory.txt"
 has "and the state key" "state_key=sol/qualreg/aws/us-east-1/cloud.tfstate" \
   "$TMP/identitydestroy.logs/aws-inventory.txt"
+
+printf '\nscenario: missing history cannot be recreated by a destroy retry\n'
+STUB_NO_CAPTURE=1 run_phase missing-capture destroy
+refused missing-capture "missing independent history blocks destructive operations"
+has "the missing evidence is named" 'identity capture is missing' "$TMP/missing-capture.out"
+lacks "Sol destroy never runs" 'destroy qualreg/aws/us-east-1 --apply' "$TMP/missing-capture.sol"
+STUB_NO_CAPTURE=1 run_phase missing-capture-verify verify
+refused missing-capture-verify "missing history cannot certify final absence"
+has "EBS absence remains unknown" 'ebs-volume: UNKNOWN' "$TMP/missing-capture-verify.logs/aws-inventory-verdict.txt"
+
+printf '\nscenario: a failed independent recapture refuses before teardown\n'
+run_phase capture-failure destroy STUB_INVENTORY_UNREADABLE=1
+refused capture-failure "unreadable capture blocks destructive operations"
+has "capture failure is reported" 'independent identity capture failed' "$TMP/capture-failure.out"
+lacks "Sol destroy never runs after failed capture" 'destroy qualreg/aws/us-east-1 --apply' "$TMP/capture-failure.sol"
 
 printf '\nscenario: terminal records do not prevent an ABSENT verdict\n'
 run_phase terminal-residue verify STUB_TERMINATED_INSTANCE=1 STUB_DELETED_NAT=1

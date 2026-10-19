@@ -256,7 +256,7 @@ The required class set and each class's disposition come from
 [`teardown-policy.v1.json`](teardown-policy.v1.json), not from the evidence
 document. The policy is a reviewed release artefact:
 
-- `sol-teardown-v1` declares 16 AWS disposable classes plus the
+- `sol-teardown-v1` declares 18 AWS disposable classes plus the
   `durable-hosted-zone` prerequisite, and 18 GCP disposable classes, 3 scope
   classes and 2 durable prerequisites.
 - It declares the provider scope fields the claim must bind: `account` and

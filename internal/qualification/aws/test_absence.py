@@ -19,6 +19,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
 
 import absence
 
@@ -43,6 +44,7 @@ RUNTIME = absence.Runtime(
     target="qualreg/aws/us-east-1",
     state_key="sol/qualreg/aws/us-east-1/cloud.tfstate",
     candidate=CANDIDATE,
+    prior={"resources": {"ebs-volume": [], "security-group": [], "elastic-ip": [], "load-balancer": [], "oidc-provider": [f"arn:aws:iam::{ACCOUNT}:oidc-provider/oidc.eks.{REGION}.amazonaws.com/id/TEST"]}},
 )
 
 CLUSTER_TAG = {"Key": f"kubernetes.io/cluster/{CLUSTER}", "Value": "owned"}
@@ -79,8 +81,10 @@ PRESENT_FIXTURES: dict[str, tuple[tuple[str, str], object]] = {
     ),
     "elastic-ip": (
         ("ec2", "describe-addresses"),
-        {"Addresses": [{"PublicIp": "198.51.100.5", "Tags": [CLUSTER_TAG]}]},
+        {"Addresses": [{"AllocationId": "eipalloc-residue", "PublicIp": "198.51.100.5", "Tags": [CLUSTER_TAG]}]},
     ),
+    "oidc-provider": (("iam", "list-open-id-connect-providers"), {"OpenIDConnectProviderList": [{"Arn": RUNTIME.prior["resources"]["oidc-provider"][0]}]}),
+    "security-group": (("ec2", "describe-security-groups"), {"SecurityGroups": [{"GroupId": "sg-residue", "Tags": [{"Key": "aws:eks:cluster-name", "Value": CLUSTER}]}]}),
     "ebs-volume": (
         ("ec2", "describe-volumes"),
         {"Volumes": [{"VolumeId": "vol-residue", "State": "available", "Tags": [CLUSTER_TAG]}]},
@@ -120,6 +124,8 @@ EMPTY_RESPONSES: dict[tuple[str, str], object] = {
     ("ec2", "describe-nat-gateways"): {"NatGateways": []},
     ("ec2", "describe-addresses"): {"Addresses": []},
     ("ec2", "describe-volumes"): {"Volumes": []},
+    ("ec2", "describe-security-groups"): {"SecurityGroups": []},
+    ("iam", "list-open-id-connect-providers"): {"OpenIDConnectProviderList": []},
     ("elbv2", "describe-load-balancers"): {"LoadBalancers": []},
     ("elbv2", "describe-tags"): {"TagDescriptions": []},
     ("ecr", "describe-repositories"): {"repositories": []},
@@ -189,6 +195,72 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
     check("every declared residue class is observed", sorted(states(report)) == sorted(absence.RESIDUE_CLASSES))
     check("a clean account passes", report.ok)
     check("every class is ABSENT when nothing is attributable", set(states(report).values()) == {absence.ABSENT})
+
+    print("absence: independently captured identities survive tag and cluster loss")
+    with tempfile.TemporaryDirectory() as scratch:
+        path = os.path.join(scratch, "identities.json")
+        runner = FakeAws()
+        runner.set(("eks", "list-clusters"), {"clusters": [CLUSTER]})
+        runner.set(("eks", "describe-cluster"), {"cluster": {
+            "name": CLUSTER, "arn": f"arn:aws:eks:{REGION}:{ACCOUNT}:cluster/{CLUSTER}",
+            "identity": {"oidc": {"issuer": f"https://oidc.eks.{REGION}.amazonaws.com/id/TEST"}}}})
+        runner.set(("ec2", "describe-volumes"), {"Volumes": [{"VolumeId": "vol-historical", "Tags": [CLUSTER_TAG]}]})
+        runner.set(("ec2", "describe-security-groups"), {"SecurityGroups": [{"GroupId": "sg-historical", "Tags": [CLUSTER_TAG]}]})
+        runner.set(("ec2", "describe-addresses"), {"Addresses": [{"AllocationId": "eipalloc-historical", "Tags": [CLUSTER_TAG]}]})
+        runner.set(("elbv2", "describe-load-balancers"), {"LoadBalancers": [{"LoadBalancerArn": "arn:historical", "LoadBalancerName": "opaque"}]})
+        runner.set(("elbv2", "describe-tags"), {"TagDescriptions": [{"ResourceArn": "arn:historical", "Tags": [CLUSTER_TAG]}]})
+        absence.capture(replace(RUNTIME, prior=None), runner, path)
+        captured = absence.load_prior(path, RUNTIME)
+        runner.set(("eks", "list-clusters"), {"clusters": []})
+        runner.set(("ec2", "describe-volumes"), {"Volumes": [{"VolumeId": "vol-historical", "Tags": []}, {"VolumeId": "vol-unrelated", "Tags": []}]})
+        runner.set(("ec2", "describe-security-groups"), {"SecurityGroups": [{"GroupId": "sg-historical", "Tags": []}]})
+        oidc = captured["resources"]["oidc-provider"][0]
+        runner.set(("iam", "list-open-id-connect-providers"), {"OpenIDConnectProviderList": [{"Arn": oidc}]})
+        runner.set(("ec2", "describe-addresses"), {"Addresses": [{"AllocationId": "eipalloc-historical", "Tags": []}]})
+        runner.set(("elbv2", "describe-tags"), {"TagDescriptions": []})
+        historical = replace(RUNTIME, prior=captured)
+        report = absence.evaluate(historical, runner)
+        for name in absence.CONTINUITY_CLASSES:
+            check(f"{name}: identity loss cannot become absence", states(report)[name] == absence.PRESENT)
+        check("historical residue fails the complete independent verdict", not report.ok)
+        absence.capture(historical, runner, path)
+        check("retry preserves original identities after tags disappear", absence.load_prior(path, RUNTIME)["resources"] == captured["resources"])
+        runner = FakeAws()
+        check("actual provider deletion establishes absence", absence.evaluate(historical, runner).ok)
+        runner.set(("ec2", "describe-volumes"), {"Volumes": [{"VolumeId": "vol-unrelated", "Tags": []}]})
+        check("an unrelated untagged disk remains outside ownership", absence.evaluate(historical, runner).ok)
+        for name in ("account", "region", "cluster", "attempt", "target", "state_key", "candidate"):
+            value = None if name == "candidate" else "other"
+            try:
+                absence.load_prior(path, replace(RUNTIME, **{name: value}))
+                rejected = False
+            except ValueError:
+                rejected = True
+            check(f"capture from another {name} is rejected", rejected)
+        for key in (("ec2", "describe-volumes"), ("ec2", "describe-security-groups"), ("iam", "list-open-id-connect-providers")):
+            broken = FakeAws()
+            broken.fail(key)
+            try:
+                absence.capture(historical, broken, path)
+                rejected = False
+            except ValueError:
+                rejected = True
+            check(f"failed capture {key} refuses and preserves evidence", rejected and absence.load_prior(path, RUNTIME)["resources"] == captured["resources"])
+        check("no historical capture never produces a clean verdict", not absence.evaluate(replace(RUNTIME, prior=None), FakeAws()).ok)
+
+    runner = FakeAws()
+    runner.set(("ec2", "describe-security-groups"), {"SecurityGroups": [
+        {"GroupId": "sg-unrelated", "GroupName": CLUSTER + "-rds-other"}]})
+    check("an unrelated RDS name prefix is not ownership", absence.evaluate(RUNTIME, runner).ok)
+
+    with tempfile.TemporaryDirectory() as scratch:
+        path = os.path.join(scratch, "initial.json")
+        runner = FakeAws()
+        runner.set(("iam", "list-open-id-connect-providers"), {"OpenIDConnectProviderList": [{"Arn": "arn:unrelated"}]})
+        absence.capture(replace(RUNTIME, prior=None), runner, path, initial=True)
+        initial = absence.load_prior(path, RUNTIME)
+        check("fresh target can capture before its issuer exists in a shared account", initial["resources"]["oidc-provider"] == [])
+        check("initial capture never certifies unattributable OIDC absence", not absence.evaluate(replace(RUNTIME, prior=initial), runner).ok)
 
     print("absence: each required class participates in the verdict")
     for resource_class, (key, value) in PRESENT_FIXTURES.items():
@@ -293,7 +365,7 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
     runner = FakeAws()
     runner.set(("rds", "describe-db-snapshots"), {"DBSnapshots": [{"DBSnapshotIdentifier": f"{CLUSTER}-postgres-final"}]})
     retaining = absence.Runtime(
-        cluster=CLUSTER, region=REGION, account=ACCOUNT, registry_prefix="pluto", retention="final-snapshot"
+        cluster=CLUSTER, region=REGION, account=ACCOUNT, registry_prefix="pluto", retention="final-snapshot", prior=RUNTIME.prior
     )
     report = absence.evaluate(retaining, runner)
     check("a declared final snapshot is not residue", states(report)["rds-snapshot"] == absence.ABSENT)
@@ -345,6 +417,8 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
             "ec2 describe-nat-gateways": {"NatGateways": []},
             "ec2 describe-addresses": {"Addresses": []},
             "ec2 describe-volumes": {"Volumes": []},
+            "ec2 describe-security-groups": {"SecurityGroups": []},
+            "iam list-open-id-connect-providers": {"OpenIDConnectProviderList": []},
             "elbv2 describe-load-balancers": {"LoadBalancers": []},
             "ecr describe-repositories": {"repositories": []},
             "iam list-roles": {"Roles": []},
@@ -368,12 +442,17 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
         environment = dict(os.environ, PATH=f"{directory}:{os.environ['PATH']}", ACCOUNT=ACCOUNT)
         candidate = directory / "candidate.json"
         candidate.write_text(json.dumps(CANDIDATE))
+        prior = directory / "prior.json"
+        cli_runtime = replace(RUNTIME, attempt="", target="", state_key="", base_domain=None)
+        absence.capture(cli_runtime, FakeAws(), str(prior))
         out = directory / "evidence"
         result = subprocess.run(
             [
                 sys.executable,
                 str(pathlib.Path(__file__).resolve().parent / "absence.py"),
                 "collect",
+                "--prior",
+                str(prior),
                 "--dir",
                 str(out),
                 "--cluster",
@@ -414,6 +493,8 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
                 sys.executable,
                 str(pathlib.Path(__file__).resolve().parent / "absence.py"),
                 "collect",
+                "--prior",
+                str(prior),
                 "--dir",
                 str(out),
                 "--cluster",
@@ -447,6 +528,8 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
                 sys.executable,
                 str(pathlib.Path(__file__).resolve().parent / "absence.py"),
                 "collect",
+                "--prior",
+                str(prior),
                 "--dir",
                 str(directory / "bad-evidence"),
                 "--cluster",

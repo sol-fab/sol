@@ -643,34 +643,34 @@ capture_kube_evidence() {
 # Durable prerequisites (the delegated zone) are observed separately and are
 # excluded. Nothing here calls terraform or helm, and absence is never inferred
 # from Sol's exit code or Terraform state.
-aws_inventory() {
-  if ! command -v python3 >/dev/null 2>&1; then
-    say "the independent inventory needs python3, which is not on PATH"
+aws_observe() {
+  python3 "$ABSENCE" "$@" \
+    --prior "$LOG_DIR/aws-pre-teardown-identities.json" \
+    --cluster "$CLUSTER" --region "$AWS_REGION" --account "$ACCOUNT" \
+    --registry-prefix "$WORKSPACE_NAME" --base-domain "$BASE_DOMAIN" \
+    --retention "$RETENTION" --attempt "$ATTEMPT" --target "$TARGET" \
+    --state-key "$STATE_KEY" --candidate "$SOL_CANDIDATE"
+}
+
+capture_independent_identities() {
+  if ! aws_observe capture "$@" >"$LOG_DIR/aws-identity-capture.stdout" 2>"$LOG_DIR/aws-identity-capture.err"; then
+    say "independent identity capture failed; refusing teardown before destructive operations"
+    cat "$LOG_DIR/aws-identity-capture.err" >&2
     return 1
   fi
+}
+
+aws_inventory() {
   say "independent inventory (read-only): every required disposable class"
-  if ! python3 "$ABSENCE" collect \
-    --dir "$LOG_DIR" \
-    --cluster "$CLUSTER" \
-    --region "$AWS_REGION" \
-    --account "$ACCOUNT" \
-    --registry-prefix "$WORKSPACE_NAME" \
-    --base-domain "$BASE_DOMAIN" \
-    --retention "$RETENTION" \
-    --attempt "$ATTEMPT" \
-    --target "$TARGET" \
-    --state-key "$STATE_KEY" \
-    --candidate "$SOL_CANDIDATE" \
+  if ! aws_observe collect --dir "$LOG_DIR" \
     >"$LOG_DIR/aws-inventory.stdout" 2>"$LOG_DIR/aws-inventory.err"; then
     say "the independent inventory does not read ABSENT; teardown is not complete"
-    say "  evidence: $LOG_DIR/aws-inventory.txt and $LOG_DIR/aws-inventory-verdict.txt"
-    say "  structured verdict (promotion-eligible only with a candidate binding):"
-    say "    $LOG_DIR/aws-inventory-verdict.json"
+    say "  evidence: $LOG_DIR/aws-inventory.txt and $LOG_DIR/aws-inventory-verdict.json"
     return 1
   fi
   say "the independent inventory reads ABSENT for every required disposable class"
-  return 0
 }
+
 
 
 DEPLOY_KUBECONFIG="$LOG_DIR/kubeconfig-deploy.yaml"
@@ -834,6 +834,7 @@ require_credentials() {
 phase_cloud() {
   require_credentials || return 1
   require_target_terraform_var_file || return 1
+  capture_independent_identities --initial || return 1
   # A fixed repository name is not made fresh by a fresh target name, so record it on the way in.
   ecr_record_sol_repositories before
   # The cold deploy. `sol deploy` establishes the durable installation inline, applies the
@@ -852,6 +853,7 @@ phase_cloud() {
     bootstrap_deploy cloud-apply-resume || deploy_rc=$?
     if cloud_mutated; then CLOUD_APPLIED=1; fi
   fi
+  capture_independent_identities || return 1
   if ! environment_reconciled; then
     say "the bootstrap deploy did not reconcile the environment $TARGET (full log $LOG_DIR/cloud-apply.log)"
     return 1
@@ -1454,6 +1456,11 @@ phase_destroy() {
   # teardown was attempted, or an inventory that was never taken reads as a failed teardown.
   require_credentials || return 1
   TEARDOWN_ATTEMPTED=1
+  if [ ! -f "$LOG_DIR/aws-pre-teardown-identities.json" ]; then
+    say "independent identity capture is missing; teardown is blocked, not verified absent"
+    return 1
+  fi
+  capture_independent_identities || return 1
   destroy_kube_destination
   capture_state
   local destroy_rc=0 verdict_rc=0

@@ -314,9 +314,16 @@ lands, E5 is `BLOCKED` — recorded as blocked, never weakened.
    an unreadable cluster or an unreachable API is UNKNOWN there, never a skipped release.
    Capture every `lifecycle phase:` line and the
    terraform argv (I7's `-var` order, I8's targeted preparation, I9's `Destroying` → `Absent`).
-3. Independent inventory (`absence.py`, read-only), tri-state `PRESENT` / `ABSENT` / `UNKNOWN`,
+3. Before teardown, the harness captures independently attributed EBS volume IDs, EIP allocation IDs, load-balancer ARNs, security-group IDs
+   and the EKS issuer in `aws-pre-teardown-identities.json`, bound to the attempt, target, account,
+   region and candidate. It also captures after cloud reconciliation while the cluster still exists.
+   Retries preserve captured identities; failed capture refuses teardown. Final verification requires
+   that capture, so tag loss and cluster removal cannot erase historical ownership. Missing or
+   mismatched capture is UNKNOWN. These are provider reads, independent of Sol and Terraform state.
+
+   Independent inventory (`absence.py`, read-only), tri-state `PRESENT` / `ABSENT` / `UNKNOWN`,
    over EKS clusters, RDS instances, subnet groups and snapshots, EC2 instances, VPCs, NAT gateways,
-   EIPs, EBS volumes, ELBv2 load balancers, ECR repositories, IAM roles and policies, S3 buckets,
+   EIPs, EBS volumes, OIDC providers, security groups, ELBv2 load balancers, ECR repositories, IAM roles and policies, S3 buckets,
    CloudWatch dashboards and log groups. Each class enumerates the provider and attributes what it
    returns to this target by the target's cluster tag, cluster-name prefix or declared registry
    path, so an unrelated account resource is not residue and an attributable one is found after the
