@@ -2093,6 +2093,47 @@ fi
 assert_contains "the state residue was reported, by address" "$residue_state_log.out" \
   'STILL REPRESENTS module.eks.aws_eks_cluster.this[0], module.eks.aws_iam_openid_connect_provider.oidc_provider[0], aws_db_instance.postgres[0]' || exit 1
 
+# #1501: only the pre-teardown capability observation fails. Namespace release,
+# platform teardown, closure and independent final observations still work.
+unobservable_window_log="$tmp/destroy-unobservable-window.log"
+cp "$tmp/work/sol/environments.yml" "$tmp/window-original-environments.yml"
+python3 - "$tmp/work/sol/environments.yml" <<'PYTHON'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+text = text.replace('    aws/us-east-1:\n', '    aws/us-east-1:\n      kube_context: lifecycle-test-deploy\n', 1)
+path.write_text(text)
+PYTHON
+rm -f "$FAIL_MARKER_DIR/bootstrap-window" "$RDS_PREPARED_FILE"
+if ! (export WINDOW_OBSERVATION_UNAVAILABLE=1; run_destroy "$unobservable_window_log"); then
+  cat "$unobservable_window_log.out" >&2
+  echo "an unobservable bootstrap window prevented otherwise successful teardown" >&2
+  exit 1
+fi
+assert_contains "uncertainty is reported" "$unobservable_window_log.out" \
+  'the bootstrap window could not be observed before teardown' || exit 1
+assert_contains "the specific observation failure reached the product" "$unobservable_window_log" \
+  'window-observation-unavailable' || exit 1
+assert_contains "required final absence is established" "$unobservable_window_log.out" \
+  'Destruction reached verified absence.' || exit 1
+if [ "$(cat "$FAIL_MARKER_DIR/bootstrap-window")" != false ]; then
+  echo "defensive closure did not close the actual authority marker" >&2
+  exit 1
+fi
+python3 - "$unobservable_window_log" <<'PYTHON'
+import sys
+lines = open(sys.argv[1]).readlines()
+def first(predicate):
+    return next(i for i, line in enumerate(lines) if predicate(line))
+namespace = first(lambda line: 'get namespace kube-system' in line)
+observe = first(lambda line: 'window-observation-unavailable' in line)
+platform = first(lambda line: 'cloud/aws/platform' in line and ' destroy ' in line)
+close = first(lambda line: 'bootstrap-window-closed-by-apply' in line)
+substrate = first(lambda line: 'cloud/aws/cluster' in line and ' destroy ' in line)
+assert namespace < observe < platform < close < substrate, (namespace, observe, platform, close, substrate)
+PYTHON
+mv "$tmp/window-original-environments.yml" "$tmp/work/sol/environments.yml"
+
 destroy_tri_log="$tmp/destroy-can-i-indeterminate.log"
 rm -f "$FAIL_MARKER_DIR/bootstrap-window"
 if ! (cd "$tmp/work" && DESTROYING=1 CAN_I_FAIL=1 LIFECYCLE_LOG="$destroy_tri_log" \

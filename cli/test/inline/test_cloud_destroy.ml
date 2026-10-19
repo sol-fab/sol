@@ -4115,3 +4115,62 @@ let%test
     [ "observe"; "release"; "substrate"; "verify" ]
     (List.rev !order)
 ;;
+
+let%test "an unobservable bootstrap window is closed after platform and before substrate" =
+  let deps, _ = fake_deps ~state:(Ok (show_json_resources gcp_cluster)) () in
+  let events = ref [] in
+  let warnings = ref [] in
+  let closed = ref false in
+  let event value = events := value :: !events in
+  let deps =
+    { deps with
+      authority =
+        Mechanism
+          { reconcile_and_enable =
+              (fun () ->
+                event "enable";
+                Ok ())
+          ; remove_elevated_access =
+              (fun () ->
+                event "close";
+                closed := true;
+                Ok ())
+          }
+    ; observe_window_before =
+        (fun () ->
+          event "unknown";
+          Error "unobservable window")
+    ; destroy_platform =
+        (fun () ->
+          event "platform";
+          Ok ())
+    ; destroy_substrate =
+        (fun () ->
+          Windtrap.equal
+            Windtrap.bool
+            ~msg:"authority actually closed before substrate"
+            true
+            !closed;
+          event "substrate";
+          Ok ())
+    ; warn = (fun message -> warnings := message :: !warnings)
+    }
+  in
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"successful defensive closure permits verified teardown"
+    0
+    (exit_code (execute ~deps));
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"unknown triggers closure in existing lifecycle order"
+    [ "enable"; "unknown"; "platform"; "close"; "substrate" ]
+    (List.rev !events);
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"unknown is reported rather than called closed"
+    true
+    (List.exists
+       (fun message -> matches_regex (Str.regexp_string "could not be observed") message)
+       !warnings)
+;;

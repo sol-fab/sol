@@ -317,6 +317,9 @@ JSON
         if fail_once cloud; then exit 20; fi
         ;;
       *" -var=provisioner_bootstrap_admin=false "*)
+        if [ "$(cat "$FAIL_MARKER_DIR/bootstrap-window" 2>/dev/null || true)" = true ]; then
+          printf 'bootstrap-window-closed-by-apply\n' >>"$LIFECYCLE_LOG"
+        fi
         printf 'false\n' >"$FAIL_MARKER_DIR/bootstrap-window"
         if fail_once deescalate; then exit 20; fi
         ;;
@@ -379,7 +382,10 @@ JSON
     if fail_once cloud; then exit 20; fi
     ;;
   *cloud/aws/cluster*" apply "*"provisioner_bootstrap_admin=false"*|*cloud/gcp/cluster*" apply "*"provisioner_bootstrap_admin=false"*)
-    printf 'false\n' >"$FAIL_MARKER_DIR/bootstrap-window"
+    if [ "$(cat "$FAIL_MARKER_DIR/bootstrap-window" 2>/dev/null || true)" = true ]; then
+          printf 'bootstrap-window-closed-by-apply\n' >>"$LIFECYCLE_LOG"
+        fi
+        printf 'false\n' >"$FAIL_MARKER_DIR/bootstrap-window"
     if fail_once deescalate; then exit 20; fi
     ;;
   *cloud/aws/platform*" apply "*"-target="*|*cloud/gcp/platform*" apply "*"-target="*)
