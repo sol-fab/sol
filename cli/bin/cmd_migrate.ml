@@ -85,15 +85,6 @@ let report_job_outcome (outcome : Sol_cli_migration_job.outcome) =
   | Succeeded | Failed -> ()
 ;;
 
-let finish_job (outcome : Sol_cli_migration_job.outcome) =
-  match outcome with
-  | Succeeded ->
-    Printf.printf "Done.\n";
-    Ok ()
-  | Failed | Unstartable _ | Timed_out _ ->
-    Error "migration Job failed -- see logs above."
-;;
-
 let run_migration_job ~ctx ~namespace (job : Sol_cli_migration_job.job) =
   let* () =
     Sol_cli_migration_job.with_cleanup ~ctx job (fun () ->
@@ -110,7 +101,8 @@ let run_migration_job ~ctx ~namespace (job : Sol_cli_migration_job.job) =
         Error "migration Job failed -- see logs above.")
   in
   (* Do not print Done before cleanup has succeeded. *)
-  finish_job Succeeded
+  Printf.printf "Done.\n";
+  Ok ()
 ;;
 
 type target_migration =
