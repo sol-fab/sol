@@ -510,8 +510,8 @@ let product_execution
         | Error _ -> 1
         | Ok job ->
           let outcome = J.wait ~ctx ~interval_s:0. ~attempts:1 job in
-          J.cleanup ~ctx job;
-          if outcome = J.Succeeded then 0 else 2
+          let cleanup = J.cleanup ~ctx job in
+          if outcome = J.Succeeded && Result.is_ok cleanup then 0 else 2
       in
       Unix._exit code);
     Unix.close child;
@@ -701,8 +701,8 @@ let unusable_requested_channel_fails_closed () =
         | Error _ -> 1
         | Ok job ->
           let outcome = J.wait ~ctx ~interval_s:0. ~attempts:1 job in
-          J.cleanup ~ctx job;
-          if outcome = J.Succeeded then 0 else 2
+          let cleanup = J.cleanup ~ctx job in
+          if outcome = J.Succeeded && Result.is_ok cleanup then 0 else 2
       in
       Unix._exit code);
     Unix.close refused_read;

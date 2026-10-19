@@ -241,31 +241,45 @@ let test_local_run_scopes_same_secret_key_per_unit_and_filters_ambient_value () 
          ; "notifications/email_svc", [ "API_KEY", "notifications-value" ]
          ]
        in
-       match Sol_cli_local_run.plan ~secret_values ~root ~facts (services_of facts) with
-       | Error errors -> Windtrap.fail (String.concat "; " (List.map snd errors))
-       | Ok plan ->
-         (match plan.launches with
-          | [ payments; notifications ] ->
-            check_string
-              "payments receives its unit value"
-              "payments-value"
-              (Option.value ~default:"" (List.assoc_opt "API_KEY" payments.env));
-            check_string
-              "notifications receives its unit value"
-              "notifications-value"
-              (Option.value ~default:"" (List.assoc_opt "API_KEY" notifications.env));
-            check_bool
-              "ambient secret is filtered from launches"
-              false
-              (List.exists
-                 (fun (_, value) -> value = "ambient-secret-must-not-leak")
-                 payments.env);
-            check_bool
-              "file values are redacted"
-              true
-              (List.mem "payments-value" plan.redact
-               && List.mem "notifications-value" plan.redact)
-          | _ -> Windtrap.fail "expected two local units"))
+       List.iter
+         (fun services ->
+            match Sol_cli_local_run.plan ~secret_values ~root ~facts services with
+            | Error errors -> Windtrap.fail (String.concat "; " (List.map snd errors))
+            | Ok plan ->
+              (match plan.launches with
+               | [ _; _ ] ->
+                 let find label =
+                   match
+                     List.find_opt
+                       (fun (r : Sol_cli_local_run.recipe) -> r.label = label)
+                       plan.launches
+                   with
+                   | Some recipe -> recipe
+                   | None -> Windtrap.fail ("missing local unit " ^ label)
+                 in
+                 let payments = find "payments/charge_svc" in
+                 let notifications = find "notifications/email_svc" in
+                 check_string
+                   "payments receives its unit value"
+                   "payments-value"
+                   (Option.value ~default:"" (List.assoc_opt "API_KEY" payments.env));
+                 check_string
+                   "notifications receives its unit value"
+                   "notifications-value"
+                   (Option.value ~default:"" (List.assoc_opt "API_KEY" notifications.env));
+                 check_bool
+                   "ambient secret is filtered from launches"
+                   false
+                   (List.exists
+                      (fun (_, value) -> value = "ambient-secret-must-not-leak")
+                      (payments.env @ notifications.env));
+                 check_bool
+                   "file values are redacted"
+                   true
+                   (List.mem "payments-value" plan.redact
+                    && List.mem "notifications-value" plan.redact)
+               | _ -> Windtrap.fail "expected two local units"))
+         [ services_of facts; List.rev (services_of facts) ])
 ;;
 
 let typescript_unit =

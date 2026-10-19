@@ -85,25 +85,24 @@ let report_job_outcome (outcome : Sol_cli_migration_job.outcome) =
   | Succeeded | Failed -> ()
 ;;
 
-let finish_job (outcome : Sol_cli_migration_job.outcome) =
-  match outcome with
-  | Succeeded ->
-    Printf.printf "Done.\n";
-    Ok ()
-  | Failed | Unstartable _ | Timed_out _ ->
-    Error "migration Job failed -- see logs above."
-;;
-
 let run_migration_job ~ctx ~namespace (job : Sol_cli_migration_job.job) =
-  Printf.printf
-    "Submitting migration Job %s in namespace %s...\n%!"
-    job.job_name
-    namespace;
-  let outcome = Sol_cli_migration_job.wait ~ctx ~interval_s:2. ~attempts:150 job in
-  report_job_logs ~ctx job;
-  report_job_outcome outcome;
-  Sol_cli_migration_job.cleanup ~ctx job;
-  finish_job outcome
+  let* () =
+    Sol_cli_migration_job.with_cleanup ~ctx job (fun () ->
+      Printf.printf
+        "Submitting migration Job %s in namespace %s...\n%!"
+        job.job_name
+        namespace;
+      let outcome = Sol_cli_migration_job.wait ~ctx ~interval_s:2. ~attempts:150 job in
+      report_job_logs ~ctx job;
+      report_job_outcome outcome;
+      match outcome with
+      | Succeeded -> Ok ()
+      | Failed | Unstartable _ | Timed_out _ ->
+        Error "migration Job failed -- see logs above.")
+  in
+  (* Do not print Done before cleanup has succeeded. *)
+  Printf.printf "Done.\n";
+  Ok ()
 ;;
 
 type target_migration =

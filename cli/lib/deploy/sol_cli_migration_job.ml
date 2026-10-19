@@ -139,23 +139,79 @@ let record_submission ~ctx ~target ~binding ~before job output =
 
 let cleanup ~ctx job =
   let delete resource name =
-    kubectl
-      ~ctx
-      [ "delete"
-      ; resource
-      ; name
-      ; "-n"
-      ; job.namespace
-      ; "--ignore-not-found"
-      ; "--wait=false"
-      ]
-    |> Result.iter_error (fun e ->
-      Sol_cli_report.warn
-        "warning: could not clean up after the Job: %s"
-        (Sol_cli_process.error_to_string e))
+    let remaining =
+      match resource with
+      | "job" -> "may still run with its mounted credential references"
+      | _ -> "may still contain the migration files"
+    in
+    let failure detail =
+      Some (Printf.sprintf "%s %s/%s %s: %s" resource job.namespace name remaining detail)
+    in
+    (* Cleanup must attempt both objects and never replace an active exception. *)
+    try
+      match
+        kubectl
+          ~ctx
+          [ "delete"
+          ; resource
+          ; name
+          ; "-n"
+          ; job.namespace
+          ; "--ignore-not-found"
+          ; "--wait=false"
+          ]
+      with
+      | Ok _ -> None
+      | Error error -> failure (Sol_cli_process.error_to_string error)
+    with
+    | exn -> failure (Printexc.to_string exn)
   in
-  delete "job" job.job_name;
-  Option.iter (fun name -> delete "configmap" name) job.configmap_name
+  let job_failure = delete "job" job.job_name in
+  let configmap_failure = Option.bind job.configmap_name (delete "configmap") in
+  let failures = List.filter_map Fun.id [ job_failure; configmap_failure ] in
+  match failures with
+  | [] -> Ok ()
+  | failures -> Error ("Job cleanup is incomplete:\n" ^ String.concat "\n" failures)
+;;
+
+let cleanup_result result cleanup =
+  match result, cleanup with
+  | result, Ok () -> result
+  | Ok _, Error message -> Error message
+  | Error original, Error message -> Error (original ^ "\n" ^ message)
+;;
+
+let with_cleanup ~ctx job action =
+  let cleaned = ref (Ok ()) in
+  let result =
+    Fun.protect
+      ~finally:(fun () ->
+        cleaned := cleanup ~ctx job;
+        Result.iter_error (Sol_cli_report.warn "%s") !cleaned)
+      action
+  in
+  cleanup_result result !cleaned
+;;
+
+(* Submission may have reached Kubernetes even when apply reports failure. Start
+   protection before the first write; transfer lifetime to the caller only after
+   the whole submission succeeds. Durable credential Secrets are never deleted. *)
+let submit_owned ~ctx job apply =
+  let submitted = ref false in
+  let cleaned = ref (Ok ()) in
+  let result =
+    Fun.protect
+      ~finally:(fun () ->
+        if not !submitted
+        then (
+          cleaned := cleanup ~ctx job;
+          Result.iter_error (Sol_cli_report.warn "%s") !cleaned))
+      (fun () ->
+         let* () = apply () in
+         submitted := true;
+         Ok job)
+  in
+  cleanup_result result !cleaned
 ;;
 
 let submit_doc ~ctx ~namespace ~name_prefix ~label build_doc =
@@ -166,11 +222,8 @@ let submit_doc ~ctx ~namespace ~name_prefix ~label build_doc =
     ; configmap_name = None
     }
   in
-  match apply_doc ~ctx ~what:(label ^ " job") (build_doc ~name:job.job_name) with
-  | Ok () -> Ok job
-  | Error _ as e ->
-    cleanup ~ctx job;
-    e
+  submit_owned ~ctx job (fun () ->
+    apply_doc ~ctx ~what:(label ^ " job") (build_doc ~name:job.job_name))
 ;;
 
 let submit
@@ -194,61 +247,59 @@ let submit
     ; configmap_name = Some configmap_name
     }
   in
-  let* () =
-    apply_doc
-      ~ctx
-      ~what:(label ^ "configmap")
-      (Sol_cli_manifest.migration_configmap_doc ~name:configmap_name ~namespace files)
-  in
-  let document =
-    Sol_cli_manifest.migration_job_doc
-      ~name:job.job_name
-      ~namespace
-      ~image
-      ~args
-      ~configmap_name
-      ~ddl_creds_name
-      ?ca_configmap
-      ()
-  in
-  let ordinary () = apply_doc ~ctx ~what:(label ^ "job") document in
-  let apply =
-    match execution_target with
-    | None -> ordinary ()
-    | Some target ->
-      (match Sol_cli_migration_execution.prepare () with
-       | Ok (Some binding) ->
-         let before = Sol_cli_kube_identity.observe ~ctx in
-         let result =
-           Sol_cli_fs.with_temp_file
-             ~prefix:"sol-migrate-"
-             ~suffix:".yaml"
-             (Sol_cli_yaml.render [ document ])
-             (fun file -> Sol_cli_kubectl.run ~ctx [ "apply"; "-f"; file; "-o"; "json" ])
-         in
-         (match result with
-          | Ok (Ok output) ->
-            record_submission ~ctx ~target ~binding ~before job output.stdout;
-            Ok ()
-          | Ok (Error error) ->
-            notify_execution Unavailable;
-            Error (Sol_cli_process.error_to_string error)
-          | Error error ->
-            notify_execution Unavailable;
-            Error error)
-       | Ok None -> ordinary ()
-       | Error message ->
-         Sol_cli_report.warn
-           "Migration execution capture is unestablished (%s); continuing normal Job \
-            wait and cleanup."
-           message;
-         ordinary ())
-  in
-  match apply with
-  | Ok () -> Ok job
-  | Error _ as e ->
-    cleanup ~ctx job;
-    e
+  submit_owned ~ctx job (fun () ->
+    let* () =
+      apply_doc
+        ~ctx
+        ~what:(label ^ "configmap")
+        (Sol_cli_manifest.migration_configmap_doc ~name:configmap_name ~namespace files)
+    in
+    let document =
+      Sol_cli_manifest.migration_job_doc
+        ~name:job.job_name
+        ~namespace
+        ~image
+        ~args
+        ~configmap_name
+        ~ddl_creds_name
+        ?ca_configmap
+        ()
+    in
+    let ordinary () = apply_doc ~ctx ~what:(label ^ "job") document in
+    let apply =
+      match execution_target with
+      | None -> ordinary ()
+      | Some target ->
+        (match Sol_cli_migration_execution.prepare () with
+         | Ok (Some binding) ->
+           let before = Sol_cli_kube_identity.observe ~ctx in
+           let result =
+             Sol_cli_fs.with_temp_file
+               ~prefix:"sol-migrate-"
+               ~suffix:".yaml"
+               (Sol_cli_yaml.render [ document ])
+               (fun file ->
+                  Sol_cli_kubectl.run ~ctx [ "apply"; "-f"; file; "-o"; "json" ])
+           in
+           (match result with
+            | Ok (Ok output) ->
+              record_submission ~ctx ~target ~binding ~before job output.stdout;
+              Ok ()
+            | Ok (Error error) ->
+              notify_execution Unavailable;
+              Error (Sol_cli_process.error_to_string error)
+            | Error error ->
+              notify_execution Unavailable;
+              Error error)
+         | Ok None -> ordinary ()
+         | Error message ->
+           Sol_cli_report.warn
+             "Migration execution capture is unestablished (%s); continuing normal Job \
+              wait and cleanup."
+             message;
+           ordinary ())
+    in
+    apply)
 ;;
 
 let waiting_status ~ctx job =

@@ -3228,3 +3228,53 @@ let%test "rollback to local Kafka removes historical external credential project
       (List.mem_assoc "API_KEY" spec.secret_sources)
   | _ -> Windtrap.fail "unexpected restored workload count"
 ;;
+
+let%test "external_secret_prune: a declared writer survives even with matching ownership" =
+  let log = Filename.temp_file "sol-eso-survivor-" ".log" in
+  Fun.protect
+    ~finally:(fun () -> Sys.remove log)
+    (fun () ->
+       let retained =
+         { Sol_cli_release_id.resource = "externalsecret"
+         ; namespace = "myapp-payments"
+         ; name = "still-declared"
+         ; uid = "owned-uid"
+         }
+       in
+       with_fake_kubectl
+         (Printf.sprintf
+            {|#!/bin/sh
+printf '%%s\n' "$*" >> %s
+case "$*" in
+  *get*) printf owned-uid ;;
+  *delete*) exit 0 ;;
+esac
+|}
+            (Filename.quote log))
+         (fun () ->
+            let declared =
+              [ { Sol_cli_workload_ownership.resource = retained.resource
+                ; namespace = retained.namespace
+                ; name = retained.name
+                }
+              ]
+            in
+            match
+              Sol_cli_rollback.prune_external_secrets
+                ~ctx:Sol_cli_kube_destination.local_context
+                ~evidence:[ retained ]
+                ~declared
+            with
+            | Error message -> Windtrap.fail message
+            | Ok report ->
+              Windtrap.equal
+                Windtrap.int
+                ~msg:"no declared writer is removed"
+                0
+                (List.length report.removed_external_secrets);
+              Windtrap.equal
+                Windtrap.string
+                ~msg:"no cleanup call touches the survivor"
+                ""
+                (In_channel.with_open_text log In_channel.input_all)))
+;;

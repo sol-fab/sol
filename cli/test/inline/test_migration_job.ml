@@ -285,3 +285,216 @@ let%test "REFAC-139 part A: succeeded" = test_succeeded ()
 let%test "REFAC-139 part A: a transient wait runs to its bound" =
   test_times_out_on_a_transient_wait ()
 ;;
+
+(* #1379: success includes releasing the Job's authority; an API refusal is not
+   cleanup. Contract failures, in contrast, intentionally retain their evidence. *)
+let%test "contract cleanup: a successful Job with denied deletion fails the phase" =
+  with_fake_kubectl
+    {|#!/bin/sh
+case "$*" in
+  *apply*) exit 0 ;;
+  *get*job*status.succeeded*) printf 1 ;;
+  *delete*) printf 'Error from server (Forbidden): cleanup denied' >&2; exit 1 ;;
+  *) exit 1 ;;
+esac
+|}
+    (fun () ->
+       match
+         Sol_cli_contract.reconcile_in_destination
+           ~ctx:Sol_cli_kube_destination.local_context
+           ~kafka:(Sol_cli_resource_binding.Local_kafka "events")
+           ~secret_name:None
+           ~namespace:"pluto-payments"
+           ~image:"candidate@sha256:abc"
+       with
+       | Ok () -> Windtrap.fail "contract success hid a surviving Job"
+       | Error message ->
+         List.iter
+           (fun required ->
+              Windtrap.equal
+                Windtrap.bool
+                ~msg:required
+                true
+                (Sol_cli_string.contains ~needle:required message))
+           [ "pluto-payments/sol-contract-"; "Forbidden" ])
+;;
+
+let%test "submission cleanup: a failed first ConfigMap write still releases owned objects"
+  =
+  let log = Filename.temp_file "sol-submit-cleanup-" ".log" in
+  Fun.protect
+    ~finally:(fun () -> Sys.remove log)
+    (fun () ->
+       with_fake_kubectl
+         (Printf.sprintf
+            {|#!/bin/sh
+printf '%%s\n' "$*" >> %s
+case "$*" in
+  *apply*) printf 'connection lost after request' >&2; exit 1 ;;
+  *delete*) exit 0 ;;
+  *) exit 1 ;;
+esac
+|}
+            (Filename.quote log))
+         (fun () ->
+            let result =
+              Sol_cli_migration_job.submit
+                ~ctx:Sol_cli_kube_destination.local_context
+                ~namespace:"pluto-payments"
+                ~name_prefix:"sol-migrate"
+                ~label:"migration "
+                ~image:"candidate@sha256:abc"
+                ~args:[]
+                ~files:[ "001.sql", "SELECT 1" ]
+                ~ddl_creds_name:"target-ddl-creds"
+                ()
+            in
+            Windtrap.equal
+              Windtrap.bool
+              ~msg:"submission failed"
+              true
+              (Result.is_error result);
+            let calls = In_channel.with_open_text log In_channel.input_all in
+            List.iter
+              (fun required ->
+                 Windtrap.equal
+                   Windtrap.bool
+                   ~msg:required
+                   true
+                   (Sol_cli_string.contains ~needle:required calls))
+              [ "delete job sol-migrate-"; "delete configmap sol-migrate-files-" ];
+            Windtrap.equal
+              Windtrap.bool
+              ~msg:"durable credentials survive"
+              false
+              (Sol_cli_string.contains ~needle:"delete secret" calls)))
+;;
+
+let with_cleanup_calls ?(refuse = false) f =
+  let log = Filename.temp_file "sol-job-cleanup-" ".log" in
+  Fun.protect
+    ~finally:(fun () -> Sys.remove log)
+    (fun () ->
+       with_fake_kubectl
+         (Printf.sprintf
+            {|#!/bin/sh
+printf '%%s\n' "$*" >> %s
+case "$*" in
+  *delete*) %s ;;
+  *apply*) exit 0 ;;
+  *status.succeeded*) printf '' ;;
+  *status.failed*) printf 1 ;;
+  *logs*) printf 'registry unavailable' ;;
+  *) exit 0 ;;
+esac
+|}
+            (Filename.quote log)
+            (if refuse
+             then "printf 'Forbidden: deletion denied' >&2; exit 1"
+             else "exit 0"))
+         (fun () -> f (fun () -> In_channel.with_open_text log In_channel.input_all)))
+;;
+
+let assert_transients_only calls =
+  List.iter
+    (fun name ->
+       Windtrap.equal
+         Windtrap.bool
+         ~msg:name
+         true
+         (Sol_cli_string.contains ~needle:name calls))
+    [ "delete job sol-migrate-1"; "delete configmap sol-migrate-files-1" ];
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"durable credentials are never cleanup targets"
+    false
+    (Sol_cli_string.contains ~needle:"delete secret" calls)
+;;
+
+let%test "Job cleanup: success and returned failure release only transient objects" =
+  List.iter
+    (fun original ->
+       with_cleanup_calls (fun calls ->
+         let result =
+           Sol_cli_migration_job.with_cleanup
+             ~ctx:Sol_cli_kube_destination.local_context
+             job
+             (fun () -> original)
+         in
+         Windtrap.equal
+           (Windtrap.result Windtrap.unit Windtrap.string)
+           ~msg:"primary result survives cleanup"
+           original
+           result;
+         assert_transients_only (calls ())))
+    [ Ok (); Error "primary failure" ]
+;;
+
+let%test "Job cleanup: exception releases transients without masking the primary failure" =
+  with_cleanup_calls ~refuse:true (fun calls ->
+    let caught =
+      try
+        ignore
+          (Sol_cli_migration_job.with_cleanup
+             ~ctx:Sol_cli_kube_destination.local_context
+             job
+             (fun () -> failwith "primary exception"));
+        false
+      with
+      | Failure message -> message = "primary exception"
+    in
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the primary exception survives cleanup failure"
+      true
+      caught;
+    assert_transients_only (calls ()))
+;;
+
+let%test "Job cleanup: errors include the surviving authority and provider diagnostic" =
+  with_cleanup_calls ~refuse:true (fun calls ->
+    match
+      Sol_cli_migration_job.with_cleanup
+        ~ctx:Sol_cli_kube_destination.local_context
+        job
+        (fun () -> Error "primary failure")
+    with
+    | Ok _ -> Windtrap.fail "cleanup failure became success"
+    | Error message ->
+      List.iter
+        (fun required ->
+           Windtrap.equal
+             Windtrap.bool
+             ~msg:required
+             true
+             (Sol_cli_string.contains ~needle:required message))
+        [ "primary failure"
+        ; "pluto-payments/sol-migrate-1"
+        ; "credential references"
+        ; "pluto-payments/sol-migrate-files-1"
+        ; "Forbidden"
+        ];
+      assert_transients_only (calls ()))
+;;
+
+let%test "contract cleanup: a failed Job remains available for inspection" =
+  with_cleanup_calls (fun calls ->
+    let result =
+      Sol_cli_contract.reconcile_in_destination
+        ~ctx:Sol_cli_kube_destination.local_context
+        ~kafka:(Sol_cli_resource_binding.Local_kafka "events")
+        ~secret_name:None
+        ~namespace:"pluto-payments"
+        ~image:"candidate@sha256:abc"
+    in
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"reconciliation failed"
+      true
+      (Result.is_error result);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the diagnostic Job survives"
+      false
+      (Sol_cli_string.contains ~needle:"delete" (calls ())))
+;;
