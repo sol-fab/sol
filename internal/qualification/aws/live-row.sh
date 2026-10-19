@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -uo pipefail
+umask 077
 trap '' PIPE
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -528,38 +529,6 @@ require_target_terraform_var_file() {
   return 1
 }
 
-platform_credential_missing() {
-  grep -qF 'the platform install cannot start' "$LOG_DIR/cloud-apply.log" 2>/dev/null &&
-    grep -qF 'redpanda-users' "$LOG_DIR/cloud-apply.log" 2>/dev/null
-}
-
-supply_platform_credential() {
-  local source
-  if [ -n "${KAFKA_SASL_PASSWORD:-}" ]; then
-    source="operator-supplied"
-  else
-    source="generated-for-this-run"
-    KAFKA_SASL_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 20)"
-  fi
-  # `redpanda` is a reserved platform namespace: the deploy identity is
-  # namespace-scoped application authority and correctly cannot write there. The
-  # harness stands in for the operator, who holds platform-management authority,
-  # so it uses the cluster-access identity.
-  if ! kubectl --kubeconfig "$ACCESS_KUBECONFIG" create secret generic redpanda-users -n redpanda \
-      --from-literal="users.txt=sol-workloads:$KAFKA_SASL_PASSWORD:SCRAM-SHA-256" \
-      >"$LOG_DIR/platform-credential.log" 2>&1; then
-    say "could not create the platform's documented prerequisite Secret redpanda/redpanda-users"
-    say "(see $LOG_DIR/platform-credential.log); the harness stands in for the operator and will not proceed without it"
-    return 1
-  fi
-  {
-    printf 'platform_credential: redpanda/redpanda-users\n'
-    printf 'platform_credential_username: sol-workloads\n'
-    printf 'platform_credential_source: %s\n' "$source"
-    printf 'platform_credential_value: never recorded\n'
-  } >>"$LOG_DIR/prerequisites.txt"
-  say "supplied the documented pre-platform Secret redpanda/redpanda-users ($source); its value is never recorded"
-}
 
 k8s_name() { printf '%s' "$1" | tr '_' '-'; }
 # Sol's cluster root owns `pluto/<unit>` — the repositories the target's release names — and the
@@ -618,8 +587,8 @@ target_state_bucket() {
 }
 
 capture_state() {
-  aws s3 cp "s3://$(target_state_bucket)/$STATE_KEY" "$LOG_DIR/state/cloud.tfstate" \
-    >"$LOG_DIR/state/copy.log" 2>&1 || true
+  aws s3 cp "s3://$(target_state_bucket)/$STATE_KEY" - 2>"$LOG_DIR/state/copy.log" | \
+    python3 "$ROOT/internal/qualification/state-evidence.py" >"$LOG_DIR/state/cloud.tfstate" || true
 }
 
 capture_kube_evidence() {
@@ -846,13 +815,7 @@ phase_cloud() {
   local deploy_rc=0
   bootstrap_deploy cloud-apply || deploy_rc=$?
   if cloud_mutated; then CLOUD_APPLIED=1; fi
-  if [ "$deploy_rc" != 0 ] && platform_credential_missing; then
-    say "the bootstrap deploy stopped at the platform's documented credential prerequisite; supplying it and resuming"
-    ensure_contexts || return 1
-    supply_platform_credential || return 1
-    bootstrap_deploy cloud-apply-resume || deploy_rc=$?
-    if cloud_mutated; then CLOUD_APPLIED=1; fi
-  fi
+
   capture_independent_identities || return 1
   if ! environment_reconciled; then
     say "the bootstrap deploy did not reconcile the environment $TARGET (full log $LOG_DIR/cloud-apply.log)"
@@ -1088,9 +1051,6 @@ phase_prepare() {
   say "the run images are built; the cloud phase publishes them into the repositories Sol creates"
 }
 
-app_secret_failure() {
-  grep -qF 'does not hold the required non-empty secret key(s)' "$1" 2>/dev/null
-}
 
 # 2b moved migration verification to the post-setup gates, so on a fresh target the deploy
 # reaches the migration gate before the required-secret check. It is the first refusal a
@@ -1100,28 +1060,6 @@ app_migration_gate_failure() {
   grep -qF 'the required migration set is not applied' "$1" 2>/dev/null
 }
 
-app_read_platform_password() {
-  local password
-  if [ -n "${KAFKA_SASL_PASSWORD:-}" ]; then
-    printf '%s' "$KAFKA_SASL_PASSWORD"
-    return 0
-  fi
-  password="$(kubectl --kubeconfig "$ACCESS_KUBECONFIG" get secret redpanda-users -n redpanda \
-    -o jsonpath='{.data.users\.txt}' 2>/dev/null | base64 -d 2>/dev/null |
-    sed -n 's/^sol-workloads:\([^:]*\):.*/\1/p' | head -1)"
-  [ -n "$password" ] || return 1
-  printf '%s' "$password"
-}
-
-app_read_kafka_ca() {
-  kubectl --kubeconfig "$ACCESS_KUBECONFIG" get secret redpanda-default-cert -n redpanda \
-    -o jsonpath='{.data.ca\.crt}' 2>/dev/null | base64 -d 2>/dev/null
-}
-
-# The supported `sol secret set` surface is positional — `TARGET ADDRESS` — where ADDRESS is
-# `@platform/<KEY>` for a Sol Job input or `<domain>/<unit>/<KEY>` for one unit's secret. The
-# pre-2b `--target`/`--domain` flags are gone. The value must arrive with `--from-stdin`: the
-# CLI does not auto-detect a pipe and otherwise demands a terminal (#1432).
 app_unit_addresses() {
   local unit dir
   for unit in $APP_UNITS; do
@@ -1131,59 +1069,6 @@ app_unit_addresses() {
   done | sort -u
 }
 
-app_secret_set_unit() {
-  local key="$1" address
-  for address in $(app_unit_addresses); do
-    run "app-secret-$key-$(printf '%s' "$address" | tr '/' '-')" bash -c \
-      "cd '$WORKSPACE' && printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$TARGET' '$address/$key' --from-stdin"
-  done
-}
-
-app_secret_set_platform() {
-  local key="$1"
-  run "app-secret-platform-$key" bash -c \
-    "cd '$WORKSPACE' && printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$TARGET' '@platform/$key' --from-stdin"
-}
-
-# Production secrets are operator-supplied: Sol's deploy verifies the ones a unit or a Job
-# declares and fails closed. The harness stands in for the operator, supplying the Kafka
-# platform inputs through the supported `sol secret set`. The database is *not* one of them:
-# the deploy delivers it from the target's binding (2b), so the harness neither holds nor sets
-# a POSTGRES_URL.
-#
-# This workspace declares the two Kafka keys **per unit** with `authority: sol`, and the
-# deploy verifies each unit's own Secret holds every key that unit declares, so the keys are
-# supplied in **both** scopes: `@platform/<KEY>` for Sol's Jobs, `<domain>/<unit>/<KEY>` for
-# the workload. Supplying only the platform scope leaves the deploy refusing the unit Secret
-# (#1438); supplying an *undeclared* key is refused by the CLI (#1430). Writing the unit
-# scope before the workload exists is fine — `sol secret set` writes and stops, and the
-# deploy that follows activates (#1350).
-app_supply_secrets() {
-  local password ca
-  if ! password="$(app_read_platform_password)"; then
-    say "could not establish KAFKA_SASL_PASSWORD: set it in the environment, or ensure redpanda/redpanda-users exists"
-    return 1
-  fi
-  ca="$(app_read_kafka_ca)"
-  if [ -z "$ca" ]; then
-    say "could not read the Redpanda CA from redpanda/redpanda-default-cert"
-    return 1
-  fi
-  export SOL_SECRET_VALUE="$password"
-  app_secret_set_platform KAFKA_SASL_PASSWORD || return 1
-  app_secret_set_unit KAFKA_SASL_PASSWORD || return 1
-  export SOL_SECRET_VALUE="$ca"
-  app_secret_set_platform KAFKA_SSL_CA_CERT || return 1
-  app_secret_set_unit KAFKA_SSL_CA_CERT || return 1
-  unset SOL_SECRET_VALUE
-  {
-    printf 'unit_secret_keys: KAFKA_SASL_PASSWORD KAFKA_SSL_CA_CERT (declared per unit, authority sol)\n'
-    printf 'platform_secret_keys: KAFKA_SASL_PASSWORD KAFKA_SSL_CA_CERT\n'
-    printf 'secret_values: never recorded\n'
-    printf 'database_delivery: delivered by the deploy from the target binding; no operator copy\n'
-  } >>"$LOG_DIR/prerequisites.txt"
-  say "supplied the workspace's declared Kafka secrets through sol secret set; the database is delivered by the deploy"
-}
 
 app_class_credential_name() { printf '%s' "$TARGET" | tr '[:upper:]/' '[:lower:]-'; }
 
@@ -1208,6 +1093,27 @@ app_database_declaration() {
 
 app_database_field() {
   app_database_declaration | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1
+}
+
+app_verify_kafka_delivery() {
+  local state="$LOG_DIR/state/cloud.tfstate" public unit
+  local consumers=()
+  # Independent requirements for this row's selected reference applications.
+  # Do not derive them from observed env refs: a missing projection must fail.
+  for unit in $APP_UNITS; do
+    case "$unit" in
+      charge_svc | orders_svc) consumers+=(--consumer "$APP_NS/$(k8s_name "$unit")") ;;
+      notify_worker | fulfilment_worker) consumers+=(--consumer "$WORKER_NS/$(k8s_name "$unit")") ;;
+      checkout_svc) ;; # This scenario's checkout is not a Kafka consumer.
+      *) say "no Kafka qualification requirement defined for selected unit $unit"; return 1 ;;
+    esac
+  done
+  public="$(jq -ce '.outputs.kafka_authority.value | select(type == "object")' "$state")" || return 1
+  printf '%s' "$public" | python3 "$ROOT/internal/qualification/kafka-delivery.py" \
+    --provider aws --cluster "$CLUSTER" --region "$AWS_REGION" --account "$ACCOUNT" \
+    --kubeconfig "$ACCESS_KUBECONFIG" \
+    "${consumers[@]}" \
+    $(app_namespaces) >"$LOG_DIR/kafka-delivery.json"
 }
 
 app_verify_database_delivery() {
@@ -1288,7 +1194,7 @@ phase_app() {
   # redacted and never feeds the value to `sol secret set`.
   {
     printf 'database master source: the cluster root postgres_url output (never recorded in the clear)\n'
-    printf 'operator secrets: supplied with sol secret set; values never recorded\n'
+    printf 'Kafka authority: generated and delivered by Sol; independently compared after deploy\n'
   } >"$LOG_DIR/app-runtime-secrets.txt" 2>&1
   local image_ref_args=""
   while IFS= read -r ref; do
@@ -1327,21 +1233,17 @@ phase_app() {
   # before cleanup. It does not add a second migration.
   ca_qualify migration "$LOG_DIR/ca-migration-capture.json" "$LOG_DIR/ca-migration.json" \
     "$(python3 -c 'import secrets; print(secrets.token_hex(32))')" || return 1
-  say "app-deploy-secrets"
-  if ! run app-deploy-secrets bash -c "cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args"; then
-    if app_secret_failure "$LOG_DIR/app-deploy-secrets.log"; then
-      say "  the deploy established the namespaces and their scoped RBAC, then refused the absent operator secrets (expected)"
-    else
-      say "FAILED: the deploy did not reach the secret prerequisite"
-      return 1
-    fi
-  fi
-  app_supply_secrets || return 1
+  # A distinct declaration-only specimen preserves the operator-input refusal
+  # claim without treating generated Kafka credentials as operator inputs.
+  bash "$ROOT/internal/qualification/application-secret-refusal.sh" "$SOL" \
+    "$CLUSTER-deploy" "$(head -1 "$LOG_DIR/app-image-refs.txt" | cut -d= -f2-)" \
+    "$LOG_DIR/application-secret-refusal.log" >>"$LOG_DIR/prerequisites.txt" || return 1
   run app-deploy bash -c "cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args" || return 1
   # The workloads exist now; observe the application CA delivery in the same
   # assessment as the migration phase.
   ca_qualify application "$LOG_DIR/ca-application-capture.json" "$LOG_DIR/ca-application.json" || return 1
   app_verify_database_delivery || return 1
+  app_verify_kafka_delivery || return 1
   # ADR 0004: destruction removes what the lifecycle created, and the images this run published
   # live in the `pluto/<unit>` repositories Sol's own deploy created (#1413). The destroy phase's
   # independent inventory therefore decides a *populated* teardown.

@@ -7,6 +7,7 @@ val validate_resource_requirements
 
 val service_specs_of_release
   :  ?database:string * Sol_cli_resource_binding.postgres
+  -> ?kafka:string * Sol_cli_resource_binding.kafka
   -> Sol_cli_release.t
   -> ((Sol_cli_deployment_plan.service_spec * string) list, string) result
 
@@ -207,11 +208,7 @@ val pointer_report_ok : pointer_report -> bool
 val pointer_report_to_string : release:Sol_cli_release.t -> pointer_report -> string
 
 type transaction_deps =
-  { (* 2b: the target's already resolved **current** database selection, from which
-       restored workloads' delivery is derived (historical requirements, current bindings). [None] for a local
-       rollback, where delivery stays unit-scoped. *)
-    database : (string * Sol_cli_resource_binding.postgres) option
-  ; ensure_held : unit -> (unit, string) result
+  { ensure_held : unit -> (unit, string) result
   ; applied_migrations : unit -> (int list, string) result
   ; apply : (Sol_cli_deployment_plan.service_spec * string) list -> (unit, string) result
   ; live_workloads : unit -> ((workload_identity * string) list, string) result
@@ -226,8 +223,11 @@ type transaction_deps =
 
 val consumer_groups_of_release : Sol_cli_release.t -> string list
 
+(** Execute the same current-target workload projection used for credential delivery.
+    The caller resolves it once with [service_specs_of_release] before mutation. *)
 val execute
   :  release:Sol_cli_release.t
+  -> specs:(Sol_cli_deployment_plan.service_spec * string) list
   -> migrations_dir:string
   -> current_migrations:string list
   -> deps:transaction_deps

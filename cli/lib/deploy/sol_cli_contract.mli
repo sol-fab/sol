@@ -28,11 +28,12 @@ val plan_report
 
 val reconciliation_images
   :  Sol_cli_deployment_plan.service_spec list
-  -> (string * string) list
+  -> (string * string * string option) list
 
 val reconcile_in_destination
   :  ctx:Sol_cli_kube_destination.context
-  -> platform_shape:Sol_cli_profile.platform_shape
+  -> kafka:Sol_cli_resource_binding.kafka
+  -> secret_name:string option
   -> namespace:string
   -> image:string
   -> (unit, string) result

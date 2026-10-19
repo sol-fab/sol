@@ -324,3 +324,14 @@ variable "alert_runbook_url" {
   type        = string
   default     = ""
 }
+
+variable "kafka_credential" {
+  description = "Provider-backed broker projection. Only the password is confidential; the whole object is protected in Terraform output."
+  type        = object({ reference = string, resource = string, username = string, mechanism = string, password = string })
+  sensitive   = true
+  default     = null
+  validation {
+    condition     = var.kafka_credential == null ? true : (length(trimspace(var.kafka_credential.password)) > 0 && !can(regex("[:\\r\\n]", var.kafka_credential.password)))
+    error_message = "The native Kafka authority must contain a usable password; recover it rather than replacing broker credentials."
+  }
+}

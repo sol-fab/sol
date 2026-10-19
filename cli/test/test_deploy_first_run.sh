@@ -413,7 +413,7 @@ printf '%s\n' \
     "operator_policy_json":{"sensitive":false,"value":{"Version":"2012-10-17","Statement":[{"Sid":"sol-operator"}]}}}' \
   >"$tmp/outputs.json"
 printf '%s\n' \
-  '{"resource_changes":[{"address":"aws_s3_bucket.state","type":"aws_s3_bucket","mode":"managed","change":{"actions":["create"]}}]}' \
+  '{"variables":{"kafka_connection":{"value":null}},"resource_changes":[{"address":"aws_s3_bucket.state","type":"aws_s3_bucket","mode":"managed","change":{"actions":["create"]}}]}' \
   >"$tmp/plan.json"
 
 printf '%s\n' \

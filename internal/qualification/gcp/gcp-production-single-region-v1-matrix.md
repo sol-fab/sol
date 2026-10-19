@@ -89,7 +89,7 @@ authorization for a billable window; none of it creates a resource.
 ### What the harness drives
 
 The run exercises the installed release through the product lifecycle only: `sol deploy`
-reconciles the environment and the workloads, `sol secret set` supplies the operator inputs,
+reconciles the environment and the workloads and owns generated Kafka credential delivery,
 `sol migrate apply` runs the migrations, and `sol destroy` tears the target down. The
 application images are built and pushed in the `app` phase into the Artifact Registry
 repository the `cloud` phase's `sol deploy` created (the cluster-named repository at

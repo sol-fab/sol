@@ -14,6 +14,7 @@ let plan_of_services
       ?inventory
       ?target
       ~database
+      ?kafka
       services
   =
   Sol_cli_deployment_plan.of_services_result
@@ -27,6 +28,7 @@ let plan_of_services
     ?inventory
     ?target
     ~database
+    ?kafka
     services
   |> Result.map_error Sol_cli_deployment_plan.plan_error_to_string
 ;;
@@ -40,10 +42,11 @@ type request =
   ; requested_scope : string option
   ; declared : Sol_cli_config.declared option
   ; platform_shape : Sol_cli_profile.platform_shape
-  ; (* Target identity and its resolved PostgreSQL selection are projected into
+  ; (* Target identity and its resolved resource selections are projected into
        each consumer's credential route and trust requirement. *)
     target : string option
   ; database : Sol_cli_resource_binding.postgres
+  ; kafka : Sol_cli_resource_binding.kafka
   }
 
 let run execution ~(request : request) ~mode ~facts services =
@@ -58,6 +61,7 @@ let run execution ~(request : request) ~mode ~facts services =
       ~platform_shape:request.platform_shape
       ?target:request.target
       ~database:request.database
+      ~kafka:request.kafka
       services
   in
   let* results = execute execution ~mode plan in

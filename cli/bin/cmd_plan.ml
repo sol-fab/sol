@@ -211,13 +211,18 @@ let run target_name image_refs var_file vars =
     (fun (unit_address, key, authority) ->
        let source =
          match authority with
-         | Sol_cli_config.Sol_managed ->
+         | Sol_cli_secret_source.Sol_managed ->
            "declared Sol-managed Kubernetes Secret; value state deferred"
-         | Sol_cli_config.External { store; key } ->
+         | External { store; key } ->
            Printf.sprintf
              "declared ESO SecretStore %s key %s; sync state deferred"
              store
              key
+         | Target_kafka { secret } ->
+           Printf.sprintf
+             "delivered by the target's managed Kafka authority into Secret %s; value \
+              state deferred"
+             secret
        in
        Printf.printf "  - %s/%s: %s\n" unit_address key source)
     secret_authorities;

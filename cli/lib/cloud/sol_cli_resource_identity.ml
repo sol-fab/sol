@@ -158,7 +158,37 @@ let gcp ~cluster_name ~project_id =
   let dns_discovery_observed, dns_discovery_import =
     custom_role ("sol_" ^ underscored ^ "_cert_manager_dns_discovery")
   in
-  [ entry
+  [ (let name = Sol_cli_resource_binding.kafka_authority_name ~cluster_name in
+     (* The address is literal because the static identity checker reads this
+        file; it must match Sol_cli_gcp_cluster.kafka_authority_resources.secret. *)
+     entry
+       "google_secret_manager_secret.kafka[0]"
+       direct
+       ~resource_class:"Kafka credential secret"
+       ~observed_as:name
+       ~identity:name
+       ~import_identity:
+         (match project with
+          | Some project -> "projects/" ^ project ^ "/secrets/" ^ name
+          | None -> ""))
+  ; entry
+      "google_secret_manager_secret_version.kafka[0]"
+      (not_recoverable
+         "a secret version cannot survive deletion of its provider secret; restore the \
+          original Terraform state rather than importing a new generated value")
+      ~resource_class:""
+      ~observed_as:""
+      ~identity:"the Kafka secret's original credential version"
+      ~import_identity:""
+  ; entry
+      "google_secret_manager_secret_iam_member.kafka_reader"
+      (not_recoverable
+         "a resource IAM binding cannot survive deletion of its provider secret")
+      ~resource_class:""
+      ~observed_as:""
+      ~identity:"the Kafka secret's scoped reader grant"
+      ~import_identity:""
+  ; entry
       "google_compute_network.main"
       direct
       ~resource_class:"VPC network"
@@ -391,7 +421,35 @@ let gcp ~cluster_name ~project_id =
 ;;
 
 let aws ~cluster_name =
-  [ entry
+  [ (let name = Sol_cli_resource_binding.kafka_authority_name ~cluster_name in
+     (* The address is literal because the static identity checker reads this
+        file; it must match Sol_cli_aws_cluster.kafka_authority_resources.secret. *)
+     entry
+       "aws_secretsmanager_secret.kafka[0]"
+       (not_recoverable
+          "the provider ARN includes an assigned suffix; restore the original state \
+           using the observed ARN, never regenerate a surviving broker credential")
+       ~resource_class:"Kafka credential secret"
+       ~observed_as:name
+       ~identity:name
+       ~import_identity:"")
+  ; entry
+      "aws_secretsmanager_secret_policy.kafka_reader[0]"
+      (not_recoverable "a resource policy cannot survive deletion of its provider secret")
+      ~resource_class:""
+      ~observed_as:""
+      ~identity:"the Kafka authority's scoped reader policy"
+      ~import_identity:""
+  ; entry
+      "aws_secretsmanager_secret_version.kafka[0]"
+      (not_recoverable
+         "a secret version cannot survive deletion of its provider secret; restore the \
+          original Terraform state rather than importing a new generated value")
+      ~resource_class:""
+      ~observed_as:""
+      ~identity:"the Kafka secret's original credential version"
+      ~import_identity:""
+  ; entry
       "aws_db_instance.postgres[0]"
       direct
       ~resource_class:"RDS instance"

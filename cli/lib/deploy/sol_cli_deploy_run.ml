@@ -554,10 +554,11 @@ let contract_reconciliation ctx (plan : Sol_cli_deployment_plan.t) =
   then Ok ()
   else
     Sol_cli_contract.reconciliation_images plan.Sol_cli_deployment_plan.services
-    |> Sol_cli_result.map_list (fun (namespace, image) ->
+    |> Sol_cli_result.map_list (fun (namespace, image, secret_name) ->
       Sol_cli_contract.reconcile_in_destination
         ~ctx:ctx.execution.cluster
-        ~platform_shape:plan.Sol_cli_deployment_plan.platform_shape
+        ~kafka:plan.Sol_cli_deployment_plan.kafka
+        ~secret_name
         ~namespace
         ~image)
     |> Result.map (fun _ -> ())
@@ -601,6 +602,7 @@ let run_lifecycle
       ~present_plan
       ~gates
       ~database_setup
+      ~kafka_delivery
       ~post_setup_gates
       ~before_apply
       ~apply
@@ -623,6 +625,10 @@ let run_lifecycle
           substrate it needs — and before the workloads, whose migration Jobs consume the
           DDL role it creates. Under the lease, because it mutates the target. *)
        let* () = database_setup () in
+       (* The Kafka projection is written after the platform prerequisites create the
+          chart-owned CA and before any consumer workload reads it. It is not part of the
+          database step: a target may have either, both, or neither. *)
+       let* () = kafka_delivery () in
        (* The migration verification runs *after* the setup, and this is the whole point of
           the phase: it verifies a schema the DDL role owns, and the reader switch has it read
           `<target>-ddl-creds` — which is exactly what the setup creates. Verifying before
@@ -694,6 +700,7 @@ let apply
       ~confirm_group_change
       ?resolve_setup_image
       ?database_setup
+      ?kafka_delivery
       plan
   =
   (* **Resolve deterministic prerequisites before the gate that creates infrastructure.** A
@@ -715,6 +722,7 @@ let apply
   let database_setup =
     Option.value database_setup ~default:(fun ~setup_image:_ () -> Ok ())
   in
+  let kafka_delivery = Option.value kafka_delivery ~default:(fun () -> Ok ()) in
   run_lifecycle
     ~cluster:ctx.execution.cluster
     ~workspace:ctx.execution.workspace
@@ -725,6 +733,7 @@ let apply
     ~present_plan
     ~gates:(fun _plan -> effective_access ())
     ~database_setup:(fun () -> database_setup ~setup_image ())
+    ~kafka_delivery
     ~post_setup_gates:(fun plan ->
       run_gate ~on_refused:(fun _ -> ()) (migration_prerequisite ctx ~plan ~live:true))
     ~before_apply:(fun plan -> contract_reconciliation ctx plan)

@@ -8,12 +8,12 @@ status_help=$("$sol" secret status --help=plain)
 
 printf '%s\n' "$set_help" | grep -F 'TARGET' >/dev/null
 printf '%s\n' "$set_help" | grep -F 'DOMAIN/UNIT/KEY' >/dev/null
-printf '%s\n' "$set_help" | grep -F '@platform/KEY' >/dev/null
+printf '%s\n' "$set_help" | grep -F 'refused' >/dev/null
 printf '%s\n' "$set_help" | grep -F -- '--from-stdin' >/dev/null
 printf '%s\n' "$set_help" | grep -F -- '--from-file=PATH' >/dev/null
 if printf '%s\n' "$set_help" | grep -F -- '--value=' >/dev/null; then exit 1; fi
 printf '%s\n' "$delete_help" | grep -F 'DOMAIN/UNIT/KEY' >/dev/null
-printf '%s\n' "$delete_help" | grep -F '@platform/KEY' >/dev/null
+if printf '%s\n' "$delete_help" | grep -F '@platform/KEY' >/dev/null; then exit 1; fi
 printf '%s\n' "$status_help" | grep -F 'TARGET' >/dev/null
 
 local_help=$("$sol" local --help=plain)
@@ -25,4 +25,4 @@ if printf '' | timeout 3 "$sol" secret set dev/aws/us-east-1 payments/charge_svc
   exit 1
 fi
 
-echo "secret CLI exposes unit-scoped and reserved platform Job inputs securely"
+echo "secret CLI exposes unit-scoped writes and refuses resource-owned platform inputs"

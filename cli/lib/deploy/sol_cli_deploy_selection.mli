@@ -22,10 +22,13 @@ type input_owner =
       ; key : string
       }
   | Target_database
+  | Target_kafka of { secret : string }
+  | Conflicting
   | Unmapped
 
 val unit_input_owners
   :  config:Sol_cli_config.t
+  -> kafka:Sol_cli_resource_binding.kafka
   -> unit_address:string
   -> transport:Sol_cli_manifest.kafka_transport
   -> db_uses_target:bool
@@ -60,7 +63,7 @@ val apply_target
 val secret_authorities_for_plan
   :  config:Sol_cli_config.t
   -> Sol_cli_deployment_plan.t
-  -> ((string * string * Sol_cli_config.secret_authority) list, string) result
+  -> ((string * string * Sol_cli_secret_source.t) list, string) result
 
 type plan_error =
   | Refused of string

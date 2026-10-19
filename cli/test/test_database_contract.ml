@@ -260,8 +260,9 @@ let check_complete_plan (config : Sol_cli_config.t) plan workloads =
            field "containers" (pod doc)
            |> list
            |> List.filter (fun container ->
-             field "env" container
-             |> list
+             (match field "env" container with
+              | `Null -> []
+              | env -> list env)
              |> List.exists (fun env ->
                field "name" env = `String R.postgres_url_key
                && J.field [ "valueFrom"; "secretKeyRef" ] env <> `Null))

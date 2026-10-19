@@ -93,6 +93,7 @@ type t =
   ; guarded_removals : string list
   ; root_declared_vars :
       has_postgres:bool
+      -> kafka_connection:Yojson.Safe.t option
       -> production_postgres:bool
       -> ecr_repositories:(unit -> (string, string) result)
       -> ((string * string) list, string) result

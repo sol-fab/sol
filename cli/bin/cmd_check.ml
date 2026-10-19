@@ -55,52 +55,77 @@ let secret_authority_findings ~facts =
                 | Error message ->
                   [ finding Sol_cli_check.Severity.Error "sol.yml" message ]
                 | Ok db_uses_target ->
-                  let owners =
-                    Sol_cli_deploy_selection.unit_input_owners
-                      ~config
-                      ~unit_address
-                      ~transport:(Sol_cli_manifest.kafka_transport platform_shape)
-                      ~db_uses_target
-                      ~declared:toml.secret_keys
-                  in
-                  let required_keys = List.map fst owners in
-                  (* The warning for a mapped-but-undeclared key is a different question
-                     from which inputs the unit carries: it reads the target's mapping
-                     table directly and does not decide required ownership. *)
-                  let additional =
-                    Sol_cli_config.secret_authorities_for_unit config.target unit_address
-                    |> List.filter_map (fun (key, _) ->
-                      if List.mem key required_keys then None else Some key)
-                  in
-                  let path = "sol/environments.yml" in
-                  List.filter_map
-                    (fun (key, owner) ->
-                       match owner with
-                       | Sol_cli_deploy_selection.Unmapped ->
-                         Some
-                           (finding
-                              Sol_cli_check.Severity.Error
+                  (match Sol_cli_resource_binding.resolve_kafka config with
+                   | Error message ->
+                     [ finding Sol_cli_check.Severity.Error "sol.yml" message ]
+                   | Ok kafka ->
+                     let kafka =
+                       Sol_cli_resource_binding.kafka_for_shape
+                         ~shape:platform_shape
+                         kafka
+                     in
+                     let owners =
+                       Sol_cli_deploy_selection.unit_input_owners
+                         ~config
+                         ~kafka
+                         ~unit_address
+                         ~transport:(Sol_cli_manifest.kafka_transport platform_shape)
+                         ~db_uses_target
+                         ~declared:toml.secret_keys
+                     in
+                     let required_keys = List.map fst owners in
+                     (* The warning for a mapped-but-undeclared key is a different question
+                        from which inputs the unit carries: it reads the target's mapping
+                        table directly and does not decide required ownership. *)
+                     let additional =
+                       Sol_cli_config.secret_authorities_for_unit
+                         config.target
+                         unit_address
+                       |> List.filter_map (fun (key, _) ->
+                         if List.mem key required_keys then None else Some key)
+                     in
+                     let path = "sol/environments.yml" in
+                     List.filter_map
+                       (fun (key, owner) ->
+                          match owner with
+                          | Sol_cli_deploy_selection.Unmapped ->
+                            Some
+                              (finding
+                                 Sol_cli_check.Severity.Error
+                                 path
+                                 (Printf.sprintf
+                                    "%s/%s has no authority mapping for target %s; \
+                                     declare authority: sol or external"
+                                    unit_address
+                                    key
+                                    target_path))
+                          | Sol_cli_deploy_selection.Conflicting ->
+                            Some
+                              (finding
+                                 Sol_cli_check.Severity.Error
+                                 path
+                                 (Printf.sprintf
+                                    "%s/%s maps an authority the target's Kafka binding \
+                                     already owns; remove the application mapping"
+                                    unit_address
+                                    key))
+                          | Unit_secret
+                          | Target_database
+                          | Target_kafka _
+                          | External_secret _ -> None)
+                       owners
+                     @ List.map
+                         (fun key ->
+                            finding
+                              Sol_cli_check.Severity.Warning
                               path
                               (Printf.sprintf
-                                 "%s/%s has no authority mapping for target %s; declare \
-                                  authority: sol or external"
+                                 "%s/%s maps an undeclared secret for target %s; it will \
+                                  not be projected"
                                  unit_address
                                  key
                                  target_path))
-                       | Unit_secret | Target_database | External_secret _ -> None)
-                    owners
-                  @ List.map
-                      (fun key ->
-                         finding
-                           Sol_cli_check.Severity.Warning
-                           path
-                           (Printf.sprintf
-                              "%s/%s maps an undeclared secret for target %s; it will \
-                               not be projected"
-                              unit_address
-                              key
-                              target_path))
-                      additional))))
+                         additional)))))
 ;;
 
 let findings_for ~facts = function

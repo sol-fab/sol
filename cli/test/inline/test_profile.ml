@@ -510,36 +510,66 @@ let test_plan_without_profile_is_unchanged () =
 
 let test_profile_declares_the_kafka_posture () =
   with_workspace (fun () ->
+    (* A declared Kafka dependency is what makes a unit a consumer. The profile
+       supplies the posture; it does not opt in a unit that declares no Kafka. *)
+    write
+      "sol.yml"
+      "project: pluto\n\
+       resources:\n\
+      \  events:\n\
+      \    type: kafka\n\
+       services:\n\
+      \  charge_svc:\n\
+      \    type: http\n\
+      \    path: app/payments/charge_svc\n\
+      \    language: ocaml\n\
+      \    uses: [events]\n\
+      \  idle_svc:\n\
+      \    type: http\n\
+      \    path: app/payments/idle_svc\n\
+      \    language: ocaml\n";
     write_target prod_aws selecting;
     write_target
       "prod/aws/us-west-2"
       "target:\n  cluster_name: pluto-west\n  shape: local\n";
-    let claimed = plan_for "prod/aws/us-east-1" in
-    let unclaimed = plan_for "prod/aws/us-west-2" in
-    let protocol (plan : Sol_cli_deployment_plan.t) =
+    let idle_svc = unit ~domain:"payments" ~name:"idle_svc" Sol_cli_manifest.Svc in
+    let services = [ charge_svc; idle_svc ] in
+    let claimed = plan_for ~services "prod/aws/us-east-1" in
+    let unclaimed = plan_for ~services "prod/aws/us-west-2" in
+    let protocol name (plan : Sol_cli_deployment_plan.t) =
       plan.services
-      |> List.find_map (fun (s : Sol_cli_deployment_plan.service_spec) ->
-        List.assoc_opt "KAFKA_SECURITY_PROTOCOL" s.config)
+      |> List.find (fun (s : Sol_cli_deployment_plan.service_spec) ->
+        s.source_name = name)
+      |> fun (s : Sol_cli_deployment_plan.service_spec) ->
+      List.assoc_opt "KAFKA_SECURITY_PROTOCOL" s.config
     in
     check_bool
-      "the production profile declares the SASL_SSL posture"
+      "the production profile declares the SASL_SSL posture for a consumer"
       true
-      (protocol claimed = Some "sasl_ssl"
+      (protocol "charge_svc" claimed = Some "sasl_ssl"
        && claimed.platform_shape = Sol_cli_profile.Durable);
     check_bool
-      "the local shape leaves the default posture to the renderer"
+      "a non-consumer receives no Kafka posture on a durable target"
       true
-      (protocol unclaimed = None && unclaimed.platform_shape = Sol_cli_profile.Local);
+      (protocol "idle_svc" claimed = None);
+    check_bool
+      "the local shape declares plaintext for a consumer"
+      true
+      (protocol "charge_svc" unclaimed = Some "plaintext"
+       && unclaimed.platform_shape = Sol_cli_profile.Local);
+    check_bool
+      "a non-consumer receives no Kafka posture on the local shape"
+      true
+      (protocol "idle_svc" unclaimed = None);
     let contract_protocol (plan : Sol_cli_deployment_plan.t) =
-      Sol_cli_manifest.kafka_transport plan.platform_shape
-      |> Sol_cli_manifest.cluster_env
+      Sol_cli_resource_binding.kafka_config plan.kafka @ Sol_cli_manifest.telemetry_env
       |> List.assoc_opt "KAFKA_SECURITY_PROTOCOL"
     in
     check_bool
       "contract jobs use the same resolved transport as workloads"
       true
-      (contract_protocol claimed = protocol claimed
-       && contract_protocol unclaimed = Some "plaintext");
+      (contract_protocol claimed = protocol "charge_svc" claimed
+       && contract_protocol unclaimed = protocol "charge_svc" unclaimed);
     check_bool
       "the declared transport is part of the release identity"
       true

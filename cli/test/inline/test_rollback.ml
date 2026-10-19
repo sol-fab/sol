@@ -1,4 +1,4 @@
-let service_specs_of_release ?config release =
+let service_specs_of_release ?config ?kafka release =
   let open Result.Syntax in
   let* database =
     match config with
@@ -10,7 +10,7 @@ let service_specs_of_release ?config release =
       in
       Ok (Some (Sol_cli_kubernetes_name.sanitize_name config.target.name, selection))
   in
-  Sol_cli_rollback.service_specs_of_release ?database release
+  Sol_cli_rollback.service_specs_of_release ?database ?kafka release
 ;;
 
 let k8s_name value =
@@ -215,6 +215,7 @@ let gate_plan : Sol_cli_deployment_plan.t =
   ; contract = []
   ; contract_changes = []
   ; database = Sol_cli_resource_binding.No_postgres
+  ; kafka = Sol_cli_resource_binding.No_kafka
   ; resource_delivery = None
   }
 ;;
@@ -1444,8 +1445,7 @@ let recording_deps
         Ok []
   in
   let deps : Sol_cli_rollback.transaction_deps =
-    { database = None
-    ; ensure_held
+    { ensure_held
     ; applied_migrations
     ; apply =
         (fun _specs ->
@@ -1484,6 +1484,7 @@ let test_execute_success_calls_every_dep_in_order () =
   let release = transaction_release ~apply_mode:Sol_cli_release.Direct in
   match
     Sol_cli_rollback.execute
+      ~specs:(Result.get_ok (service_specs_of_release release))
       ~release
       ~migrations_dir:"unused"
       ~current_migrations:[]
@@ -1554,6 +1555,7 @@ let test_execute_records_the_restored_consumer_groups () =
     let calls, _pruned, deps = recording_deps ~live:(live_for ~release specs) () in
     match
       Sol_cli_rollback.execute
+        ~specs:(Result.get_ok (service_specs_of_release release))
         ~release
         ~migrations_dir:"unused"
         ~current_migrations:[]
@@ -1594,6 +1596,7 @@ let test_execute_leaves_the_guard_alone_when_verification_fails () =
   in
   match
     Sol_cli_rollback.execute
+      ~specs:(Result.get_ok (service_specs_of_release release))
       ~release
       ~migrations_dir:"unused"
       ~current_migrations:[]
@@ -1621,6 +1624,7 @@ let test_execute_reports_an_uncorrected_guard_record () =
   in
   match
     Sol_cli_rollback.execute
+      ~specs:(Result.get_ok (service_specs_of_release release))
       ~release
       ~migrations_dir:"unused"
       ~current_migrations:[]
@@ -1643,6 +1647,7 @@ let test_execute_apply_mode_refusal_calls_no_deps () =
   let release = transaction_release ~apply_mode:Sol_cli_release.Gitops in
   match
     Sol_cli_rollback.execute
+      ~specs:(Result.get_ok (service_specs_of_release release))
       ~release
       ~migrations_dir:"unused"
       ~current_migrations:[]
@@ -1666,6 +1671,7 @@ let test_execute_migration_boundary_refusal_calls_no_deps () =
        in
        match
          Sol_cli_rollback.execute
+           ~specs:(Result.get_ok (service_specs_of_release release))
            ~release
            ~migrations_dir
            ~current_migrations:[ "0001_init.sql"; "0002_drop_col.sql" ]
@@ -1693,6 +1699,7 @@ let test_execute_unexpected_workload_triggers_prune_then_completes () =
   let release = transaction_release ~apply_mode:Sol_cli_release.Direct in
   match
     Sol_cli_rollback.execute
+      ~specs:(Result.get_ok (service_specs_of_release release))
       ~release
       ~migrations_dir:"unused"
       ~current_migrations:[]
@@ -1741,6 +1748,7 @@ let test_execute_prune_failure_skips_pointer_move () =
   let release = transaction_release ~apply_mode:Sol_cli_release.Direct in
   match
     Sol_cli_rollback.execute
+      ~specs:(Result.get_ok (service_specs_of_release release))
       ~release
       ~migrations_dir:"unused"
       ~current_migrations:[]
@@ -1770,6 +1778,7 @@ let test_execute_applied_state_unavailable_skips_every_mutation () =
   let release = transaction_release ~apply_mode:Sol_cli_release.Direct in
   match
     Sol_cli_rollback.execute
+      ~specs:(Result.get_ok (service_specs_of_release release))
       ~release
       ~migrations_dir:"unused"
       ~current_migrations:[]
@@ -1810,6 +1819,7 @@ let test_execute_lost_ownership_after_apply_skips_prune_and_pointer () =
   let release = transaction_release ~apply_mode:Sol_cli_release.Direct in
   match
     Sol_cli_rollback.execute
+      ~specs:(Result.get_ok (service_specs_of_release release))
       ~release
       ~migrations_dir:"unused"
       ~current_migrations:[]
@@ -1833,6 +1843,7 @@ let test_execute_lost_ownership_after_prune_skips_pointer_move () =
   let release = transaction_release ~apply_mode:Sol_cli_release.Direct in
   match
     Sol_cli_rollback.execute
+      ~specs:(Result.get_ok (service_specs_of_release release))
       ~release
       ~migrations_dir:"unused"
       ~current_migrations:[]
@@ -1871,6 +1882,7 @@ let test_execute_missing_workload_skips_prune_and_pointer_move () =
   let release = transaction_release_with_ledger ~apply_mode:Sol_cli_release.Direct in
   match
     Sol_cli_rollback.execute
+      ~specs:(Result.get_ok (service_specs_of_release release))
       ~release
       ~migrations_dir:"unused"
       ~current_migrations:[]
@@ -1895,6 +1907,7 @@ let test_execute_apply_failure_reports_the_incomplete_rollback () =
   let release = transaction_release ~apply_mode:Sol_cli_release.Direct in
   match
     Sol_cli_rollback.execute
+      ~specs:(Result.get_ok (service_specs_of_release release))
       ~release
       ~migrations_dir:"unused"
       ~current_migrations:[]
@@ -1918,6 +1931,7 @@ let test_execute_mismatched_workload_skips_prune_and_pointer_move () =
   let release = transaction_release_with_ledger ~apply_mode:Sol_cli_release.Direct in
   match
     Sol_cli_rollback.execute
+      ~specs:(Result.get_ok (service_specs_of_release release))
       ~release
       ~migrations_dir:"unused"
       ~current_migrations:[]
@@ -2176,8 +2190,7 @@ let modelled_deps ~release ~cluster ?(fail_at = None) ()
        | Error _ as e -> e
        | Ok () -> apply_all (index + 1) rest)
   in
-  { database = None
-  ; Sol_cli_rollback.ensure_held = (fun () -> Ok ())
+  { Sol_cli_rollback.ensure_held = (fun () -> Ok ())
   ; applied_migrations = (fun () -> Ok [])
   ; apply = apply_all 0
   ; live_workloads = (fun () -> Ok cluster.live)
@@ -2260,6 +2273,7 @@ let test_qualification_restores_after_a_bad_deploy () =
   let deps = modelled_deps ~release ~cluster () in
   (match
      Sol_cli_rollback.execute
+       ~specs:(Result.get_ok (service_specs_of_release release))
        ~release
        ~migrations_dir:"unused"
        ~current_migrations:[]
@@ -2350,6 +2364,7 @@ let test_qualification_partial_apply_leaves_the_pointer () =
   let deps = modelled_deps ~release ~cluster ~fail_at:(Some 1) () in
   (match
      Sol_cli_rollback.execute
+       ~specs:(Result.get_ok (service_specs_of_release release))
        ~release
        ~migrations_dir:"unused"
        ~current_migrations:[]
@@ -3000,4 +3015,216 @@ let%test
             [ resource "app_db" "postgres" true; resource "event_log" "kafka" false ])
        (release [ "event_log" ])
      = Ok ())
+;;
+
+let kafka_external =
+  Sol_cli_resource_binding.External_kafka
+    { resource = "events"
+    ; store = "external-kafka"
+    ; brokers = "broker.example:9093"
+    ; schema_registry_url = "https://registry.example"
+    ; admin_url = "https://admin.example"
+    ; username = "consumer"
+    ; mechanism = "SCRAM-SHA-256"
+    ; password = "events/password"
+    ; ca = "events/ca"
+    }
+;;
+
+let%test
+    "rollback re-resolves Kafka against the current target and keeps the historical \
+     requirement"
+  =
+  let recorded =
+    { (worker_spec ()) with
+      config =
+        [ "KAFKA_BROKERS", "old.redpanda:9093"
+        ; "KAFKA_SECURITY_PROTOCOL", "sasl_ssl"
+        ; "SCHEMA_REGISTRY_URL", "https://old.registry"
+        ; "REDPANDA_ADMIN_URL", "https://old.admin"
+        ; "KAFKA_SASL_USERNAME", "old-user"
+        ; "KAFKA_SASL_MECHANISM", "SCRAM-SHA-256"
+        ; "KAFKA_SSL_CA_LOCATION", "/etc/sol/kafka/ca.crt"
+        ; "NODE_EXTRA_CA_CERTS", "/etc/sol/kafka/ca.crt"
+        ; "SOL_KAFKA_DURABILITY", "single-broker-loss"
+        ; "LOG_LEVEL", "info"
+        ]
+    ; uses = [ "events" ]
+    }
+  in
+  let release = release_with_workloads ~apply_mode:Sol_cli_release.Direct [ recorded ] in
+  match
+    service_specs_of_release ~kafka:("prod-aws-us-east-1", kafka_external) release
+  with
+  | Error message -> Windtrap.fail message
+  | Ok [ (spec, _) ] ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the current broker replaces the recorded one"
+      true
+      (List.assoc_opt "KAFKA_BROKERS" spec.config = Some "broker.example:9093");
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the old broker is gone"
+      true
+      (List.assoc_opt "KAFKA_BROKERS" spec.config <> Some "old.redpanda:9093");
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"durability remains the historical requirement"
+      true
+      (List.assoc_opt "SOL_KAFKA_DURABILITY" spec.config = Some "single-broker-loss");
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"consumes_kafka remains the historical requirement"
+      true
+      spec.consumes_kafka;
+    Windtrap.equal
+      (Windtrap.list Windtrap.string)
+      ~msg:"uses remains the historical requirement"
+      [ "events" ]
+      spec.uses
+  | Ok _ -> Windtrap.fail "unexpected restored workload count"
+;;
+
+let%test "rollback refuses a historical Kafka consumer whose target has no binding" =
+  let release =
+    release_with_workloads
+      ~apply_mode:Sol_cli_release.Direct
+      [ { (worker_spec ()) with uses = [ "events" ]; consumes_kafka = true } ]
+  in
+  match
+    service_specs_of_release
+      ~kafka:("prod-aws-us-east-1", Sol_cli_resource_binding.No_kafka)
+      release
+  with
+  | Error message ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the refusal explains the missing binding"
+      true
+      (Sol_cli_string.contains ~needle:"no resolved Kafka binding" message)
+  | Ok _ -> Windtrap.fail "rollback restored a Kafka consumer without a current binding"
+;;
+
+let%test "rollback re-resolves managed Kafka into the target's delivered Secret" =
+  let release =
+    release_with_workloads
+      ~apply_mode:Sol_cli_release.Direct
+      [ { (worker_spec ()) with uses = [ "events" ]; consumes_kafka = true } ]
+  in
+  match
+    service_specs_of_release
+      ~kafka:("prod-aws-us-east-1", Sol_cli_resource_binding.Managed_kafka "events")
+      release
+  with
+  | Error message -> Windtrap.fail message
+  | Ok [ (spec, _) ] ->
+    let keys = Sol_cli_manifest.kafka_required_secret_keys Sol_cli_manifest.Sasl_ssl in
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"every required Kafka key is delivered from the target's Secret"
+      true
+      (List.for_all
+         (fun key ->
+            match List.assoc_opt key spec.secret_sources with
+            | Some (Sol_cli_secret_source.Target_kafka { secret }) ->
+              String.equal secret "prod-aws-us-east-1-kafka-creds"
+            | _ -> false)
+         keys);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the historical consumer requirement is preserved"
+      true
+      spec.consumes_kafka
+  | Ok _ -> Windtrap.fail "unexpected restored workload count"
+;;
+
+let%test
+    "rollback executes the same current-target projection used for credential delivery"
+  =
+  let recorded =
+    { (worker_spec ()) with config = [ "KAFKA_BROKERS", "historical:9093" ] }
+  in
+  let release = release_with_workloads ~apply_mode:Sol_cli_release.Direct [ recorded ] in
+  let specs =
+    Result.get_ok
+      (service_specs_of_release ~kafka:("current-target", kafka_external) release)
+  in
+  let live =
+    List.map
+      (fun (spec, applied_by) -> Sol_cli_rollback.identity_of_spec spec, applied_by)
+      specs
+  in
+  let _, _, deps = recording_deps ~live () in
+  let applied = ref [] in
+  let deps =
+    { deps with
+      apply =
+        (fun specs ->
+          applied := specs;
+          Ok ())
+    }
+  in
+  (match
+     Sol_cli_rollback.execute
+       ~release
+       ~specs
+       ~migrations_dir:"unused"
+       ~current_migrations:[]
+       ~deps
+   with
+   | Error message -> Windtrap.fail message
+   | Ok () -> ());
+  match !applied with
+  | [ (spec, _) ] ->
+    Windtrap.equal
+      (Windtrap.option Windtrap.string)
+      ~msg:"execution retains the current broker"
+      (Some "broker.example:9093")
+      (List.assoc_opt "KAFKA_BROKERS" spec.config);
+    List.iter
+      (fun (key, remote) ->
+         match List.assoc_opt key spec.secret_sources with
+         | Some (Sol_cli_secret_source.External { store; key }) ->
+           Windtrap.equal Windtrap.string "external-kafka" store;
+           Windtrap.equal Windtrap.string remote key
+         | _ -> Windtrap.fail "execution lost the current credential source")
+      [ "KAFKA_SASL_PASSWORD", "events/password"; "KAFKA_SSL_CA_CERT", "events/ca" ]
+  | _ -> Windtrap.fail "unexpected applied workload count"
+;;
+
+let%test "rollback to local Kafka removes historical external credential projections" =
+  let recorded =
+    { (worker_spec ()) with
+      config = Sol_cli_resource_binding.kafka_config kafka_external
+    ; secret_sources =
+        [ ( "KAFKA_SASL_PASSWORD"
+          , Sol_cli_secret_source.External { store = "old"; key = "old/password" } )
+        ; ( "KAFKA_SSL_CA_CERT"
+          , Sol_cli_secret_source.External { store = "old"; key = "old/ca" } )
+        ; "API_KEY", Sol_cli_secret_source.External { store = "app"; key = "api/key" }
+        ]
+    }
+  in
+  let release = release_with_workloads ~apply_mode:Sol_cli_release.Direct [ recorded ] in
+  match
+    service_specs_of_release
+      ~kafka:("local", Sol_cli_resource_binding.Local_kafka "events")
+      release
+  with
+  | Error message -> Windtrap.fail message
+  | Ok [ (spec, _) ] ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"old Kafka sources are not delivered beside a plaintext binding"
+      false
+      (List.exists
+         (fun (key, _) -> List.mem key [ "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ])
+         spec.secret_sources);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"unrelated application sources survive"
+      true
+      (List.mem_assoc "API_KEY" spec.secret_sources)
+  | _ -> Windtrap.fail "unexpected restored workload count"
 ;;

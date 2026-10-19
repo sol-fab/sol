@@ -109,12 +109,15 @@ Deployment, Rollout, worker or scheduled function. Explicit activation uses the
 an unchanged deploy does not adopt a changed environment value. It never writes
 the platform Secret or another unit's Secret.
 
-Sol's internal Jobs use a separate fixed-name Secret, `sol-secrets`, for platform
-inputs that no unit owns. A TLS contract Job reads `KAFKA_SASL_PASSWORD` and
-mounts `KAFKA_SSL_CA_CERT` from it; `sol secret set TARGET @platform/KEY` writes
-only these Kafka platform Job inputs to `sol-secrets` objects in the target's
-active workload namespaces. It does not fan values out to application Secrets.
-Database connections are not a platform input: a unit that declares
+Kafka credentials are resource-owned, not operator-written platform inputs. For a
+managed Kafka binding, the deploy reads the authoritative password from the
+provider store and the chart-owned CA from Kubernetes, then writes
+`KAFKA_SASL_PASSWORD` and `KAFKA_SSL_CA_CERT` atomically to `<target>-kafka-creds` in each
+namespace that declares a Kafka consumer. A TLS contract Job reads only those two
+keys from the same Secret. External Kafka keeps its ESO-delivered Secret. A
+non-consumer receives neither, and `sol secret set` refuses both keys
+as application inputs. `sol secret set` accepts only `DOMAIN/UNIT/KEY` addresses.
+Database connections are not a platform input either: a unit that declares
 `uses: [app_db]` reads the deploy-delivered `<target>-dml-creds` class Secret,
 and the migration Job reads `<target>-ddl-creds`.
 
@@ -149,7 +152,7 @@ sanitized strings would put one target's credentials in two namespaces. Reportin
 Secret at the declared location, it does not stop at the declaration. The class Secret *names*
 remain target-scoped, which is what ADR 0007 and every consumer already name.
 
-The substrate checks the platform inputs a Job consumes before proceeding. An
+Generated Jobs verify the resource-delivered inputs they consume before proceeding. An
 application Secret contains exactly the unit's declared keys; a unit-scoped
 `POSTGRES_URL` is one it declares itself, while a unit that consumes the target's
 database reads the class Secret instead. `sol secret status TARGET` reports

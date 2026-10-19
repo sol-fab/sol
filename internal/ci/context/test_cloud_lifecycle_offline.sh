@@ -195,6 +195,10 @@ for phase in cloud outputs cloud-verify access platform-init prerequisites crds 
   log="$tmp/$phase.log"
   if (export FAIL_ON="$phase"; export ACCESS_FAIL=always; run_apply "$log"); then
     echo "cloud apply unexpectedly survived injected $phase failure" >&2
+    echo "--- fake terraform calls ---" >&2
+    cat "$log" >&2 || true
+    echo "--- apply output ---" >&2
+    cat "$log.out" >&2 || true
     exit 1
   fi
   if [ "$phase" = prerequisites ] || [ "$phase" = crds ]; then

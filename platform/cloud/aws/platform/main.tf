@@ -4,6 +4,10 @@ terraform {
   backend "s3" {}
 
   required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.40"
+    }
     helm = {
       source  = "hashicorp/helm"
       version = "~> 2.12"
@@ -16,6 +20,9 @@ terraform {
 }
 
 module "platform" {
+  kafka_credential = var.kafka_authority == null ? null : merge(var.kafka_authority, {
+    password = data.aws_secretsmanager_secret_version.kafka[0].secret_string
+  })
   source                                  = "../../modules/platform"
   base_domain                             = var.base_domain
   cluster_issuer                          = var.cluster_issuer

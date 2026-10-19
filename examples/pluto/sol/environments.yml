@@ -58,42 +58,10 @@ pilot:
       cluster_name: pluto-pilot
       kube_context: pluto-pilot
       registry: 123456789012.dkr.ecr.us-east-1.amazonaws.com
-      secrets:
-        payments/charge_svc:
-          KAFKA_SASL_PASSWORD:
-            authority: sol
-          KAFKA_SSL_CA_CERT:
-            authority: sol
-        payments/orders_svc:
-          KAFKA_SASL_PASSWORD:
-            authority: sol
-          KAFKA_SSL_CA_CERT:
-            authority: sol
-        comms/notify_worker:
-          KAFKA_SASL_PASSWORD:
-            authority: sol
-          KAFKA_SSL_CA_CERT:
-            authority: sol
-        comms/fulfilment_worker:
-          KAFKA_SASL_PASSWORD:
-            authority: sol
-          KAFKA_SSL_CA_CERT:
-            authority: sol
-        checkout/checkout_svc:
-          KAFKA_SASL_PASSWORD:
-            authority: sol
-          KAFKA_SSL_CA_CERT:
-            authority: sol
-        demo_ts/order_svc:
-          KAFKA_SASL_PASSWORD:
-            authority: sol
-          KAFKA_SSL_CA_CERT:
-            authority: sol
-        demo_ts/fulfillment_worker:
-          KAFKA_SASL_PASSWORD:
-            authority: sol
-          KAFKA_SSL_CA_CERT:
-            authority: sol
+      # Managed Kafka credentials are resource-owned: the deploy resolves the target's
+      # Kafka binding and writes `<target>-kafka-creds` for declared consumers. Do not
+      # map KAFKA_SASL_PASSWORD or KAFKA_SSL_CA_CERT under `secrets:`; a second producer
+      # is refused.
 
 # A low-cost development environment: Postgres, Kafka and the services that
 # need them are omitted, so `sol deploy dev/aws/us-east-1` provisions the

@@ -97,3 +97,40 @@ val consumes_kafka
   -> string
   -> topics:string list
   -> bool
+
+type external_kafka =
+  { resource : string
+  ; store : string
+  ; brokers : string
+  ; schema_registry_url : string
+  ; admin_url : string
+  ; username : string
+  ; mechanism : string
+  ; password : string
+  ; ca : string
+  }
+
+type kafka =
+  | No_kafka
+  | Managed_kafka of string
+  | External_kafka of external_kafka
+  | Local_kafka of string
+
+val kafka : t list -> (kafka, string) result
+val kafka_of_resources : Sol_cli_config.resource list -> (kafka, string) result
+val resolve_kafka : Sol_cli_config.t -> (kafka, string) result
+val kafka_resource : kafka -> string option
+val kafka_is_managed : kafka -> bool
+val kafka_for_shape : shape:Sol_cli_profile.platform_shape -> kafka -> kafka
+val kafka_config : kafka -> (string * string) list
+
+(** Consumer credential sources, shared by deployment and current-target rollback. *)
+val kafka_secret_sources
+  :  target:string
+  -> kafka
+  -> (string * Sol_cli_secret_source.t) list
+
+(** Stable native authority identity, shared by provisioning and independent observation. *)
+val kafka_authority_name : cluster_name:string -> string
+
+val kafka_native_connection : cluster_name:string -> kafka -> Yojson.Safe.t option

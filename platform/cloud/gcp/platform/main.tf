@@ -4,6 +4,10 @@ terraform {
   backend "gcs" {}
 
   required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 5.25"
+    }
     helm = {
       source  = "hashicorp/helm"
       version = "~> 2.12"
@@ -16,6 +20,9 @@ terraform {
 }
 
 module "platform" {
+  kafka_credential = var.kafka_authority == null ? null : merge(var.kafka_authority, {
+    password = data.google_secret_manager_secret_version_access.kafka[0].secret_data
+  })
   source = "../../modules/platform"
 
   base_domain                             = var.base_domain

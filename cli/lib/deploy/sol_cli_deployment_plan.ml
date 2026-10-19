@@ -140,6 +140,7 @@ type t =
   ; contract : Sol_cli_release_id.contract_fact list
   ; contract_changes : contract_change list
   ; database : Sol_cli_resource_binding.postgres
+  ; kafka : Sol_cli_resource_binding.kafka
   ; resource_delivery : resource_delivery option
   }
 
@@ -271,7 +272,8 @@ let external_secret_of_spec (spec : service_spec) : (string * string) option =
       (fun (_, source) ->
          match source with
          | Sol_cli_manifest.Sol_managed -> false
-         | External _ -> true)
+         | External _ -> true
+         | Target_kafka _ -> false)
       spec.secret_sources
   in
   if has_external
@@ -299,7 +301,8 @@ let release_workload_of_spec (spec : service_spec) : Sol_cli_release_id.workload
       |> List.filter_map (fun (key, source) ->
         match source with
         | Sol_cli_manifest.Sol_managed -> None
-        | External { store; key = remote_key } -> Some (key, store, remote_key))
+        | External { store; key = remote_key } -> Some (key, store, remote_key)
+        | Target_kafka _ -> None)
   ; schedule = spec.schedule
   ; scheduled_concurrency =
       Sol_cli_toml.scheduled_concurrency_to_string spec.scheduled_concurrency
@@ -1041,6 +1044,7 @@ let of_services_result
       ?inventory
       ?target
       ~database
+      ?kafka
       services
   =
   let* () =
@@ -1051,6 +1055,24 @@ let of_services_result
            "a resolved PostgreSQL selection requires its target identity")
     | _ -> Ok ()
   in
+  (* A caller that already resolved the target's Kafka binding passes it here, so
+     planning, provisioning, Jobs and rollback consume one selection. The [declared]
+     fallback keeps direct callers honest without a second naming rule: it uses the
+     same resource-binding abstraction, not a reconstructed endpoint list. *)
+  let* kafka =
+    match kafka with
+    | Some kafka -> Ok kafka
+    | None ->
+      (match declared with
+       | None -> Ok Sol_cli_resource_binding.No_kafka
+       | Some (declared : Sol_cli_config.declared) ->
+         Sol_cli_resource_binding.kafka_of_resources
+           (List.filter
+              (fun (resource : Sol_cli_config.resource) -> not resource.omit)
+              declared.resources)
+         |> Result.map_error (fun message -> Invalid_resource_binding message))
+  in
+  let kafka = Sol_cli_resource_binding.kafka_for_shape ~shape:platform_shape kafka in
   let resolution_units =
     match inventory with
     | None -> services
@@ -1199,6 +1221,13 @@ let of_services_result
       | Some replicas -> replicas
       | None -> Option.value toml.replicas ~default:1
     in
+    let consumes_kafka =
+      Sol_cli_resource_binding.consumes_kafka declared svc.name ~topics:toml.topics
+    in
+    let kafka_security_config =
+      (* Only a declared consumer receives the target's Kafka connection/posture. *)
+      if consumes_kafka then Sol_cli_resource_binding.kafka_config kafka else []
+    in
     let kafka_durability_config =
       match platform_shape with
       | Sol_cli_profile.Durable
@@ -1206,16 +1235,8 @@ let of_services_result
         -> [ "SOL_KAFKA_DURABILITY", "single-broker-loss" ]
       | _ -> []
     in
-    let kafka_security_config =
-      match platform_shape with
-      | Sol_cli_profile.Durable -> Sol_cli_manifest.production_kafka_config
-      | Sol_cli_profile.Local -> []
-    in
     let service_config = List.remove_assoc "SOL_KAFKA_DURABILITY" toml.env_config in
     let language = sol_yml_language ~declared ~service_name:svc.name in
-    let consumes_kafka =
-      Sol_cli_resource_binding.consumes_kafka declared svc.name ~topics:toml.topics
-    in
     let spec =
       { domain = svc.domain
       ; source_name = svc.name
@@ -1341,6 +1362,7 @@ let of_services_result
     ; contract
     ; contract_changes = []
     ; database
+    ; kafka
     ; resource_delivery = None
     }
 ;;

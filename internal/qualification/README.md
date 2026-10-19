@@ -126,6 +126,34 @@ GCP skips bootstrap mutation entirely.
 The offline harness tests protect fail-closed behavior and evidence accounting. They are regression
 tests, not substitutes for live evidence.
 
+## Managed Kafka evidence
+
+AWS/GCP rows let Sol generate and persist the Kafka authority, initialize Redpanda,
+and deliver consumer Secrets. They never seed broker or application Kafka credentials.
+`kafka-delivery.py` compares provider values, broker input and every expected consumer's
+password/CA projection in memory. Its evidence contains references and results only.
+The existing application transaction remains the behavioral authentication/message-flow
+proof; matching Secret contents alone does not establish broker behavior.
+
+The separate declaration-only application-secret specimen reuses a candidate application
+image and an existing application namespace. It requires a missing `SOL_API_KEY` and must
+refuse before applying its workload. It never supplies that input or replaces Kafka's
+generated credential with an operator input. Its real-CLI regression rejects workload
+writes. Qualification requires the corresponding expected refusal, not any nonzero exit.
+
+Remote Terraform state is streamed into a credential-free projection before capture;
+`state/*.tfstate` evidence files are metadata, **not restorable Terraform state**. Provider
+credentials are read only for comparisons, never logged or passed as CLI arguments.
+The qualification identity needs target-scoped credential read permission for that check.
+
+Independent AWS/GCP teardown observes the native `kafka-secret` parent separately from
+Sol's destruction verdict. AWS pending deletion remains PRESENT even after its scheduled
+date; GCP disabled or pending-destruction versions do not establish parent absence.
+Permission failures and malformed responses are UNKNOWN. Release promotion independently
+requires the class, so omitting a probe or shrinking an evidence document cannot establish
+qualified teardown. Provider-fake tests exercise these decisions; only an authorized live
+run establishes a provider's production claim.
+
 ## Release qualification
 
 A Sol release is published only from an immutable candidate, and only after the

@@ -192,6 +192,7 @@ let make_plan ?(env = customer_env) services : Sol_cli_deployment_plan.t =
   ; contract = []
   ; contract_changes = []
   ; database = Sol_cli_resource_binding.No_postgres
+  ; kafka = Sol_cli_resource_binding.No_kafka
   ; resource_delivery = None
   }
 ;;

@@ -42,19 +42,39 @@ let of_config ~workspace cfg =
   (* Provisioning follows the resolved ownership, not the bare presence of a postgres
      resource: an externally bound database must not also be provisioned, and every
      provider derives the decision from the same resolution. *)
-  match Sol_cli_resource_binding.resolve_postgres cfg with
-  | Error message -> Error message
-  | Ok database ->
-    let has_postgres = Sol_cli_resource_binding.postgres_is_managed database in
-    let production = target.profile = Some Sol_cli_profile.Production_single_region in
-    let production_postgres = has_postgres && production in
-    let vars = capabilities.profile_vars ~production ~production_postgres @ vars in
-    Result.map
-      (fun declared -> declared @ vars)
-      (capabilities.root_declared_vars
-         ~has_postgres
-         ~production_postgres
-         ~ecr_repositories:ecr_repositories_var)
+  let open Result.Syntax in
+  let* graph = Sol_cli_resource_binding.resolve cfg in
+  let* database = Sol_cli_resource_binding.postgres graph in
+  let* kafka = Sol_cli_resource_binding.kafka graph in
+  let* kafka =
+    match kafka with
+    | Sol_cli_resource_binding.Managed_kafka _ ->
+      Result.map
+        (fun shape -> Sol_cli_resource_binding.kafka_for_shape ~shape kafka)
+        (Sol_cli_config.platform_shape cfg)
+    | _ -> Ok kafka
+  in
+  let kafka_connection =
+    match kafka with
+    | Sol_cli_resource_binding.Managed_kafka _ ->
+      (match target.cluster_name with
+       | Some cluster_name when not (Sol_cli_string.is_blank cluster_name) ->
+         Ok (Sol_cli_resource_binding.kafka_native_connection ~cluster_name kafka)
+       | _ -> Error "managed Kafka requires an explicit target cluster identity")
+    | _ -> Ok None
+  in
+  let* kafka_connection = kafka_connection in
+  let has_postgres = Sol_cli_resource_binding.postgres_is_managed database in
+  let production = target.profile = Some Sol_cli_profile.Production_single_region in
+  let production_postgres = has_postgres && production in
+  let vars = capabilities.profile_vars ~production ~production_postgres @ vars in
+  Result.map
+    (fun declared -> declared @ vars)
+    (capabilities.root_declared_vars
+       ~has_postgres
+       ~kafka_connection
+       ~production_postgres
+       ~ecr_repositories:ecr_repositories_var)
 ;;
 
 let var_file ~cwd ~workspace_root ~flag ~target =

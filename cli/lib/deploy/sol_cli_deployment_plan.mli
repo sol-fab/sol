@@ -145,6 +145,7 @@ type t =
   ; contract : Sol_cli_release_id.contract_fact list
   ; contract_changes : contract_change list
   ; database : Sol_cli_resource_binding.postgres
+  ; kafka : Sol_cli_resource_binding.kafka
   ; resource_delivery : resource_delivery option
   }
 
@@ -256,6 +257,7 @@ val of_services_result
   -> ?inventory:Sol_cli_manifest.service list
   -> ?target:string
   -> database:Sol_cli_resource_binding.postgres
+  -> ?kafka:Sol_cli_resource_binding.kafka
   -> Sol_cli_manifest.service list
   -> (t, plan_error) result
 

@@ -150,7 +150,8 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
       |> List.filter_map (fun (key, source) ->
         match source with
         | Sol_cli_manifest.Sol_managed -> None
-        | External { store; key = remote_key } -> Some (key, store, remote_key))
+        | External { store; key = remote_key } -> Some (key, store, remote_key)
+        | Target_kafka _ -> None)
       |> function
       | [] -> None
       | secret_refs -> Some (external_secret_doc ~secret_refs ~ns ~name)

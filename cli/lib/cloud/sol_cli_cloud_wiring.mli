@@ -97,7 +97,8 @@ val plan
   -> (unit, Sol_cli_cloud_apply.failure) result
 
 val apply_deps
-  :  assets:Sol_cli_platform_assets.t
+  :  kafka:Sol_cli_resource_binding.kafka
+  -> assets:Sol_cli_platform_assets.t
   -> confirm_ecr_removal:bool
   -> run_log:Sol_cli_run_log.t
   -> cloud_target:Sol_cli_cloud_lifecycle.cloud_target

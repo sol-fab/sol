@@ -91,12 +91,11 @@ The following substrate inputs must exist before running `sol deploy`.
   `KAFKA_SECURITY_PROTOCOL=plaintext`; on the **durable shape** Sol declares
   `KAFKA_SECURITY_PROTOCOL=sasl_ssl` with the HTTPS schema-registry and admin
   URLs, `KAFKA_SASL_MECHANISM=SCRAM-SHA-256` and `KAFKA_SSL_CA_LOCATION`, and
-  mounts the CA from the workload Secret as `KAFKA_SSL_CA_CERT`. A durable-shape
-  workload Secret must therefore also carry `KAFKA_SASL_PASSWORD` and
-  `KAFKA_SSL_CA_CERT`; an ordinary deploy fails closed when either is missing.
-  For an external Kafka substrate, override those values via
-  `[infra.env] config = { ... }` in each service's `sol.toml` or through a
-  GitOps overlay.
+  mounts the CA from the deploy-delivered Secret as `KAFKA_SSL_CA_CERT`. A
+  durable-shape consumer reads both keys from `<target>-kafka-creds`; a
+  non-consumer carries no Kafka credential. An ordinary deploy fails closed when
+  the provider authority or the broker CA is unavailable. For an external Kafka
+  substrate, the binding's external Secret supplies those keys through ESO.
 - Sol's workspace scan discovers topic intent from `events/**/sol.toml`, but
   it does not create an external Kafka cluster for you.
 
@@ -251,9 +250,9 @@ the workload only after ESO reports it synced, verifying that the sync names the
 spec it applied (see the deployment guide). For a target bound to an external
 database the same wait covers the class `ExternalSecret`s (`<target>-ddl-creds`,
 `<target>-dml-creds`) before the migration gate and the workloads that read them
-run. Platform Job inputs use the reserved
-`@platform/<KEY>` address and write only `sol-secrets`. Do not commit manifest
-files that contain real secret values.
+run. Managed Kafka consumers and contract Jobs use the target's resource-delivered
+`<target>-kafka-creds` Secret; external Kafka uses its binding's ESO source. Do not
+commit manifest files that contain real secret values.
 
 No per-service manifest hand-editing is required or expected. If a generated
 manifest does not fit your needs, open an issue or add a `sol.toml` escape

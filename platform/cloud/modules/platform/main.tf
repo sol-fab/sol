@@ -221,6 +221,22 @@ resource "kubernetes_ingress_v1" "argocd" {
   depends_on = [helm_release.argocd, helm_release.ingress_nginx]
 }
 
+# The broker bootstrap projection has one writer: platform Terraform. Provider
+# authority survives cluster replacement; this Kubernetes object does not own it.
+resource "kubernetes_secret_v1" "redpanda_users" {
+  # Only presence is declassified; the credential value remains sensitive.
+  count = var.platform_profile == "durable" && nonsensitive(var.kafka_credential != null) ? 1 : 0
+  metadata {
+    name        = local.platform_components.redpanda.durable.auth.sasl.secretRef
+    namespace   = kubernetes_namespace.redpanda.metadata[0].name
+    labels      = { "app.kubernetes.io/managed-by" = "sol" }
+    annotations = { "sol.io/credential-authority" = nonsensitive(var.kafka_credential.reference) }
+  }
+  data = {
+    "users.txt" = "${var.kafka_credential.username}:${var.kafka_credential.password}:${var.kafka_credential.mechanism}"
+  }
+}
+
 resource "helm_release" "redpanda" {
   name       = "redpanda"
   repository = "https://charts.redpanda.com"
@@ -244,7 +260,7 @@ resource "helm_release" "redpanda" {
     })]
   )
 
-  depends_on = [kubernetes_storage_class_v1.platform_default]
+  depends_on = [kubernetes_storage_class_v1.platform_default, kubernetes_secret_v1.redpanda_users]
 }
 
 resource "helm_release" "postgresql" {

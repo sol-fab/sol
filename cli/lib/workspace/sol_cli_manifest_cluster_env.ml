@@ -54,6 +54,12 @@ let redpanda_admin_host = "redpanda.redpanda.svc.cluster.local:9644"
    them once here. `*_host_port` is the CLI's local port-forward convention, not
    a cluster fact. *)
 let monitoring_namespace = "monitoring"
+
+(* The managed broker's namespace and the chart-created TLS projection the deploy reads
+   its CA from. The chart owns the certificate; Sol owns only the consumer projection. *)
+let kafka_namespace = "redpanda"
+let kafka_ca_secret_name = "redpanda-default-cert"
+let kafka_ca_cert_file = "ca.crt"
 let loki_service = "loki"
 let loki_service_port = 3100
 let loki_host_port = 3100
@@ -103,7 +109,7 @@ let kafka_posture_env = function
     ]
 ;;
 
-let cluster_env transport =
+let kafka_connection_env transport =
   let scheme =
     match transport with
     | Plaintext -> "http"
@@ -113,38 +119,38 @@ let cluster_env transport =
   @ [ "KAFKA_BROKERS", kafka_brokers
     ; "SCHEMA_REGISTRY_URL", Printf.sprintf "%s://%s" scheme schema_registry_host
     ; "REDPANDA_ADMIN_URL", Printf.sprintf "%s://%s" scheme redpanda_admin_host
-    ; ( "LOKI_URL"
-      , service_url
-          ~scheme:"http"
-          ~namespace:monitoring_namespace
-          ~name:loki_service
-          ~port:loki_service_port )
-    ; ( "PUSHGATEWAY_URL"
-      , service_url
-          ~scheme:"http"
-          ~namespace:monitoring_namespace
-          ~name:pushgateway_service
-          ~port:pushgateway_service_port )
-    ; ( "TEMPO_URL"
-      , service_url
-          ~scheme:"http"
-          ~namespace:monitoring_namespace
-          ~name:tempo_service
-          ~port:tempo_otlp_port )
     ]
 ;;
 
+let telemetry_env =
+  [ ( "LOKI_URL"
+    , service_url
+        ~scheme:"http"
+        ~namespace:monitoring_namespace
+        ~name:loki_service
+        ~port:loki_service_port )
+  ; ( "PUSHGATEWAY_URL"
+    , service_url
+        ~scheme:"http"
+        ~namespace:monitoring_namespace
+        ~name:pushgateway_service
+        ~port:pushgateway_service_port )
+  ; ( "TEMPO_URL"
+    , service_url
+        ~scheme:"http"
+        ~namespace:monitoring_namespace
+        ~name:tempo_service
+        ~port:tempo_otlp_port )
+  ]
+;;
+
+let cluster_env transport = kafka_connection_env transport @ telemetry_env
 let default_cluster_env = cluster_env Plaintext
 
 (* The durable unit's config: the same posture env the contract Job gets (one declaration of
    the trust anchor, so a durable Node consumer cannot receive the CA path in one projection
    and not the other) plus the two TLS endpoints it reaches over the platform CA. *)
-let production_kafka_config =
-  kafka_posture_env Sasl_ssl
-  @ [ "SCHEMA_REGISTRY_URL", Printf.sprintf "https://%s" schema_registry_host
-    ; "REDPANDA_ADMIN_URL", Printf.sprintf "https://%s" redpanda_admin_host
-    ]
-;;
+let production_kafka_config = kafka_connection_env Sasl_ssl
 
 let kafka_required_secret_keys = function
   | Plaintext -> []

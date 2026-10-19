@@ -768,6 +768,64 @@ let oidc_provider_observation
       ()
 ;;
 
+(* DescribeSecret is the documented current read; ListSecrets can lag recent
+   changes. Pending deletion is still present, and only this exact-name read's
+   ResourceNotFoundException establishes absence. No secret value is requested. *)
+let read_kafka_secret ~region ~cluster_name =
+  let identity = Sol_cli_resource_binding.kafka_authority_name ~cluster_name in
+  let argv =
+    [ "aws"
+    ; "secretsmanager"
+    ; "describe-secret"
+    ; "--secret-id"
+    ; identity
+    ; "--region"
+    ; region
+    ; "--query"
+    ; "{name:Name,deleted:DeletedDate,stages:VersionIdsToStages}"
+    ; "--output"
+    ; "json"
+    ]
+  in
+  let result =
+    let open Result.Syntax in
+    match Sol_cli_process.run (Sol_cli_process.cmd argv) with
+    | Ok output when String.trim output.stderr = "" ->
+      let* json =
+        Sol_cli_json.decode_sensitive
+          ~what:"the Kafka authority observation"
+          output.stdout
+      in
+      let* name =
+        Sol_cli_json.require
+          ~what:"the Kafka authority"
+          [ "name" ]
+          Sol_cli_json.string
+          json
+      in
+      if name = identity
+      then Ok (Some json)
+      else Error "DescribeSecret did not return the requested Kafka authority identity"
+    | Ok output -> Error (String.trim output.stderr)
+    | Error (Sol_cli_process.Non_zero output)
+      when Sol_cli_string.contains ~needle:"(ResourceNotFoundException)" output.stderr ->
+      Ok None
+    | Error (Sol_cli_process.Non_zero output) -> Error (String.trim output.stderr)
+    | Error error -> Error (Sol_cli_process.error_to_string error)
+  in
+  identity, String.concat " " argv, result
+;;
+
+let kafka_secret_observation ~region ~cluster_name ~resource_class () =
+  let identity, checked_with, result = read_kafka_secret ~region ~cluster_name in
+  let attribution = Named_for_target (named_for_cluster cluster_name) in
+  match result with
+  | Ok (Some _) ->
+    Present { resource_class; identity; attribution; checked_with; found = [ identity ] }
+  | Ok None -> Absent { resource_class; identity; attribution; checked_with }
+  | Error reason -> Unobservable { resource_class; reason; checked_with }
+;;
+
 (* Constructing probes performs no provider reads. Execution and coverage use
    this same sequence; an unattributable result does not advertise a query. *)
 let probes
@@ -792,6 +850,8 @@ let probes
        | Ok check -> Some check.resource_class, fun () -> run ~check ()
        | Error (resource_class, reason) ->
          None, fun () -> Not_attributable { resource_class; reason })
+    ; (let resource_class = "Kafka credential secret" in
+       Some resource_class, kafka_secret_observation ~region ~cluster_name ~resource_class)
     ; (let resource_class = "OIDC provider" in
        ( Some resource_class
        , oidc_provider_observation
@@ -876,4 +936,186 @@ let authorization_state_identities
     , List.filter (fun name -> not (String.equal reconciler name)) roles )
   ; "authorization IAM policy", names "aws_iam_policy"
   ]
+;;
+
+let kafka_storage ~region ~namespace observation =
+  let open Result.Syntax in
+  let read argv =
+    match
+      Sol_cli_process.run
+        (Sol_cli_process.cmd
+           (("aws" :: argv) @ [ "--region"; region; "--output"; "json" ]))
+    with
+    | Ok output when String.trim output.stderr = "" ->
+      Sol_cli_json.decode ~what:"Kafka storage metadata" output.stdout
+    | Ok output -> Error (String.trim output.stderr)
+    | Error (Sol_cli_process.Non_zero output) -> Error (String.trim output.stderr)
+    | Error _ -> Error "the aws CLI is unavailable"
+  in
+  let require what key convert value = Sol_cli_json.require ~what [ key ] convert value in
+  let is_kafka identity =
+    let* json = read [ "ec2"; "describe-volumes"; "--volume-ids"; identity ] in
+    let* volumes = require "a volume response" "Volumes" Sol_cli_json.list json in
+    let* volume =
+      match volumes with
+      | [ volume ] -> Ok volume
+      | _ -> Error "the volume read did not return exactly its requested identity"
+    in
+    let* actual = require "a volume" "VolumeId" Sol_cli_json.string volume in
+    let* () =
+      if actual = identity
+      then Ok ()
+      else Error "volume metadata disagrees with its requested identity"
+    in
+    let* tags =
+      Sol_cli_json.optional ~what:"a volume" [ "Tags" ] Sol_cli_json.list volume
+    in
+    let* tags =
+      Sol_cli_result.map_list
+        (fun tag ->
+           let* key = require "a volume tag" "Key" Sol_cli_json.string tag in
+           let* value = require "a volume tag" "Value" Sol_cli_json.string tag in
+           Ok (key, value))
+        (Option.value tags ~default:[])
+    in
+    match List.assoc_opt "kubernetes.io/created-for/pvc/namespace" tags with
+    | Some claim when String.trim claim <> "" -> Ok (claim = namespace)
+    | _ ->
+      let* attachments =
+        Sol_cli_json.optional ~what:"a volume" [ "Attachments" ] Sol_cli_json.list volume
+      in
+      let* boots =
+        Sol_cli_result.map_list
+          (fun attachment ->
+             let* instance_id =
+               require "a volume attachment" "InstanceId" Sol_cli_json.string attachment
+             in
+             let* json =
+               read [ "ec2"; "describe-instances"; "--instance-ids"; instance_id ]
+             in
+             let* reservations =
+               require "an instance response" "Reservations" Sol_cli_json.list json
+             in
+             let* groups =
+               Sol_cli_result.map_list
+                 (require "a reservation" "Instances" Sol_cli_json.list)
+                 reservations
+             in
+             let* instance =
+               match List.concat groups with
+               | [ instance ] -> Ok instance
+               | _ ->
+                 Error "the instance read did not return exactly its requested identity"
+             in
+             let* actual =
+               require "an instance" "InstanceId" Sol_cli_json.string instance
+             in
+             let* () =
+               if actual = instance_id
+               then Ok ()
+               else Error "instance metadata disagrees with its requested identity"
+             in
+             let* root =
+               require "an instance" "RootDeviceName" Sol_cli_json.string instance
+             in
+             let* mappings =
+               require "an instance" "BlockDeviceMappings" Sol_cli_json.list instance
+             in
+             let* matches =
+               Sol_cli_result.map_list
+                 (fun mapping ->
+                    let* device =
+                      require "a block mapping" "DeviceName" Sol_cli_json.string mapping
+                    in
+                    if device <> root
+                    then Ok false
+                    else
+                      let* volume =
+                        Sol_cli_json.require
+                          ~what:"a root block mapping"
+                          [ "Ebs"; "VolumeId" ]
+                          Sol_cli_json.string
+                          mapping
+                      in
+                      Ok (volume = identity))
+                 mappings
+             in
+             Ok (List.exists Fun.id matches))
+          (Option.value attachments ~default:[])
+      in
+      if List.exists Fun.id boots
+      then Ok false
+      else
+        Error
+          "a target volume has neither attributable CSI namespace metadata nor a \
+           confirmed node boot mapping; Kafka initialization is unresolved"
+  in
+  Sol_cli_kafka_authority.scope_storage observation ~is_kafka
+;;
+
+(* Reuse is a provider fact, not a Terraform-state inference. describe-secret is
+   the documented current read; VersionIdsToStages identifies an active version
+   without requesting the credential value. Pending deletion is not reusable
+   authority, and an unreadable secret is unknown rather than absent. *)
+let kafka_authority ~region ~cluster_name =
+  let _, checked_with, result = read_kafka_secret ~region ~cluster_name in
+  let unknown reason =
+    Sol_cli_kafka_authority.Authority_unobservable
+      (Printf.sprintf "%s (%s)" reason checked_with)
+  in
+  match result with
+  | Error reason -> unknown reason
+  | Ok None ->
+    Sol_cli_kafka_authority.Authority_missing "the provider secret does not exist"
+  | Ok (Some json) ->
+    let stages =
+      match Sol_cli_json.field [ "stages" ] json with
+      | `Assoc fields -> Ok (List.map snd fields)
+      | `Null -> Ok []
+      | _ -> Error "the authority observation has no version-stage map"
+    in
+    (match stages with
+     | Error message -> unknown message
+     | Ok stages ->
+       if Sol_cli_json.field [ "deleted" ] json <> `Null
+       then
+         Sol_cli_kafka_authority.Authority_missing
+           "the provider secret is pending deletion"
+       else if
+         List.exists
+           (function
+             | `List values -> List.mem (`String "AWSCURRENT") values
+             | _ -> false)
+           stages
+       then Sol_cli_kafka_authority.Authority_current
+       else
+         Sol_cli_kafka_authority.Authority_missing
+           "the provider secret has no active version")
+;;
+
+(** Retrieve the authoritative Kafka credential for delivery. The value travels on stdout
+    to the caller and never in an argv, plan, release record or diagnostic. *)
+let kafka_credential ~region ~cluster_name =
+  let identity = Sol_cli_resource_binding.kafka_authority_name ~cluster_name in
+  let argv =
+    [ "aws"
+    ; "secretsmanager"
+    ; "get-secret-value"
+    ; "--secret-id"
+    ; identity
+    ; "--region"
+    ; region
+    ; "--query"
+    ; "SecretString"
+    ; "--output"
+    ; "text"
+    ]
+  in
+  match Sol_cli_process.run (Sol_cli_process.cmd argv) with
+  | Ok result when String.trim result.stderr = "" ->
+    let value = String.trim result.stdout in
+    if value = "" then Error "the provider secret has no value" else Ok value
+  | Ok result -> Error (String.trim result.stderr)
+  | Error (Sol_cli_process.Non_zero result) -> Error (String.trim result.stderr)
+  | Error _ -> Error "the aws CLI is unavailable"
 ;;

@@ -225,3 +225,226 @@ let service_uses_resource_type declared service_name typ =
 let consumes_kafka declared service_name ~topics =
   topics <> [] || service_uses_resource_type declared service_name "kafka"
 ;;
+
+(* Kafka is one connection/authority selection, rather than independent endpoint
+   defaults and secret mappings. Names below are the existing application contract. *)
+type external_kafka =
+  { resource : string
+  ; store : string
+  ; brokers : string
+  ; schema_registry_url : string
+  ; admin_url : string
+  ; username : string
+  ; mechanism : string
+  ; password : string
+  ; ca : string
+  }
+
+type kafka =
+  | No_kafka
+  | Managed_kafka of string
+  | External_kafka of external_kafka
+  | Local_kafka of string
+
+let kafka bindings =
+  let open Result.Syntax in
+  match of_type bindings ~typ:"kafka" with
+  | [] -> Ok No_kafka
+  | _ :: _ :: _ -> Error "this target supports one Kafka resource; omit unused resources"
+  | [ binding ] ->
+    if binding.ownership = Sol_cli_config.Ownership_sol
+    then
+      if
+        binding.store <> None
+        || binding.keys <> []
+        || binding.connection <> []
+        || binding.credentials <> []
+      then
+        Error
+          (Printf.sprintf
+             "managed Kafka %S cannot override its generated connection or authority"
+             binding.resource)
+      else Ok (Managed_kafka binding.resource)
+    else (
+      let required field values key =
+        match List.assoc_opt key values with
+        | Some value when String.trim value <> "" -> Ok value
+        | _ ->
+          Error
+            (Printf.sprintf
+               "external Kafka %S requires binding.%s.%s"
+               binding.resource
+               field
+               key)
+      in
+      let* store =
+        match binding.store with
+        | Some store when String.trim store <> "" -> Ok store
+        | _ ->
+          Error (Printf.sprintf "external Kafka %S requires a store" binding.resource)
+      in
+      let* brokers = required "connection" binding.connection "KAFKA_BROKERS" in
+      let* schema_registry_url =
+        required "connection" binding.connection "SCHEMA_REGISTRY_URL"
+      in
+      let* admin_url = required "connection" binding.connection "REDPANDA_ADMIN_URL" in
+      let* username = required "connection" binding.connection "KAFKA_SASL_USERNAME" in
+      let* mechanism = required "connection" binding.connection "KAFKA_SASL_MECHANISM" in
+      let* password = required "keys" binding.keys "KAFKA_SASL_PASSWORD" in
+      let* ca = required "keys" binding.keys "KAFKA_SSL_CA_CERT" in
+      let allowed_connection =
+        [ "KAFKA_BROKERS"
+        ; "SCHEMA_REGISTRY_URL"
+        ; "REDPANDA_ADMIN_URL"
+        ; "KAFKA_SASL_USERNAME"
+        ; "KAFKA_SASL_MECHANISM"
+        ]
+      in
+      let unsupported =
+        List.filter_map
+          (fun (key, _) ->
+             if List.mem key allowed_connection then None else Some ("connection." ^ key))
+          binding.connection
+        @ List.filter_map
+            (fun (key, _) ->
+               if key = "KAFKA_SASL_PASSWORD" || key = "KAFKA_SSL_CA_CERT"
+               then None
+               else Some ("keys." ^ key))
+            binding.keys
+        @ List.map (fun (key, _) -> "credentials." ^ key) binding.credentials
+      in
+      let* () =
+        match unsupported with
+        | [] -> Ok ()
+        | keys -> Error ("unsupported Kafka inputs: " ^ String.concat ", " keys)
+      in
+      let safe_endpoint ~scheme value =
+        try
+          let uri = Uri.of_string value in
+          Uri.scheme uri = scheme
+          && Option.is_some (Uri.host uri)
+          && Uri.userinfo uri = None
+          && Uri.query uri = []
+          && Uri.fragment uri = None
+          && (not (String.exists (fun c -> Char.code c <= 32 || Char.code c = 127) value))
+          &&
+          match Uri.port uri with
+          | None -> scheme = Some "https"
+          | Some port -> port > 0 && port < 65536
+        with
+        | Invalid_argument _ -> false
+      in
+      let* () =
+        if not (List.mem mechanism [ "SCRAM-SHA-256"; "SCRAM-SHA-512"; "PLAIN" ])
+        then Error "external Kafka requires a supported SASL mechanism"
+        else if
+          not
+            (List.for_all
+               (safe_endpoint ~scheme:(Some "https"))
+               [ schema_registry_url; admin_url ])
+        then
+          Error
+            "external Kafka registry/admin endpoints require HTTPS without embedded \
+             credentials, query or fragment"
+        else if
+          not
+            (String.split_on_char ',' brokers
+             |> List.for_all (fun broker ->
+               safe_endpoint ~scheme:None ("//" ^ broker)
+               && not (String.contains broker '/')))
+        then
+          Error
+            "external Kafka brokers must be host:port endpoints without credentials or \
+             URL components"
+        else Ok ()
+      in
+      Ok
+        (External_kafka
+           { resource = binding.resource
+           ; store
+           ; brokers
+           ; schema_registry_url
+           ; admin_url
+           ; username
+           ; mechanism
+           ; password
+           ; ca
+           }))
+;;
+
+(* Kafka-only selection from a declared resource graph. Unlike [resolve_resources],
+   this does not re-run the PostgreSQL cardinality decision: a caller that already
+   holds a database selection must not have it re-derived here. *)
+let kafka_of_resources resources =
+  let open Result.Syntax in
+  let* bindings = Sol_cli_result.map_list of_resource resources in
+  kafka bindings
+;;
+
+let resolve_kafka config = Result.bind (resolve config) kafka
+
+let kafka_resource = function
+  | No_kafka -> None
+  | Managed_kafka resource | Local_kafka resource -> Some resource
+  | External_kafka binding -> Some binding.resource
+;;
+
+let kafka_is_managed = function
+  | Managed_kafka _ -> true
+  | _ -> false
+;;
+
+let kafka_for_shape ~shape = function
+  | Managed_kafka resource when shape = Sol_cli_profile.Local -> Local_kafka resource
+  | kafka -> kafka
+;;
+
+let kafka_config = function
+  | No_kafka -> []
+  | Managed_kafka _ -> Sol_cli_manifest.production_kafka_config
+  | Local_kafka _ -> Sol_cli_manifest.kafka_connection_env Sol_cli_manifest.Plaintext
+  | External_kafka binding ->
+    let overrides =
+      [ "KAFKA_BROKERS", binding.brokers
+      ; "SCHEMA_REGISTRY_URL", binding.schema_registry_url
+      ; "REDPANDA_ADMIN_URL", binding.admin_url
+      ; "KAFKA_SASL_USERNAME", binding.username
+      ; "KAFKA_SASL_MECHANISM", binding.mechanism
+      ]
+    in
+    overrides
+    @ List.filter
+        (fun (key, _) -> not (List.mem_assoc key overrides))
+        Sol_cli_manifest.production_kafka_config
+;;
+
+(* Both fresh deployment and rollback project this same resolved credential source.
+   The target is a delivery identity, not a second credential authority. *)
+let kafka_secret_sources ~target = function
+  | Managed_kafka _ ->
+    let secret = Sol_cli_manifest.kafka_creds_name ~target in
+    List.map
+      (fun key -> key, Sol_cli_secret_source.Target_kafka { secret })
+      (Sol_cli_manifest.kafka_required_secret_keys Sol_cli_manifest.Sasl_ssl)
+  | External_kafka binding ->
+    [ ( Sol_cli_manifest.kafka_sasl_password_key
+      , Sol_cli_secret_source.External { store = binding.store; key = binding.password } )
+    ; ( Sol_cli_manifest.kafka_ca_secret_key
+      , Sol_cli_secret_source.External { store = binding.store; key = binding.ca } )
+    ]
+  | No_kafka | Local_kafka _ -> []
+;;
+
+let kafka_authority_name ~cluster_name = "sol-kafka-" ^ cluster_name
+
+let kafka_native_connection ~cluster_name = function
+  | Managed_kafka resource ->
+    Some
+      (`Assoc
+          [ "secret_name", `String (kafka_authority_name ~cluster_name)
+          ; "resource", `String resource
+          ; "username", `String Sol_cli_manifest_cluster_env.kafka_sasl_username
+          ; "mechanism", `String Sol_cli_manifest_cluster_env.kafka_sasl_mechanism
+          ])
+  | No_kafka | Local_kafka _ | External_kafka _ -> None
+;;

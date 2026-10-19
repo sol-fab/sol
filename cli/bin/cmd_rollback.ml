@@ -131,8 +131,33 @@ let run_locked ~lease ~ctx ~local ~database_selection ?config ~workspace ~facts 
   let database = Option.map (fun target -> target, database_selection) target in
   (* Reconstruct historical consumers against this run's already resolved target.
      The transaction uses the same pure projection; credential delivery needs its
-     namespaces before the migration read, which is the first DDL consumer. *)
-  let* restored = Sol_cli_rollback.service_specs_of_release ?database release in
+     namespaces before the migration read, which is the first DDL consumer. A local
+     rollback has no target authority, so it keeps the recorded local connection. *)
+  let* kafka =
+    match config with
+    | None -> Ok None
+    | Some config ->
+      let* kafka = Sol_cli_resource_binding.resolve_kafka config in
+      let* shape = Sol_cli_config.platform_shape config in
+      Ok
+        (Some
+           ( Sol_cli_kubernetes_name.sanitize_name config.target.name
+           , Sol_cli_resource_binding.kafka_for_shape ~shape kafka ))
+  in
+  let* restored = Sol_cli_rollback.service_specs_of_release ?database ?kafka release in
+  (* The restored workloads read the current target's delivered Secret. Re-project it so
+     a recreated delivery object or a changed current authority cannot leave rollback
+     reading a stale credential. *)
+  let* () =
+    match config, kafka with
+    | Some config, Some (_, kafka) ->
+      Sol_cli_kafka_delivery.run
+        ~ctx
+        ~target:config.target
+        ~kafka
+        ~services:(List.map fst restored)
+    | _ -> Ok ()
+  in
   let deliver_credentials () =
     match database_selection, target with
     | Sol_cli_resource_binding.External_postgres binding, Some target ->
@@ -164,8 +189,7 @@ let run_locked ~lease ~ctx ~local ~database_selection ?config ~workspace ~facts 
     | _ -> Ok ()
   in
   let deps : Sol_cli_rollback.transaction_deps =
-    { database
-    ; ensure_held = (fun () -> Sol_cli_boundary_lease.ensure_held lease)
+    { ensure_held = (fun () -> Sol_cli_boundary_lease.ensure_held lease)
     ; applied_migrations =
         (fun () ->
           match config, database_selection with
@@ -244,7 +268,14 @@ let run_locked ~lease ~ctx ~local ~database_selection ?config ~workspace ~facts 
           Sol_cli_deployment_state.record_consumer_groups ~ctx ~workspace groups)
     }
   in
-  let* () = Sol_cli_rollback.execute ~release ~migrations_dir ~current_migrations ~deps in
+  let* () =
+    Sol_cli_rollback.execute
+      ~release
+      ~specs:restored
+      ~migrations_dir
+      ~current_migrations
+      ~deps
+  in
   Printf.printf
     "Verified: workloads and pointer both name release %s.\n%!"
     release.release_id;

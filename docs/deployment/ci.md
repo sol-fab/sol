@@ -108,18 +108,11 @@ your-secret-tool get payment-api-key \
 Database access needs no CI step. A unit that declares `uses: [app_db]` reads the
 target's deploy-delivered `<target>-dml-creds` class Secret, and the migration
 Job reads `<target>-ddl-creds`; Sol does not accept an operator- or
-CI-supplied `POSTGRES_URL`. The only target-scoped platform inputs CI writes are
-the Kafka credentials a TLS contract Job needs, and only until #1344c binds them:
+CI-supplied `POSTGRES_URL`. Kafka credentials also need no operator seeding:
+managed Kafka uses provider-backed authority and Sol delivers its password and CA
+to declared consumers and contract Jobs; external Kafka uses its binding's ESO source.
 
-```bash
-your-secret-tool get kafka-sasl-password \
-  | sol secret set "$SOL_TARGET" @platform/KAFKA_SASL_PASSWORD --from-stdin
-```
-
-This writes only the target's `sol-secrets` objects used by internal Jobs. It
-does not populate any application unit Secret.
-
-The target explicitly maps every required key to `sol` or `external`. An external
+The target explicitly maps every required application key to `sol` or `external`. An external
 key is delivered by a namespaced ESO `ExternalSecret`; the deploy applies the workload
 only after ESO reports `Ready=True` / `SecretSynced`, and fails closed if it never does.
 Generation freshness is part of that same readiness gate: the deploy requires

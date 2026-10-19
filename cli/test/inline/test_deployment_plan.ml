@@ -329,6 +329,7 @@ let sample_plan () : Sol_cli_deployment_plan.t =
   ; contract = []
   ; contract_changes = []
   ; database = Sol_cli_resource_binding.No_postgres
+  ; kafka = Sol_cli_resource_binding.No_kafka
   ; resource_delivery = None
   }
 ;;
@@ -422,6 +423,7 @@ let test_to_json_mode_strings () =
       ; contract = []
       ; contract_changes = []
       ; database = Sol_cli_resource_binding.No_postgres
+      ; kafka = Sol_cli_resource_binding.No_kafka
       ; resource_delivery = None
       }
     in
@@ -2714,4 +2716,139 @@ let%test
   | Error (Sol_cli_deployment_plan.Invalid_resource_binding _) -> ()
   | Error error -> Windtrap.fail (Sol_cli_deployment_plan.plan_error_to_string error)
   | Ok _ -> Windtrap.fail "a database selection without target identity was accepted"
+;;
+
+let test_kafka_delivery_is_scoped_to_declared_consumers () =
+  let tmp = Filename.temp_dir "sol_test_kafka_consumers" "" in
+  with_cwd tmp (fun () ->
+    let unit name = worker_unit ~domain:"payments" ~name in
+    let consumer = unit "consumer_svc" in
+    let idle = unit "idle_svc" in
+    List.iter
+      (fun (s : Sol_cli_manifest.service) ->
+         mkdirs s.dir;
+         write_file (Filename.concat s.dir "sol.toml") "")
+      [ consumer; idle ];
+    let service name uses =
+      { Sol_cli_config.name
+      ; typ = None
+      ; path = None
+      ; uses
+      ; scale_min = None
+      ; scale_max = None
+      ; language = None
+      ; omit = false
+      }
+    in
+    let resource =
+      { Sol_cli_config.name = "events"
+      ; typ = Some "kafka"
+      ; partition_key = None
+      ; sort_key = None
+      ; indexes = []
+      ; size = None
+      ; omit = false
+      ; binding = None
+      }
+    in
+    let declared =
+      Sol_cli_config.declared_of_config
+        { Sol_cli_config.project = Some "ws"
+        ; target = Result.get_ok (Sol_cli_config.parse_target "prod/aws/us-east-1")
+        ; resources = [ resource ]
+        ; services = [ service "consumer_svc" [ "events" ]; service "idle_svc" [] ]
+        }
+    in
+    let plan kafka =
+      match
+        Sol_cli_deployment_plan.of_services_result
+          ~platform_shape:Sol_cli_profile.Durable
+          ~workspace:"myworkspace"
+          ~env:deploy_env
+          ~facts:(facts ())
+          ~declared
+          ~target:"prod-aws-us-east-1"
+          ~database:Sol_cli_resource_binding.No_postgres
+          ~kafka
+          [ consumer; idle ]
+      with
+      | Error err -> Windtrap.fail (Sol_cli_deployment_plan.plan_error_to_string err)
+      | Ok plan -> plan
+    in
+    let spec (plan : Sol_cli_deployment_plan.t) name =
+      List.find
+        (fun (s : Sol_cli_deployment_plan.service_spec) -> s.source_name = name)
+        plan.services
+    in
+    let config key (spec : Sol_cli_deployment_plan.service_spec) =
+      List.assoc_opt key spec.config
+    in
+    let kafka_keys (spec : Sol_cli_deployment_plan.service_spec) =
+      spec.config
+      |> Sol_cli_manifest.kafka_transport_of_config
+      |> Sol_cli_manifest.kafka_required_secret_keys
+    in
+    let managed = plan (Sol_cli_resource_binding.Managed_kafka "events") in
+    let consumer = spec managed "consumer_svc" in
+    let idle = spec managed "idle_svc" in
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the consumer receives the managed connection"
+      true
+      (config "KAFKA_BROKERS" consumer = Some "redpanda.redpanda.svc.cluster.local:9093");
+    Windtrap.equal
+      (Windtrap.list Windtrap.string)
+      ~msg:"the consumer's transport requires the Kafka credential keys"
+      [ "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ]
+      (kafka_keys consumer);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the non-consumer receives no Kafka connection"
+      true
+      (config "KAFKA_BROKERS" idle = None);
+    Windtrap.equal
+      (Windtrap.list Windtrap.string)
+      ~msg:"the non-consumer's transport requires no Kafka credential keys"
+      []
+      (kafka_keys idle);
+    let external_kafka =
+      Sol_cli_resource_binding.External_kafka
+        { resource = "events"
+        ; store = "external-kafka"
+        ; brokers = "broker.example:9093"
+        ; schema_registry_url = "https://registry.example"
+        ; admin_url = "https://admin.example"
+        ; username = "consumer"
+        ; mechanism = "SCRAM-SHA-256"
+        ; password = "events/password"
+        ; ca = "events/ca"
+        }
+    in
+    let external_plan = plan external_kafka in
+    let external_consumer = spec external_plan "consumer_svc" in
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the external binding supplies its own broker"
+      true
+      (config "KAFKA_BROKERS" external_consumer = Some "broker.example:9093");
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the external binding supplies its own registry"
+      true
+      (config "SCHEMA_REGISTRY_URL" external_consumer = Some "https://registry.example");
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the external binding does not fall back to the managed broker"
+      true
+      (config "KAFKA_BROKERS" external_consumer
+       <> Some "redpanda.redpanda.svc.cluster.local:9093");
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"an external non-consumer still receives no Kafka connection"
+      true
+      (config "KAFKA_BROKERS" (spec external_plan "idle_svc") = None))
+;;
+
+let%test "Kafka delivery follows only declared consumers, never the profile" =
+  test_kafka_delivery_is_scoped_to_declared_consumers ()
 ;;

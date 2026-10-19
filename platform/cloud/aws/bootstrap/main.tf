@@ -72,6 +72,8 @@ resource "aws_dynamodb_table" "lock" {
   }
 }
 
+data "aws_caller_identity" "current" {}
+
 data "aws_iam_policy_document" "provisioner" {
   statement {
     sid    = "ManageClusterInfrastructure"
@@ -116,6 +118,23 @@ data "aws_iam_policy_document" "provisioner" {
     ]
     resources = ["*"]
   }
+  statement {
+    sid    = "ManageNativeKafkaAuthority"
+    effect = "Allow"
+    actions = [
+      "secretsmanager:CreateSecret", "secretsmanager:DeleteSecret",
+      "secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue",
+      "secretsmanager:PutSecretValue", "secretsmanager:UpdateSecret",
+      "secretsmanager:ListSecretVersionIds", "secretsmanager:UpdateSecretVersionStage",
+      "secretsmanager:TagResource", "secretsmanager:UntagResource",
+      "secretsmanager:GetResourcePolicy", "secretsmanager:PutResourcePolicy",
+      "secretsmanager:DeleteResourcePolicy",
+    ]
+    # This installation's provisioner manages its native target authorities. The
+    # per-secret resource policy grants the deploy role read access to one target.
+    resources = ["arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:sol-kafka-*"]
+  }
+
 }
 
 data "aws_iam_policy_document" "cluster_access" {

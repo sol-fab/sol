@@ -475,8 +475,9 @@ let test_input_ownership_is_one_decision () =
     let owners =
       Sol_cli_deploy_selection.unit_input_owners
         ~config
+        ~kafka:plan.kafka
         ~unit_address:"payments/charge_svc"
-        ~transport:Sol_cli_manifest.Plaintext
+        ~transport:(Sol_cli_manifest.kafka_transport plan.platform_shape)
         ~db_uses_target:true
         ~declared:declared_keys
     in
@@ -489,6 +490,10 @@ let test_input_ownership_is_one_decision () =
            String.equal expected "the unit's own Secret"
          | Some Sol_cli_deploy_selection.Target_database ->
            String.equal expected "the target's database input"
+         | Some (Sol_cli_deploy_selection.Target_kafka _) ->
+           String.equal expected "the target's Kafka input"
+         | Some Sol_cli_deploy_selection.Conflicting ->
+           String.equal expected "a conflicting authority"
          | Some (Sol_cli_deploy_selection.External_secret _) ->
            String.equal expected "an external authority"
          | Some Sol_cli_deploy_selection.Unmapped -> String.equal expected "unmapped"
@@ -503,13 +508,16 @@ let test_input_ownership_is_one_decision () =
       | Sol_cli_deploy_selection.Unit_secret -> Some "sol"
       | Sol_cli_deploy_selection.External_secret { store; key } ->
         Some (Printf.sprintf "external:%s:%s" store key)
-      | Sol_cli_deploy_selection.Target_database | Sol_cli_deploy_selection.Unmapped ->
-        None
+      | Sol_cli_deploy_selection.Target_kafka _ -> Some "kafka"
+      | Sol_cli_deploy_selection.Conflicting
+      | Sol_cli_deploy_selection.Target_database
+      | Sol_cli_deploy_selection.Unmapped -> None
     in
     let authority_text = function
-      | Sol_cli_config.Sol_managed -> "sol"
-      | Sol_cli_config.External { store; key } ->
+      | Sol_cli_secret_source.Sol_managed -> "sol"
+      | Sol_cli_secret_source.External { store; key } ->
         Printf.sprintf "external:%s:%s" store key
+      | Sol_cli_secret_source.Target_kafka _ -> "kafka"
     in
     let from_owners =
       owners
@@ -773,14 +781,18 @@ let%test "1423: an external database plans for GitOps with its delivery" =
    the target must map. *)
 
 (* A workspace whose cloud target body the test supplies, so the shape is the only variable. *)
-let single_charge_workspace ~target_body ?(toml = "") () =
+let single_charge_workspace ?(kafka = false) ~target_body ?(toml = "") () =
+  let resources = if kafka then "resources:\n  events:\n    type: kafka\n" else "" in
+  let uses = if kafka then "    uses: [events]\n" else "" in
   [ ( "sol.yml"
-    , "project: ws\n\
-       services:\n\
-      \  charge_svc:\n\
-      \    type: http\n\
-      \    path: app/payments/charge_svc\n\
-      \    language: ocaml\n" )
+    , "project: ws\n"
+      ^ resources
+      ^ "services:\n\
+        \  charge_svc:\n\
+        \    type: http\n\
+        \    path: app/payments/charge_svc\n\
+        \    language: ocaml\n"
+      ^ uses )
   ; ( "sol/environments.yml"
     , Printf.sprintf "prod:\n  targets:\n    aws/us-east-1:\n%s" target_body )
   ; "app/payments/charge_svc/Dockerfile", "FROM scratch\n"
@@ -834,38 +846,52 @@ let test_production_profile_with_local_shape_is_refused_at_plan () =
 ;;
 
 let test_durable_shape_declares_authenticated_kafka_and_requires_its_authorities () =
-  let message =
-    plan_refuses
-      "a durable target with no Kafka authority"
-      (single_charge_workspace
-         ~target_body:"      cluster_name: ws-prod\n      shape: durable\n"
-         ())
-  in
-  check_bool
-    "the refusal names the credential the durable shape requires"
-    true
-    (Sol_cli_string.contains ~needle:"KAFKA_SASL_PASSWORD" message);
+  (* A managed Kafka consumer declares only its resource dependency. The deploy delivers
+     the credential from the resolved binding, so a per-unit `secrets:` mapping is neither
+     needed nor allowed: it would be a second producer for the same delivered value. *)
   let plan =
     planned_or_fail
-      "a durable target that maps its Kafka authority"
+      "a durable target with a managed Kafka consumer"
       (plan_for
          (single_charge_workspace
-            ~target_body:
-              "      cluster_name: ws-prod\n\
-              \      shape: durable\n\
-              \      secrets:\n\
-              \        payments/charge_svc:\n\
-              \          KAFKA_SASL_PASSWORD:\n\
-              \            authority: sol\n\
-              \          KAFKA_SSL_CA_CERT:\n\
-              \            authority: sol\n"
+            ~kafka:true
+            ~toml:"[service]\ntopics = [\"orders\"]\n"
+            ~target_body:"      cluster_name: ws-prod\n      shape: durable\n"
             ()))
   in
   let spec = List.hd plan.Sol_cli_deployment_plan.services in
   check_bool
     "the durable shape renders the SASL_SSL transport"
     true
-    (List.assoc_opt "KAFKA_SECURITY_PROTOCOL" spec.config = Some "sasl_ssl")
+    (List.assoc_opt "KAFKA_SECURITY_PROTOCOL" spec.config = Some "sasl_ssl");
+  Sol_cli_manifest.kafka_required_secret_keys Sol_cli_manifest.Sasl_ssl
+  |> List.iter (fun key ->
+    check_bool
+      (Printf.sprintf "%s is delivered by the target's Kafka authority" key)
+      true
+      (match List.assoc_opt key spec.secret_sources with
+       | Some (Sol_cli_secret_source.Target_kafka { secret }) ->
+         Sol_cli_string.contains ~needle:"-kafka-creds" secret
+       | _ -> false));
+  let message =
+    plan_refuses
+      "a target that also maps a managed Kafka key"
+      (single_charge_workspace
+         ~kafka:true
+         ~toml:"[service]\ntopics = [\"orders\"]\n"
+         ~target_body:
+           "      cluster_name: ws-prod\n\
+           \      shape: durable\n\
+           \      secrets:\n\
+           \        payments/charge_svc:\n\
+           \          KAFKA_SASL_PASSWORD:\n\
+           \            authority: sol\n"
+         ())
+  in
+  check_bool
+    "the refusal names the conflicting producer"
+    true
+    (Sol_cli_string.contains ~needle:"already owns" message)
 ;;
 
 let test_local_shape_leaves_the_transport_to_the_renderer () =

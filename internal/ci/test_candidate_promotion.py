@@ -341,6 +341,14 @@ def test_teardown_evidence() -> None:
         "incomplete required class universe",
     )
 
+    for provider in ("aws", "gcp"):
+        incomplete = evidence_document(provider)
+        incomplete["classes"] = [row for row in incomplete["classes"] if row["class"] != "kafka-secret"]
+        incomplete["required_classes"] = [name for name in incomplete["required_classes"] if name != "kafka-secret"]
+        document = verdict(**{provider: teardown(provider, document=incomplete)})
+        refuses_with(f"{provider}: omission of Kafka authority cannot shrink release requirements", document,
+                     "incomplete required class universe")
+
     reclassified = evidence_document("aws")
     disposable = next(row for row in reclassified["classes"] if row["expectation"] == "absent")
     disposable["expectation"] = "present"

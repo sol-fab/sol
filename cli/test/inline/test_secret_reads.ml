@@ -55,11 +55,6 @@ if [ "$verb" = "patch" ]; then
     patch-not-found)
       echo 'Error from server (NotFound): secrets "charge-svc-secrets" not found' >&2
       exit 1 ;;
-    patch-create-race)
-      if [ "$(grep -c 'patch-args' %s)" = "1" ]; then
-        echo 'Error from server (NotFound): secrets "charge-svc-secrets" not found' >&2
-        exit 1
-      fi ;;
   esac
   exit 0
 fi
@@ -111,8 +106,8 @@ if [ "$verb" = "get" ]; then
       fi
       exit 0 ;;
     externalsecrets)
-      if [ "$mode" = "platform-collision" ] && [ "$namespace" = "notifications" ]; then
-        printf 'owner\tsol-secrets\n'
+      if [ "$mode" = "eso-target-collision" ] && [ "$namespace" = "notifications" ]; then
+        printf 'owner\tprod-kafka-creds\n'
       fi
       exit 0 ;;
     secrets)
@@ -175,8 +170,8 @@ if [ "$verb" = "get" ]; then
         echo '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"sol-secrets","namespace":"payments","resourceVersion":"1"},"data":{"EXISTING":"ZXhpc3Rpbmc="}}'
         exit 0
       fi
-      if [ "$mode" = "runtime-valid" ]; then
-        echo '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"sol-secrets","namespace":"payments","resourceVersion":"1"},"data":{"POSTGRES_URL":"cG9zdGdyZXM6Ly9kYiJ9"}}'
+      if [ "$mode" = "kafka-inputs-missing" ]; then
+        echo '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"prod-kafka-creds","namespace":"payments","resourceVersion":"1"},"data":{"OTHER_KEY":"c2VjcmV0"}}'
         exit 0
       fi
       if [ "$mode" = "owned-unit" ]; then
@@ -198,6 +193,13 @@ if [ "$verb" = "get" ]; then
     *) exit 0 ;;
   esac
 fi
+if [ "$verb" = "apply" ] || [ "$verb" = "create" ]; then
+  prev=""
+  for a in "$@"; do
+    if [ "$prev" = "-f" ]; then cat "$a" >> %s.manifests; fi
+    prev="$a"
+  done
+fi
 if [ "$verb" = "create" ]; then
   # The namespace is created with a different manifest prefix; only the Secret's own create
   # makes the object exist for a later read.
@@ -212,19 +214,11 @@ if [ "$verb" = "create" ]; then
   esac
   exit 0
 fi
-if [ "$verb" = "apply" ]; then
-  prev=""
-  for a in "$@"; do
-    if [ "$prev" = "-f" ]; then cat "$a" >> %s.manifests; fi
-    prev="$a"
-  done
-fi
 exit 0
 |}
     log
     log
     mode_file
-    log
     log
     log
     log
@@ -327,23 +321,25 @@ let test_verify_rejects_an_absent_secret () =
 (* 2b: `verify_runtime_secret` (the substrate `POSTGRES_URL` check) is deleted; see the
    note beside its former test registration. *)
 
-let test_platform_set_writes_only_the_runtime_secret () =
-  with_fake_kubectl ~mode:"present" (fun ~calls ~manifests:_ ->
+let test_target_set_writes_only_the_named_secret () =
+  with_fake_kubectl ~mode:"owned-unit" (fun ~calls ~manifests:_ ->
     match
-      Sol_cli_secret.set_platform_key
+      Sol_cli_secret.set_target_keys
         ~ctx
         ~namespaces:[ "payments"; "orders" ]
-        ~key:"KAFKA_SASL_PASSWORD"
-        ~value:"kafka-sasl"
+        ~secret_name:"charge-svc-secrets"
+        ~values:[ "KAFKA_SASL_PASSWORD", "kafka-sasl" ]
     with
-    | Error message -> Windtrap.failf "platform secret set failed: %s" message
+    | Error message -> Windtrap.failf "target secret set failed: %s" message
     | Ok _ ->
       let log = calls () in
       Windtrap.equal
         Windtrap.bool
-        ~msg:"the platform Secret is patched by name"
+        ~msg:"the named Secret is patched"
         true
-        (Sol_cli_string.contains ~needle:"patch secret sol-secrets -n payments" log);
+        (Sol_cli_string.contains
+           ~needle:"patch secret charge-svc-secrets -n payments"
+           log);
       Windtrap.equal
         Windtrap.bool
         ~msg:"and names only the key being written"
@@ -356,49 +352,64 @@ let test_platform_set_writes_only_the_runtime_secret () =
         (Sol_cli_string.contains ~needle:"/data/EXISTING" log);
       Windtrap.equal
         Windtrap.bool
-        ~msg:"application Secrets are not written"
+        ~msg:"another unit's Secret is not written"
         false
-        (Sol_cli_string.contains ~needle:"charge-svc-secrets" log))
+        (Sol_cli_string.contains ~needle:"other-svc-secrets" log))
 ;;
 
-(* 2b: POSTGRES_URL is no longer a platform Job input, so the shared-scope writer
-   that used to carry it must refuse it and the Kafka credential must still work. *)
-let test_platform_set_refuses_postgres_url () =
-  match
-    Sol_cli_secret.set_platform_key
-      ~ctx
-      ~namespaces:[ "payments" ]
-      ~key:"POSTGRES_URL"
-      ~value:"postgres://platform-db"
-  with
-  | Ok _ -> Windtrap.fail "POSTGRES_URL must no longer be a platform Job input"
-  | Error message ->
-    Windtrap.equal
-      Windtrap.bool
-      ~msg:"the refusal names the class-Secret replacement"
-      true
-      (Sol_cli_string.contains ~needle:"not a supported Sol platform Job secret" message)
-;;
-
-let test_platform_preflight_checks_all_namespaces_before_secret_writes () =
-  with_fake_kubectl ~mode:"platform-collision" (fun ~calls:_ ~manifests ->
+let test_read_secret_key_decodes_the_projection () =
+  with_fake_kubectl ~mode:"present" (fun ~calls:_ ~manifests:_ ->
     match
-      Sol_cli_secret.verify_platform_secret_destinations
+      Sol_cli_secret.read_secret_key
         ~ctx
-        ~namespaces:[ "payments"; "notifications" ]
+        ~namespace:"payments"
+        ~secret_name:Sol_cli_manifest.runtime_secret_name
+        ~key:"EXISTING"
     with
-    | Ok () -> Windtrap.fail "an ExternalSecret collision must fail preflight"
+    | Error message -> Windtrap.fail message
+    | Ok value ->
+      Windtrap.equal Windtrap.string ~msg:"decodes the stored value" "existing" value;
+      (match
+         Sol_cli_secret.read_secret_key
+           ~ctx
+           ~namespace:"payments"
+           ~secret_name:Sol_cli_manifest.runtime_secret_name
+           ~key:"ABSENT"
+       with
+       | Ok _ -> Windtrap.fail "an absent key must not read as a value"
+       | Error message ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"names the absent key"
+           true
+           (Sol_cli_string.contains ~needle:"has no key ABSENT" message)))
+;;
+
+let test_target_projection_refuses_an_eso_writer () =
+  with_fake_kubectl ~mode:"eso-target-collision" (fun ~calls ~manifests ->
+    match
+      Sol_cli_secret.set_target_keys
+        ~ctx
+        ~namespaces:[ "notifications" ]
+        ~secret_name:"prod-kafka-creds"
+        ~values:[ "KAFKA_SASL_PASSWORD", "credential" ]
+    with
+    | Ok _ -> Windtrap.fail "a competing ESO writer was accepted"
     | Error message ->
       Windtrap.equal
         Windtrap.bool
-        ~msg:"names the conflicting shared Secret"
         true
         (Sol_cli_string.contains
            ~needle:"ExternalSecret already targets this object"
            message);
       Windtrap.equal
         Windtrap.bool
-        ~msg:"preflight writes no shared Secret before discovering the collision"
+        ~msg:"no destination write"
+        false
+        (Sol_cli_string.contains ~needle:"patch-args" (calls ()));
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"no Secret create"
         false
         (Sol_cli_string.contains ~needle:"kind: Secret" (manifests ())))
 ;;
@@ -673,11 +684,13 @@ let test_unit_set_writes_only_its_unit_secret () =
 
 let test_contract_readiness_names_missing_tls_job_input () =
   match
-    with_fake_kubectl ~mode:"runtime-valid" (fun ~calls:_ ~manifests:_ ->
-      Sol_cli_secret.verify_runtime_secret_keys
+    with_fake_kubectl ~mode:"kafka-inputs-missing" (fun ~calls:_ ~manifests:_ ->
+      Sol_cli_secret.verify_required_keys
         ~ctx
         ~namespace:"payments"
-        ~required_keys:[ "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ])
+        ~secret_name:"prod-kafka-creds"
+        ~required_keys:[ "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ]
+        ())
   with
   | Ok () ->
     Windtrap.fail "a runtime Secret without Kafka inputs passed contract readiness"
@@ -690,20 +703,21 @@ let test_contract_readiness_names_missing_tls_job_input () =
        && Sol_cli_string.contains ~needle:"KAFKA_SSL_CA_CERT" message)
 ;;
 
-let test_tls_contract_job_refuses_before_submission_without_platform_inputs () =
+let test_tls_contract_job_refuses_before_submission_without_delivered_inputs () =
   with_fake_kubectl ~mode:"missing" (fun ~calls ~manifests:_ ->
     match
       Sol_cli_contract.reconcile_in_destination
         ~ctx
-        ~platform_shape:Sol_cli_profile.Durable
+        ~kafka:(Sol_cli_resource_binding.Managed_kafka "events")
+        ~secret_name:(Some "prod-aws-us-east-1-kafka-creds")
         ~namespace:"payments"
         ~image:"contract-image"
     with
-    | Ok () -> Windtrap.fail "TLS contract Job started without platform Kafka inputs"
+    | Ok () -> Windtrap.fail "TLS contract Job started without delivered Kafka inputs"
     | Error message ->
       Windtrap.equal
         Windtrap.bool
-        ~msg:"names the required Kafka platform values"
+        ~msg:"names the required Kafka delivered values"
         true
         (Sol_cli_string.contains ~needle:"KAFKA_SASL_PASSWORD" message
          && Sol_cli_string.contains ~needle:"KAFKA_SSL_CA_CERT" message);
@@ -726,14 +740,16 @@ let%test "verify: an absent Secret fails" = test_verify_rejects_an_absent_secret
    now reads the target's DML class Secret, and the substrate no longer owns the operator's
    copy of the master. *)
 
-let%test "scope: platform writes only the shared Job Secret" =
-  test_platform_set_writes_only_the_runtime_secret ()
+let%test "scope: a target write touches only the named Secret" =
+  test_target_set_writes_only_the_named_secret ()
 ;;
 
-let%test "2b: platform refuses POSTGRES_URL" = test_platform_set_refuses_postgres_url ()
+let%test "verify: a delivered Secret key is decoded, and an absent key is named" =
+  test_read_secret_key_decodes_the_projection ()
+;;
 
-let%test "scope: platform secret destinations preflight as a target" =
-  test_platform_preflight_checks_all_namespaces_before_secret_writes ()
+let%test "scope: target credential projection refuses a competing ESO writer" =
+  test_target_projection_refuses_an_eso_writer ()
 ;;
 
 let%test "scope: unit writes only the selected unit Secret" =
@@ -747,8 +763,8 @@ let%test "verify: TLS contract readiness checks both Kafka Job inputs" =
   test_contract_readiness_names_missing_tls_job_input ()
 ;;
 
-let%test "verify: TLS contract Job requires platform inputs before submit" =
-  test_tls_contract_job_refuses_before_submission_without_platform_inputs ()
+let%test "verify: TLS contract Job requires its delivered inputs before submit" =
+  test_tls_contract_job_refuses_before_submission_without_delivered_inputs ()
 ;;
 
 let%test "external Secret status reports readiness and keys" =
@@ -1178,10 +1194,8 @@ let%test "1392: a class output Secret owned by its ExternalSecret passes" =
   test_class_output_owned_by_its_external_secret_passes ()
 ;;
 
-(* #1426: the other half of the lost update is an object that does not exist yet. `kubectl
-   patch` fails `NotFound` on it, so the write creates; a concurrent writer that created it
-   first races the create to `AlreadyExists`, and the patch is retried against the winner's
-   object — which merges this key rather than overwriting the winner's. *)
+(* #1426: an absent Secret is created first. A concurrent creator is re-read
+   and ownership checked before a key-scoped patch, preserving its other keys. *)
 let test_absent_secret_is_created () =
   with_fake_kubectl ~mode:"patch-not-found" (fun ~calls ~manifests:_ ->
     match
@@ -1196,9 +1210,14 @@ let test_absent_secret_is_created () =
     | Ok _ ->
       Windtrap.equal
         Windtrap.bool
-        ~msg:"after the patch misses, the Secret is created"
+        ~msg:"the absent Secret is created"
         true
-        (Sol_cli_string.contains ~needle:"create " (calls ())))
+        (Sol_cli_string.contains ~needle:"create " (calls ()));
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"no unguarded patch of a concurrent creator"
+        false
+        (Sol_cli_string.contains ~needle:"patch-args" (calls ())))
 ;;
 
 let test_create_race_retries_the_patch () =
@@ -1222,14 +1241,12 @@ let test_create_race_retries_the_patch () =
       in
       Windtrap.equal
         Windtrap.bool
-        ~msg:
-          "the racing create is followed by exactly one retried patch (Ok proves it won)"
+        ~msg:"the racing create is followed by one guarded patch"
         true
-        (count "patch-args" = 2);
+        (count "patch-args" = 1);
       Windtrap.equal
         Windtrap.bool
-        ~msg:
-          "the retry rebuilds from a fresh read, so it carries the identity precondition"
+        ~msg:"the fresh read supplies the identity precondition"
         true
         (count "/metadata/labels/app.kubernetes.io~1managed-by" = 1))
 ;;
@@ -1258,7 +1275,7 @@ let test_rewriting_the_same_value_is_a_no_op () =
         (Sol_cli_string.contains ~needle:"patch-args" (calls ())))
 ;;
 
-let%test "1426: a write to an absent Secret creates it after the patch misses" =
+let%test "1426: an absent Secret is created without an unguarded patch" =
   test_absent_secret_is_created ()
 ;;
 

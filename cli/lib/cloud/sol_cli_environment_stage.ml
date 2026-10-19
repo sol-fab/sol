@@ -157,6 +157,7 @@ type prepared =
   ; infra_dir : string
   ; platform_dir : string
   ; inputs : Sol_cli_cloud_wiring.terraform_inputs
+  ; kafka : Sol_cli_resource_binding.kafka
   }
 
 let prepare_config ~strict ~assets ~config ~var_file ~vars () =
@@ -198,6 +199,11 @@ let prepare_config ~strict ~assets ~config ~var_file ~vars () =
     Sol_cli_config.platform_shape config
     |> Result.map_error (fun message -> Refused message)
   in
+  let* kafka =
+    Sol_cli_resource_binding.resolve_kafka config
+    |> Result.map_error (fun message -> Refused message)
+  in
+  let kafka = Sol_cli_resource_binding.kafka_for_shape ~shape:platform_shape kafka in
   let* cloud_target =
     Sol_cli_cloud_lifecycle.cloud_target ~platform_shape target_cfg
     |> Result.map_error (fun message -> Refused message)
@@ -221,6 +227,7 @@ let prepare_config ~strict ~assets ~config ~var_file ~vars () =
           ~role:Sol_cli_platform_assets.Platform
           ~backend_config:platform_backend
     ; inputs = { Sol_cli_cloud_wiring.var_files = Option.to_list var_file; vars }
+    ; kafka
     }
 ;;
 
@@ -362,6 +369,7 @@ let apply_config
   reconcile_ownership_at ~provider ~target_cfg ~infra_dir ~var_files ~vars;
   let* deps =
     Sol_cli_cloud_wiring.apply_deps
+      ~kafka:prepared.kafka
       ~assets
       ~confirm_ecr_removal:(Option.value confirm_ecr_removal ~default:false)
       ~run_log

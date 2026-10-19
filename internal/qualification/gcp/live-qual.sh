@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 trap '' PIPE
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -215,34 +216,6 @@ cloud_mutated() {
     grep -qF 'lifecycle phase: CloudBootstrap' "$LOG_DIR"/cloud-apply*.log 2>/dev/null
 }
 
-platform_credential_missing() {
-  grep -qF 'the platform install cannot start' "$LOG_DIR/cloud-apply.log" 2>/dev/null &&
-    grep -qF 'redpanda-users' "$LOG_DIR/cloud-apply.log" 2>/dev/null
-}
-
-supply_platform_credential() {
-  local source
-  if [ -n "${KAFKA_SASL_PASSWORD:-}" ]; then
-    source="operator-supplied"
-  else
-    source="generated-for-this-run"
-    KAFKA_SASL_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 20)"
-  fi
-  if ! kubectl create secret generic redpanda-users -n redpanda \
-      --from-literal="users.txt=sol-workloads:$KAFKA_SASL_PASSWORD:SCRAM-SHA-256" \
-      >"$LOG_DIR/platform-credential.log" 2>&1; then
-    say "  could not create the platform's documented prerequisite Secret redpanda/redpanda-users"
-    say "  (see $LOG_DIR/platform-credential.log); the harness stands in for the operator and will not proceed without it"
-    return 1
-  fi
-  {
-    printf 'platform_credential: redpanda/redpanda-users\n'
-    printf 'platform_credential_username: sol-workloads\n'
-    printf 'platform_credential_source: %s\n' "$source"
-    printf 'platform_credential_value: never recorded\n'
-  } >>"$LOG_DIR/prerequisites.txt"
-  say "supplied the documented pre-platform Secret redpanda/redpanda-users ($source); its value is never recorded"
-}
 
 owns_target_file() {
   if [ ! -s "$TARGET_FILE" ]; then return 0; fi
@@ -290,31 +263,6 @@ $TARGET_ENV:
         provisioner_impersonator: $IMPERSONATOR
 
       destroy_retention: none
-
-      # The durable shape's Kafka is authenticated, so each unit the row includes needs these
-      # two declared; the platform supplies them, so the authority is sol. The same
-      # declaration the example's own durable target makes.
-      secrets:
-        payments/orders_svc:
-          KAFKA_SASL_PASSWORD:
-            authority: sol
-          KAFKA_SSL_CA_CERT:
-            authority: sol
-        comms/fulfilment_worker:
-          KAFKA_SASL_PASSWORD:
-            authority: sol
-          KAFKA_SSL_CA_CERT:
-            authority: sol
-        demo_ts/order_svc:
-          KAFKA_SASL_PASSWORD:
-            authority: sol
-          KAFKA_SSL_CA_CERT:
-            authority: sol
-        demo_ts/fulfillment_worker:
-          KAFKA_SASL_PASSWORD:
-            authority: sol
-          KAFKA_SSL_CA_CERT:
-            authority: sol
 
       resources:
         app_db:
@@ -381,6 +329,7 @@ INVENTORY_CLASSES=(
   "disks|absent"
   "forwarding-rules|absent"
   "artifact-registry|absent"
+  "kafka-secret|absent"
   "service-account-provisioner|absent"
   "service-account-loki|absent"
   "service-account-thanos|absent"
@@ -768,6 +717,13 @@ attribute_disks() {
   return 0
 }
 
+attribute_kafka_secret() {
+  local class="$1" out="$2"
+  inventory_json_rows "$out" \
+    'type == "array" and all(.[]; (.name | type == "string") and (.name | test("^projects/[^/]+/secrets/[^/]+$")))' \
+    '.[] | select((.name | split("/") | last) == "sol-kafka-'"$CLUSTER"'") | .name'
+}
+
 attribute_peerings() {
   local class="$1" out="$2" name network rows
   rows="$(inventory_json_rows "$out" \
@@ -958,6 +914,10 @@ inventory() {
       gcloud compute forwarding-rules list --project "$PROJECT" --format=json
     provider_describe artifact-registry "$CLUSTER" \
       gcloud artifacts repositories describe "$CLUSTER" --location "$REGION" --project "$PROJECT" --format='value(name)'
+    # The parent secret remains residue even if every version is disabled or
+    # pending destruction. Successful parent absence covers its versions.
+    provider_enumerate kafka-secret attribute_kafka_secret \
+      gcloud secrets list --project "$PROJECT" --format=json
     probe_service_account service-account-provisioner "$GCP_PROVISIONER_SA"
     provider_describe service-account-loki "$CLUSTER-loki@$PROJECT.iam.gserviceaccount.com" \
       gcloud iam service-accounts describe "$CLUSTER-loki@$PROJECT.iam.gserviceaccount.com" --project "$PROJECT" --format='value(email)'
@@ -1175,13 +1135,9 @@ capture_state_object() {
   local out="$LOG_DIR/state/$name.tfstate"
   mkdir -p "$LOG_DIR/state"
   if gcloud storage cat "gs://$STATE_BUCKET/$key" --project "$PROJECT" \
-      >"$out" 2>"$LOG_DIR/state/$name.stderr"; then
-    if [ "$(head -c2 "$out" | od -An -tx1 | tr -d ' \n')" = "1f8b" ]; then
-      gzip -dc "$out" >"$out.json" 2>/dev/null || true
-      say "  state $name: captured (gzip); readable copy $name.tfstate.json"
-    else
-      say "  state $name: captured"
-    fi
+      2>"$LOG_DIR/state/$name.stderr" | \
+      python3 "$ROOT/internal/qualification/state-evidence.py" >"$out"; then
+    say "  state $name: captured (credential-free metadata only)"
   elif grep -qiE 'not.?found|404|No URLs matched|No such object' "$LOG_DIR/state/$name.stderr"; then
     say "  state $name: no object (the root has never been applied) — recorded as absent"
   else
@@ -1378,14 +1334,7 @@ phase_cloud() {
   local deploy_rc=0
   bootstrap_deploy cloud-apply || deploy_rc=$?
   if cloud_mutated; then CLOUD_APPLIED=1; fi
-  if [ "$deploy_rc" != 0 ] && platform_credential_missing; then
-    say "the whole-target deploy stopped at the platform's documented credential prerequisite; supplying it and resuming"
-    if supply_platform_credential; then
-      deploy_rc=0
-      bootstrap_deploy cloud-apply-resume || deploy_rc=$?
-      if cloud_mutated; then CLOUD_APPLIED=1; fi
-    fi
-  fi
+
   # The whole-target deploy reconciles the durable installation inline and is expected to
   # stop at the workloads whose digests the app phase has not published yet: their Artifact
   # Registry repositories did not exist when this phase began. What decides the phase is
@@ -1661,8 +1610,7 @@ app_helpers() {
 }
 
 app_postgres_url() {
-  local state="$LOG_DIR/state/cloud.tfstate.json"
-  [ -s "$state" ] || state="$LOG_DIR/state/cloud.tfstate"
+  local state="$LOG_DIR/state/cloud.tfstate"
   [ -s "$state" ] || return 1
   jq -r '.outputs.postgres_url.value // empty' "$state" 2>/dev/null
 }
@@ -1700,6 +1648,15 @@ app_database_declaration() {
 
 app_database_field() {
   app_database_declaration | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1
+}
+
+app_verify_kafka_delivery() {
+  local state="$LOG_DIR/state/cloud.tfstate" public
+  public="$(jq -ce '.outputs.kafka_authority.value | select(type == "object")' "$state")" || return 1
+  printf '%s' "$public" | python3 "$ROOT/internal/qualification/kafka-delivery.py" \
+    --provider gcp --cluster "$CLUSTER" --region "$REGION" --project "$PROJECT" \
+    --consumer pluto-payments/orders-svc --consumer pluto-comms/fulfilment-worker \
+    $(app_namespaces) >"$LOG_DIR/kafka-delivery.json"
 }
 
 app_verify_database_delivery() {
@@ -1740,133 +1697,7 @@ app_verify_database_delivery() {
   say "app: the deploy delivered the database as $name-ddl-creds / $name-dml-creds; the consumer's unit Secret carries no master copy"
 }
 
-app_read_platform_password() {
-  local password
-  if [ -n "${KAFKA_SASL_PASSWORD:-}" ]; then
-    printf '%s' "$KAFKA_SASL_PASSWORD"
-    return 0
-  fi
-  password="$(kubectl get secret redpanda-users -n redpanda -o jsonpath='{.data.users\.txt}' 2>/dev/null |
-    base64 -d 2>/dev/null | sed -n 's/^sol-workloads:\([^:]*\):.*/\1/p' | head -1)"
-  [ -n "$password" ] || return 1
-  printf '%s' "$password"
-}
 
-app_read_kafka_ca() {
-  kubectl get secret redpanda-default-cert -n redpanda -o jsonpath='{.data.ca\.crt}' 2>/dev/null |
-    base64 -d 2>/dev/null
-}
-
-# The supported `sol secret set` surface is positional — `TARGET ADDRESS`, where ADDRESS is
-# `@platform/<KEY>` for a Sol Job input (the Kafka credentials of a TLS target) or
-# `<domain>/<unit>/<KEY>` for one unit's secret. The pre-2b `--target`/`--domain` flags are gone.
-# The value must arrive with `--from-stdin`: the CLI does not auto-detect a pipe and otherwise
-# demands a terminal (#1432).
-app_unit_addresses() {
-  local service path
-  for service in $(app_services); do
-    if path="$(app_context_path "$service")"; then
-      printf '%s\n' "${path#app/}"
-    fi
-  done | sort -u
-}
-
-app_secret_set_unit() {
-  local key="$1" address
-  for address in $(app_unit_addresses); do
-    if ! run "app-secret-$key-$(printf '%s' "$address" | tr '/' '-')" bash -c \
-      "printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$TARGET' '$address/$key' --from-stdin"; then
-      return 1
-    fi
-  done
-}
-
-app_secret_set_platform() {
-  local key="$1"
-  if ! run "app-secret-platform-$key" bash -c \
-    "printf '%s' \"\$SOL_SECRET_VALUE\" | exec '$SOL' secret set '$TARGET' '@platform/$key' --from-stdin"; then
-    return 1
-  fi
-}
-
-# Production secrets are operator-supplied: Sol's deploy verifies the Kafka inputs a TLS
-# contract Job declares and fails closed. The database is *not* one of them: the deploy
-# delivers it from the target's binding (2b), so the harness neither holds nor sets a
-# POSTGRES_URL.
-#
-# The durable target's platform publishes the broker credential Secret, and the row must supply
-# the Kafka inputs the deploy requires. An absent Secret is therefore a missing prerequisite,
-# not a reason to skip the authenticated transport; and a read that fails without saying
-# "not found" cannot establish absence (permissions, connectivity), so it fails closed too. An
-# unreadable read is never an absent one.
-app_broker_credential_presence() {
-  local out="$LOG_DIR/broker-credential.out" err="$LOG_DIR/broker-credential.stderr"
-  mkdir -p "$LOG_DIR"
-  if kubectl get secret redpanda-users -n redpanda -o name >"$out" 2>"$err"; then
-    printf 'present'
-  elif grep -qiE '(not[_. -]?found|does not exist|was not found|404|No URLs matched)' "$err" "$out"; then
-    printf 'absent'
-  else
-    printf 'unobservable'
-  fi
-}
-
-app_supply_secrets() {
-  local password ca presence
-  presence="$(app_broker_credential_presence)"
-  case "$presence" in
-    present) : ;;
-    absent)
-      {
-        printf 'platform_secret_keys: none (redpanda/redpanda-users is absent)\n'
-        printf 'secret_values: never recorded\n'
-        printf 'refused: the durable shape requires the platform broker credential Secret redpanda/redpanda-users, which is absent\n'
-      } >>"$LOG_DIR/prerequisites.txt"
-      say "app: refusing: the durable target's platform requires the broker credential Secret redpanda/redpanda-users, and it is absent; the units read the authenticated Kafka transport, so the deploy cannot proceed without it. Create it and re-run:"
-      say "       kubectl create secret generic redpanda-users -n redpanda --from-literal=users.txt=\"sol-workloads:<password>:SCRAM-SHA-256\""
-      return 1
-      ;;
-    unobservable)
-      {
-        printf 'platform_secret_keys: unobservable (the redpanda-users read failed without saying not-found)\n'
-        printf 'secret_values: never recorded\n'
-        printf 'refused: could not establish whether redpanda/redpanda-users exists; an unreadable read is not an absent one\n'
-      } >>"$LOG_DIR/prerequisites.txt"
-      say "app: refusing: could not establish whether redpanda/redpanda-users exists, and will not read a failed check as an absent one: $(tr '\n' ' ' <"$LOG_DIR/broker-credential.stderr" 2>/dev/null | cut -c1-200)"
-      say "       resolve the kubectl read, then re-run the app phase"
-      return 1
-      ;;
-  esac
-  if ! password="$(app_read_platform_password)"; then
-    say "app: could not establish KAFKA_SASL_PASSWORD: set it in the environment, or ensure redpanda/redpanda-users exists"
-    return 1
-  fi
-  ca="$(app_read_kafka_ca)"
-  if [ -z "$ca" ]; then
-    say "app: could not read the Redpanda CA from redpanda/redpanda-default-cert"
-    return 1
-  fi
-  export SOL_SECRET_VALUE="$password"
-  app_secret_set_platform KAFKA_SASL_PASSWORD || return 1
-  app_secret_set_unit KAFKA_SASL_PASSWORD || return 1
-  export SOL_SECRET_VALUE="$ca"
-  app_secret_set_platform KAFKA_SSL_CA_CERT || return 1
-  app_secret_set_unit KAFKA_SSL_CA_CERT || return 1
-  unset SOL_SECRET_VALUE
-  {
-    printf 'platform_secret_keys: KAFKA_SASL_PASSWORD KAFKA_SSL_CA_CERT\n'
-    printf 'secret_values: never recorded\n'
-    printf 'database_delivery: delivered by the deploy from the target binding; no operator copy\n'
-    # The row supplies the platform credential and applies migrations before its steady-state
-    # deploy, so it does not stage the refusal each gate produces. The gates are scoped out of
-    # what this row records as claimed, not bypassed by it; the migration gate is
-    # shape-independent (#1468) and the required-secret stop follows the durable shape's
-    # authenticated Kafka.
-    printf 'scoped_out: "Sol refuses absent operator secrets" (this row supplies the credential before its steady-state deploy; #1403)\n'
-    printf 'scoped_out: "A deploy refuses to move workloads against an unapplied migration" (this row applies migrations before its steady-state deploy)\n'
-  } >>"$LOG_DIR/prerequisites.txt"
-  say "app: supplied the Kafka platform secrets through sol secret set; the database is delivered by the deploy"
-}
 
 app_k8s_name() { printf '%s' "$1" | tr '_' '-'; }
 
@@ -1916,28 +1747,6 @@ $TARGET_ENV:
       kube_context: $(app_kube_context)
 
       destroy_retention: none
-
-      secrets:
-        payments/orders_svc:
-          KAFKA_SASL_PASSWORD:
-            authority: sol
-          KAFKA_SSL_CA_CERT:
-            authority: sol
-        comms/fulfilment_worker:
-          KAFKA_SASL_PASSWORD:
-            authority: sol
-          KAFKA_SSL_CA_CERT:
-            authority: sol
-        demo_ts/order_svc:
-          KAFKA_SASL_PASSWORD:
-            authority: sol
-          KAFKA_SSL_CA_CERT:
-            authority: sol
-        demo_ts/fulfillment_worker:
-          KAFKA_SASL_PASSWORD:
-            authority: sol
-          KAFKA_SSL_CA_CERT:
-            authority: sol
 
       resources:
         app_db:
@@ -2556,20 +2365,15 @@ phase_app() {
     finalise_bundle
     return 1
   fi
-  say "app-secrets-bootstrap"
-  # The durable target's deploy refuses at its required-secret stop before it applies any
-  # workload (#1403), after establishing the namespaces and their scoped RBAC the next steps
-  # need. The exit is recorded, the platform credential and the unit secrets are supplied
-  # below, and the steady-state deploy then resumes.
+  # Establish namespaces/database setup; a first deployment may stop at its
+  # migration gate. Any other failure is not an accepted bootstrap outcome.
   if ! run app-deploy-bootstrap "$SOL" deploy "$TARGET" --registry "$(app_registry)" $image_ref_args; then
-    say "app: the bootstrap deploy did not complete; a fresh durable target refuses at its required-secret stop until the operator credentials exist, so they are supplied next"
+    grep -Fq 'the required migration set is not applied' "$LOG_DIR/app-deploy-bootstrap.log" || return 1
   fi
-  if ! app_supply_secrets; then
-    capture_app_evidence
-    freeze_evidence
-    finalise_bundle
-    return 1
-  fi
+  bash "$ROOT/internal/qualification/application-secret-refusal.sh" "$SOL" \
+    "$(app_kube_context)" "$(head -1 "$LOG_DIR/app-image-refs.txt" | cut -d= -f2-)" \
+    "$LOG_DIR/application-secret-refusal.log" >>"$LOG_DIR/prerequisites.txt" || return 1
+  printf 'scoped_out: "A deploy refuses to move workloads against an unapplied migration" (this row applies migrations before its steady-state deploy)\n' >>"$LOG_DIR/prerequisites.txt"
   # The migration Job is submitted by the deploy identity, but its CA is read by
   # a separate read-only identity. Record both authorities before the migration
   # step so the shared launcher can validate the receipt without conflating them.
@@ -2609,7 +2413,7 @@ phase_app() {
     finalise_bundle
     return 1
   fi
-  if ! app_verify_database_delivery; then
+  if ! app_verify_kafka_delivery || ! app_verify_database_delivery; then
     capture_app_evidence
     freeze_evidence
     finalise_bundle
@@ -2802,12 +2606,11 @@ phases
             installation inline (its first-run offer is confirmed through `script`),
             applies the cluster and platform roots, and stops at the workloads whose
             digests the app phase has not published yet. The run starts the
-            run-kubeconfig waiter and the API-readiness probe around it. When it stops at the
-            pre-platform `redpanda-users` credential, create the Secret with the
-            run's generated or operator-supplied `sol-workloads` SCRAM credential,
-            record that it was supplied (never the value) in prerequisites.txt, and
-            re-run `sol deploy` to resume -- the same ordered steps the
-            production bootstrap guide gives the operator. On failure it captures the
+            run-kubeconfig waiter and the API-readiness probe around it. If it fails to establish
+            Kafka authority or initialization, the phase fails rather than supplying a
+            credential on Sol's behalf. Sol owns provider-backed generation and delivery;
+            the app phase compares the authority, broker input and consumer projections.
+            On failure it captures the
             Kubernetes evidence, the cert-manager discriminator and the provider
             inventory before any teardown. On success it continues to the delegation
             hand-off and keeps the substrate for the TLS rows.

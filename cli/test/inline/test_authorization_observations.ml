@@ -34,37 +34,16 @@ let aws_target : Sol_cli_config.target =
 ;;
 
 let gcp_target : Sol_cli_config.target =
-  { name = "prod/gcp/us-central1"
-  ; env = "prod"
+  { aws_target with
+    name = "prod/gcp/us-central1"
   ; provider = Sol_cli_provider.Gcp
   ; region = "us-central1"
-  ; registry = None
-  ; base_domain = None
-  ; cluster_issuer = None
-  ; letsencrypt_email = None
-  ; cluster_name = Some "acme-prod"
-  ; kube_context = None
-  ; kubeconfig = None
-  ; terraform_var_file = None
-  ; observability_backend = None
-  ; destroy_retention = None
-  ; alert_receiver_type = None
-  ; alert_receiver_url = None
-  ; alert_owner = None
-  ; alert_runbook_url = None
-  ; state_bucket = None
-  ; cluster_endpoint_cidr = None
-  ; dns_zone_ownership = None
-  ; node_failure_headroom_nodes = None
-  ; profile = None
-  ; shape = Some Sol_cli_profile.Local
   ; provider_fields =
       [ ( "gcp"
         , [ "project_id", "acme-project"
           ; "reconciler_trust_principal", "user:ci@example.test"
           ] )
       ]
-  ; secret_authorities = []
   }
 ;;
 
@@ -573,4 +552,321 @@ let%test "authorization: malformed STS credentials do not escape through JSON di
         false
         (Sol_cli_string.contains ~needle:canary message)
     | Ok _ -> Windtrap.fail "malformed STS credentials must fail")
+;;
+
+let%test
+    "Kafka authority: AWS missing, pending deletion, unreadable and wrong identity \
+     remain distinct"
+  =
+  let name = "sol-kafka-acme-prod" in
+  List.iter
+    (fun (status, stdout, stderr, expected) ->
+       let script =
+         Printf.sprintf
+           {|#!/bin/sh
+case "$*" in
+  *"sts get-caller-identity"*) printf '111122223333\n' ;;
+  *"secretsmanager describe-secret --secret-id sol-kafka-acme-prod --region us-east-1 --query {name:Name,deleted:DeletedDate,stages:VersionIdsToStages} --output json"*)
+    printf '%%s' %s
+    printf '%%s' %s >&2
+    exit %d
+    ;;
+esac
+|}
+           (Filename.quote stdout)
+           (Filename.quote stderr)
+           status
+       in
+       with_fake_command "aws" script (fun () ->
+         let observations =
+           Sol_cli_aws_absence.observations aws_target ~cluster_name:"acme-prod"
+         in
+         match find_class "Kafka credential secret" observations, expected with
+         | Some (Sol_cli_absence.Present p), `Present ->
+           Windtrap.equal (Windtrap.list Windtrap.string) [ name ] p.found
+         | Some (Sol_cli_absence.Absent _), `Absent -> ()
+         | Some (Sol_cli_absence.Unobservable _), `Unknown -> ()
+         | _ ->
+           Windtrap.fail "the exact-name authority read produced an incorrect verdict"))
+    [ (* A scheduled deletion still permits DescribeSecret's Name read. *)
+      0, {|{"name":"sol-kafka-acme-prod","deleted":1700000000,"stages":{}}|}, "", `Present
+    ; ( 254
+      , ""
+      , "An error occurred (ResourceNotFoundException) when calling the DescribeSecret \
+         operation"
+      , `Absent )
+    ; 254, "", "AccessDeniedException", `Unknown
+    ; 254, "", "region not found", `Unknown
+    ; 0, "", "", `Unknown
+    ; 0, {|{"name":"another-target"}|}, "", `Unknown
+    ; 0, {|{"name":"sol-kafka-acme-prod"}|}, "WARNING: incomplete response", `Unknown
+    ]
+;;
+
+let%test
+    "Kafka authority: independent observations authorize only a genuinely absent native \
+     installation"
+  =
+  let script =
+    {|#!/bin/sh
+case "$*" in
+  *"sts get-caller-identity"*) printf '111122223333\n' ;;
+  *"secretsmanager describe-secret"*)
+    printf 'An error occurred (ResourceNotFoundException) when calling the DescribeSecret operation' >&2
+    exit 254 ;;
+esac
+|}
+  in
+  with_fake_command "aws" script (fun () ->
+    match
+      Sol_cli_provider_registry.kafka_initialization_evidence
+        Sol_cli_provider.Aws
+        aws_target
+        ~cluster_name:"acme-prod"
+        ~namespace:"redpanda"
+        ~observe_broker:(fun () ->
+          Windtrap.fail "an absent cluster must not require Kubernetes access")
+    with
+    | Error message -> Windtrap.fail message
+    | Ok evidence ->
+      (match Sol_cli_kafka_authority.check_initial_absence evidence with
+       | Ok () -> ()
+       | Error message -> Windtrap.fail message))
+;;
+
+let assert_kafka_storage = function
+  | Sol_cli_absence.Present _, `Present | Absent _, `Absent | Unobservable _, `Unknown ->
+    ()
+  | _ -> Windtrap.fail "Kafka initialization misclassified the storage obligation"
+;;
+
+let storage_identity resource_class identity =
+  Sol_cli_absence.Present
+    { resource_class
+    ; identity
+    ; found = [ identity ]
+    ; attribution = Within_target "target inventory"
+    ; checked_with = "provider inventory"
+    }
+;;
+
+let%test
+    "Kafka initialization distinguishes AWS broker, unrelated, boot and unattributable \
+     disks"
+  =
+  let volume ?claim ?(attachments = []) ?(identity = "vol-target") () =
+    `Assoc
+      [ ( "Volumes"
+        , `List
+            [ `Assoc
+                [ "VolumeId", `String identity
+                ; ( "Tags"
+                  , `List
+                      (match claim with
+                       | None -> []
+                       | Some namespace ->
+                         [ `Assoc
+                             [ "Key", `String "kubernetes.io/created-for/pvc/namespace"
+                             ; "Value", namespace
+                             ]
+                         ]) )
+                ; "Attachments", `List attachments
+                ]
+            ] )
+      ]
+  in
+  let attached = [ `Assoc [ "InstanceId", `String "i-target" ] ] in
+  let instance root_volume =
+    let mapping =
+      `Assoc
+        [ "DeviceName", `String "/dev/xvda"
+        ; "Ebs", `Assoc [ "VolumeId", `String root_volume ]
+        ]
+    in
+    let details =
+      `Assoc
+        [ "InstanceId", `String "i-target"
+        ; "RootDeviceName", `String "/dev/xvda"
+        ; "BlockDeviceMappings", `List [ mapping ]
+        ]
+    in
+    `Assoc [ "Reservations", `List [ `Assoc [ "Instances", `List [ details ] ] ] ]
+  in
+  List.iter
+    (fun (disk, boot, expected) ->
+       let script =
+         Printf.sprintf
+           {|#!/bin/sh
+case "$*" in
+  *"ec2 describe-volumes --volume-ids vol-target --region us-east-1 --output json"*) printf '%%s' %s ;;
+  *"ec2 describe-instances --instance-ids i-target --region us-east-1 --output json"*) printf '%%s' %s ;;
+  *) exit 91 ;;
+esac
+|}
+           (Filename.quote (Yojson.Safe.to_string disk))
+           (Filename.quote (Yojson.Safe.to_string boot))
+       in
+       with_fake_command "aws" script (fun () ->
+         let observation =
+           Sol_cli_aws_absence.kafka_storage
+             ~region:"us-east-1"
+             ~namespace:"redpanda"
+             (storage_identity "EBS volume" "vol-target")
+         in
+         assert_kafka_storage (observation, expected)))
+    [ volume ~claim:(`String "redpanda") (), `Null, `Present
+    ; volume ~claim:(`String "monitoring") (), `Null, `Absent
+    ; volume (), `Null, `Unknown
+    ; volume ~claim:(`Int 1) (), `Null, `Unknown
+    ; volume ~identity:"vol-other" ~claim:(`String "monitoring") (), `Null, `Unknown
+    ; volume ~attachments:attached (), instance "vol-target", `Absent
+    ; volume ~attachments:attached (), instance "vol-other", `Unknown
+    ; volume ~attachments:attached (), `Null, `Unknown
+    ]
+;;
+
+let%test
+    "Kafka initialization distinguishes GCP broker, unrelated, boot and unattributable \
+     disks"
+  =
+  let identity =
+    "https://www.googleapis.com/compute/v1/projects/acme-project/zones/us-central1-a/disks/target"
+  in
+  let user =
+    "https://www.googleapis.com/compute/v1/projects/acme-project/zones/us-central1-a/instances/node"
+  in
+  let disk ?description ?(users = []) () =
+    `Assoc
+      ([ "selfLink", `String identity; "users", `List users ]
+       @
+       match description with
+       | None -> []
+       | Some description -> [ "description", description ])
+  in
+  let claim namespace =
+    `String
+      (Yojson.Safe.to_string
+         (`Assoc [ "kubernetes.io/created-for/pvc/namespace", namespace ]))
+  in
+  let instance boot =
+    `Assoc
+      [ "selfLink", `String user
+      ; "disks", `List [ `Assoc [ "source", `String identity; "boot", `Bool boot ] ]
+      ]
+  in
+  List.iter
+    (fun (disk, boot, expected) ->
+       let script =
+         Printf.sprintf
+           {|#!/bin/sh
+case "$*" in
+  *"compute disks describe target --project acme-project --format json --zone us-central1-a"*) printf '%%s' %s ;;
+  *"compute instances describe node --project acme-project --format json --zone us-central1-a"*) printf '%%s' %s ;;
+  *) exit 91 ;;
+esac
+|}
+           (Filename.quote (Yojson.Safe.to_string disk))
+           (Filename.quote (Yojson.Safe.to_string boot))
+       in
+       with_fake_command "gcloud" script (fun () ->
+         let observation =
+           Sol_cli_gcp_absence.kafka_storage
+             gcp_target
+             ~namespace:"redpanda"
+             (storage_identity "persistent disk" identity)
+         in
+         assert_kafka_storage (observation, expected)))
+    [ disk ~description:(claim (`String "redpanda")) (), `Null, `Present
+    ; disk ~description:(claim (`String "monitoring")) (), `Null, `Absent
+    ; disk (), `Null, `Unknown
+    ; disk ~description:(claim (`Int 1)) (), `Null, `Unknown
+    ; disk ~description:(`String "{") (), `Null, `Unknown
+    ; disk ~users:[ `String user ] (), instance true, `Absent
+    ; disk ~users:[ `String user ] (), instance false, `Unknown
+    ; disk ~users:[ `String user ] (), `Null, `Unknown
+    ]
+;;
+
+let authority_is expected = function
+  | Sol_cli_kafka_authority.Authority_current ->
+    Windtrap.equal Windtrap.string ~msg:"Kafka authority state" "current" expected
+  | Sol_cli_kafka_authority.Authority_missing _ ->
+    Windtrap.equal Windtrap.string ~msg:"Kafka authority state" "missing" expected
+  | Sol_cli_kafka_authority.Authority_unobservable _ ->
+    Windtrap.equal Windtrap.string ~msg:"Kafka authority state" "unknown" expected
+;;
+
+let aws_authority_script stdout exit_code stderr =
+  Printf.sprintf
+    {|#!/bin/sh
+case "$*" in
+  *"secretsmanager describe-secret "*) printf '%%s' %s ; printf '%%s' %s >&2 ; exit %d ;;
+  *) exit 91 ;;
+esac
+|}
+    (Filename.quote stdout)
+    (Filename.quote stderr)
+    exit_code
+;;
+
+let%test "AWS Kafka authority requires an existing secret with an active version" =
+  let observe stdout exit_code stderr expected =
+    with_fake_command "aws" (aws_authority_script stdout exit_code stderr) (fun () ->
+      Sol_cli_aws_absence.kafka_authority ~region:"us-east-1" ~cluster_name:"acme-prod"
+      |> authority_is expected)
+  in
+  observe
+    {|{"name":"sol-kafka-acme-prod","deleted":null,"stages":{"v1":["AWSCURRENT"]}}|}
+    0
+    ""
+    "current";
+  observe {|{"name":"sol-kafka-acme-prod","deleted":null,"stages":{}}|} 0 "" "missing";
+  observe
+    {|{"name":"sol-kafka-acme-prod","deleted":1700000000,"stages":{"v1":["AWSCURRENT"]}}|}
+    0
+    ""
+    "missing";
+  observe
+    ""
+    254
+    "An error occurred (ResourceNotFoundException) when calling the DescribeSecret \
+     operation"
+    "missing";
+  observe
+    {|{"name":"another-target","deleted":null,"stages":{"v1":["AWSCURRENT"]}}|}
+    0
+    ""
+    "unknown";
+  observe {|{"deleted":null,"stages":{"v1":["AWSCURRENT"]}}|} 0 "" "unknown";
+  observe "" 254 "An error occurred (AccessDeniedException)" "unknown"
+;;
+
+let gcp_authority_script stdout exit_code stderr =
+  Printf.sprintf
+    {|#!/bin/sh
+case "$*" in
+  *"secrets versions list "*) printf '%%s' %s ; printf '%%s' %s >&2 ; exit %d ;;
+  *) exit 91 ;;
+esac
+|}
+    (Filename.quote stdout)
+    (Filename.quote stderr)
+    exit_code
+;;
+
+let%test "GCP Kafka authority requires an enabled secret version" =
+  let observe stdout exit_code stderr expected =
+    with_fake_command "gcloud" (gcp_authority_script stdout exit_code stderr) (fun () ->
+      Sol_cli_gcp_absence.kafka_authority gcp_target ~cluster_name:"acme-prod"
+      |> authority_is expected)
+  in
+  observe "1\n" 0 "" "current";
+  observe "" 0 "" "missing";
+  observe
+    ""
+    1
+    "ERROR: (gcloud.secrets.versions.list) NOT_FOUND: Secret \
+     [projects/acme-project/secrets/sol-kafka-acme-prod] not found"
+    "missing";
+  observe "" 1 "ERROR: (gcloud.secrets.versions.list) PERMISSION_DENIED" "unknown"
 ;;

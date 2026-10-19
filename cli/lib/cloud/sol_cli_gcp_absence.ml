@@ -184,6 +184,14 @@ let checks ~project ~region ~cluster_name =
   in
   let project_roles = "projects/" ^ project ^ "/roles/" in
   [ cluster_check ~project ~region ~cluster_name
+  ; (let name = Sol_cli_resource_binding.kafka_authority_name ~cluster_name in
+     identity_check
+       ~resource_class:"Kafka credential secret"
+       ~identity:name
+       ~attribution:(Named_for_target (names_the_cluster cluster_name))
+       ~attributable:(fun line -> Filename.basename line = name)
+       ~normalize:Filename.basename
+       (p [ "secrets"; "list"; "--format"; "value(name)" ]))
   ; identity_check
       ~resource_class:"GKE node pool"
       ~identity:(cluster_name ^ "-*")
@@ -1064,4 +1072,221 @@ let authorization_state_identities ~target:_ (state : Sol_cli_cloud_destroy.stat
   ; "authorization project IAM binding", project_bindings
   ; "authorization secret IAM binding", secret_bindings
   ]
+;;
+
+(* This refines existing target disk identities for credential initialization; it
+   does not change destruction coverage or enumerate a second resource universe. *)
+let kafka_storage_in_project ~project ~namespace observation =
+  let open Result.Syntax in
+  let read argv =
+    match Sol_cli_process.run (Sol_cli_process.cmd ("gcloud" :: argv)) with
+    | Ok output when benign_empty_list_warning output.stderr ->
+      Sol_cli_json.decode ~what:"Kafka storage metadata" output.stdout
+    | Ok output -> Error (String.trim output.stderr)
+    | Error (Sol_cli_process.Non_zero output) -> Error (String.trim output.stderr)
+    | Error _ -> Error "the gcloud CLI is unavailable"
+  in
+  let location identity resource =
+    match String.split_on_char '/' identity with
+    | [ "https:"
+      ; ""
+      ; "www.googleapis.com"
+      ; "compute"
+      ; "v1"
+      ; "projects"
+      ; actual_project
+      ; kind
+      ; location
+      ; actual_resource
+      ; name
+      ]
+      when actual_project = project
+           && actual_resource = resource
+           && List.mem kind [ "zones"; "regions" ]
+           && location <> ""
+           && name <> "" -> Ok (kind, location, name)
+    | _ -> Error "the storage metadata contains an unbound provider identity"
+  in
+  let scope kind location =
+    [ (if kind = "zones" then "--zone" else "--region"); location ]
+  in
+  (* Both disk and attached-instance reads must bind the response to the exact
+     project/location identity from the inventory, never just its basename. *)
+  let describe resource identity =
+    let* kind, place, name = location identity resource in
+    let* () =
+      if resource = "instances" && kind <> "zones"
+      then Error "an instance has no zone"
+      else Ok ()
+    in
+    let* json =
+      read
+        ([ "compute"
+         ; resource
+         ; "describe"
+         ; name
+         ; "--project"
+         ; project
+         ; "--format"
+         ; "json"
+         ]
+         @ scope kind place)
+    in
+    let* actual =
+      Sol_cli_json.require ~what:resource [ "selfLink" ] Sol_cli_json.string json
+    in
+    if actual = identity
+    then Ok json
+    else Error "provider metadata does not match the requested identity"
+  in
+  let is_kafka identity =
+    let* disk = describe "disks" identity in
+    let* description =
+      Sol_cli_json.optional ~what:"a disk" [ "description" ] Sol_cli_json.string disk
+    in
+    let claim_namespace =
+      match description with
+      | None -> Ok None
+      | Some text when not (String.starts_with ~prefix:"{" (String.trim text)) -> Ok None
+      | Some text ->
+        let* json = Sol_cli_json.decode ~what:"CSI disk description" text in
+        Sol_cli_json.optional
+          ~what:"CSI disk metadata"
+          [ "kubernetes.io/created-for/pvc/namespace" ]
+          Sol_cli_json.string
+          json
+    in
+    let* claim_namespace = claim_namespace in
+    match claim_namespace with
+    | Some claim when String.trim claim <> "" -> Ok (claim = namespace)
+    | _ ->
+      let* users =
+        Sol_cli_json.optional ~what:"a disk" [ "users" ] Sol_cli_json.list disk
+      in
+      let* users =
+        Sol_cli_result.map_list
+          (function
+            | `String user -> Ok user
+            | _ -> Error "a disk user has no provider identity")
+          (Option.value users ~default:[])
+      in
+      let* boots =
+        Sol_cli_result.map_list
+          (fun user ->
+             let* instance = describe "instances" user in
+             let* disks =
+               Sol_cli_json.require
+                 ~what:"an instance"
+                 [ "disks" ]
+                 Sol_cli_json.list
+                 instance
+             in
+             let* matches =
+               Sol_cli_result.map_list
+                 (fun attached ->
+                    let* source =
+                      Sol_cli_json.require
+                        ~what:"an attached disk"
+                        [ "source" ]
+                        Sol_cli_json.string
+                        attached
+                    in
+                    let* boot =
+                      Sol_cli_json.optional
+                        ~what:"an attached disk"
+                        [ "boot" ]
+                        Sol_cli_json.bool
+                        attached
+                    in
+                    Ok (source = identity && boot = Some true))
+                 disks
+             in
+             Ok (List.exists Fun.id matches))
+          users
+      in
+      if List.exists Fun.id boots
+      then Ok false
+      else
+        Error
+          "a target disk has neither attributable CSI namespace metadata nor a confirmed \
+           node boot mapping; Kafka initialization is unresolved"
+  in
+  Sol_cli_kafka_authority.scope_storage observation ~is_kafka
+;;
+
+let kafka_storage target ~namespace observation =
+  match project_of target with
+  | Some project -> kafka_storage_in_project ~project ~namespace observation
+  | None ->
+    Sol_cli_absence.Unobservable
+      { resource_class = "Kafka storage"
+      ; reason = unlistable
+      ; checked_with = "the declared target project"
+      }
+;;
+
+(* Reuse requires an enabled version, not merely a secret container. The
+   versions list is a metadata read and never returns credential data. *)
+let kafka_authority (target : Sol_cli_config.target) ~cluster_name =
+  let identity = Sol_cli_resource_binding.kafka_authority_name ~cluster_name in
+  let unknown reason = Sol_cli_kafka_authority.Authority_unobservable reason in
+  match project_of target with
+  | None -> unknown (unlistable ^ " for the Kafka authority observation")
+  | Some project ->
+    let argv =
+      [ "gcloud"
+      ; "secrets"
+      ; "versions"
+      ; "list"
+      ; identity
+      ; "--project"
+      ; project
+      ; "--filter=state=ENABLED"
+      ; "--limit=1"
+      ; "--format=value(name)"
+      ]
+    in
+    let not_found (result : Sol_cli_process.failure) =
+      Sol_cli_string.contains ~needle:"NOT_FOUND" result.stderr
+    in
+    (match Sol_cli_process.run (Sol_cli_process.cmd argv) with
+     | Ok result when String.trim result.stderr = "" ->
+       (match Sol_cli_absence.lines result.stdout with
+        | [] ->
+          Sol_cli_kafka_authority.Authority_missing
+            "the provider secret has no enabled version"
+        | _ -> Sol_cli_kafka_authority.Authority_current)
+     | Ok result -> unknown (String.trim result.stderr)
+     | Error (Sol_cli_process.Non_zero result) when not_found result ->
+       Sol_cli_kafka_authority.Authority_missing "the provider secret does not exist"
+     | Error (Sol_cli_process.Non_zero result) -> unknown (String.trim result.stderr)
+     | Error _ -> unknown "the gcloud CLI is unavailable")
+;;
+
+(** Retrieve the authoritative Kafka credential for delivery. The value travels on stdout
+    to the caller and never in an argv, plan, release record or diagnostic. *)
+let kafka_credential (target : Sol_cli_config.target) ~cluster_name =
+  let identity = Sol_cli_resource_binding.kafka_authority_name ~cluster_name in
+  match project_of target with
+  | None -> Error (unlistable ^ " for the Kafka credential")
+  | Some project ->
+    let argv =
+      [ "gcloud"
+      ; "secrets"
+      ; "versions"
+      ; "access"
+      ; "latest"
+      ; "--secret"
+      ; identity
+      ; "--project"
+      ; project
+      ]
+    in
+    (match Sol_cli_process.run (Sol_cli_process.cmd argv) with
+     | Ok result when String.trim result.stderr = "" ->
+       let value = String.trim result.stdout in
+       if value = "" then Error "the provider secret has no value" else Ok value
+     | Ok result -> Error (String.trim result.stderr)
+     | Error (Sol_cli_process.Non_zero result) -> Error (String.trim result.stderr)
+     | Error _ -> Error "the gcloud CLI is unavailable")
 ;;

@@ -1038,6 +1038,13 @@ let run_apply
       ~plan
       ~setup_image
   in
+  let kafka_delivery () =
+    Sol_cli_kafka_delivery.run
+      ~ctx:ctx.execution.cluster
+      ~target:ctx.target_cfg
+      ~kafka:plan.kafka
+      ~services:plan.services
+  in
   Sol_cli_deploy_run.apply
     ctx
     ~present_plan:(present_plan ctx)
@@ -1054,6 +1061,7 @@ let run_apply
     ~confirm_group_change
     ~resolve_setup_image:(fun () -> Ok setup_image)
     ~database_setup
+    ~kafka_delivery
     ~push_events:
       (push_deploy_events
          ~ctx:ctx.execution.cluster

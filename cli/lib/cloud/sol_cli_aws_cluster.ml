@@ -1,3 +1,10 @@
+(* Shared by generation decisions and native ownership/recovery attribution. *)
+let kafka_authority_resources : Sol_cli_kafka_authority.authority_resources =
+  { secret = "aws_secretsmanager_secret.kafka[0]"
+  ; version = "aws_secretsmanager_secret_version.kafka[0]"
+  }
+;;
+
 type aws_outputs =
   { cluster_name : string
   ; cluster_access_role_arn : string
@@ -19,6 +26,7 @@ type aws_outputs =
        created. The committed global RDS bundle, coupled to the instance's pinned
        ca_cert_identifier. *)
     postgres_ca_cert : string option
+  ; kafka_authority : string option
   }
 
 let aws_outputs_of_json text =
@@ -26,6 +34,7 @@ let aws_outputs_of_json text =
   let* value, string, optional_string =
     Sol_cli_cluster.outputs_reader ~provider:"AWS" text
   in
+  let* kafka_authority = Sol_cli_kafka_authority.reference_output text in
   let* cluster_name = string "cluster_name" in
   let* cluster_access_role_arn = string "cluster_access_role_arn" in
   let* deploy_kube_context = optional_string "deploy_kube_context" in
@@ -72,6 +81,7 @@ let aws_outputs_of_json text =
       ; database_egress_cidrs
       ; postgres_url
       ; postgres_ca_cert
+      ; kafka_authority
       }
   | _ -> Error "AWS Terraform output \"managed_resource_dashboards\" is not an object"
 ;;
@@ -659,7 +669,7 @@ let database_egress_cidrs_json outputs =
     Some (`List (List.map (fun cidr -> `String cidr) cidrs) |> Yojson.Safe.to_string)
 ;;
 
-let platform_vars outputs _context ~cluster_issuer:_ ~region =
+let platform_vars outputs context ~cluster_issuer:_ ~region =
   Ok
     { Sol_cli_cluster.fixed =
         [ "cloud_provider=aws"
@@ -669,7 +679,11 @@ let platform_vars outputs _context ~cluster_issuer:_ ~region =
           ^ Yojson.Safe.to_string outputs.managed_resource_dashboards
         ]
     ; optional =
-        [ "loki_s3_bucket", outputs.loki_s3_bucket
+        [ ( "kafka_authority"
+          , match context with
+            | Sol_cli_cluster.Install -> outputs.kafka_authority
+            | Destruction -> None )
+        ; "loki_s3_bucket", outputs.loki_s3_bucket
         ; "loki_irsa_role_arn", outputs.loki_irsa_role_arn
         ; "thanos_s3_bucket", outputs.thanos_s3_bucket
         ; "thanos_irsa_role_arn", outputs.thanos_irsa_role_arn

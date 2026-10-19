@@ -180,7 +180,7 @@ JSON
             add_declared '{"address":"aws_db_instance.postgres[0]","mode":"managed","type":"aws_db_instance","values":{"identifier":"lifecycle-test-postgres"}}'
             ;;
         esac
-        printf '{"resource_changes":[%s],"planned_values":{"root_module":{"resources":[%s]}}}\n' \
+        printf '{"variables":{"kafka_connection":{"value":null}},"resource_changes":[%s],"planned_values":{"root_module":{"resources":[%s]}}}\n' \
           "$changes" "$declared"
         exit 0
         ;;
@@ -282,7 +282,7 @@ JSON
         "$eks_resource" "$oidc_resource"
     fi
     ;;
-  *" apply "*".tfplan")
+  *cloud/aws/cluster*" apply "*".tfplan"*|*cloud/gcp/cluster*" apply "*".tfplan"*)
     plan_args="$(cat "${!#}.args")"
     if [ "${PLAN_CREATES_MISSING_CLUSTER:-}" = 1 ]; then
       case " $plan_args " in
