@@ -831,6 +831,10 @@ jobs:
           k3d cluster list || true
           echo "=== all pods ==="
           kubectl get pods -A -o wide || true
+          # Preserve object identity without dumping configuration or Secret values.
+          # A later passing run cannot explain a missing ConfigMap in this attempt.
+          echo "=== ConfigMap inventory ==="
+          kubectl get configmaps -A -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,UID:.metadata.uid,CREATED:.metadata.creationTimestamp,VERSION:.metadata.resourceVersion' || true
           echo "=== recent events ==="
           kubectl get events -A --sort-by=.lastTimestamp || true
 
