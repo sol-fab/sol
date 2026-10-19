@@ -30,11 +30,27 @@ def main():
     secrets = (ddl, dml)
     environment = dict(os.environ, SOL_DDL_PASSWORD=ddl, SOL_DML_PASSWORD=dml)
 
+    def canary_spellings(secret):
+        """Every form a leaked dynamic SQL statement plausibly contains.
+
+        The prefix catches truncation; the full value and its SQL-escaped forms
+        catch an error context that quotes the whole statement.
+        """
+        doubled = secret.replace("'", "''")
+        escaped = secret.replace("\\", "\\\\")
+        return {
+            secret.split("'")[0],
+            secret,
+            escaped,
+            doubled,
+            doubled.replace("\\", "\\\\"),
+        }
+
     def safe(result):
+        output = result.stdout + result.stderr
         for secret in secrets:
-            # PostgreSQL's error context can include escaped dynamic SQL too.
-            for spelling in (secret.split("'")[0],):
-                require(spelling not in result.stdout + result.stderr,
+            for spelling in canary_spellings(secret):
+                require(spelling not in output,
                         "setup disclosed a credential in stdout/stderr")
         return result
 
