@@ -196,6 +196,38 @@ def check_deploy_rbac(root):
             "FAIL: sol-deploy-bootstrap's namespaces/rolebindings rules are no longer",
             "      create-only; this identity must never patch/update/delete either kind.",
         )
+    ca_reader = find(found, "kubernetes_role", "sol_kafka_ca_reader")
+    if ca_reader is None:
+        fail(
+            "FAIL: kubernetes_role.sol_kafka_ca_reader not found;",
+            "      the deploy identity cannot read the broker CA it must project (ADR 0008).",
+        )
+    ca_namespace = (tfconfig.blocks(ca_reader.body, "metadata") or [{}])[0].get("namespace")
+    ca_rules = rules(ca_reader)
+    ca_names = [literal(n) for values in tfconfig.attributes(ca_reader.body, "resource_names") for n in values]
+    if (
+        ca_namespace != "${kubernetes_namespace.redpanda.metadata[0].name}"
+        or len(ca_rules) != 1
+        or ca_rules[0][0] != ["secrets"]
+        or ca_rules[0][1] != ["get"]
+        or ca_names != ["redpanda-default-cert"]
+    ):
+        fail(
+            "FAIL: the Kafka CA reader must grant exactly get on the",
+            "      redpanda-default-cert Secret in the redpanda namespace",
+        )
+    ca_binding = find(found, "kubernetes_role_binding", "sol_kafka_ca_reader")
+    ca_binding_ok = ca_binding is not None and (
+        (tfconfig.blocks(ca_binding.body, "metadata") or [{}])[0].get("namespace")
+        == "${kubernetes_namespace.redpanda.metadata[0].name}"
+        and any(
+            r.get("name") == "${kubernetes_role.sol_kafka_ca_reader.metadata[0].name}"
+            for r in tfconfig.blocks(ca_binding.body, "role_ref")
+        )
+        and any(literal(s.get("name")) == "sol:deployers" for s in tfconfig.blocks(ca_binding.body, "subject"))
+    )
+    if not ca_binding_ok:
+        fail("FAIL: the Kafka CA reader Role is not bound to sol:deployers in redpanda")
     lease = find(found, "kubernetes_role", "sol_boundary_lease")
     if lease is None:
         fail("FAIL: kubernetes_role.sol_boundary_lease not found")

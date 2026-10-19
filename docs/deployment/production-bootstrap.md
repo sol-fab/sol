@@ -135,7 +135,12 @@ private-only networking is a stronger future posture.
 group `sol:deployers`) and a cluster-wide `sol-deploy` `ClusterRole`; the
 namespace-scoped `RoleBinding` that actually grants it is applied per
 application namespace at deploy time (`Sol_cli_substrate.ensure`), not by
-Terraform, since application namespaces are created dynamically. Once the role
+Terraform, since application namespaces are created dynamically. The one
+Terraform-owned binding for this identity is the broker CA read: the deploy
+projects the chart's `redpanda-default-cert` into consumer namespaces, so the
+platform module binds a dedicated `sol-kafka-ca-reader` Role — exactly `get` on
+that one Secret in `redpanda` — to the same group. The broad `sol-deploy` role
+is never bound in the platform's namespaces. Once the role
 exists and `deploy_role_arn` is set, `sol deploy`'s output prints the
 command to run — Sol does not write your kubeconfig or the target file for
 you (AUDIT-072: Sol owns the IAM policy contract, not your local kubeconfig

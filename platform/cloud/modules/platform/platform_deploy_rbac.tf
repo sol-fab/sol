@@ -81,6 +81,41 @@ resource "kubernetes_cluster_role_binding" "sol_deploy_bootstrap" {
   }
 }
 
+# The Redpanda chart owns the broker CA (`redpanda-default-cert`); the deploy
+# projects it into the declared consumer namespaces (ADR 0008). Read that one
+# Secret, in the namespace that holds it, rather than binding the whole
+# `sol-deploy` role in the platform's namespace.
+resource "kubernetes_role" "sol_kafka_ca_reader" {
+  metadata {
+    name      = "sol-kafka-ca-reader"
+    namespace = kubernetes_namespace.redpanda.metadata[0].name
+  }
+
+  rule {
+    api_groups     = [""]
+    resources      = ["secrets"]
+    resource_names = ["redpanda-default-cert"]
+    verbs          = ["get"]
+  }
+}
+
+resource "kubernetes_role_binding" "sol_kafka_ca_reader" {
+  metadata {
+    name      = "sol-kafka-ca-reader"
+    namespace = kubernetes_namespace.redpanda.metadata[0].name
+  }
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Role"
+    name      = kubernetes_role.sol_kafka_ca_reader.metadata[0].name
+  }
+  subject {
+    kind      = "Group"
+    name      = "sol:deployers"
+    api_group = "rbac.authorization.k8s.io"
+  }
+}
+
 resource "kubernetes_role" "sol_boundary_lease" {
   metadata {
     name      = "sol-boundary-lease"
