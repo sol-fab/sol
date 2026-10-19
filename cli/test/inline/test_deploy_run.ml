@@ -86,6 +86,7 @@ let plan ?profile services : Sol_cli_deployment_plan.t =
   ; contract = []
   ; contract_changes = []
   ; database = Sol_cli_resource_binding.No_postgres
+  ; kafka = Sol_cli_resource_binding.No_kafka
   ; resource_delivery = None
   }
 ;;
@@ -104,7 +105,12 @@ let temp_dir () =
   dir
 ;;
 
-let with_context ?(migrations = []) ?(resources = "") f =
+let with_context
+      ?(migrations = [])
+      ?(resources = "")
+      ?(target_body = "target:\n  cluster_name: c\n")
+      f
+  =
   let root = temp_dir () in
   let cwd = Sys.getcwd () in
   Fun.protect
@@ -113,7 +119,7 @@ let with_context ?(migrations = []) ?(resources = "") f =
        Sys.chdir root;
        Out_channel.with_open_text "sol.yml" (fun oc ->
          output_string oc ("project: myapp\n" ^ resources));
-       Targets_fixture.write ~target:"dev/aws/us-east-1" "target:\n  cluster_name: c\n";
+       Targets_fixture.write ~target:"dev/aws/us-east-1" target_body;
        if migrations <> []
        then (
          Unix.mkdir "db" 0o755;
@@ -1695,4 +1701,42 @@ let test_captured_evidence_is_recorded () =
 
 let%test "removal: a captured evidence entry is recorded with its workload" =
   test_captured_evidence_is_recorded ()
+;;
+
+let test_managed_kafka_cannot_emit_gitops () =
+  with_context
+    ~resources:"resources:\n  events:\n    type: kafka\n"
+    ~target_body:"target:\n  cluster_name: c\n  shape: durable\n"
+    (fun ctx ->
+       match
+         Sol_cli_deploy_selection.declaration_plan
+           { Sol_cli_deploy_selection.Planning_input.workspace = ctx.execution.workspace
+           ; registry = "registry.example.com"
+           ; sha = "test"
+           ; emit_to = Some "gitops"
+           ; config = ctx.resolved_config
+           ; facts = ctx.facts
+           ; inventory = []
+           ; requested_scope = "workspace"
+           ; image_refs = []
+           ; services = []
+           }
+       with
+       | Error (Sol_cli_deploy_selection.Refused message) ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the refusal names GitOps"
+           true
+           (Sol_cli_string.contains ~needle:"cannot emit a GitOps bundle" message);
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the refusal names the managed Kafka resource"
+           true
+           (Sol_cli_string.contains ~needle:"provisions Kafka" message)
+       | Error _ -> Windtrap.fail "unexpected planning error"
+       | Ok _ -> Windtrap.fail "managed Kafka emitted a GitOps bundle")
+;;
+
+let%test "managed Kafka cannot emit a GitOps bundle without confidential delivery" =
+  test_managed_kafka_cannot_emit_gitops ()
 ;;

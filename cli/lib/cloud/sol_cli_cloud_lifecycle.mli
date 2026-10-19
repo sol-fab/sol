@@ -30,6 +30,7 @@ type platform_credential =
   ; secret : string
   }
 
+val redpanda_namespace : string
 val profile_of_platform_vars : string list -> string option
 
 val platform_credentials_of_components

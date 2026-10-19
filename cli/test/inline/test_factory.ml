@@ -63,6 +63,7 @@ let test_run_without_cmdliner () =
           ; platform_shape = Sol_cli_profile.Local
           ; target = None
           ; database = Sol_cli_resource_binding.No_postgres
+          ; kafka = Sol_cli_resource_binding.No_kafka
           }
         ~mode:(Sol_cli_executor.Emit_to emit_dir)
         ~facts:(facts ())

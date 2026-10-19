@@ -96,8 +96,8 @@ CASES = [
     ("gcp-pool-uses-the-node-metadata-server", substitute(
         GCP_CLUSTER, r'mode = "GKE_METADATA"', 'mode = "GCE_METADATA"')),
     ("gcp-driver-refuses-tls-again", substitute(
-        GCP_DRIVER, r"let platform_vars outputs _context ~cluster_issuer:_ ~region:_ =",
-        'let platform_vars outputs _context ~cluster_issuer:_ ~region:_ =\n  let _ = "Sol cannot yet wire a certificate issuer on GCP" in\n  ignore _ in')),
+        GCP_DRIVER, r"let platform_vars outputs context ~cluster_issuer:_ ~region:_ =",
+        'let platform_vars outputs context ~cluster_issuer:_ ~region:_ =\n  let _ = "Sol cannot yet wire a certificate issuer on GCP" in\n  ignore _ in')),
     ("aws-record-authority-widened-to-every-zone", substitute(
         AWS_CLUSTER,
         r'resources = \[local\.route53_zone_arn\]',

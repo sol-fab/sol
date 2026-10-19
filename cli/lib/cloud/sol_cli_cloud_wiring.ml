@@ -551,6 +551,7 @@ let verify_platform_prerequisites ~assets ~env ~platform_vars ~deploy_handoff =
 ;;
 
 let apply_deps
+      ~kafka
       ~assets
       ~confirm_ecr_removal
       ~run_log
@@ -612,7 +613,79 @@ let apply_deps
               ~plan_file
               ()
           with
-          | Ok (_, changes) -> Ok changes
+          | Ok (json, changes) ->
+            let* () =
+              Sol_cli_kafka_authority.check_plan_inputs
+                ~kafka
+                ~cluster_name:target_cfg.cluster_name
+                json
+              |> Result.map_error (fun message -> Sol_cli_cloud_apply.Refused message)
+            in
+            let cluster_name () =
+              match target_cfg.cluster_name with
+              | Some name when not (Sol_cli_string.is_blank name) -> Ok name
+              | _ -> Error "managed Kafka requires the declared target cluster identity"
+            in
+            let check_generation () =
+              let* generation =
+                Sol_cli_provider_registry.kafka_generation
+                  provider
+                  ~managed:(Sol_cli_resource_binding.kafka_is_managed kafka)
+                  changes
+              in
+              match generation with
+              | Reuse ->
+                (* Terraform retaining the generator/state addresses does not prove
+                   the provider secret and an active version still exist. *)
+                if not (Sol_cli_resource_binding.kafka_is_managed kafka)
+                then Ok ()
+                else
+                  let* cluster_name = cluster_name () in
+                  Sol_cli_provider_registry.kafka_authority
+                    provider
+                    target_cfg
+                    ~cluster_name
+                  |> Sol_cli_kafka_authority.check_reuse_authority
+              | Initialize ->
+                let* cluster_name = cluster_name () in
+                let* evidence =
+                  Sol_cli_provider_registry.kafka_initialization_evidence
+                    provider
+                    target_cfg
+                    ~cluster_name
+                    ~namespace:Sol_cli_cloud_lifecycle.redpanda_namespace
+                    ~observe_broker:(fun () ->
+                      let observed =
+                        match cluster_of ~target_cfg provider infra_dir with
+                        | Ok (Some cluster) ->
+                          cluster.with_access (fun ~env ->
+                            Ok
+                              (Sol_cli_kafka_authority.observe_broker
+                                 ~env
+                                 ~namespace:Sol_cli_cloud_lifecycle.redpanda_namespace))
+                        | Ok None ->
+                          Error
+                            "the surviving cluster has no recoverable access authority"
+                        | Error error ->
+                          Error
+                            (Sol_cli_provider_registry.resolution_failure_to_string error)
+                      in
+                      match observed with
+                      | Ok observation -> observation
+                      | Error reason ->
+                        Sol_cli_absence.Unobservable
+                          { resource_class = "Kafka broker"
+                          ; reason
+                          ; checked_with = "the existing target cluster access authority"
+                          })
+                in
+                Sol_cli_kafka_authority.check_initial_absence evidence
+            in
+            let* () =
+              check_generation ()
+              |> Result.map_error (fun message -> Sol_cli_cloud_apply.Refused message)
+            in
+            Ok changes
           | Error message ->
             Error
               (Sol_cli_cloud_apply.Refused ("could not read the cloud plan: " ^ message)))
@@ -636,7 +709,28 @@ let apply_deps
             let* () = window.gate () in
             Result.map Option.some (window.observe ())
           | No_role_declared | Closed_by_platform_root -> Ok None)
-    ; platform_vars = (fun cluster -> platform_vars_of_result ~cloud_target ~cluster ())
+    ; platform_vars =
+        (fun cluster ->
+          let* vars = platform_vars_of_result ~cloud_target ~cluster () in
+          let authority =
+            Sol_cli_terraform_vars.resolved "kafka_authority" ~var_files:[] ~vars
+          in
+          let* () =
+            match kafka, authority with
+            | Sol_cli_resource_binding.Managed_kafka resource, Some reference
+              when reference <> "null" ->
+              Sol_cli_kafka_authority.check_reference ~resource reference
+              |> Result.map ignore
+            | Managed_kafka _, _ ->
+              Error
+                "the selected managed Kafka has no provider-backed credential authority; \
+                 restore or provision its native authority before deployment"
+            | _, None | _, Some "null" -> Ok ()
+            | _ ->
+              Error
+                "the recorded Kafka authority conflicts with the current resource binding"
+          in
+          Ok vars)
     ; substrate_supported =
         (fun () ->
           match
@@ -704,13 +798,52 @@ let apply_deps
             ])
     ; verify_platform_prerequisites =
         (fun env platform_vars ->
+          let* () =
+            match
+              Sol_cli_terraform_vars.resolved
+                "kafka_authority"
+                ~var_files:[]
+                ~vars:platform_vars
+            with
+            | None | Some "null" -> Ok ()
+            | Some reference ->
+              let* _ =
+                Sol_cli_kafka_authority.reference_of_json reference
+                |> Result.map_error (fun message -> Sol_cli_cloud_apply.Refused message)
+              in
+              Sol_cli_terraform_steps.apply_asserted
+                ~env
+                ~run_log
+                ~phase_name:"kafka-credential-delivery"
+                ~policy:Sol_cli_kafka_authority.broker_projection_policy
+                ~scope:
+                  (Sol_cli_terraform.targets
+                     "module.platform.kubernetes_secret_v1.redpanda_users"
+                     [])
+                ~chdir:platform_dir
+                ~var_files:[]
+                ~vars:platform_vars
+                ()
+              |> Result.map_error (fun message -> Sol_cli_cloud_apply.Refused message)
+          in
           verify_platform_prerequisites
             ~assets
             ~env
             ~platform_vars
             ~deploy_handoff:(deploy_kubeconfig_handoff ~infra_dir))
     ; apply_platform =
-        platform_apply ~name:"platform-apply" ~scope:Sol_cli_terraform.whole_root
+        (fun env platform_vars ->
+          Sol_cli_terraform_steps.apply_asserted
+            ~env
+            ~run_log
+            ~phase_name:"platform-apply"
+            ~policy:Sol_cli_kafka_authority.platform_policy
+            ~scope:Sol_cli_terraform.whole_root
+            ~chdir:platform_dir
+            ~var_files:[]
+            ~vars:platform_vars
+            ()
+          |> Result.map_error (fun message -> Sol_cli_cloud_apply.Refused message))
     ; await_readiness = (fun env -> await_platform_readiness ~provider ~deadline_s ~env)
     ; remove_bootstrap_access =
         (fun () ->

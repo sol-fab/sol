@@ -55,6 +55,9 @@ type kafka_transport =
 val kafka_transport : Sol_cli_profile.platform_shape -> kafka_transport
 val kafka_tls : kafka_transport -> bool
 val kafka_transport_of_config : (string * string) list -> kafka_transport
+val kafka_connection_env : kafka_transport -> (string * string) list
+val kafka_required_secret_keys : kafka_transport -> string list
+val telemetry_env : (string * string) list
 val cluster_env : kafka_transport -> (string * string) list
 val production_kafka_config : (string * string) list
 val default_cluster_env : (string * string) list

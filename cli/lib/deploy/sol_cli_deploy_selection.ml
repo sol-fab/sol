@@ -320,6 +320,7 @@ let declaration_plan (input : Planning_input.t) =
      delivery are projections of this selection. *)
   let target = Sol_cli_kubernetes_name.sanitize_name config.target.name in
   let* database = Sol_cli_resource_binding.resolve_postgres config |> refused in
+  let* kafka = Sol_cli_resource_binding.resolve_kafka config |> refused in
   (* A GitOps emit cannot run the database setup step, so it cannot deliver a database Sol
      provisions. Refuse it here, keyed on the binding rather than on a profile, so the
      ownership matrix is established by the deploy contract and not by whichever profile a
@@ -339,6 +340,23 @@ let declaration_plan (input : Planning_input.t) =
     |> refused
   in
   let* platform_shape = Sol_cli_config.platform_shape config |> refused in
+  let kafka = Sol_cli_resource_binding.kafka_for_shape ~shape:platform_shape kafka in
+  (* Managed Kafka's credential is read from the provider and written to the broker
+     delivery Secret during a direct apply. A GitOps bundle cannot materialize that
+     confidential value, so emitting one would render a reference that nothing delivers. *)
+  let* () =
+    (match emit_to, kafka with
+     | Some _, Sol_cli_resource_binding.Managed_kafka resource ->
+       Error
+         (Printf.sprintf
+            "target %s cannot emit a GitOps bundle: it provisions Kafka %S, whose \
+             provider-backed credential and broker delivery run during a direct apply. \
+             Bind Kafka externally to emit it, or deploy this target directly."
+            config.target.name
+            resource)
+     | _ -> Ok ())
+    |> refused
+  in
   let* plan =
     Sol_cli_factory.plan_of_services
       ~workspace
@@ -351,6 +369,7 @@ let declaration_plan (input : Planning_input.t) =
       ~inventory
       ~target
       ~database
+      ~kafka
       services
     |> refused
   in

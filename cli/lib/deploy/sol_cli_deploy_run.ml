@@ -557,7 +557,7 @@ let contract_reconciliation ctx (plan : Sol_cli_deployment_plan.t) =
     |> Sol_cli_result.map_list (fun (namespace, image) ->
       Sol_cli_contract.reconcile_in_destination
         ~ctx:ctx.execution.cluster
-        ~platform_shape:plan.Sol_cli_deployment_plan.platform_shape
+        ~kafka:plan.Sol_cli_deployment_plan.kafka
         ~namespace
         ~image)
     |> Result.map (fun _ -> ())

@@ -21,3 +21,16 @@ val authorization_state_identities
   :  target:Sol_cli_config.target
   -> Sol_cli_cloud_destroy.state_read
   -> (string * string list) list
+
+val kafka_storage
+  :  Sol_cli_config.target
+  -> namespace:string
+  -> Sol_cli_absence.observation
+  -> Sol_cli_absence.observation
+
+(** Independently observe the durable Kafka secret and its enabled version.
+    This is the reuse decision's evidence; a Terraform plan alone is not. *)
+val kafka_authority
+  :  Sol_cli_config.target
+  -> cluster_name:string
+  -> Sol_cli_kafka_authority.authority_state

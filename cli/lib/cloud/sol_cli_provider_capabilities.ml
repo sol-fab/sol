@@ -102,6 +102,7 @@ type t =
   ; guarded_removals : string list
   ; root_declared_vars :
       has_postgres:bool
+      -> kafka_connection:Yojson.Safe.t option
       -> production_postgres:bool
       -> ecr_repositories:(unit -> (string, string) result)
       -> ((string * string) list, string) result
@@ -871,14 +872,17 @@ let gcp_effective_access ~run (target : Sol_cli_config.target) workloads =
 
 let aws_root_declared_vars
   :  has_postgres:bool
+  -> kafka_connection:Yojson.Safe.t option
   -> production_postgres:bool
   -> ecr_repositories:(unit -> (string, string) result)
   -> ((string * string) list, string) result
   =
-  fun ~has_postgres ~production_postgres ~ecr_repositories ->
+  fun ~has_postgres ~kafka_connection ~production_postgres ~ecr_repositories ->
   Result.map
     (fun ecr_repositories ->
-       [ "create_rds", string_of_bool has_postgres
+       [ ( "kafka_connection"
+         , Yojson.Safe.to_string (Option.value kafka_connection ~default:`Null) )
+       ; "create_rds", string_of_bool has_postgres
        ; "rds_multi_az", string_of_bool production_postgres
        ; "ecr_repositories", ecr_repositories
        ])
@@ -1183,8 +1187,12 @@ let gcp : t =
       (* GCP used to ignore this flag and declare Cloud SQL unconditionally, so omitting a
          postgres resource stopped provisioning on AWS and not on GCP. Both providers now
          derive provisioning from the same resolved ownership decision. *)
-      (fun ~has_postgres ~production_postgres:_ ~ecr_repositories:_ ->
-        Ok [ "create_database", string_of_bool has_postgres ])
+      (fun ~has_postgres ~kafka_connection ~production_postgres:_ ~ecr_repositories:_ ->
+        Ok
+          [ "create_database", string_of_bool has_postgres
+          ; ( "kafka_connection"
+            , Yojson.Safe.to_string (Option.value kafka_connection ~default:`Null) )
+          ])
   ; destroy_guard_vars =
       (fun ~final_snapshot:_ ->
         [ "sql_deletion_protection", "false"; "gke_deletion_protection", "false" ])
@@ -1266,7 +1274,10 @@ let byo : t =
   ; profile_vars = (fun ~production:_ ~production_postgres:_ -> [])
   ; guarded_removals = []
   ; root_declared_vars =
-      (fun ~has_postgres:_ ~production_postgres:_ ~ecr_repositories:_ -> Ok [])
+      (fun ~has_postgres:_
+        ~kafka_connection:_
+        ~production_postgres:_
+        ~ecr_repositories:_ -> Ok [])
   ; destroy_guard_vars = (fun ~final_snapshot:_ -> [])
   ; authority = No_authority_required
   ; guarded_addresses = []

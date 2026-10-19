@@ -296,7 +296,7 @@ let validate_resource_requirements
          (String.concat ", " missing))
 ;;
 
-let service_specs_of_release ?database (release : Sol_cli_release.t) =
+let service_specs_of_release ?database ?kafka (release : Sol_cli_release.t) =
   (* A rollback restores the release's **recorded** requirements against the **current** target's
      authorities and bindings. The release answers "what did this version require?"; the target
      answers "where does that credential come from today?". Neither is asked the other's question,
@@ -311,6 +311,40 @@ let service_specs_of_release ?database (release : Sol_cli_release.t) =
     | Some (target, database) ->
       Sol_cli_deployment_plan.database_for_uses ~target:(Some target) ~database
   in
+  (* The recorded workload says whether it required Kafka and what it required it
+     for. The current target says which connection/authority supplies that today.
+     A recorded consumer whose target no longer resolves Kafka fails closed rather
+     than silently restoring stale endpoint metadata. *)
+  let kafka_env_keys =
+    Sol_cli_manifest.kafka_connection_env Sol_cli_manifest.Sasl_ssl |> List.map fst
+  in
+  let restore_kafka (w : Sol_cli_release.recorded_workload) spec =
+    match kafka with
+    | None -> Ok spec
+    | Some kafka ->
+      if
+        spec.Sol_cli_deployment_plan.consumes_kafka
+        && kafka = Sol_cli_resource_binding.No_kafka
+      then
+        Error
+          (Printf.sprintf
+             "cannot restore release %s: workload %s/%s required Kafka, but the current \
+              target has no resolved Kafka binding"
+             release.release_id
+             w.spec.domain
+             w.spec.name)
+      else (
+        let config =
+          List.filter
+            (fun (key, _) -> not (List.mem key kafka_env_keys))
+            spec.Sol_cli_deployment_plan.config
+          @
+          if spec.Sol_cli_deployment_plan.consumes_kafka
+          then Sol_cli_resource_binding.kafka_config kafka
+          else []
+        in
+        Ok { spec with Sol_cli_deployment_plan.config })
+  in
   let rec go acc = function
     | [] -> Ok (List.rev acc)
     | (w : Sol_cli_release.recorded_workload) :: rest ->
@@ -322,7 +356,7 @@ let service_specs_of_release ?database (release : Sol_cli_release.t) =
       in
       (* The requirement is the *record's*; the resolution is the current target's. *)
       let database = database_targets w.spec.uses in
-      let spec = { spec with database } in
+      let* spec = restore_kafka w { spec with database } in
       go (spec :: acc) rest
   in
   let* specs = go [] release.workloads in
@@ -1232,6 +1266,7 @@ let pointer_report_to_string ~(release : Sol_cli_release.t) = function
 
 type transaction_deps =
   { database : (string * Sol_cli_resource_binding.postgres) option
+  ; kafka : Sol_cli_resource_binding.kafka option
   ; ensure_held : unit -> (unit, string) result
   ; applied_migrations : unit -> (int list, string) result
   ; apply : (Sol_cli_deployment_plan.service_spec * string) list -> (unit, string) result
@@ -1278,7 +1313,9 @@ let execute
     | Error e -> Error (migration_check_error_to_string e)
     | Ok () -> Ok ()
   in
-  let* specs = service_specs_of_release ?database:deps.database release in
+  let* specs =
+    service_specs_of_release ?database:deps.database ?kafka:deps.kafka release
+  in
   let* () = deps.ensure_held () in
   let* () =
     match deps.apply specs with

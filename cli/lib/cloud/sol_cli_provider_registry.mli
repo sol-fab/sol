@@ -47,6 +47,28 @@ val observations
   -> cluster_name:string
   -> Sol_cli_absence.observation list
 
+val kafka_generation
+  :  Sol_cli_provider.t
+  -> managed:bool
+  -> Sol_cli_terraform_plan.change list
+  -> (Sol_cli_kafka_authority.generation, string) result
+
+(** Independent provider observation of the authority a [Reuse] decision relies on. *)
+val kafka_authority
+  :  Sol_cli_provider.t
+  -> Sol_cli_config.target
+  -> cluster_name:string
+  -> Sol_cli_kafka_authority.authority_state
+
+(** Positive independent absence required before first credential generation. *)
+val kafka_initialization_evidence
+  :  Sol_cli_provider.t
+  -> Sol_cli_config.target
+  -> cluster_name:string
+  -> namespace:string
+  -> observe_broker:(unit -> Sol_cli_absence.observation)
+  -> (Sol_cli_kafka_authority.initialization_evidence, string) result
+
 val substrate_absence
   :  Sol_cli_provider.t
   -> Sol_cli_config.target

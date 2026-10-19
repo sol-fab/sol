@@ -1,4 +1,4 @@
-let service_specs_of_release ?config release =
+let service_specs_of_release ?config ?kafka release =
   let open Result.Syntax in
   let* database =
     match config with
@@ -10,7 +10,7 @@ let service_specs_of_release ?config release =
       in
       Ok (Some (Sol_cli_kubernetes_name.sanitize_name config.target.name, selection))
   in
-  Sol_cli_rollback.service_specs_of_release ?database release
+  Sol_cli_rollback.service_specs_of_release ?database ?kafka release
 ;;
 
 let k8s_name value =
@@ -215,6 +215,7 @@ let gate_plan : Sol_cli_deployment_plan.t =
   ; contract = []
   ; contract_changes = []
   ; database = Sol_cli_resource_binding.No_postgres
+  ; kafka = Sol_cli_resource_binding.No_kafka
   ; resource_delivery = None
   }
 ;;
@@ -1445,6 +1446,7 @@ let recording_deps
   in
   let deps : Sol_cli_rollback.transaction_deps =
     { database = None
+    ; kafka = None
     ; ensure_held
     ; applied_migrations
     ; apply =
@@ -2177,6 +2179,7 @@ let modelled_deps ~release ~cluster ?(fail_at = None) ()
        | Ok () -> apply_all (index + 1) rest)
   in
   { database = None
+  ; kafka = None
   ; Sol_cli_rollback.ensure_held = (fun () -> Ok ())
   ; applied_migrations = (fun () -> Ok [])
   ; apply = apply_all 0
@@ -3000,4 +3003,87 @@ let%test
             [ resource "app_db" "postgres" true; resource "event_log" "kafka" false ])
        (release [ "event_log" ])
      = Ok ())
+;;
+
+let kafka_external =
+  Sol_cli_resource_binding.External_kafka
+    { resource = "events"
+    ; store = "external-kafka"
+    ; brokers = "broker.example:9093"
+    ; schema_registry_url = "https://registry.example"
+    ; admin_url = "https://admin.example"
+    ; username = "consumer"
+    ; mechanism = "SCRAM-SHA-256"
+    ; password = "events/password"
+    ; ca = "events/ca"
+    }
+;;
+
+let%test
+    "rollback re-resolves Kafka against the current target and keeps the historical \
+     requirement"
+  =
+  let recorded =
+    { (worker_spec ()) with
+      config =
+        [ "KAFKA_BROKERS", "old.redpanda:9093"
+        ; "KAFKA_SECURITY_PROTOCOL", "sasl_ssl"
+        ; "SCHEMA_REGISTRY_URL", "https://old.registry"
+        ; "REDPANDA_ADMIN_URL", "https://old.admin"
+        ; "KAFKA_SASL_USERNAME", "old-user"
+        ; "KAFKA_SASL_MECHANISM", "SCRAM-SHA-256"
+        ; "KAFKA_SSL_CA_LOCATION", "/etc/sol/kafka/ca.crt"
+        ; "NODE_EXTRA_CA_CERTS", "/etc/sol/kafka/ca.crt"
+        ; "SOL_KAFKA_DURABILITY", "single-broker-loss"
+        ; "LOG_LEVEL", "info"
+        ]
+    ; uses = [ "events" ]
+    }
+  in
+  let release = release_with_workloads ~apply_mode:Sol_cli_release.Direct [ recorded ] in
+  match service_specs_of_release ~kafka:kafka_external release with
+  | Error message -> Windtrap.fail message
+  | Ok [ (spec, _) ] ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the current broker replaces the recorded one"
+      true
+      (List.assoc_opt "KAFKA_BROKERS" spec.config = Some "broker.example:9093");
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the old broker is gone"
+      true
+      (List.assoc_opt "KAFKA_BROKERS" spec.config <> Some "old.redpanda:9093");
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"durability remains the historical requirement"
+      true
+      (List.assoc_opt "SOL_KAFKA_DURABILITY" spec.config = Some "single-broker-loss");
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"consumes_kafka remains the historical requirement"
+      true
+      spec.consumes_kafka;
+    Windtrap.equal
+      (Windtrap.list Windtrap.string)
+      ~msg:"uses remains the historical requirement"
+      [ "events" ]
+      spec.uses
+  | Ok _ -> Windtrap.fail "unexpected restored workload count"
+;;
+
+let%test "rollback refuses a historical Kafka consumer whose target has no binding" =
+  let release =
+    release_with_workloads
+      ~apply_mode:Sol_cli_release.Direct
+      [ { (worker_spec ()) with uses = [ "events" ]; consumes_kafka = true } ]
+  in
+  match service_specs_of_release ~kafka:Sol_cli_resource_binding.No_kafka release with
+  | Error message ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the refusal explains the missing binding"
+      true
+      (Sol_cli_string.contains ~needle:"no resolved Kafka binding" message)
+  | Ok _ -> Windtrap.fail "rollback restored a Kafka consumer without a current binding"
 ;;

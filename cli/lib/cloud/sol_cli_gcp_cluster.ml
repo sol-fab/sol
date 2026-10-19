@@ -1,3 +1,10 @@
+(* Shared by generation decisions and native ownership/recovery attribution. *)
+let kafka_authority_resources : Sol_cli_kafka_authority.authority_resources =
+  { secret = "google_secret_manager_secret.kafka[0]"
+  ; version = "google_secret_manager_secret_version.kafka[0]"
+  }
+;;
+
 open Result.Syntax
 
 let service_account_id_min_length = 6
@@ -71,6 +78,7 @@ type gcp_outputs =
   ; (* The trust anchor a client needs for this provider's sslmode; Cloud SQL's per-instance
        server CA. Null when no database was created. See the AWS counterpart. *)
     postgres_ca_cert : string option
+  ; kafka_authority : string option
   }
 
 let gcp_outputs_of_json text =
@@ -78,6 +86,7 @@ let gcp_outputs_of_json text =
   let* value, string, optional_string =
     Sol_cli_cluster.outputs_reader ~provider:"GCP" text
   in
+  let* kafka_authority = Sol_cli_kafka_authority.reference_output text in
   let* cluster_name = string "cluster_name" in
   let* project_id = string "project_id" in
   let* region = string "region" in
@@ -128,6 +137,7 @@ let gcp_outputs_of_json text =
     ; database_egress_cidrs
     ; postgres_url
     ; postgres_ca_cert
+    ; kafka_authority
     }
 ;;
 
@@ -233,11 +243,15 @@ let database_egress_cidrs_json outputs =
     Some (`List (List.map (fun cidr -> `String cidr) cidrs) |> Yojson.Safe.to_string)
 ;;
 
-let platform_vars outputs _context ~cluster_issuer:_ ~region:_ =
+let platform_vars outputs context ~cluster_issuer:_ ~region:_ =
   Ok
     { Sol_cli_cluster.fixed = [ "cloud_provider=gcp"; "storage_class_name=standard-rwo" ]
     ; optional =
-        [ "loki_gcs_bucket", outputs.loki_gcs_bucket
+        [ ( "kafka_authority"
+          , match context with
+            | Sol_cli_cluster.Install -> outputs.kafka_authority
+            | Destruction -> None )
+        ; "loki_gcs_bucket", outputs.loki_gcs_bucket
         ; "loki_workload_identity_sa_email", outputs.loki_workload_identity_sa_email
         ; "thanos_gcs_bucket", outputs.thanos_gcs_bucket
         ; "thanos_workload_identity_sa_email", outputs.thanos_workload_identity_sa_email

@@ -773,14 +773,18 @@ let%test "1423: an external database plans for GitOps with its delivery" =
    the target must map. *)
 
 (* A workspace whose cloud target body the test supplies, so the shape is the only variable. *)
-let single_charge_workspace ~target_body ?(toml = "") () =
+let single_charge_workspace ?(kafka = false) ~target_body ?(toml = "") () =
+  let resources = if kafka then "resources:\n  events:\n    type: kafka\n" else "" in
+  let uses = if kafka then "    uses: [events]\n" else "" in
   [ ( "sol.yml"
-    , "project: ws\n\
-       services:\n\
-      \  charge_svc:\n\
-      \    type: http\n\
-      \    path: app/payments/charge_svc\n\
-      \    language: ocaml\n" )
+    , "project: ws\n"
+      ^ resources
+      ^ "services:\n\
+        \  charge_svc:\n\
+        \    type: http\n\
+        \    path: app/payments/charge_svc\n\
+        \    language: ocaml\n"
+      ^ uses )
   ; ( "sol/environments.yml"
     , Printf.sprintf "prod:\n  targets:\n    aws/us-east-1:\n%s" target_body )
   ; "app/payments/charge_svc/Dockerfile", "FROM scratch\n"
@@ -838,6 +842,8 @@ let test_durable_shape_declares_authenticated_kafka_and_requires_its_authorities
     plan_refuses
       "a durable target with no Kafka authority"
       (single_charge_workspace
+         ~kafka:true
+         ~toml:"[service]\ntopics = [\"orders\"]\n"
          ~target_body:"      cluster_name: ws-prod\n      shape: durable\n"
          ())
   in
@@ -850,6 +856,8 @@ let test_durable_shape_declares_authenticated_kafka_and_requires_its_authorities
       "a durable target that maps its Kafka authority"
       (plan_for
          (single_charge_workspace
+            ~kafka:true
+            ~toml:"[service]\ntopics = [\"orders\"]\n"
             ~target_body:
               "      cluster_name: ws-prod\n\
               \      shape: durable\n\

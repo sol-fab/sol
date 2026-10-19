@@ -17,6 +17,9 @@ GCP_MAY_OMIT = {
     "thanos_irsa_role_arn",
     "thanos_s3_bucket",
 }
+# The platform root synthesizes this module input from the cluster output and a
+# scoped provider read; it is not a root variable the module call can mirror.
+SYNTHESIZED_MODULE_INPUTS = {"kafka_credential"}
 NAMESPACE_KINDS = {"namespaces", "rolebindings"}
 
 
@@ -319,7 +322,7 @@ def check_platform_roots(root):
                 "      so Sol would initialize it with the wrong backend type.",
             )
         mirrored = set(tfconfig.variables(vars_file))
-        unexpected = sorted((definition - mirrored) - may_omit)
+        unexpected = sorted((definition - mirrored) - may_omit - SYNTHESIZED_MODULE_INPUTS)
         if unexpected:
             fail(
                 f"FAIL: the {provider} platform root does not mirror these declared variables:",

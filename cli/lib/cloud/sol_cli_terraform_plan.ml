@@ -19,6 +19,7 @@ type matcher =
   | Resource of string
   | Type of string
   | Every_change
+  | Except of matcher
 
 type rule =
   { matches : matcher list
@@ -86,12 +87,13 @@ let without_instance_key address =
 
 let same_resource a b = String.equal (without_instance_key a) (without_instance_key b)
 
-let matches matcher change =
+let rec matches matcher change =
   match matcher with
   | Exact address -> change.address = address
   | Resource resource -> String.equal (without_instance_key change.address) resource
   | Type kind -> change.resource_type = kind
   | Every_change -> true
+  | Except matcher -> not (matches matcher change)
 ;;
 
 let permitted policy change =

@@ -19,6 +19,7 @@ type matcher =
   | Resource of string
   | Type of string
   | Every_change
+  | Except of matcher
 
 type rule =
   { matches : matcher list

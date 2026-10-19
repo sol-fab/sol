@@ -233,6 +233,92 @@ let observations
   | Sol_cli_provider.Byo -> []
 ;;
 
+let kafka_generation provider ~managed changes =
+  match provider with
+  | Sol_cli_provider.Aws ->
+    Sol_cli_kafka_authority.generation
+      ~resources:Sol_cli_aws_cluster.kafka_authority_resources
+      ~managed
+      changes
+  | Sol_cli_provider.Gcp ->
+    Sol_cli_kafka_authority.generation
+      ~resources:Sol_cli_gcp_cluster.kafka_authority_resources
+      ~managed
+      changes
+  | Sol_cli_provider.Byo ->
+    Error "the BYO provider has no native Kafka generation authority"
+;;
+
+let kafka_authority provider (target : Sol_cli_config.target) ~cluster_name =
+  match provider with
+  | Sol_cli_provider.Aws ->
+    Sol_cli_aws_absence.kafka_authority ~region:target.region ~cluster_name
+  | Sol_cli_provider.Gcp -> Sol_cli_gcp_absence.kafka_authority target ~cluster_name
+  | Sol_cli_provider.Byo ->
+    Sol_cli_kafka_authority.Authority_unobservable
+      "the BYO provider has no native Kafka credential authority"
+;;
+
+(* These are independent provider observations, not the destruction verdict or
+   Terraform's success. A missing required probe cannot make generation safe. *)
+let kafka_initialization_evidence provider target ~cluster_name ~namespace ~observe_broker
+  =
+  let required =
+    match provider with
+    | Sol_cli_provider.Aws -> Ok ("EKS cluster", "EBS volume")
+    | Sol_cli_provider.Gcp -> Ok ("GKE cluster", "persistent disk")
+    | Sol_cli_provider.Byo ->
+      Error "managed Kafka credential provisioning requires a native AWS or GCP authority"
+  in
+  let open Result.Syntax in
+  let* cluster_class, storage_class = required in
+  let observed = observations provider target ~cluster_name in
+  let resource_class = function
+    | Sol_cli_absence.Absent o -> o.resource_class
+    | Present o -> o.resource_class
+    | External o -> o.resource_class
+    | Not_attributable o -> o.resource_class
+    | Unobservable o -> o.resource_class
+  in
+  let get required =
+    match List.filter (fun o -> resource_class o = required) observed with
+    | [ observation ] -> observation
+    | _ ->
+      Sol_cli_absence.Unobservable
+        { resource_class = required
+        ; reason =
+            "required initialization observation is unavailable: "
+            ^ Sol_cli_absence.report observed
+        ; checked_with = "the provider inventory"
+        }
+  in
+  let broker =
+    match get cluster_class with
+    | Sol_cli_absence.Absent parent ->
+      Sol_cli_absence.Absent
+        { parent with
+          resource_class = "Kafka broker"
+        ; identity = "a broker cannot survive the absent target cluster"
+        }
+    | Present _ -> observe_broker ()
+    | evidence -> evidence
+  in
+  let authority = get "Kafka credential secret" in
+  let storage = get storage_class in
+  let storage =
+    match broker, authority with
+    | Sol_cli_absence.Absent _, Sol_cli_absence.Absent _ ->
+      (match provider with
+       | Sol_cli_provider.Aws ->
+         Sol_cli_aws_absence.kafka_storage ~region:target.region ~namespace storage
+       | Sol_cli_provider.Gcp ->
+         Sol_cli_gcp_absence.kafka_storage target ~namespace storage
+       | Sol_cli_provider.Byo -> storage)
+    | _ -> storage
+  in
+  Ok { Sol_cli_kafka_authority.broker; storage; authority }
+;;
+
 let substrate_absence provider target ~cluster_name =
   match provider with
   | Sol_cli_provider.Aws -> Sol_cli_aws_absence.substrate_absence target ~cluster_name

@@ -49,6 +49,11 @@ let local_plan
     | Some resource -> Sol_cli_resource_binding.Local_postgres resource
     | None -> Sol_cli_resource_binding.No_postgres
   in
+  let* kafka =
+    Sol_cli_resource_binding.kafka bindings
+    |> Result.map_error (fun message ->
+      Sol_cli_deployment_plan.Invalid_resource_binding message)
+  in
   Sol_cli_deployment_plan.of_services_result
     ~requested_scope
     ~workspace
@@ -58,6 +63,7 @@ let local_plan
     ~platform_shape:Sol_cli_profile.Local
     ~target:(Sol_cli_kubernetes_name.sanitize_name workspace)
     ~database
+    ~kafka:(Sol_cli_resource_binding.kafka_for_shape ~shape:Sol_cli_profile.Local kafka)
     services
 ;;
 

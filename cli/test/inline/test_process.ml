@@ -97,9 +97,18 @@ let test_detached_process_honors_explicit_environment_only () =
                     \"$SOL_TEST_EXPLICIT_ENV\" > \"$SOL_TEST_OUTPUT\""
                  ]))
        in
+       (* [>] creates the file before the child writes it; polling existence can
+          observe an empty file. Wait for the expected content instead. *)
+       let expected = "unset:visible" in
        let rec await attempts =
          if Sys.file_exists path
-         then In_channel.with_open_bin path In_channel.input_all
+         then (
+           let output = In_channel.with_open_bin path In_channel.input_all in
+           if String.equal output expected || attempts = 0
+           then output
+           else (
+             Unix.sleepf 0.01;
+             await (attempts - 1)))
          else if attempts = 0
          then (
            Sol_cli_process.stop child;
@@ -110,7 +119,7 @@ let test_detached_process_honors_explicit_environment_only () =
        in
        let output = await 100 in
        Sol_cli_process.join child;
-       check_str "detached child gets only explicit environment" "unset:visible" output)
+       check_str "detached child gets only explicit environment" expected output)
 ;;
 
 let test_spawn_failed () =

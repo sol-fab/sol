@@ -14,6 +14,7 @@ val plan_of_services
   -> ?inventory:Sol_cli_manifest.service list
   -> ?target:string
   -> database:Sol_cli_resource_binding.postgres
+  -> ?kafka:Sol_cli_resource_binding.kafka
   -> Sol_cli_manifest.service list
   -> (Sol_cli_deployment_plan.t, string) result
 
@@ -31,6 +32,7 @@ type request =
   ; platform_shape : Sol_cli_profile.platform_shape
   ; target : string option
   ; database : Sol_cli_resource_binding.postgres
+  ; kafka : Sol_cli_resource_binding.kafka
   }
 
 val run

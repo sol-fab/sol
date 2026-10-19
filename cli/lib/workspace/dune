@@ -1,4 +1,4 @@
 (library
  (name sol_cli_workspace)
  (wrapped false)
- (libraries sol_cli_base sol_cli_kube cmdliner otoml unix yaml))
+ (libraries sol_cli_base sol_cli_kube cmdliner otoml unix yaml uri))

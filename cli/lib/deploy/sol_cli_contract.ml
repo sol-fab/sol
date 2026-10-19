@@ -101,8 +101,10 @@ let reconciliation_images services =
     services
 ;;
 
-let reconcile_in_destination ~ctx ~platform_shape ~namespace ~image =
-  let transport = Sol_cli_manifest.kafka_transport platform_shape in
+let reconcile_in_destination ~ctx ~kafka ~namespace ~image =
+  (* The Job consumes the same resolved selection as workload rendering. *)
+  let kafka_config = Sol_cli_resource_binding.kafka_config kafka in
+  let transport = Sol_cli_manifest.kafka_transport_of_config kafka_config in
   let* () =
     match transport with
     | Sol_cli_manifest.Plaintext -> Ok ()
@@ -110,7 +112,7 @@ let reconcile_in_destination ~ctx ~platform_shape ~namespace ~image =
       Sol_cli_secret.verify_runtime_secret_keys
         ~ctx
         ~namespace
-        ~required_keys:[ "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ]
+        ~required_keys:(Sol_cli_manifest.kafka_required_secret_keys transport)
   in
   match
     Sol_cli_migration_job.submit_doc
@@ -120,7 +122,7 @@ let reconcile_in_destination ~ctx ~platform_shape ~namespace ~image =
       ~label:"contract"
       (fun ~name ->
          Sol_cli_manifest.contract_job_doc
-           ~cluster_env:(Sol_cli_manifest.cluster_env transport)
+           ~cluster_env:(kafka_config @ Sol_cli_manifest.telemetry_env)
            ~name
            ~namespace
            ~image

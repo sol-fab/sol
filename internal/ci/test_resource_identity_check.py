@@ -11,8 +11,10 @@ COPIED = [
     "cli/lib/cloud/sol_cli_resource_identity.ml",
     "platform/cloud/gcp/cluster/main.tf",
     "platform/cloud/gcp/cluster/variables.tf",
+    "platform/cloud/gcp/cluster/kafka.tf",
     "platform/cloud/aws/cluster/main.tf",
     "platform/cloud/aws/cluster/variables.tf",
+    "platform/cloud/aws/cluster/kafka.tf",
     "platform/cloud/modules/platform/main.tf",
     "platform/cloud/modules/platform/cert_manager_issuer.tf",
 ]

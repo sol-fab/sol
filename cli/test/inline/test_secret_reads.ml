@@ -695,7 +695,7 @@ let test_tls_contract_job_refuses_before_submission_without_platform_inputs () =
     match
       Sol_cli_contract.reconcile_in_destination
         ~ctx
-        ~platform_shape:Sol_cli_profile.Durable
+        ~kafka:(Sol_cli_resource_binding.Managed_kafka "events")
         ~namespace:"payments"
         ~image:"contract-image"
     with

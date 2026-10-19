@@ -38,7 +38,16 @@ let terraform_stdout (r : (Sol_cli_process.output, Sol_cli_process.error) result
          (Sol_cli_process.error_to_string error))
 ;;
 
-let apply_asserted ~run_log ~phase_name ~policy ~scope ~chdir ~var_files ~vars ()
+let apply_asserted
+      ?(env = [])
+      ~run_log
+      ~phase_name
+      ~policy
+      ~scope
+      ~chdir
+      ~var_files
+      ~vars
+      ()
   : (unit, string) result
   =
   let* private_plan = Sol_cli_terraform.create_private_plan () in
@@ -53,6 +62,7 @@ let apply_asserted ~run_log ~phase_name ~policy ~scope ~chdir ~var_files ~vars (
              terraform_stdout
                (Sol_cli_run_log.run_phase run_log ~name:(phase_name ^ "-plan") (fun () ->
                   Sol_cli_terraform.plan_saved
+                    ~env
                     ~scope
                     ~chdir
                     ~var_files
@@ -62,6 +72,7 @@ let apply_asserted ~run_log ~phase_name ~policy ~scope ~chdir ~var_files ~vars (
              |> Result.map (fun _ -> plan_file))
            ~show_plan:(fun file ->
              Sol_cli_terraform.show_saved_plan
+               ~env
                ~run_log
                ~phase:(phase_name ^ "-show")
                ~chdir
@@ -71,7 +82,7 @@ let apply_asserted ~run_log ~phase_name ~policy ~scope ~chdir ~var_files ~vars (
            ~apply_plan:(fun file ->
              terraform_outcome
                (Sol_cli_run_log.run_phase run_log ~name:phase_name (fun () ->
-                  Sol_cli_terraform.apply_saved ~chdir ~plan_file:file ())))
+                  Sol_cli_terraform.apply_saved ~env ~chdir ~plan_file:file ())))
            ()
        with
        | Ok () -> Ok ()
