@@ -20,6 +20,12 @@ before="$(git -C "$real" rev-parse --absolute-git-dir)"
 scratch_repo_assert "$real" || fail "a repository made by scratch_repo_init must resolve inside itself"
 pass "scratch_repo_init creates a repository that resolves inside itself"
 
+[ "$(git -C "$real" config --get maintenance.auto)" = "false" ] \
+  || fail "scratch_repo_init left background maintenance enabled"
+[ "$(git -C "$real" config --get gc.auto)" = "0" ] \
+  || fail "scratch_repo_init left automatic gc enabled"
+pass "scratch_repo_init disables background maintenance so cleanup cannot race a pack write"
+
 if scratch_repo_assert "$tmp/absent" 2>"$tmp/assert.err"; then
   fail "scratch_repo_assert accepted a directory that is not a repository"
 fi
