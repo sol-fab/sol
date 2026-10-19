@@ -145,7 +145,7 @@ let only observations resource_class =
 ;;
 
 let with_calls
-      ?(disks_out = "")
+      ?(disks_out = "[]")
       ?(node_pools_err = "")
       ?(roles_out = "")
       ?(previously_attributed = [])
@@ -234,16 +234,15 @@ let test_location_is_explicit_on_every_regional_check () =
     Windtrap.equal Windtrap.int ~msg:"one disk check" 1 (List.length disks);
     Windtrap.equal
       Windtrap.bool
-      ~msg:"the disk check is scoped to the target's region"
-      true
-      (Sol_cli_string.contains ~needle:"--regions us-central1" (List.hd disks));
+      ~msg:"disk enumeration includes zonal and regional disks"
+      false
+      (Sol_cli_string.contains ~needle:"--regions" (List.hd disks)
+       || Sol_cli_string.contains ~needle:"--zones" (List.hd disks));
     Windtrap.equal
       Windtrap.bool
-      ~msg:"and asks for the GKE cluster label that attributes a PVC disk"
+      ~msg:"JSON retains location, provider identity and ownership metadata"
       true
-      (Sol_cli_string.contains
-         ~needle:"value(name,labels.goog-k8s-cluster-name)"
-         (List.hd disks)))
+      (Sol_cli_string.contains ~needle:"--format json" (List.hd disks)))
 ;;
 
 let test_the_target_region_beats_the_configured_default () =
@@ -456,16 +455,45 @@ let%test "GCP scope: an incomplete enumeration with matches is Unobservable" =
   test_an_incomplete_enumeration_with_matches_is_unobservable ()
 ;;
 
+let disk_identity ?(kind = "zones") ?(location = "us-central1-a") name =
+  "https://www.googleapis.com/compute/v1/projects/acme-project/"
+  ^ kind
+  ^ "/"
+  ^ location
+  ^ "/disks/"
+  ^ name
+;;
+
+let disk ?(kind = "zones") ?(location = "us-central1-a") ?label name =
+  `Assoc
+    ([ "selfLink", `String (disk_identity ~kind ~location name)
+     ; ( (if kind = "zones" then "zone" else "region")
+       , `String
+           ("https://www.googleapis.com/compute/v1/projects/acme-project/"
+            ^ kind
+            ^ "/"
+            ^ location) )
+     ]
+     @
+     match label with
+     | None -> []
+     | Some value -> [ "labels", `Assoc [ "goog-k8s-cluster-name", `String value ] ])
+;;
+
+let disk_listing disks = Yojson.Safe.to_string (`List disks)
+
 let test_attributable_pvc_disks_are_present () =
   with_calls
     ~node_pools_out:""
     ~nats_out:""
     ~disks_out:
-      "pvc-2120bdaa\tacme-prod\n\
-       pvc-other\tother-cluster\n\
-       gke-acme-prod-node-1\tacme-prod\n\
-       pvc-unlabelled\n\
-       gke-acme-prod-node-2\n"
+      (disk_listing
+         [ disk ~label:"acme-prod" "pvc-2120bdaa"
+         ; disk ~label:"other-cluster" "pvc-other"
+         ; disk ~label:"acme-prod" "gke-acme-prod-node-1"
+         ; disk "pvc-unlabelled"
+         ; disk "gke-acme-prod-node-2"
+         ])
     ~list_exit:0
     (fun ~log:_ ~observations ->
        match only observations "persistent disk" with
@@ -475,7 +503,7 @@ let test_attributable_pvc_disks_are_present () =
            ~msg:
              "the cluster label attributes the PVC and labelled node disks; an unrelated \
               label, no label, or an unlabelled gke-* name is not attributed"
-           [ "gke-acme-prod-node-1"; "pvc-2120bdaa" ]
+           [ disk_identity "gke-acme-prod-node-1"; disk_identity "pvc-2120bdaa" ]
            p.found
        | Sol_cli_absence.Absent _ ->
          Windtrap.fail "an attributable pvc-* disk must be Present"
@@ -484,8 +512,8 @@ let test_attributable_pvc_disks_are_present () =
 
 let%test "GCP disks: a previously attributed disk survives label loss" =
   with_calls
-    ~disks_out:"pvc-2120bdaa\n"
-    ~previously_attributed:[ "persistent disk", [ "pvc-2120bdaa" ] ]
+    ~disks_out:(disk_listing [ disk "pvc-2120bdaa" ])
+    ~previously_attributed:[ "persistent disk", [ disk_identity "pvc-2120bdaa" ] ]
     ~node_pools_out:""
     ~nats_out:""
     ~list_exit:0
@@ -495,7 +523,7 @@ let%test "GCP disks: a previously attributed disk survives label loss" =
          Windtrap.equal
            (Windtrap.list Windtrap.string)
            ~msg:"the pre-destroy identity keeps the label-less disk attributable"
-           [ "pvc-2120bdaa" ]
+           [ disk_identity "pvc-2120bdaa" ]
            present.found
        | _ ->
          Windtrap.fail
@@ -506,7 +534,7 @@ let test_a_present_pvc_disk_prevents_verified_absence () =
   with_calls
     ~node_pools_out:""
     ~nats_out:""
-    ~disks_out:"pvc-2120bdaa\tacme-prod\n"
+    ~disks_out:(disk_listing [ disk ~label:"acme-prod" "pvc-2120bdaa" ])
     ~list_exit:0
     (fun ~log:_ ~observations ->
        let disk = only observations "persistent disk" in
@@ -762,4 +790,166 @@ let%test "GCP regional addresses: a failed address listing is unknown" =
         true
         (Sol_cli_string.contains ~needle:"permission denied" u.reason)
     | _ -> Windtrap.fail "a failed address listing must be unknown")
+;;
+
+let%test "GCP disks: regional enumeration must not hide a surviving zonal disk" =
+  with_fake_gcloud
+    ~node_pools_out:""
+    ~node_pools_err:""
+    ~nats_out:""
+    ~roles_out:""
+    ~disks_out:""
+    ~list_exit:0
+    (fun () ->
+       let dir = List.hd (String.split_on_char ':' (Sys.getenv "PATH")) in
+       let script =
+         {|#!/bin/sh
+case "$*" in
+  *"compute disks list"*)
+    case "$*" in *"--regions"*) exit 0 ;; esac
+    printf '%s' '[{"selfLink":"https://www.googleapis.com/compute/v1/projects/acme-project/zones/us-central1-a/disks/pvc-survivor","zone":"https://www.googleapis.com/compute/v1/projects/acme-project/zones/us-central1-a","labels":{"goog-k8s-cluster-name":"acme-prod"}}]'
+    ;;
+esac
+|}
+       in
+       Out_channel.with_open_text (Filename.concat dir "gcloud") (fun oc ->
+         output_string oc script);
+       match
+         only
+           (Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod")
+           "persistent disk"
+       with
+       | Sol_cli_absence.Present p ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the provider identity of a zonal survivor remains visible"
+           [ "https://www.googleapis.com/compute/v1/projects/acme-project/zones/us-central1-a/disks/pvc-survivor"
+           ]
+           p.found
+       | _ -> Windtrap.fail "a zonal survivor must prevent verified absence")
+;;
+
+let disk_observation ?(previously_attributed = []) disks f =
+  with_calls
+    ~disks_out:(disk_listing disks)
+    ~previously_attributed
+    ~node_pools_out:""
+    ~nats_out:""
+    ~list_exit:0
+    (fun ~log:_ ~observations -> f (only observations "persistent disk"))
+;;
+
+let%test "GCP disks: target zonal and regional disks, without adjacent-region aliases" =
+  disk_observation
+    [ disk ~label:"acme-prod" "zonal"
+    ; disk ~kind:"regions" ~location:"us-central1" ~label:"acme-prod" "regional"
+    ; disk ~location:"europe-west1-a" ~label:"acme-prod" "foreign"
+    ; disk ~location:"us-central10-a" ~label:"acme-prod" "adjacent"
+    ]
+    (function
+      | Sol_cli_absence.Present p ->
+        Windtrap.equal
+          (Windtrap.list Windtrap.string)
+          ~msg:"scope both disk forms by returned location"
+          (List.sort
+             String.compare
+             [ disk_identity "zonal"
+             ; disk_identity ~kind:"regions" ~location:"us-central1" "regional"
+             ])
+          p.found
+      | _ -> Windtrap.fail "target disks must remain present")
+;;
+
+let%test "GCP disks: previously captured names cannot alias another zone" =
+  disk_observation
+    ~previously_attributed:[ "persistent disk", [ disk_identity "same" ] ]
+    [ disk ~location:"us-central1-b" "same" ]
+    (function
+      | Sol_cli_absence.Absent _ -> ()
+      | _ -> Windtrap.fail "zone-local names are not identities")
+;;
+
+let%test "GCP disks: a previously captured disk can be established absent" =
+  disk_observation
+    ~previously_attributed:[ "persistent disk", [ disk_identity "deleted" ] ]
+    []
+    (function
+      | Sol_cli_absence.Absent _ -> ()
+      | _ -> Windtrap.fail "successful empty enumeration establishes absence")
+;;
+
+let%test "GCP disks: malformed identity, location and labels are unknown" =
+  let valid =
+    match disk ~label:"acme-prod" "disk" with
+    | `Assoc fields -> fields
+    | _ -> assert false
+  in
+  let replace key value = `Assoc ((key, value) :: List.remove_assoc key valid) in
+  List.iter
+    (fun broken ->
+       disk_observation [ broken ] (function
+         | Sol_cli_absence.Unobservable _ -> ()
+         | _ -> Windtrap.fail "malformed metadata cannot establish absence"))
+    [ `Assoc (List.remove_assoc "selfLink" valid)
+    ; `Assoc (List.remove_assoc "zone" valid)
+    ; replace "zone" (`String "unrecognized")
+    ; replace "selfLink" (`String (disk_identity ~location:"us-central1-b" "disk"))
+    ; replace "labels" (`String "unreadable")
+    ; replace "labels" (`Assoc [ "goog-k8s-cluster-name", `Int 1 ])
+    ]
+;;
+
+let%test "GCP disks: malformed JSON is unknown" =
+  with_calls
+    ~disks_out:"not JSON"
+    ~node_pools_out:""
+    ~nats_out:""
+    ~list_exit:0
+    (fun ~log:_ ~observations ->
+       match only observations "persistent disk" with
+       | Sol_cli_absence.Unobservable _ -> ()
+       | _ -> Windtrap.fail "malformed enumeration is unknown")
+;;
+
+let%test "GCP disks: failed or incomplete enumeration never establishes absence" =
+  List.iter
+    (fun (status, stdout) ->
+       with_fake_gcloud
+         ~node_pools_out:""
+         ~node_pools_err:""
+         ~nats_out:""
+         ~roles_out:""
+         ~disks_out:"[]"
+         ~list_exit:0
+         (fun () ->
+            let dir = List.hd (String.split_on_char ':' (Sys.getenv "PATH")) in
+            let script =
+              Printf.sprintf
+                {|#!/bin/sh
+case "$*" in
+  *"compute disks list"*)
+    printf '%%s' %s
+    printf 'PERMISSION_DENIED: some disk scopes could not be read' >&2
+    exit %d
+    ;;
+esac
+|}
+                (Filename.quote stdout)
+                status
+            in
+            Out_channel.with_open_text (Filename.concat dir "gcloud") (fun oc ->
+              output_string oc script);
+            match
+              only
+                (Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod")
+                "persistent disk"
+            with
+            | Sol_cli_absence.Unobservable u ->
+              Windtrap.equal
+                Windtrap.bool
+                ~msg:"retain the provider diagnostic"
+                true
+                (Sol_cli_string.contains ~needle:"PERMISSION_DENIED" u.reason)
+            | _ -> Windtrap.fail "provider uncertainty cannot establish absence"))
+    [ 1, "[]"; 0, "[]"; 0, disk_listing [ disk ~label:"acme-prod" "survivor" ] ]
 ;;

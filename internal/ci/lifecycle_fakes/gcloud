@@ -26,7 +26,7 @@ case " $* " in
     ;;
 esac
 case " $* " in
-  *" compute addresses list "*" --format json "*)
+  *" compute addresses list "*" --format json "*|*" compute disks list "*" --format json "*)
     printf '[]\n'
     exit 0
     ;;
