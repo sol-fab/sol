@@ -1,3 +1,59 @@
+(* Saved plans contain sensitive state. Keep them outside workspaces, run logs,
+   caches and caller-supplied TMPDIR locations. Abandoned files remain private after an uncatchable
+   termination; host temporary-file retention or operator cleanup must remove them. *)
+type private_plan_file =
+  { path : string
+  ; directory : string
+  ; mutable released : bool
+  }
+
+let discard_private_plan file =
+  if not file.released
+  then (
+    match Sol_cli_fs.remove_tree file.directory with
+    | Ok () -> file.released <- true
+    | Error message ->
+      Sol_cli_report.warn "warning: private Terraform plan cleanup failed: %s" message)
+;;
+
+let private_plan_path file = file.path
+
+let create_private_plan () =
+  try
+    let marker = Filename.temp_file ~temp_dir:"/tmp" "sol-terraform-plan-" ".private" in
+    let directory = marker ^ ".d" in
+    let cleanup_marker () = Sol_cli_fs.remove_reporting marker in
+    Fun.protect ~finally:cleanup_marker (fun () ->
+      (* mkdir never follows an existing path. Failure does not authorize deleting
+         somebody else's directory. No sensitive data has been written yet. *)
+      Unix.mkdir directory 0o700;
+      let file =
+        { directory
+        ; path = Filename.concat directory "execution.tfplan"
+        ; released = false
+        }
+      in
+      try
+        Unix.chmod directory 0o700;
+        let fd =
+          Unix.openfile file.path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] 0o600
+        in
+        Fun.protect ~finally:(fun () -> Unix.close fd) (fun () -> Unix.fchmod fd 0o600);
+        at_exit (fun () -> discard_private_plan file);
+        Ok file
+      with
+      | Unix.Unix_error (error, _, _) ->
+        discard_private_plan file;
+        Error ("cannot allocate private Terraform plan: " ^ Unix.error_message error)
+      | Sys_error message ->
+        discard_private_plan file;
+        Error ("cannot allocate private Terraform plan: " ^ message))
+  with
+  | Unix.Unix_error (error, _, _) ->
+    Error ("cannot allocate private Terraform plan: " ^ Unix.error_message error)
+  | Sys_error message -> Error ("cannot allocate private Terraform plan: " ^ message)
+;;
+
 let run = Sol_cli_process.run
 let cmd = Sol_cli_process.cmd
 

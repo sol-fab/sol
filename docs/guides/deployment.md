@@ -298,3 +298,23 @@ part of it over.
 - [Building an application](application-authoring.md) is the other half: what runs once it is
   deployed.
 - [`docs/reference/cli.md`](../reference/cli.md) is every command and flag.
+
+### Sensitive Terraform execution artifacts
+
+Terraform state and saved binary execution plans can contain plaintext credential values even
+when ordinary output is redacted. Keep the remote backend private, encrypted, and restricted to
+its authorized provisioning/deployment principals. State versions and backups remain sensitive;
+provider Secret Manager storage is not the only copy of a generated credential.
+
+Sol's saved apply/destruction plans use fresh 0700 directories under `/tmp`, with 0600 plan files.
+They ignore caller-supplied `TMPDIR`, stay outside workspace caches and diagnostic/run-log
+archives, and are removed on success, failure and handled Terraform interruption. Cleanup errors
+are warnings naming the failed cleanup, never the file contents. Do not add these directories to
+CI uploads, caches, support bundles or broad host diagnostic collection.
+
+A hard kill or host crash can leave an abandoned private plan directory. Host administrators
+must include these private temporary directories in their retention/cleanup policy; an operator
+can remove an abandoned `sol-terraform-plan-*.private.d` directory after establishing that its
+Sol/Terraform operation is no longer active. Sol's Terraform supervisor can outlive the CLI, so
+the CLI PID disappearing alone does not prove that. Never remove the remote state or lock as a
+substitute for cleaning up a temporary plan. There is no unconditional crash-cleanup guarantee.

@@ -8,6 +8,11 @@
  (modules test_supervised)
  (libraries sol_cli windtrap unix str))
 
+(test
+ (name test_private_terraform_plans)
+ (modules test_private_terraform_plans)
+ (libraries sol_cli windtrap unix yojson))
+
 (executable
  (name print_readiness_invocations)
  (libraries sol_cli))
