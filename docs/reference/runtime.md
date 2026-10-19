@@ -103,8 +103,11 @@ Application values are scoped to one `domain/unit`. A workload references its
 own Kubernetes Secret, named `<k8s-unit-name>-secrets`, through `envFrom`; for
 example, `payments/charge_svc` receives values from `charge-svc-secrets` in the
 `<workspace>-payments` namespace. `sol secret set TARGET payments/charge_svc/KEY`
-changes only that Secret and restarts the unit when it is a long-running
-Deployment. It never writes the platform Secret or another unit's Secret.
+changes only that Secret. It never restarts or waits for a workload, including a
+Deployment, Rollout, worker or scheduled function. Explicit activation uses the
+[workload's rollout tool](../deployment/credential-rotation.md#explicit-activation);
+an unchanged deploy does not adopt a changed environment value. It never writes
+the platform Secret or another unit's Secret.
 
 Sol's internal Jobs use a separate fixed-name Secret, `sol-secrets`, for platform
 inputs that no unit owns. A TLS contract Job reads `KAFKA_SASL_PASSWORD` and
