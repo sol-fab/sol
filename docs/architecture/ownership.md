@@ -95,3 +95,26 @@ cloud execution principals and works under ADR 0006's enforceable contract
 (assume-only routine credentials, independently revocable provider and backend
 identities, Kubernetes access revoked, state transferred under lock, and a
 standalone plan showing no unintended change).
+
+## One-shot Jobs and credential delivery
+
+Submission owns a migration Job and its script ConfigMap from the first Kubernetes
+write attempt. An apply error can follow a successful server write, so failed or
+interrupted submission attempts cleanup of both objects. A successful submission
+transfers that lifetime to its caller.
+
+- Explicit migration execution cleans up its Job and script on success, returned
+  error, or exception. Cleanup failures name the surviving object, possible credential
+  access, and Kubernetes diagnostic; they cannot become successful completion.
+- Contract reconciliation and migration-status reads deliberately retain failed,
+  unstartable, or timed-out Jobs for inspection. Successful operations require their
+  transient cleanup to succeed. Process finalizers cannot run after a hard kill;
+  migration and contract Jobs then require operator cleanup. These Jobs have no
+  generated deadline or TTL, so process exit alone does not establish cleanup.
+- Database setup deletes its transient master Secret, script and Job, while keeping
+  its credential authority, DDL/DML output Secrets and trust material for consumers.
+- ExternalSecrets are durable credential writers. Pruning removes only an undeclared
+  writer whose live UID matches captured ownership. Declared writers and objects whose
+  ownership cannot be established survive; their generated Secrets remain ESO's domain.
+
+These are distinct lifetimes, not a rule to delete every failed Job or credential.

@@ -175,7 +175,7 @@ let reconcile_in_destination ~ctx ~kafka ~secret_name ~namespace ~image =
   | Ok job ->
     (match Sol_cli_migration_job.wait ~ctx ~interval_s:2. ~attempts:150 job with
      | Succeeded ->
-       Sol_cli_migration_job.cleanup ~ctx job;
+       let* () = Sol_cli_migration_job.cleanup ~ctx job in
        Sol_cli_report.app "Contract: reconciled in the destination with image %s." image;
        Ok ()
      | Failed ->

@@ -105,27 +105,29 @@ let read_status ~ctx ~dir ~table ~namespace ~ddl_creds_name ?ca_configmap () =
          in
          Sol_cli_migration.parse_status_json text)
   in
-  (match result with
-   | Ok _ -> Sol_cli_migration_job.cleanup ~ctx job
-   | Error _ ->
-     Sol_cli_migration_job.evidence ~ctx job
-     |> Option.iter (Sol_cli_report.err "\nmigration-status Job evidence:\n%s");
-     let cleanup_hint =
-       match job.configmap_name with
-       | Some configmap ->
-         Printf.sprintf
-           "kubectl delete job/%s configmap/%s -n %s"
-           job.job_name
-           configmap
-           namespace
-       | None -> Printf.sprintf "kubectl delete job/%s -n %s" job.job_name namespace
-     in
-     Sol_cli_report.err
-       "\nThe failing Job is kept for inspection:\n  kubectl logs job/%s -n %s\n  %s"
-       job.job_name
-       namespace
-       cleanup_hint);
-  result
+  match result with
+  | Ok status ->
+    let* () = Sol_cli_migration_job.cleanup ~ctx job in
+    Ok status
+  | Error _ ->
+    Sol_cli_migration_job.evidence ~ctx job
+    |> Option.iter (Sol_cli_report.err "\nmigration-status Job evidence:\n%s");
+    let cleanup_hint =
+      match job.configmap_name with
+      | Some configmap ->
+        Printf.sprintf
+          "kubectl delete job/%s configmap/%s -n %s"
+          job.job_name
+          configmap
+          namespace
+      | None -> Printf.sprintf "kubectl delete job/%s -n %s" job.job_name namespace
+    in
+    Sol_cli_report.err
+      "\nThe failing Job is kept for inspection:\n  kubectl logs job/%s -n %s\n  %s"
+      job.job_name
+      namespace
+      cleanup_hint;
+    result
 ;;
 
 let read_applied ~ctx ~dir ~table ~namespace ~ddl_creds_name ?ca_configmap () =
