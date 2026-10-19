@@ -697,6 +697,58 @@ exit 0
        f ~log ~observations)
 ;;
 
+let with_fake_aws_nodegroups ~stderr f =
+  let dir = Filename.temp_file "sol-fake-aws-ng-" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o755;
+  let log = Filename.concat dir "calls.log" in
+  let bin = Filename.concat dir "aws" in
+  let script =
+    Printf.sprintf
+      {|#!/bin/sh
+printf '%%s\n' "$*" >> %s
+case "$1 $2" in
+  "sts get-caller-identity") printf '111122223333\n' ;;
+  "eks list-nodegroups") printf '%%s' %s >&2; exit 255 ;;
+esac
+exit 0
+|}
+      (Filename.quote log)
+      (Filename.quote stderr)
+  in
+  Out_channel.with_open_text bin (fun oc -> output_string oc script);
+  Unix.chmod bin 0o755;
+  let old_path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+  Unix.putenv "PATH" (dir ^ ":" ^ old_path);
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" old_path;
+      (try Sys.remove bin with
+       | _ -> ());
+      (try Sys.remove log with
+       | _ -> ());
+      try Unix.rmdir dir with
+      | _ -> ())
+    (fun () ->
+       let observations =
+         Sol_cli_aws_absence.observations target ~cluster_name:"acme-prod"
+       in
+       f ~log ~observations)
+;;
+
+let%test "AWS EKS node groups: a targeted not-found is absence" =
+  with_fake_aws_nodegroups
+    ~stderr:
+      "aws: [ERROR]: An error occurred (ResourceNotFoundException) when calling the \
+       ListNodegroups operation: No cluster found for name: acme-prod.\n"
+    (fun ~log:_ ~observations ->
+       match observation_of "EKS node group" observations with
+       | Sol_cli_absence.Absent _ -> ()
+       | Sol_cli_absence.Unobservable u ->
+         Windtrap.failf "a targeted not-found must be absence, not unknown: %s" u.reason
+       | _ -> Windtrap.fail "a targeted not-found must be absence")
+;;
+
 let%test "AWS EKS security groups are observed independently of the cluster" =
   with_fake_aws_security_groups
     ~groups:"acme-prod-cluster-123\nacme-prod-node-456\nacme-prod-rds\n"

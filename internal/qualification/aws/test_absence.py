@@ -227,6 +227,27 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
         return FakeAws()(argv)
     check("a denied read mentioning not-found is still unknown",
           states(absence.evaluate(RUNTIME, denied_with_notfound))["kafka-secret"] == absence.UNKNOWN)
+    def prefixed_not_found(argv):
+        if argv[:2] == list(key):
+            return absence.ReadResult(
+                argv, 255, "",
+                "aws: [ERROR]: An error occurred (ResourceNotFoundException) when calling the "
+                "DescribeSecret operation: Secrets Manager can't find the specified secret.",
+            )
+        return FakeAws()(argv)
+    prefixed = absence.evaluate(RUNTIME, prefixed_not_found)
+    check("the CLI's prefixed not-found is the secret's absence",
+          prefixed.ok and states(prefixed)["kafka-secret"] == absence.ABSENT)
+    def not_found_for_another_operation(argv):
+        if argv[:2] == list(key):
+            return absence.ReadResult(
+                argv, 255, "",
+                "aws: [ERROR]: An error occurred (ResourceNotFoundException) when calling the "
+                "DescribeCluster operation: No cluster found.",
+            )
+        return FakeAws()(argv)
+    check("a not-found naming another operation cannot prove secret absence",
+          states(absence.evaluate(RUNTIME, not_found_for_another_operation))["kafka-secret"] == absence.UNKNOWN)
     original_checks = absence.RESIDUE_CHECKS
     try:
         absence.RESIDUE_CHECKS = [probe for probe in original_checks if probe != absence.check_kafka_secret]
