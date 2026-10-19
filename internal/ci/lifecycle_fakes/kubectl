@@ -144,6 +144,13 @@ case " $* " in
     esac
     case " $* " in
       *" can-i escalate clusterroles "*|*" can-i bind clusterroles "*)
+        if [ "${WINDOW_OBSERVATION_UNAVAILABLE:-}" = 1 ] &&
+          [ "${DESTROYING:-}" = 1 ] &&
+          [ "$(cat "$FAIL_MARKER_DIR/bootstrap-window" 2>/dev/null || true)" = "true" ]; then
+          printf 'window-observation-unavailable\n' >>"$LIFECYCLE_LOG"
+          printf 'error: bootstrap capability observation unavailable\n' >&2
+          exit 1
+        fi
         if [ "${CAN_I_FAIL:-}" = 1 ] &&
           [ "$(cat "$FAIL_MARKER_DIR/bootstrap-window" 2>/dev/null || true)" = "false" ]; then
           printf 'error: unable to connect to the server: dial tcp: i/o timeout\n' >&2
