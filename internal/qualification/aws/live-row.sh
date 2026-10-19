@@ -240,33 +240,45 @@ json.dump({"revision":bound["candidate"]["revision"],
 
 # The expected Kubernetes authority the CA observations must match. Recorded from
 # the read-only qualifier transport, never from the product's own report.
-record_ca_authority() {
-  local principal cluster endpoint err kubeconfig context
-  err="$LOG_DIR/ca-authority.err"
-  # `transport` records from the qualifier; the app phase overrides CA_* when a
-  # TRANSPORT=0 run observes through the deploy identity.
-  kubeconfig="${CA_KUBECONFIG:-$QUALIFIER_KUBECONFIG}"
-  context="${CA_CONTEXT:-$CLUSTER-qualifier}"
+record_authority_for() {
+  local output="$1" err="$2" role="$3" kubeconfig="$4" context="$5"
+  local principal cluster endpoint
   if ! principal="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
       auth whoami -o jsonpath='{.status.userInfo.username}' 2>"$err")"; then
-    say "could not read the observation principal; provider diagnostics are not copied into this log"
+    say "could not read the $role principal; provider diagnostics are not copied into this log"
     return 1
   fi
   if ! cluster="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
       get namespace kube-system -o jsonpath='{.metadata.uid}' 2>>"$err")"; then
-    say "could not read the observation cluster identity; provider diagnostics are not copied into this log"
+    say "could not read the $role cluster identity; provider diagnostics are not copied into this log"
     return 1
   fi
   if ! endpoint="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
       config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>>"$err")"; then
-    say "could not read the observation endpoint; provider diagnostics are not copied into this log"
+    say "could not read the $role endpoint; provider diagnostics are not copied into this log"
     return 1
   fi
-  python3 - "$LOG_DIR/ca-authority.json" "$principal" "$cluster" "$endpoint" <<'PY'
+  python3 - "$output" "$principal" "$cluster" "$endpoint" <<'PY'
 import json, sys
 json.dump({"principal": sys.argv[2], "cluster": sys.argv[3], "endpoint": sys.argv[4]},
           open(sys.argv[1], "w"))
 PY
+}
+
+record_ca_authority() {
+  # `transport` records from the qualifier; the app phase overrides CA_* when a
+  # TRANSPORT=0 run observes through the deploy identity.
+  record_authority_for "$LOG_DIR/ca-authority.json" "$LOG_DIR/ca-authority.err" observation \
+    "${CA_KUBECONFIG:-$QUALIFIER_KUBECONFIG}" "${CA_CONTEXT:-$CLUSTER-qualifier}"
+}
+
+# The migration Job is submitted by the product as the deploy identity; the CA
+# observation uses the read-only qualifier. The receipt must agree with the
+# authority that submitted it, which is not the observation authority.
+record_ca_submission_authority() {
+  record_authority_for "$LOG_DIR/ca-submission-authority.json" \
+    "$LOG_DIR/ca-submission-authority.err" submission \
+    "$DEPLOY_KUBECONFIG" "$CLUSTER-deploy"
 }
 
 # Build the driver request for one phase from inputs the row recorded earlier.
@@ -275,10 +287,10 @@ ca_request() {
   local phase="$1" capture="${2:-}" report="${3:-}" binding="${4:-}"
   python3 - "$ROOT" "$SOL_CANDIDATE" "$SOL_INSTALL" "$WORKSPACE" "$LOG_DIR" \
     "$CA_KUBECONFIG" "$CA_CONTEXT" "$ATTEMPT" "$phase" "$capture" "$report" "$binding" \
-    "$QUALIFIER_KUBECONFIG" <<'PY'
+    "$QUALIFIER_KUBECONFIG" "$LOG_DIR/ca-submission-authority.json" <<'PY'
 import json, os, sys
 (root, candidate, install, workspace, log, kubeconfig, context, attempt,
- phase, capture, report, binding, qualifier_kubeconfig) = sys.argv[1:14]
+ phase, capture, report, binding, qualifier_kubeconfig, submission_authority) = sys.argv[1:15]
 request = {
     "repository": root,
     "candidate": candidate,
@@ -300,6 +312,8 @@ request = {
     "migration_capture": os.path.join(log, "ca-migration-capture.json"),
     "application_capture": os.path.join(log, "ca-application-capture.json"),
 }
+if os.path.exists(submission_authority):
+    request["submission_authority"] = json.load(open(submission_authority))
 json.dump(request, open(os.path.join(log, "ca-request-" + phase + ".json"), "w"))
 PY
 }
@@ -1184,6 +1198,7 @@ phase_app() {
   require_target_terraform_var_file || return 1
   ensure_contexts || return 1
   verify_identity_boundary || return 1
+  record_ca_submission_authority || return 1
   app_require_published_images || return 1
   say "runner: release $SOL_BUNDLE_VERSION names $SOL_RUNNER_IMAGE; the publisher publishes nothing"
   capture_state

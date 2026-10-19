@@ -750,6 +750,16 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$request" ] || { echo "stub CA driver: no --request" >&2; exit 2; }
+if [ "${STUB_REQUIRE_SUBMISSION_AUTHORITY:-0}" = "1" ]; then
+  python3 - "$request" <<'PY' || exit 1
+import json, sys
+request = json.load(open(sys.argv[1]))
+authority = request.get("submission_authority")
+if not isinstance(authority, dict) or not authority.get("principal"):
+    print("stub CA driver: the request carries no submission authority", file=sys.stderr)
+    raise SystemExit(1)
+PY
+fi
 [ -n "${LOG_DIR:-}" ] && printf '%s\n' "$phase" >>"$LOG_DIR/ca-phases.txt"
 if [ "$phase" = "application" ]; then
   case "${STUB_CA_ABSENT:-0}:${STUB_CA_UNREADABLE:-0}:${STUB_CA_UNMOUNTED:-}" in
@@ -1297,7 +1307,7 @@ has "and it names the missing input" "QUALIFIER_ROLE is not set" "$TMP/norole.ou
 lacks "and no establishment is attempted" "establish " "$TMP/norole.establish"
 
 printf '\nscenario: the app phase drives its transaction through the qualification transport\n'
-run_phase apptransport app TRANSPORT=1 STUB_DDL_NAMESPACE=sol-db-qualreg-aws-us-east-1
+run_phase apptransport app TRANSPORT=1 STUB_DDL_NAMESPACE=sol-db-qualreg-aws-us-east-1 STUB_REQUIRE_SUBMISSION_AUTHORITY=1
 is "exit 0" "$(cat "$TMP/apptransport.rc")" "0"
 has "the transport is established before Sol moves the workload" \
   "establish test-cluster qualifier us-east-1 pluto-payments" "$TMP/apptransport.establish"
