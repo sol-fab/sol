@@ -232,7 +232,8 @@ let run_set target address from_stdin from_file =
        running process keeps reading the value it started with until something restarts it,
        and a value written before the workload exists has nothing to restart -- which is not
        a failure, and is exactly the state a deploy's own secret precondition requires
-       (#1350, #1434). `sol deploy` applies the units, and that is what activates the value.
+       (#1350, #1434). An unchanged deploy does not restart a running process; the
+       operator activates the value through the workload's Kubernetes rollout tool.
        This also means a sequence of `sol secret set` calls is not an atomic rotation
        transaction: a process that starts between two writes can observe the newer value. *)
     Printf.printf

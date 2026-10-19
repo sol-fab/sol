@@ -594,6 +594,17 @@ let set_platform_key ~ctx ~namespaces ~key ~value =
         in
         if is_changed then changed := namespace :: !changed;
         Ok ())
+      |> Result.map_error (fun message ->
+        match List.rev !changed with
+        | [] -> message
+        | namespaces ->
+          Printf.sprintf
+            "%s\n\
+             Platform Job secret %s was already updated in namespace(s): %s. These \
+             writes were not rolled back."
+            message
+            key
+            (String.concat ", " namespaces))
     in
     Ok (List.rev !changed)
 ;;

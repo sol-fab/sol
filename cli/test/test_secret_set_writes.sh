@@ -111,7 +111,7 @@ printf '%s\n' "$output" | grep -F 'Secret updated for payments/api_svc/SOL_API_K
   || note "the write must report the Secret it updated: $output"
 grep -Eq 'apply|create|patch' "$tmp/kubectl.log" || note "the write must reach the cluster"
 if grep -q 'rollout' "$tmp/kubectl.log"; then
-  note "a write must not restart a workload (activation is the deploy's job): $(cat "$tmp/kubectl.log")"
+  note "a write must not restart a workload (activation is an explicit rollout action): $(cat "$tmp/kubectl.log")"
 fi
 printf '%s\n' "$output" | grep -F 'restart' >/dev/null \
   && note "the write must not claim a restart: $output"

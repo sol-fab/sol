@@ -40,14 +40,15 @@ input. It refuses external keys before reading a value. A changed value updates
 only that unit's Secret. **Setting writes; activation is explicit**: Sol does not
 restart the workload, so a running process keeps reading the value it started
 with until something restarts it, and a value written before the workload exists
-has nothing to restart — which is not a failure. `sol deploy` applies the units,
-and that is what activates the value. `secret set` neither updates `sol-secrets`
+has nothing to restart — which is not a failure. An unchanged `sol deploy` does
+not restart a running process or guarantee adoption of the new value. `secret set` neither updates `sol-secrets`
 nor writes to another unit. Secret values are redacted from command output.
 
 That also bounds the guarantee: a sequence of `sol secret set` writes is **not**
 an atomic rotation transaction, because a process that starts between two writes
-can observe the newer value. Coordinate overlapping rotations yourself, or make
-the change and activate it in one deploy.
+can observe the newer value. Coordinate credential overlap and the explicit
+activation of each affected workload; neither writing nor deploying makes
+multiple credential changes atomic.
 
 Platform credentials used by Sol's internal Jobs have a separate target scope.
 Database credentials are no longer one of them: the deploy delivers
@@ -65,6 +66,36 @@ Platform writes update only `sol-secrets` objects in active target namespaces;
 they never copy values into application Secrets or restart application
 workloads. `sol secret status TARGET` reports key owners and presence without
 printing values.
+
+### Explicit activation
+
+First select the target's configured kube context, actual namespace and workload
+name. Unit names use Kubernetes spelling (`charge_svc` becomes `charge-svc`);
+namespace selection follows the target's plan. For a Deployment (service or worker):
+
+```bash
+kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/charge-svc
+kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/charge-svc --timeout=5m
+```
+
+For an Argo Rollout, use the installed Argo Rollouts plugin:
+
+```bash
+kubectl argo rollouts restart charge-svc --context "$CONTEXT" -n "$NAMESPACE"
+kubectl argo rollouts get rollout charge-svc --context "$CONTEXT" -n "$NAMESPACE" --watch
+```
+
+Argo's [restart operation](https://argoproj.github.io/argo-rollouts/features/restart/)
+recreates pods using `spec.restartAt`. Wait for the previous pods to be replaced
+and the new pods to become healthy; an already-healthy Rollout status alone does
+not prove that a scheduled restart has finished. A scheduled function's next Job
+starts with the then-current Secret; an already-running Job retains its startup
+values. Do not rerun a Job merely to refresh a secret unless repeating its work
+is intended.
+
+After replacement, verify the application's authenticated behavior against the
+resource before revoking the old credential. Neither Secret presence, ESO sync,
+nor healthy rollout alone proves successful use of the new credential.
 
 ### Deploy and rollback
 
