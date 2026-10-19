@@ -102,16 +102,24 @@ sol local run
 
 For local-only credentials, put values in `sol/secrets.local/<domain>/<unit>.env`. For example, `sol/secrets.local/payments/charge_svc.env` can contain `PAYMENT_API_KEY=value`. Each unit has a separate file, so two units can use the same key name with different values. Sol passes a value only to the matching unit when that key is declared under `[infra.env].secrets`; values are not shell-expanded, passed to build commands, or printed when they appear in service output. Local processes do not inherit the shell environment; Sol supplies its local development variables and the unit's declared secret values. Missing values stop local run before it builds or starts services. The scaffolded `.gitignore` and `.dockerignore` both exclude `sol/secrets.local/`; add the same entries to older workspaces before creating secret files.
 
-The environment variables your services expect are inherited directly from the shell (set by `sol local infra up`'s port-forwards):
+Resource inputs follow declared dependencies. A unit receives PostgreSQL configuration only
+when its `uses` names a PostgreSQL resource. Kafka endpoints are supplied only when the unit
+uses a Kafka resource or declares topics; being a worker alone does not imply Kafka usage.
+Resource credentials are not application keys under `[infra.env].secrets`. A database consumer
+can override its local `POSTGRES_URL` in its own ignored file; an unrelated unit receives
+neither that file's database URL nor Kafka credentials. Undeclared application keys, including
+`SOL_API_KEY`, are not forwarded.
 
-| Variable | Value (set by `sol local infra up`) |
-|---|---|
-| `KAFKA_SECURITY_PROTOCOL` | `plaintext` (required; set by `sol local run`) |
-| `KAFKA_BROKERS` | `localhost:9092` (required) |
-| `SCHEMA_REGISTRY_URL` | `http://localhost:8081` (required) |
-| `REDPANDA_ADMIN_URL` | `http://localhost:9644` (required) |
-| `POSTGRES_URL` | `postgresql://postgres:dev@localhost:5432/dev` |
-| `LOKI_URL` | `http://localhost:3100` |
+Sol supplies these local values rather than inheriting resource credentials from the shell:
+
+| Variable | Local value | Consumers |
+|---|---|---|
+| `KAFKA_SECURITY_PROTOCOL` | `plaintext` | Kafka dependencies |
+| `KAFKA_BROKERS` | `localhost:9092` | Kafka dependencies |
+| `SCHEMA_REGISTRY_URL` | `http://localhost:8081` | Kafka dependencies |
+| `REDPANDA_ADMIN_URL` | `http://localhost:9644` | Kafka dependencies |
+| `POSTGRES_URL` | `postgresql://postgres:dev@localhost:5432/dev` | PostgreSQL dependencies |
+| `LOKI_URL` | `http://localhost:3100` | All local units |
 
 **When to use `sol local run` vs `sol local deploy`:**
 

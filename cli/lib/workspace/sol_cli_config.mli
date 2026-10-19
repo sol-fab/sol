@@ -108,6 +108,14 @@ val declared_of_config : t -> declared
     construction. A profile that claims production guarantees requires [Durable]. *)
 val platform_shape : t -> (Sol_cli_profile.platform_shape, string) result
 
+(** Validate dependency references before projecting resource inputs. Shared by
+    target resolution and local execution. Omitted declarations cannot authorize use. *)
+val validate_service_uses
+  :  path:string
+  -> resources:resource list
+  -> services:service list
+  -> (unit, error) result
+
 val load_declared : root:string -> (declared, error) result
 val parse_target : string -> (target, error) result
 val target_declared : target -> bool

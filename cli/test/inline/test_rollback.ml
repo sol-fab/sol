@@ -2914,7 +2914,7 @@ let test_rollback_restores_recorded_requirements () =
              (content_id
                 [ { ledger_spec with Sol_cli_deployment_plan.uses = [] }; billing_spec ]))));
   (* The rollback decodes a recorded ref with **the same function the deploy uses**
-     (`Sol_cli_deployment_plan.resource_name_of_ref`, which `service_uses_resource` also calls),
+     (`Sol_cli_resource_binding.resource_name_of_ref`, which `service_uses_resource` also calls),
      so the two cannot disagree about what "a ref that names a resource" means -- no second
      parser to drift. A path-shaped ref exercises that decode. *)
   let namespaced =

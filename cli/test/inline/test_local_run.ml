@@ -1143,3 +1143,234 @@ let%test "secrets: local input is scoped to a unit" =
   test_local_run_requires_declared_secret_value ();
   test_local_run_scopes_same_secret_key_per_unit_and_filters_ambient_value ()
 ;;
+
+let%test
+    "local resource inputs follow declared dependencies for every primitive and language"
+  =
+  let cases =
+    [ "none", [], false, false
+    ; "database", [ "app_db" ], true, false
+    ; "kafka", [ "events" ], false, true
+    ; "both", [ "app_db"; "events" ], true, true
+    ]
+  in
+  let units =
+    [ "ocaml"; "typescript" ]
+    |> List.concat_map (fun language ->
+      [ "svc", "http"; "worker", "worker"; "fn", "fn" ]
+      |> List.concat_map (fun (suffix, kind) ->
+        List.map
+          (fun (tag, uses, database, kafka) ->
+             language, tag ^ "_" ^ language ^ "_" ^ suffix, kind, uses, database, kafka)
+          cases))
+  in
+  let declarations =
+    units
+    |> List.map (fun (language, name, kind, uses, _, _) ->
+      Printf.sprintf
+        "  %s:\n    type: %s\n    language: %s\n    path: app/test/%s\n    uses: [%s]\n"
+        name
+        kind
+        language
+        name
+        (String.concat ", " uses))
+    |> String.concat ""
+  in
+  let files =
+    [ ( "sol.yml"
+      , "resources:\n\
+        \  app_db:\n\
+        \    type: postgres\n\
+        \  events:\n\
+        \    type: kafka\n\
+         services:\n"
+        ^ declarations )
+    ]
+    @ (units
+       |> List.concat_map (fun (language, name, _, _, _, _) ->
+         let directory = "app/test/" ^ name ^ "/" in
+         [ directory ^ "Dockerfile", dockerfile
+         ; directory ^ "sol.toml", "[infra.env]\nsecrets = [\"UNIT_API_KEY\"]\n"
+         ]
+         @
+         if language = "typescript"
+         then
+           [ ( directory ^ "package.json"
+             , Printf.sprintf {|{"name":"%s","main":"index.js"}|} name )
+           ; directory ^ "node_modules/.keep", ""
+           ]
+         else []))
+  in
+  with_workspace files (fun root ->
+    let facts = facts_of root in
+    let secret_values =
+      units
+      |> List.map (fun (_, name, _, _, _, _) ->
+        ( "test/" ^ name
+        , [ "UNIT_API_KEY", "declared-app-value"
+          ; "POSTGRES_URL", "postgresql://local-file-value/db"
+          ; "SOL_API_KEY", "undeclared-peer-value"
+          ; "KAFKA_SASL_PASSWORD", "unused-local-auth"
+          ; "KAFKA_SSL_CA_CERT", "unused-local-trust"
+          ] ))
+    in
+    match Sol_cli_local_run.plan ~secret_values ~root ~facts (services_of facts) with
+    | Error errors -> Windtrap.fail (String.concat "; " (List.map snd errors))
+    | Ok plan ->
+      List.iter
+        (fun (_, name, _, _, database, kafka) ->
+           let recipe =
+             List.find
+               (fun (recipe : Sol_cli_local_run.recipe) -> recipe.label = "test/" ^ name)
+               plan.launches
+           in
+           check_bool
+             (name ^ ": database input follows uses")
+             database
+             (List.mem_assoc "POSTGRES_URL" recipe.env);
+           List.iter
+             (fun key ->
+                check_bool
+                  (name ^ ": " ^ key ^ " follows Kafka dependency")
+                  kafka
+                  (List.mem_assoc key recipe.env))
+             [ "KAFKA_BROKERS"
+             ; "SCHEMA_REGISTRY_URL"
+             ; "REDPANDA_ADMIN_URL"
+             ; "KAFKA_SECURITY_PROTOCOL"
+             ];
+           List.iter
+             (fun key ->
+                check_bool
+                  (name ^ ": unrelated file key stays private")
+                  false
+                  (List.mem_assoc key recipe.env))
+             [ "SOL_API_KEY"; "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ];
+           if database
+           then
+             check_bool
+               (name ^ ": local file override preserved")
+               true
+               (List.assoc_opt "POSTGRES_URL" recipe.env
+                = Some "postgresql://local-file-value/db");
+           check_bool
+             (name ^ ": declared application secret remains delivered")
+             true
+             (List.mem_assoc "UNIT_API_KEY" recipe.env))
+        units)
+;;
+
+let%test
+    "a topic declaration remains a local Kafka dependency without guessing from workload \
+     kind"
+  =
+  with_workspace
+    [ ( "sol.yml"
+      , "services:\n\
+        \  producer_svc:\n\
+        \    language: ocaml\n\
+        \  idle_worker:\n\
+        \    language: ocaml\n" )
+    ; "app/test/producer_svc/Dockerfile", dockerfile
+    ; "app/test/producer_svc/sol.toml", "[service]\ntopics = [\"events\"]\n"
+    ; "app/test/idle_worker/Dockerfile", dockerfile
+    ; "app/test/idle_worker/sol.toml", ""
+    ]
+    (fun root ->
+       let facts = facts_of root in
+       match Sol_cli_local_run.plan ~root ~facts (services_of facts) with
+       | Error errors -> Windtrap.fail (String.concat "; " (List.map snd errors))
+       | Ok plan ->
+         List.iter
+           (fun (recipe : Sol_cli_local_run.recipe) ->
+              check_bool
+                "topic producer receives Kafka; idle worker does not"
+                (recipe.label = "test/producer_svc")
+                (List.mem_assoc "KAFKA_BROKERS" recipe.env))
+           plan.launches)
+;;
+
+let%test "local application secret declarations cannot bypass resource ownership" =
+  List.iter
+    (fun key ->
+       with_workspace
+         [ "sol.yml", "services:\n  consumer_svc:\n    language: ocaml\n"
+         ; "app/test/consumer_svc/Dockerfile", dockerfile
+         ; ( "app/test/consumer_svc/sol.toml"
+           , Printf.sprintf "[infra.env]\nsecrets = [%S]\n" key )
+         ]
+         (fun root ->
+            let facts = facts_of root in
+            match Sol_cli_local_run.plan ~root ~facts (services_of facts) with
+            | Error errors ->
+              check_bool
+                "refusal explains resource ownership"
+                true
+                (List.exists
+                   (fun (_, message) ->
+                      Sol_cli_string.contains ~needle:"resource connection input" message)
+                   errors)
+            | Ok _ ->
+              Windtrap.fail "reserved resource input accepted as application secret"))
+    [ "POSTGRES_URL"; "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ]
+;;
+
+let%test "omitted local resources do not authorize connection delivery" =
+  with_workspace
+    [ ( "sol.yml"
+      , "resources:\n\
+        \  app_db:\n\
+        \    type: postgres\n\
+        \    omit: true\n\
+        \  events:\n\
+        \    type: kafka\n\
+        \    omit: true\n\
+         services:\n\
+        \  consumer_svc:\n\
+        \    language: ocaml\n\
+        \    uses: [app_db, events]\n" )
+    ; "app/test/consumer_svc/Dockerfile", dockerfile
+    ; "app/test/consumer_svc/sol.toml", ""
+    ]
+    (fun root ->
+       let facts = facts_of root in
+       match Sol_cli_local_run.plan ~root ~facts (services_of facts) with
+       | Error errors ->
+         check_bool
+           "omitted dependency is refused"
+           true
+           (List.exists
+              (fun (_, message) ->
+                 Sol_cli_string.contains ~needle:"undeclared resource" message)
+              errors)
+       | Ok _ -> Windtrap.fail "omitted required resource accepted")
+;;
+
+let%test "local dependency references are validated before connection projection" =
+  List.iter
+    (fun reference ->
+       with_workspace
+         [ ( "sol.yml"
+           , Printf.sprintf
+               "resources:\n\
+               \  app_db:\n\
+               \    type: postgres\n\
+                services:\n\
+               \  consumer_svc:\n\
+               \    language: ocaml\n\
+               \    uses: [%s]\n"
+               reference )
+         ; "app/test/consumer_svc/Dockerfile", dockerfile
+         ; "app/test/consumer_svc/sol.toml", ""
+         ]
+         (fun root ->
+            let facts = facts_of root in
+            match Sol_cli_local_run.plan ~root ~facts (services_of facts) with
+            | Error errors ->
+              check_bool
+                "invalid reference identifies workspace"
+                true
+                (List.exists (fun (scope, _) -> scope = "workspace") errors)
+            | Ok _ -> Windtrap.fail ("invalid dependency accepted: " ^ reference)))
+    [ "missing_db"; "typo/app_db"; "/broken"; "/aws/app_db" ]
+;;

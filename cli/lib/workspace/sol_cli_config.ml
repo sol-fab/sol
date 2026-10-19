@@ -1457,16 +1457,16 @@ let format_use_ref ref =
   if ref <> "" && ref.[0] = '/' then ref ^ " (cross-region)" else ref
 ;;
 
-let validate_use_ref ~(target : target) ~resources service_name ref =
+let validate_use_ref ~path ~resources service_name ref =
   if ref = ""
-  then Error { path = target.name; line = 0; message = "empty uses ref" }
+  then Error { path; line = 0; message = "empty uses ref" }
   else if ref.[0] <> '/'
   then
     if List.mem ref resources
     then Ok ()
     else
       Error
-        { path = target.name
+        { path
         ; line = 0
         ; message =
             Printf.sprintf "service %S uses undeclared resource %S" service_name ref
@@ -1477,60 +1477,55 @@ let validate_use_ref ~(target : target) ~resources service_name ref =
       if known_provider seg1
       then
         Error
-          { path = target.name
-          ; line = 0
-          ; message = "cross-provider uses refs are not supported in v1"
-          }
+          { path; line = 0; message = "cross-provider uses refs are not supported in v1" }
       else Ok ()
     | [ ""; seg1; seg2; seg3 ] when seg1 <> "" && seg2 <> "" && seg3 <> "" ->
       if known_provider seg1
       then
         Error
-          { path = target.name
-          ; line = 0
-          ; message = "cross-provider uses refs are not supported in v1"
-          }
+          { path; line = 0; message = "cross-provider uses refs are not supported in v1" }
       else
-        Error
-          { path = target.name
-          ; line = 0
-          ; message = "cross-env uses refs are not supported in v1"
-          }
+        Error { path; line = 0; message = "cross-env uses refs are not supported in v1" }
     | "" :: (_ :: _ :: _ :: _ :: _ as segs) when List.for_all (( <> ) "") segs ->
-      Error
-        { path = target.name
-        ; line = 0
-        ; message = "cross-env uses refs are not supported in v1"
-        }
+      Error { path; line = 0; message = "cross-env uses refs are not supported in v1" }
     | _ ->
       Error
-        { path = target.name
+        { path
         ; line = 0
         ; message = "absolute uses ref must look like /<region>/<resource>"
         })
+;;
+
+let validate_service_uses ~path ~(resources : resource list) ~(services : service list) =
+  let resource_names =
+    List.filter (fun (r : resource) -> not r.omit) resources
+    |> List.map (fun (r : resource) -> r.name)
+  in
+  let rec validate_services = function
+    | [] -> Ok ()
+    | (service : service) :: rest ->
+      let rec validate_refs = function
+        | [] -> validate_services rest
+        | ref :: refs ->
+          let* () = validate_use_ref ~path ~resources:resource_names service.name ref in
+          validate_refs refs
+      in
+      validate_refs service.uses
+  in
+  validate_services (List.filter (fun (s : service) -> not s.omit) services)
 ;;
 
 let validate_uses cfg =
   match cfg.target with
   | None -> Ok cfg
   | Some target ->
-    let resource_names =
-      active_resources cfg |> List.map (fun (r : resource) -> r.name)
+    let* () =
+      validate_service_uses
+        ~path:target.name
+        ~resources:(active_resources cfg)
+        ~services:(active_services cfg)
     in
-    let rec validate_services = function
-      | [] -> Ok cfg
-      | service :: rest ->
-        let rec validate_refs = function
-          | [] -> validate_services rest
-          | ref :: refs ->
-            let* () =
-              validate_use_ref ~target ~resources:resource_names service.name ref
-            in
-            validate_refs refs
-        in
-        validate_refs service.uses
-    in
-    validate_services (active_services cfg)
+    Ok cfg
 ;;
 
 (* `profile` and `shape` are per-target claims: sol.yml's `target:` section is shared by every
