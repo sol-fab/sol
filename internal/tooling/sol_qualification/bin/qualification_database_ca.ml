@@ -329,12 +329,29 @@ let run_phase () =
   in
   let capture = E.capture recorder ~subject:("ca-family/" ^ phase) ~payload |> evidence in
   write (E.reference_json capture) (text request "capture");
-  write
-    (match outcome with
-     | Error message ->
-       `Assoc [ "phase", `String phase; "ok", `Bool false; "error", `String message ]
-     | Ok _ -> `Assoc [ "phase", `String phase; "ok", `Bool true ])
-    (text request "report");
+  (* The report is evidence: a phase that produced non-PASS members must not
+     report [ok] merely because the observation ran. Surface the member errors
+     that made [passed] false. *)
+  let errors =
+    match outcome with
+    | Error message -> [ message ]
+    | Ok outcomes ->
+      List.filter_map
+        (fun (o : CA.outcome) ->
+           match o.result with
+           | Ok _ -> None
+           | Error e -> Some (e.stage ^ ": " ^ e.diagnostic))
+        outcomes
+  in
+  let report =
+    `Assoc
+      ([ "phase", `String phase; "ok", `Bool passed ]
+       @
+       match errors with
+       | [] -> []
+       | errors -> [ "errors", `List (List.map (fun error -> `String error) errors) ])
+  in
+  write report (text request "report");
   E.close recorder;
   exit (if passed then 0 else 1)
 ;;
