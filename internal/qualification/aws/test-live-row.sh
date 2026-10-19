@@ -1334,6 +1334,14 @@ else
     "establish at ${establish_at:-none}, transaction at ${transaction_at:-none}"
 fi
 
+printf '\nscenario: a resumed app phase re-establishes the transport\n'
+mkdir -p "$TMP/appresumed.logs"
+printf 'stale\n' >"$TMP/appresumed.logs/kubeconfig-qualifier.yaml"
+KEEP_LOG_DIR=1 run_phase appresumed app TRANSPORT=1
+is "exit 0" "$(cat "$TMP/appresumed.rc")" "0"
+has "a kubeconfig left by an earlier attempt does not suppress establishment" \
+  "establish test-cluster qualifier us-east-1" "$TMP/appresumed.establish"
+
 printf '\nscenario: the transport transaction reads the application effect back through a port-forward\n'
 run_transaction txchar charges
 is "exit 0" "$(cat "$TMP/txchar.rc")" "0"

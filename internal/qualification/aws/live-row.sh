@@ -1235,9 +1235,11 @@ phase_app() {
   # them until Sol's first deploy has created the declared application namespaces.
   # Establish it after that deploy (which moves no workload) and before the
   # migration step, so the CA family's migration observation has an independent
-  # read authority. With TRANSPORT=0 the same observations use the deploy
-  # identity, never the product's own report.
-  if [ "$TRANSPORT" = 1 ] && [ ! -f "$QUALIFIER_KUBECONFIG" ]; then
+  # read authority. Establish it on every app run: a kubeconfig left by an earlier
+  # attempt does not show that the current observation set (including the declared
+  # database namespace) is bound. With TRANSPORT=0 the same observations use the
+  # deploy identity, never the product's own report.
+  if [ "$TRANSPORT" = 1 ]; then
     phase_transport || return 1
   fi
   if [ "$TRANSPORT" = 1 ]; then
