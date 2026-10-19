@@ -113,10 +113,16 @@ writes; there is no other authoritative store for it.** The provisioning path's 
 is the target's provisioning configuration and its output. So a "Sol-managed secret" today means
 "stored in Kubernetes" — a fact this document states rather than leaves implicit.
 
-**Provider-store-backed Sol-managed secrets are future work, tracked separately (#1360), and require an
-ADR**: a provider secret store for managed targets would change storage durability, GitOps handling and
-`sol secret set`'s failure modes, and needs IAM wiring for every writer and reader. It is a decision,
-not a clarification. #1344d does not depend on it.
+**Generated Kafka credentials on managed AWS/GCP targets have an accepted provider-backed
+storage decision:** [ADR 0008](adr/0008-managed-kafka-credential-authority.md). Implementation is
+tracked by #1344; this decision does not claim that provider-backed generation or recovery already
+exists. The provisioning path generates once through Terraform, provider stores preserve the
+authority across Kubernetes replacement, and Sol projects inputs only to authorized consumers.
+Terraform state also contains sensitive credential material; provider storage is not the only copy.
+
+Application-secret migration, PostgreSQL credential migration and automatic rotation remain separate
+work under #1360. Ordinary application values and the generated PostgreSQL DDL/DML authority still
+use their existing Kubernetes storage. External bindings retain explicitly declared store authority.
 
 Whatever the store, **one secret has exactly one authoritative source**, and every projection of it is a
 representation.
