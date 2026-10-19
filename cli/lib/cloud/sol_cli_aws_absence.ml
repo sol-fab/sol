@@ -771,7 +771,7 @@ let oidc_provider_observation
 (* DescribeSecret is the documented current read; ListSecrets can lag recent
    changes. Pending deletion is still present, and only this exact-name read's
    ResourceNotFoundException establishes absence. No secret value is requested. *)
-let kafka_secret_observation ~region ~cluster_name ~resource_class () =
+let read_kafka_secret ~region ~cluster_name =
   let identity = Sol_cli_resource_binding.kafka_authority_name ~cluster_name in
   let argv =
     [ "aws"
@@ -782,24 +782,48 @@ let kafka_secret_observation ~region ~cluster_name ~resource_class () =
     ; "--region"
     ; region
     ; "--query"
-    ; "Name"
+    ; "{name:Name,deleted:DeletedDate,stages:VersionIdsToStages}"
     ; "--output"
-    ; "text"
+    ; "json"
     ]
   in
-  let checked_with = String.concat " " argv in
+  let result =
+    let open Result.Syntax in
+    match Sol_cli_process.run (Sol_cli_process.cmd argv) with
+    | Ok output when String.trim output.stderr = "" ->
+      let* json =
+        Sol_cli_json.decode_sensitive
+          ~what:"the Kafka authority observation"
+          output.stdout
+      in
+      let* name =
+        Sol_cli_json.require
+          ~what:"the Kafka authority"
+          [ "name" ]
+          Sol_cli_json.string
+          json
+      in
+      if name = identity
+      then Ok (Some json)
+      else Error "DescribeSecret did not return the requested Kafka authority identity"
+    | Ok output -> Error (String.trim output.stderr)
+    | Error (Sol_cli_process.Non_zero output)
+      when Sol_cli_string.contains ~needle:"(ResourceNotFoundException)" output.stderr ->
+      Ok None
+    | Error (Sol_cli_process.Non_zero output) -> Error (String.trim output.stderr)
+    | Error error -> Error (Sol_cli_process.error_to_string error)
+  in
+  identity, String.concat " " argv, result
+;;
+
+let kafka_secret_observation ~region ~cluster_name ~resource_class () =
+  let identity, checked_with, result = read_kafka_secret ~region ~cluster_name in
   let attribution = Named_for_target (named_for_cluster cluster_name) in
-  let unknown reason = Unobservable { resource_class; reason; checked_with } in
-  match Sol_cli_process.run (Sol_cli_process.cmd argv) with
-  | Ok output when String.trim output.stdout = identity && String.trim output.stderr = ""
-    ->
+  match result with
+  | Ok (Some _) ->
     Present { resource_class; identity; attribution; checked_with; found = [ identity ] }
-  | Ok _ -> unknown "DescribeSecret did not return the requested Kafka authority identity"
-  | Error (Sol_cli_process.Non_zero result)
-    when Sol_cli_string.contains ~needle:"(ResourceNotFoundException)" result.stderr ->
-    Absent { resource_class; identity; attribution; checked_with }
-  | Error (Sol_cli_process.Non_zero result) -> unknown (String.trim result.stderr)
-  | Error _ -> unknown "the aws CLI is unavailable"
+  | Ok None -> Absent { resource_class; identity; attribution; checked_with }
+  | Error reason -> Unobservable { resource_class; reason; checked_with }
 ;;
 
 (* Constructing probes performs no provider reads. Execution and coverage use
@@ -1034,72 +1058,39 @@ let kafka_storage ~region ~namespace observation =
    without requesting the credential value. Pending deletion is not reusable
    authority, and an unreadable secret is unknown rather than absent. *)
 let kafka_authority ~region ~cluster_name =
-  let identity = Sol_cli_resource_binding.kafka_authority_name ~cluster_name in
-  let checked_with =
-    Printf.sprintf
-      "aws secretsmanager describe-secret --secret-id %s --region %s"
-      identity
-      region
-  in
+  let _, checked_with, result = read_kafka_secret ~region ~cluster_name in
   let unknown reason =
     Sol_cli_kafka_authority.Authority_unobservable
       (Printf.sprintf "%s (%s)" reason checked_with)
   in
-  let argv =
-    [ "aws"
-    ; "secretsmanager"
-    ; "describe-secret"
-    ; "--secret-id"
-    ; identity
-    ; "--region"
-    ; region
-    ; "--query"
-    ; "{deleted:DeletedDate,stages:VersionIdsToStages}"
-    ; "--output"
-    ; "json"
-    ]
-  in
-  match Sol_cli_process.run (Sol_cli_process.cmd argv) with
-  | Error (Sol_cli_process.Non_zero result)
-    when Sol_cli_string.contains ~needle:"(ResourceNotFoundException)" result.stderr ->
+  match result with
+  | Error reason -> unknown reason
+  | Ok None ->
     Sol_cli_kafka_authority.Authority_missing "the provider secret does not exist"
-  | Error (Sol_cli_process.Non_zero result) -> unknown (String.trim result.stderr)
-  | Error _ -> unknown "the aws CLI is unavailable"
-  | Ok result when String.trim result.stderr <> "" -> unknown (String.trim result.stderr)
-  | Ok result ->
-    (match
-       Sol_cli_json.decode_sensitive ~what:"the Kafka authority observation" result.stdout
-     with
+  | Ok (Some json) ->
+    let stages =
+      match Sol_cli_json.field [ "stages" ] json with
+      | `Assoc fields -> Ok (List.map snd fields)
+      | `Null -> Ok []
+      | _ -> Error "the authority observation has no version-stage map"
+    in
+    (match stages with
      | Error message -> unknown message
-     | Ok json ->
-       let stages =
-         match Sol_cli_json.field [ "stages" ] json with
-         | `Assoc fields -> Ok (List.map snd fields)
-         | `Null -> Ok []
-         | _ -> Error "the authority observation has no version-stage map"
-       in
-       (match stages with
-        | Error message -> unknown message
-        | Ok stages ->
-          if Sol_cli_json.field [ "deleted" ] json <> `Null
-          then
-            Sol_cli_kafka_authority.Authority_missing
-              "the provider secret is pending deletion"
-          else if
-            List.exists
-              (function
-                | `List values ->
-                  List.exists
-                    (function
-                      | `String "AWSCURRENT" -> true
-                      | _ -> false)
-                    values
-                | _ -> false)
-              stages
-          then Sol_cli_kafka_authority.Authority_current
-          else
-            Sol_cli_kafka_authority.Authority_missing
-              "the provider secret has no active version"))
+     | Ok stages ->
+       if Sol_cli_json.field [ "deleted" ] json <> `Null
+       then
+         Sol_cli_kafka_authority.Authority_missing
+           "the provider secret is pending deletion"
+       else if
+         List.exists
+           (function
+             | `List values -> List.mem (`String "AWSCURRENT") values
+             | _ -> false)
+           stages
+       then Sol_cli_kafka_authority.Authority_current
+       else
+         Sol_cli_kafka_authority.Authority_missing
+           "the provider secret has no active version")
 ;;
 
 (** Retrieve the authoritative Kafka credential for delivery. The value travels on stdout

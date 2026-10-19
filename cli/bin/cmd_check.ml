@@ -111,7 +111,7 @@ let secret_authority_findings ~facts =
                                     key))
                           | Unit_secret
                           | Target_database
-                          | Target_kafka
+                          | Target_kafka _
                           | External_secret _ -> None)
                        owners
                      @ List.map

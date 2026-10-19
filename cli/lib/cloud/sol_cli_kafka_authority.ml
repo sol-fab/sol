@@ -134,33 +134,19 @@ type initialization_evidence =
   }
 
 let check_initial_absence { broker; storage; authority } =
-  let rec check = function
-    | [] -> Ok ()
-    | Sol_cli_absence.Absent _ :: rest -> check rest
-    | Sol_cli_absence.Present present :: _ ->
-      Error
-        ("Kafka initialization refused: surviving "
-         ^ present.resource_class
-         ^ "; restore the existing credential authority rather than generating a \
-            replacement")
-    | Sol_cli_absence.Unobservable unknown :: _ ->
-      Error
-        ("Kafka initialization cannot establish absence of "
-         ^ unknown.resource_class
-         ^ ": "
-         ^ unknown.reason)
-    | Sol_cli_absence.External excluded :: _ ->
-      Error
-        ("Kafka initialization requires positive absence, not an excluded "
-         ^ excluded.resource_class)
-    | Sol_cli_absence.Not_attributable unknown :: _ ->
-      Error
-        ("Kafka initialization cannot attribute "
-         ^ unknown.resource_class
-         ^ ": "
-         ^ unknown.reason)
-  in
-  check [ broker; storage; authority ]
+  match
+    List.find_opt
+      (function
+        | Sol_cli_absence.Absent _ -> false
+        | _ -> true)
+      [ broker; storage; authority ]
+  with
+  | None -> Ok ()
+  | Some observation ->
+    Error
+      ("Kafka initialization requires positive absence; restore the existing authority \
+        rather than generating a replacement: "
+       ^ Sol_cli_absence.summary observation)
 ;;
 
 (* Terraform refresh compares the existing broker projection with the durable

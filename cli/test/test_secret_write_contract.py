@@ -120,15 +120,20 @@ print('unsupported Kubernetes operation: '+repr(a),file=sys.stderr);sys.exit(90)
         (root / 'state.json').write_text(json.dumps(state))
         before_platform = json.loads(json.dumps(state))
         calls_before = len((root / 'calls.jsonl').read_text().splitlines())
-        platform = execute('@platform/KAFKA_SASL_PASSWORD', fail_ns='workspace-payments')
-        require(platform.returncode != 0 and 'resource-owned' in platform.stderr,
-                'Kafka platform key was not refused as resource-owned')
+        for address in ('@platform/KAFKA_SASL_PASSWORD', '@platform/KAFKA_SSL_CA_CERT', '@platform/POSTGRES_URL', '@platform/API_KEY'):
+            result = execute(address, from_file=str(root/'must-not-open'))
+            require(result.returncode != 0 and 'secret address must look like' in result.stderr,
+                    'retired platform scope accepted: '+address)
+            require('could not read' not in result.stderr, 'retired scope reached credential input')
+            result = subprocess.run([sol, 'secret', 'delete', 'prod/aws/us-east-1', address],
+                                    cwd=workspace, env=environment, text=True, capture_output=True, timeout=10)
+            require(result.returncode != 0 and 'secret address must look like' in result.stderr,
+                    'retired platform delete accepted: '+address)
         require(json.loads((root / 'state.json').read_text()) == before_platform,
-                'refused Kafka platform key wrote a destination')
-        extra = [json.loads(line) for line in (root / 'calls.jsonl').read_text().splitlines()[calls_before:]]
-        require(not any('patch' in call for call in extra),
-                'refused Kafka platform key reached a write')
-        print('ok: resource-owned Kafka keys are refused before any platform write')
+                'retired platform scope wrote a destination')
+        extra = (root / 'calls.jsonl').read_text().splitlines()[calls_before:]
+        require(not extra, 'retired platform scope reached Kubernetes')
+        print('ok: retired platform writes/deletes refuse before credential input or Kubernetes access')
         # Resolution and ownership refusals precede opening the requested secret file.
         refused = execute('payments/api_svc/UNDECLARED', from_file=str(root/'must-not-open'))
         require(refused.returncode != 0 and 'could not read' not in refused.stderr, 'invalid key reached input')

@@ -490,7 +490,7 @@ let test_input_ownership_is_one_decision () =
            String.equal expected "the unit's own Secret"
          | Some Sol_cli_deploy_selection.Target_database ->
            String.equal expected "the target's database input"
-         | Some Sol_cli_deploy_selection.Target_kafka ->
+         | Some (Sol_cli_deploy_selection.Target_kafka _) ->
            String.equal expected "the target's Kafka input"
          | Some Sol_cli_deploy_selection.Conflicting ->
            String.equal expected "a conflicting authority"
@@ -508,7 +508,7 @@ let test_input_ownership_is_one_decision () =
       | Sol_cli_deploy_selection.Unit_secret -> Some "sol"
       | Sol_cli_deploy_selection.External_secret { store; key } ->
         Some (Printf.sprintf "external:%s:%s" store key)
-      | Sol_cli_deploy_selection.Target_kafka -> Some "kafka"
+      | Sol_cli_deploy_selection.Target_kafka _ -> Some "kafka"
       | Sol_cli_deploy_selection.Conflicting
       | Sol_cli_deploy_selection.Target_database
       | Sol_cli_deploy_selection.Unmapped -> None

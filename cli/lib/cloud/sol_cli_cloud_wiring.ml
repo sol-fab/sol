@@ -799,18 +799,9 @@ let apply_deps
     ; verify_platform_prerequisites =
         (fun env platform_vars ->
           let* () =
-            match
-              Sol_cli_terraform_vars.resolved
-                "kafka_authority"
-                ~var_files:[]
-                ~vars:platform_vars
-            with
-            | None | Some "null" -> Ok ()
-            | Some reference ->
-              let* _ =
-                Sol_cli_kafka_authority.reference_of_json reference
-                |> Result.map_error (fun message -> Sol_cli_cloud_apply.Refused message)
-              in
+            if not (Sol_cli_resource_binding.kafka_is_managed kafka)
+            then Ok ()
+            else
               Sol_cli_terraform_steps.apply_asserted
                 ~env
                 ~run_log

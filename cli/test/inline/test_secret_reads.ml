@@ -106,8 +106,8 @@ if [ "$verb" = "get" ]; then
       fi
       exit 0 ;;
     externalsecrets)
-      if [ "$mode" = "platform-collision" ] && [ "$namespace" = "notifications" ]; then
-        printf 'owner\tsol-secrets\n'
+      if [ "$mode" = "eso-target-collision" ] && [ "$namespace" = "notifications" ]; then
+        printf 'owner\tprod-kafka-creds\n'
       fi
       exit 0 ;;
     secrets)
@@ -170,8 +170,8 @@ if [ "$verb" = "get" ]; then
         echo '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"sol-secrets","namespace":"payments","resourceVersion":"1"},"data":{"EXISTING":"ZXhpc3Rpbmc="}}'
         exit 0
       fi
-      if [ "$mode" = "runtime-valid" ]; then
-        echo '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"sol-secrets","namespace":"payments","resourceVersion":"1"},"data":{"POSTGRES_URL":"cG9zdGdyZXM6Ly9kYiJ9"}}'
+      if [ "$mode" = "kafka-inputs-missing" ]; then
+        echo '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"prod-kafka-creds","namespace":"payments","resourceVersion":"1"},"data":{"OTHER_KEY":"c2VjcmV0"}}'
         exit 0
       fi
       if [ "$mode" = "owned-unit" ]; then
@@ -193,6 +193,13 @@ if [ "$verb" = "get" ]; then
     *) exit 0 ;;
   esac
 fi
+if [ "$verb" = "apply" ] || [ "$verb" = "create" ]; then
+  prev=""
+  for a in "$@"; do
+    if [ "$prev" = "-f" ]; then cat "$a" >> %s.manifests; fi
+    prev="$a"
+  done
+fi
 if [ "$verb" = "create" ]; then
   # The namespace is created with a different manifest prefix; only the Secret's own create
   # makes the object exist for a later read.
@@ -206,13 +213,6 @@ if [ "$verb" = "create" ]; then
       exit 1 ;;
   esac
   exit 0
-fi
-if [ "$verb" = "apply" ]; then
-  prev=""
-  for a in "$@"; do
-    if [ "$prev" = "-f" ]; then cat "$a" >> %s.manifests; fi
-    prev="$a"
-  done
 fi
 exit 0
 |}
@@ -385,44 +385,31 @@ let test_read_secret_key_decodes_the_projection () =
            (Sol_cli_string.contains ~needle:"has no key ABSENT" message)))
 ;;
 
-(* 2b: POSTGRES_URL is no longer a platform Job input, so the shared-scope writer
-   that used to carry it must refuse it and the Kafka credential must still work. *)
-let test_platform_set_refuses_postgres_url () =
-  match
-    Sol_cli_secret.set_platform_key
-      ~ctx
-      ~namespaces:[ "payments" ]
-      ~key:"POSTGRES_URL"
-      ~value:"postgres://platform-db"
-  with
-  | Ok _ -> Windtrap.fail "POSTGRES_URL must no longer be a platform Job input"
-  | Error message ->
-    Windtrap.equal
-      Windtrap.bool
-      ~msg:"the refusal names the class-Secret replacement"
-      true
-      (Sol_cli_string.contains ~needle:"not a supported Sol platform Job secret" message)
-;;
-
-let test_platform_preflight_checks_all_namespaces_before_secret_writes () =
-  with_fake_kubectl ~mode:"platform-collision" (fun ~calls:_ ~manifests ->
+let test_target_projection_refuses_an_eso_writer () =
+  with_fake_kubectl ~mode:"eso-target-collision" (fun ~calls ~manifests ->
     match
-      Sol_cli_secret.verify_platform_secret_destinations
+      Sol_cli_secret.set_target_keys
         ~ctx
-        ~namespaces:[ "payments"; "notifications" ]
+        ~namespaces:[ "notifications" ]
+        ~secret_name:"prod-kafka-creds"
+        ~values:[ "KAFKA_SASL_PASSWORD", "credential" ]
     with
-    | Ok () -> Windtrap.fail "an ExternalSecret collision must fail preflight"
+    | Ok _ -> Windtrap.fail "a competing ESO writer was accepted"
     | Error message ->
       Windtrap.equal
         Windtrap.bool
-        ~msg:"names the conflicting shared Secret"
         true
         (Sol_cli_string.contains
            ~needle:"ExternalSecret already targets this object"
            message);
       Windtrap.equal
         Windtrap.bool
-        ~msg:"preflight writes no shared Secret before discovering the collision"
+        ~msg:"no destination write"
+        false
+        (Sol_cli_string.contains ~needle:"patch-args" (calls ()));
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"no Secret create"
         false
         (Sol_cli_string.contains ~needle:"kind: Secret" (manifests ())))
 ;;
@@ -697,11 +684,13 @@ let test_unit_set_writes_only_its_unit_secret () =
 
 let test_contract_readiness_names_missing_tls_job_input () =
   match
-    with_fake_kubectl ~mode:"runtime-valid" (fun ~calls:_ ~manifests:_ ->
-      Sol_cli_secret.verify_runtime_secret_keys
+    with_fake_kubectl ~mode:"kafka-inputs-missing" (fun ~calls:_ ~manifests:_ ->
+      Sol_cli_secret.verify_required_keys
         ~ctx
         ~namespace:"payments"
-        ~required_keys:[ "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ])
+        ~secret_name:"prod-kafka-creds"
+        ~required_keys:[ "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ]
+        ())
   with
   | Ok () ->
     Windtrap.fail "a runtime Secret without Kafka inputs passed contract readiness"
@@ -759,10 +748,8 @@ let%test "verify: a delivered Secret key is decoded, and an absent key is named"
   test_read_secret_key_decodes_the_projection ()
 ;;
 
-let%test "2b: platform refuses POSTGRES_URL" = test_platform_set_refuses_postgres_url ()
-
-let%test "scope: platform secret destinations preflight as a target" =
-  test_platform_preflight_checks_all_namespaces_before_secret_writes ()
+let%test "scope: target credential projection refuses a competing ESO writer" =
+  test_target_projection_refuses_an_eso_writer ()
 ;;
 
 let%test "scope: unit writes only the selected unit Secret" =

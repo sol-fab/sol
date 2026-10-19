@@ -124,6 +124,12 @@ val kafka_is_managed : kafka -> bool
 val kafka_for_shape : shape:Sol_cli_profile.platform_shape -> kafka -> kafka
 val kafka_config : kafka -> (string * string) list
 
+(** Consumer credential sources, shared by deployment and current-target rollback. *)
+val kafka_secret_sources
+  :  target:string
+  -> kafka
+  -> (string * Sol_cli_secret_source.t) list
+
 (** Stable native authority identity, shared by provisioning and independent observation. *)
 val kafka_authority_name : cluster_name:string -> string
 

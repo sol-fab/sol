@@ -22,7 +22,7 @@ type input_owner =
       ; key : string
       }
   | Target_database
-  | Target_kafka
+  | Target_kafka of { secret : string }
   | Conflicting
   | Unmapped
 

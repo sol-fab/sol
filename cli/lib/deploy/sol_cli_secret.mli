@@ -87,12 +87,6 @@ val verify_external_secret_destination
   -> Sol_cli_deployment_plan.service_spec
   -> (unit, string) result
 
-val verify_runtime_secret_keys
-  :  ctx:Sol_cli_kube_destination.context
-  -> namespace:string
-  -> required_keys:string list
-  -> (unit, string) result
-
 val set_unit_key
   :  ctx:Sol_cli_kube_destination.context
   -> namespace:string
@@ -120,8 +114,6 @@ val set_target_keys
   -> values:(string * string) list
   -> (string list, string) result
 
-val platform_secret_keys : string list
-
 (** The guard a delivered object passes before Sol writes it: what is already there must be
     absent or Sol's. A Secret is also refused where an ExternalSecret already targets it. *)
 val assert_destination_is_sol
@@ -130,24 +122,6 @@ val assert_destination_is_sol
   -> namespace:string
   -> name:string
   -> (unit, string) result
-
-val verify_platform_secret_destinations
-  :  ctx:Sol_cli_kube_destination.context
-  -> namespaces:string list
-  -> (unit, string) result
-
-val set_platform_key
-  :  ctx:Sol_cli_kube_destination.context
-  -> namespaces:string list
-  -> key:string
-  -> value:string
-  -> (string list, string) result
-
-val delete_platform_key
-  :  ctx:Sol_cli_kube_destination.context
-  -> namespaces:string list
-  -> key:string
-  -> (string list, string) result
 
 val delete_unit_key
   :  ctx:Sol_cli_kube_destination.context
@@ -160,9 +134,4 @@ val unit_secret_keys
   :  ctx:Sol_cli_kube_destination.context
   -> namespace:string
   -> secret_name:string
-  -> (string list, string) result
-
-val runtime_secret_keys
-  :  ctx:Sol_cli_kube_destination.context
-  -> namespace:string
   -> (string list, string) result

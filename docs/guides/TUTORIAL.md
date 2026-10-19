@@ -760,7 +760,6 @@ sol assets                                        where this sol's own assets co
 sol rollback RELEASE_ID                           restore a recorded release boundary (see `sol releases` for ids)
 
 sol secret set TARGET DOMAIN/UNIT/KEY [--from-stdin|--from-file PATH]
-sol secret set TARGET @platform/KEY [--from-stdin|--from-file PATH]
 sol secret status TARGET                                                         show owners and readiness without values
 sol secret delete TARGET ADDRESS                                                 delete an unused Sol-owned key
 sol local run                                                                    load ignored sol/secrets.local/<domain>/<unit>.env files

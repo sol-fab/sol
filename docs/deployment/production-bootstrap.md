@@ -338,9 +338,8 @@ namespace that declares a Kafka consumer. A TLS contract Job reads only those
 two keys from the same Secret. Non-consumers receive nothing, and there is no
 operator step that copies Kafka credentials into unit Secrets or `sol-secrets`.
 
-`sol secret set` refuses `KAFKA_SASL_PASSWORD` and `KAFKA_SSL_CA_CERT`, whether
-addressed to a unit or to `@platform`: the resolved Kafka binding is their single
-producer. An application `secrets:` mapping for either key is a conflicting
+`sol secret set` cannot write the resource-owned `KAFKA_SASL_PASSWORD` and
+`KAFKA_SSL_CA_CERT` inputs: the resolved Kafka binding is their single producer. An application `secrets:` mapping for either key is a conflicting
 producer and fails planning. External Kafka keeps its explicitly declared ESO
 Secret instead.
 

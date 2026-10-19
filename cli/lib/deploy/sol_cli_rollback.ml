@@ -296,12 +296,7 @@ let validate_resource_requirements
          (String.concat ", " missing))
 ;;
 
-let service_specs_of_release
-      ?database
-      ?kafka
-      ?kafka_creds_name
-      (release : Sol_cli_release.t)
-  =
+let service_specs_of_release ?database ?kafka (release : Sol_cli_release.t) =
   (* A rollback restores the release's **recorded** requirements against the **current** target's
      authorities and bindings. The release answers "what did this version require?"; the target
      answers "where does that credential come from today?". Neither is asked the other's question,
@@ -326,7 +321,7 @@ let service_specs_of_release
   let restore_kafka (w : Sol_cli_release.recorded_workload) spec =
     match kafka with
     | None -> Ok spec
-    | Some kafka ->
+    | Some (target, kafka) ->
       if
         spec.Sol_cli_deployment_plan.consumes_kafka
         && kafka = Sol_cli_resource_binding.No_kafka
@@ -348,41 +343,13 @@ let service_specs_of_release
           then Sol_cli_resource_binding.kafka_config kafka
           else []
         in
-        let transport = Sol_cli_manifest.kafka_transport_of_config config in
-        let kafka_keys = Sol_cli_manifest.kafka_required_secret_keys transport in
-        let* kafka_sources =
-          if not spec.Sol_cli_deployment_plan.consumes_kafka
-          then Ok []
-          else (
-            match kafka with
-            | Sol_cli_resource_binding.Managed_kafka _ ->
-              (match kafka_creds_name with
-               | Some secret ->
-                 Ok
-                   (List.map
-                      (fun key -> key, Sol_cli_secret_source.Target_kafka { secret })
-                      kafka_keys)
-               | None ->
-                 Error
-                   (Printf.sprintf
-                      "cannot restore release %s: managed Kafka needs its delivery \
-                       Secret name, and the rollback resolved none"
-                      release.release_id))
-            | Sol_cli_resource_binding.External_kafka binding ->
-              Ok
-                (List.map
-                   (fun key ->
-                      let remote =
-                        if String.equal key Sol_cli_manifest.kafka_sasl_password_key
-                        then binding.password
-                        else binding.ca
-                      in
-                      ( key
-                      , Sol_cli_secret_source.External
-                          { store = binding.store; key = remote } ))
-                   kafka_keys)
-            | Sol_cli_resource_binding.Local_kafka _ | Sol_cli_resource_binding.No_kafka
-              -> Ok [])
+        let kafka_keys =
+          Sol_cli_manifest.kafka_required_secret_keys Sol_cli_manifest.Sasl_ssl
+        in
+        let kafka_sources =
+          if spec.Sol_cli_deployment_plan.consumes_kafka
+          then Sol_cli_resource_binding.kafka_secret_sources ~target kafka
+          else []
         in
         let secret_sources =
           List.filter
@@ -1312,10 +1279,7 @@ let pointer_report_to_string ~(release : Sol_cli_release.t) = function
 ;;
 
 type transaction_deps =
-  { database : (string * Sol_cli_resource_binding.postgres) option
-  ; kafka : Sol_cli_resource_binding.kafka option
-  ; kafka_creds_name : string option
-  ; ensure_held : unit -> (unit, string) result
+  { ensure_held : unit -> (unit, string) result
   ; applied_migrations : unit -> (int list, string) result
   ; apply : (Sol_cli_deployment_plan.service_spec * string) list -> (unit, string) result
   ; live_workloads : unit -> ((workload_identity * string) list, string) result
@@ -1340,6 +1304,7 @@ let consumer_groups_of_release (release : Sol_cli_release.t) =
 
 let execute
       ~(release : Sol_cli_release.t)
+      ~specs
       ~migrations_dir
       ~current_migrations
       ~(deps : transaction_deps)
@@ -1360,13 +1325,6 @@ let execute
     with
     | Error e -> Error (migration_check_error_to_string e)
     | Ok () -> Ok ()
-  in
-  let* specs =
-    service_specs_of_release
-      ?database:deps.database
-      ?kafka:deps.kafka
-      ?kafka_creds_name:deps.kafka_creds_name
-      release
   in
   let* () = deps.ensure_held () in
   let* () =

@@ -34,37 +34,16 @@ let aws_target : Sol_cli_config.target =
 ;;
 
 let gcp_target : Sol_cli_config.target =
-  { name = "prod/gcp/us-central1"
-  ; env = "prod"
+  { aws_target with
+    name = "prod/gcp/us-central1"
   ; provider = Sol_cli_provider.Gcp
   ; region = "us-central1"
-  ; registry = None
-  ; base_domain = None
-  ; cluster_issuer = None
-  ; letsencrypt_email = None
-  ; cluster_name = Some "acme-prod"
-  ; kube_context = None
-  ; kubeconfig = None
-  ; terraform_var_file = None
-  ; observability_backend = None
-  ; destroy_retention = None
-  ; alert_receiver_type = None
-  ; alert_receiver_url = None
-  ; alert_owner = None
-  ; alert_runbook_url = None
-  ; state_bucket = None
-  ; cluster_endpoint_cidr = None
-  ; dns_zone_ownership = None
-  ; node_failure_headroom_nodes = None
-  ; profile = None
-  ; shape = Some Sol_cli_profile.Local
   ; provider_fields =
       [ ( "gcp"
         , [ "project_id", "acme-project"
           ; "reconciler_trust_principal", "user:ci@example.test"
           ] )
       ]
-  ; secret_authorities = []
   }
 ;;
 
@@ -587,7 +566,7 @@ let%test
            {|#!/bin/sh
 case "$*" in
   *"sts get-caller-identity"*) printf '111122223333\n' ;;
-  *"secretsmanager describe-secret --secret-id sol-kafka-acme-prod --region us-east-1 --query Name --output text"*)
+  *"secretsmanager describe-secret --secret-id sol-kafka-acme-prod --region us-east-1 --query {name:Name,deleted:DeletedDate,stages:VersionIdsToStages} --output json"*)
     printf '%%s' %s
     printf '%%s' %s >&2
     exit %d
@@ -610,7 +589,7 @@ esac
          | _ ->
            Windtrap.fail "the exact-name authority read produced an incorrect verdict"))
     [ (* A scheduled deletion still permits DescribeSecret's Name read. *)
-      0, name, "", `Present
+      0, {|{"name":"sol-kafka-acme-prod","deleted":1700000000,"stages":{}}|}, "", `Present
     ; ( 254
       , ""
       , "An error occurred (ResourceNotFoundException) when calling the DescribeSecret \
@@ -619,8 +598,8 @@ esac
     ; 254, "", "AccessDeniedException", `Unknown
     ; 254, "", "region not found", `Unknown
     ; 0, "", "", `Unknown
-    ; 0, "another-target", "", `Unknown
-    ; 0, name, "WARNING: incomplete response", `Unknown
+    ; 0, {|{"name":"another-target"}|}, "", `Unknown
+    ; 0, {|{"name":"sol-kafka-acme-prod"}|}, "WARNING: incomplete response", `Unknown
     ]
 ;;
 
@@ -836,15 +815,29 @@ let%test "AWS Kafka authority requires an existing secret with an active version
       Sol_cli_aws_absence.kafka_authority ~region:"us-east-1" ~cluster_name:"acme-prod"
       |> authority_is expected)
   in
-  observe {|{"deleted":null,"stages":{"v1":["AWSCURRENT"]}}|} 0 "" "current";
-  observe {|{"deleted":null,"stages":{}}|} 0 "" "missing";
-  observe {|{"deleted":1700000000,"stages":{"v1":["AWSCURRENT"]}}|} 0 "" "missing";
+  observe
+    {|{"name":"sol-kafka-acme-prod","deleted":null,"stages":{"v1":["AWSCURRENT"]}}|}
+    0
+    ""
+    "current";
+  observe {|{"name":"sol-kafka-acme-prod","deleted":null,"stages":{}}|} 0 "" "missing";
+  observe
+    {|{"name":"sol-kafka-acme-prod","deleted":1700000000,"stages":{"v1":["AWSCURRENT"]}}|}
+    0
+    ""
+    "missing";
   observe
     ""
     254
     "An error occurred (ResourceNotFoundException) when calling the DescribeSecret \
      operation"
     "missing";
+  observe
+    {|{"name":"another-target","deleted":null,"stages":{"v1":["AWSCURRENT"]}}|}
+    0
+    ""
+    "unknown";
+  observe {|{"deleted":null,"stages":{"v1":["AWSCURRENT"]}}|} 0 "" "unknown";
   observe "" 254 "An error occurred (AccessDeniedException)" "unknown"
 ;;
 

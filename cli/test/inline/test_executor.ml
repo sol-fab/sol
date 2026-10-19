@@ -395,9 +395,14 @@ let test_apply_fails_closed_when_the_workload_secret_is_absent () =
          (Sol_cli_string.contains ~needle:"SOL_API_KEY" message);
        Windtrap.equal
          Windtrap.bool
-         ~msg:"says deploy never writes values"
+         ~msg:
+           "directs application values to the operator and resource credentials to their \
+            binding"
          true
-         (Sol_cli_string.contains ~needle:"never write values" message)
+         (Sol_cli_string.contains
+            ~needle:"sol secret set <TARGET> <DOMAIN/UNIT/KEY>"
+            message
+          && Sol_cli_string.contains ~needle:"Resource-owned credentials" message)
      | Ok _ -> Windtrap.fail "apply must fail closed when the workload Secret is absent");
     Windtrap.equal
       Windtrap.bool

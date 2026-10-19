@@ -121,24 +121,6 @@ let verify_sol_managed_secret = function
   | Some _ -> Error "Secret response is not an object"
 ;;
 
-let verify_runtime_secret_owner = function
-  | None -> Ok ()
-  | Some (`Assoc fields) ->
-    (match List.assoc_opt "metadata" fields with
-     | Some (`Assoc metadata) ->
-       (match List.assoc_opt "labels" metadata with
-        | None -> Ok ()
-        | Some (`Assoc labels) ->
-          (match List.assoc_opt "app.kubernetes.io/managed-by" labels with
-           | None -> Ok ()
-           | Some (`String "sol") -> Ok ()
-           | Some (`String owner) -> Error ("Secret is marked as managed by " ^ owner)
-           | _ -> Error "Secret ownership is unknown (invalid Sol managed-by label)")
-        | _ -> Error "Secret ownership is unknown (invalid metadata labels)")
-     | _ -> Error "Secret has no metadata")
-  | Some _ -> Error "Secret response is not an object"
-;;
-
 let apply_unit_values ~ctx ~namespace ~secret_name values =
   match values with
   | [] -> Ok false
@@ -206,17 +188,6 @@ let read_secret_key ~ctx ~namespace ~secret_name ~key =
      | _ -> Error (Printf.sprintf "Secret %s/%s has no key %s" namespace secret_name key))
 ;;
 
-let labels_of = function
-  | `Assoc fields ->
-    (match List.assoc_opt "metadata" fields with
-     | Some (`Assoc metadata) ->
-       (match List.assoc_opt "labels" metadata with
-        | Some (`Assoc labels) -> labels
-        | _ -> [])
-     | _ -> [])
-  | _ -> []
-;;
-
 let has_data_field = function
   | `Assoc fields -> List.mem_assoc "data" fields
   | _ -> false
@@ -246,23 +217,19 @@ let failure_says failure needle =
 
     The identity precondition rides in the same request: a `test` op on the Sol managed-by
     label, so under the strict rule there is no window between "this Secret is Sol's" and the
-    write. The permissive runtime rule allows an *absent* label, which a single `test` cannot
-    express, so an unlabeled runtime Secret is written without it — the patch can still only
-    add the selected keys, and the object had no owner to take from. *)
+    write. *)
 let secret_keys_patch ~json ~values =
   let encoded =
     List.map (fun (key, value) -> key, `String (Base64.encode_exn value)) values
   in
+  (* Every existing destination has passed the strict Sol ownership check. *)
   let test_label =
-    match List.assoc_opt "app.kubernetes.io/managed-by" (labels_of json) with
-    | Some (`String "sol") ->
-      [ `Assoc
-          [ "op", `String "test"
-          ; "path", `String "/metadata/labels/app.kubernetes.io~1managed-by"
-          ; "value", `String "sol"
-          ]
-      ]
-    | _ -> []
+    [ `Assoc
+        [ "op", `String "test"
+        ; "path", `String "/metadata/labels/app.kubernetes.io~1managed-by"
+        ; "value", `String "sol"
+        ]
+    ]
   in
   (* Adding an absent /data map would replace keys introduced since the read.
      Refuse that stale snapshot; the next deployment can reconcile the fresh object. *)
@@ -308,19 +275,7 @@ let create_named_secret ~ctx ~namespace ~secret_name ~values =
     An absent object is created first, never patched without ownership evidence. If
     another writer wins creation, rebuilding from a fresh read re-runs the ownership
     rule and attaches the normal identity precondition before any patch. *)
-let write_named_secret_keys
-      ~allow_unlabeled_runtime
-      ~ctx
-      ~namespace
-      ~secret_name
-      ~values
-      ~existing
-  =
-  let verify_owner =
-    if allow_unlabeled_runtime
-    then verify_runtime_secret_owner
-    else verify_sol_managed_secret
-  in
+let write_named_secret_keys ~ctx ~namespace ~secret_name ~values ~existing =
   let redact message =
     let confidential =
       List.concat_map (fun (_, value) -> [ value; Base64.encode_exn value ]) values
@@ -357,7 +312,7 @@ let write_named_secret_keys
     | Ok (Ok _) -> Ok ()
     | Ok (Error failure) when failure_says failure "AlreadyExists" && retries > 0 ->
       let* fresh = get_named_secret_json ~ctx ~name:secret_name namespace in
-      let* () = verify_owner fresh in
+      let* () = verify_sol_managed_secret fresh in
       (match fresh with
        | Some json -> patch (retries - 1) json
        | None ->
@@ -490,24 +445,7 @@ let assert_destination_is_sol ~ctx ~resource ~namespace ~name =
   verify_sol_managed_secret existing
 ;;
 
-let verify_platform_secret_destinations ~ctx ~namespaces =
-  let* () = require_namespaces namespaces in
-  iter_namespaces namespaces ~f:(fun namespace ->
-    let secret_name = Sol_cli_manifest.runtime_secret_name in
-    let* () = ensure_namespace ~ctx namespace in
-    let* () = refuse_external_secret_target ~ctx ~namespace ~secret_name in
-    let* existing = get_named_secret_json ~ctx ~name:secret_name namespace in
-    verify_runtime_secret_owner existing)
-;;
-
-let set_named_keys
-      ?(allow_unlabeled_runtime = false)
-      ~ctx
-      ~namespace
-      ~secret_name
-      ~values
-      ()
-  =
+let set_named_keys ~ctx ~namespace ~secret_name ~values () =
   let* () =
     List.fold_left
       (fun result (key, _) ->
@@ -519,11 +457,7 @@ let set_named_keys
   let* () = ensure_namespace ~ctx namespace in
   let* () = refuse_external_secret_target ~ctx ~namespace ~secret_name in
   let* existing = get_named_secret_json ~ctx ~name:secret_name namespace in
-  let* () =
-    if allow_unlabeled_runtime
-    then verify_runtime_secret_owner existing
-    else verify_sol_managed_secret existing
-  in
+  let* () = verify_sol_managed_secret existing in
   (* "Changed" compares only the selected keys against what is about to be written — not a
      before/after of the whole object, which is the read-modify-write shape #1426 removed. A
      value another tool stored with different base64 padding reads as changed here, which only
@@ -540,72 +474,12 @@ let set_named_keys
   if unchanged
   then Ok false
   else
-    let* () =
-      write_named_secret_keys
-        ~allow_unlabeled_runtime
-        ~ctx
-        ~namespace
-        ~secret_name
-        ~values
-        ~existing
-    in
+    let* () = write_named_secret_keys ~ctx ~namespace ~secret_name ~values ~existing in
     Ok true
 ;;
 
-let set_named_key ?allow_unlabeled_runtime ~ctx ~namespace ~secret_name ~key ~value () =
-  set_named_keys
-    ?allow_unlabeled_runtime
-    ~ctx
-    ~namespace
-    ~secret_name
-    ~values:[ key, value ]
-    ()
-;;
-
 let set_unit_key ~ctx ~namespace ~secret_name ~key ~value =
-  set_named_key ~ctx ~namespace ~secret_name ~key ~value ()
-;;
-
-(* Database connections and Kafka credentials are both resource-delivered now: the
-   deploy writes the class Secrets and `<target>-kafka-creds`, and external Kafka keeps
-   its ESO Secret. There is no operator-written platform Job input left. *)
-let platform_secret_keys = []
-
-let set_platform_key ~ctx ~namespaces ~key ~value =
-  let* () = validate_key key in
-  if not (List.mem key platform_secret_keys)
-  then Error (Printf.sprintf "%s is not a supported Sol platform Job secret" key)
-  else
-    let* () = require_namespaces namespaces in
-    let* () = verify_platform_secret_destinations ~ctx ~namespaces in
-    let changed = ref [] in
-    let* () =
-      iter_namespaces namespaces ~f:(fun namespace ->
-        let* is_changed =
-          set_named_key
-            ~allow_unlabeled_runtime:true
-            ~ctx
-            ~namespace
-            ~secret_name:Sol_cli_manifest.runtime_secret_name
-            ~key
-            ~value
-            ()
-        in
-        if is_changed then changed := namespace :: !changed;
-        Ok ())
-      |> Result.map_error (fun message ->
-        match List.rev !changed with
-        | [] -> message
-        | namespaces ->
-          Printf.sprintf
-            "%s\n\
-             Platform Job secret %s was already updated in namespace(s): %s. These \
-             writes were not rolled back."
-            message
-            key
-            (String.concat ", " namespaces))
-    in
-    Ok (List.rev !changed)
+  set_named_keys ~ctx ~namespace ~secret_name ~values:[ key, value ] ()
 ;;
 
 (** Write a target projection atomically per namespace. A failed namespace leaves
@@ -639,40 +513,6 @@ let set_target_keys ~ctx ~namespaces ~secret_name ~values =
           (String.concat ", " namespaces))
   in
   Ok (List.rev !changed)
-;;
-
-let delete_platform_key ~ctx ~namespaces ~key =
-  let* () = validate_key_format key in
-  if not (List.mem key platform_secret_keys)
-  then Error (Printf.sprintf "%s is not a supported Sol platform Job secret" key)
-  else
-    let* () = require_namespaces namespaces in
-    let deleted = ref [] in
-    let* () =
-      iter_namespaces namespaces ~f:(fun namespace ->
-        let secret_name = Sol_cli_manifest.runtime_secret_name in
-        let* () = refuse_external_secret_target ~ctx ~namespace ~secret_name in
-        let* existing = get_named_secret_json ~ctx ~name:secret_name namespace in
-        let* () = verify_runtime_secret_owner existing in
-        match existing with
-        | None -> Ok ()
-        | Some json when not (List.mem_assoc key (data_keys json)) -> Ok ()
-        | Some _ ->
-          let patch = Printf.sprintf "[{\"op\":\"remove\",\"path\":\"/data/%s\"}]" key in
-          let* _ =
-            Sol_cli_kubectl.patch
-              ~ctx
-              ~resource:"secret"
-              ~name:secret_name
-              ~namespace
-              ~patch_type:"json"
-              ~patch
-            |> Result.map_error Sol_cli_process.error_to_string
-          in
-          deleted := namespace :: !deleted;
-          Ok ())
-    in
-    Ok (List.rev !deleted)
 ;;
 
 let delete_unit_key ~ctx ~namespace ~secret_name ~key =
@@ -724,10 +564,9 @@ let verify_required_keys ?hint ~ctx ~namespace ~secret_name ~required_keys () =
       Option.value
         hint
         ~default:
-          "Sol's ordinary deploy and rollback deliver secret references only and never \
-           write values; set application values with `sol secret set <TARGET> \
-           <DOMAIN/UNIT/KEY>` or platform Job inputs with `sol secret set <TARGET> \
-           @platform/<KEY>`, then try again."
+          "Set application values with `sol secret set <TARGET> <DOMAIN/UNIT/KEY>`. \
+           Resource-owned credentials are delivered by the target's resource binding; \
+           restore that authority and redeploy instead of writing an application secret."
     in
     Error
       (Printf.sprintf
@@ -1224,29 +1063,9 @@ let verify_external_secret_destination ~ctx (spec : Sol_cli_deployment_plan.serv
     verify_external_secret_output ~ctx ~namespace ~external_uid ~secret_name:target_name
 ;;
 
-let verify_runtime_secret_keys ~ctx ~namespace ~required_keys =
-  verify_required_keys
-    ~ctx
-    ~namespace
-    ~secret_name:Sol_cli_manifest.runtime_secret_name
-    ~required_keys
-    ()
-;;
-
 let unit_secret_keys ~ctx ~namespace ~secret_name =
   let* json = get_named_secret_json ~ctx ~name:secret_name namespace in
   let* () = verify_sol_managed_secret json in
-  Ok
-    (match json with
-     | None -> []
-     | Some json -> List.map fst (data_keys json))
-;;
-
-let runtime_secret_keys ~ctx ~namespace =
-  let* json =
-    get_named_secret_json ~ctx ~name:Sol_cli_manifest.runtime_secret_name namespace
-  in
-  let* () = verify_runtime_secret_owner json in
   Ok
     (match json with
      | None -> []

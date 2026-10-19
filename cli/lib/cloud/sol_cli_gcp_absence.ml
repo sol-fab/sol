@@ -1110,12 +1110,19 @@ let kafka_storage_in_project ~project ~namespace observation =
   let scope kind location =
     [ (if kind = "zones" then "--zone" else "--region"); location ]
   in
-  let is_kafka identity =
-    let* kind, place, name = location identity "disks" in
-    let* disk =
+  (* Both disk and attached-instance reads must bind the response to the exact
+     project/location identity from the inventory, never just its basename. *)
+  let describe resource identity =
+    let* kind, place, name = location identity resource in
+    let* () =
+      if resource = "instances" && kind <> "zones"
+      then Error "an instance has no zone"
+      else Ok ()
+    in
+    let* json =
       read
         ([ "compute"
-         ; "disks"
+         ; resource
          ; "describe"
          ; name
          ; "--project"
@@ -1126,13 +1133,14 @@ let kafka_storage_in_project ~project ~namespace observation =
          @ scope kind place)
     in
     let* actual =
-      Sol_cli_json.require ~what:"a disk" [ "selfLink" ] Sol_cli_json.string disk
+      Sol_cli_json.require ~what:resource [ "selfLink" ] Sol_cli_json.string json
     in
-    let* () =
-      if actual = identity
-      then Ok ()
-      else Error "disk metadata does not match the requested identity"
-    in
+    if actual = identity
+    then Ok json
+    else Error "provider metadata does not match the requested identity"
+  in
+  let is_kafka identity =
+    let* disk = describe "disks" identity in
     let* description =
       Sol_cli_json.optional ~what:"a disk" [ "description" ] Sol_cli_json.string disk
     in
@@ -1165,35 +1173,7 @@ let kafka_storage_in_project ~project ~namespace observation =
       let* boots =
         Sol_cli_result.map_list
           (fun user ->
-             let* kind, place, name = location user "instances" in
-             let* () =
-               if kind = "zones" then Ok () else Error "an instance has no zone"
-             in
-             let* instance =
-               read
-                 ([ "compute"
-                  ; "instances"
-                  ; "describe"
-                  ; name
-                  ; "--project"
-                  ; project
-                  ; "--format"
-                  ; "json"
-                  ]
-                  @ scope kind place)
-             in
-             let* actual =
-               Sol_cli_json.require
-                 ~what:"an instance"
-                 [ "selfLink" ]
-                 Sol_cli_json.string
-                 instance
-             in
-             let* () =
-               if actual = user
-               then Ok ()
-               else Error "instance metadata does not match its requested identity"
-             in
+             let* instance = describe "instances" user in
              let* disks =
                Sol_cli_json.require
                  ~what:"an instance"

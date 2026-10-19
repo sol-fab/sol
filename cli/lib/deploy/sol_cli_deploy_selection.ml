@@ -50,7 +50,7 @@ type input_owner =
       ; key : string
       }
   | Target_database
-  | Target_kafka
+  | Target_kafka of { secret : string }
   | Conflicting
   | Unmapped
 
@@ -67,24 +67,16 @@ let owner_of_authority (authority : Sol_cli_config.secret_authority option) =
    authority, as before. *)
 let kafka_key_owner ~(config : Sol_cli_config.t) ~unit_address kafka key =
   let declared = Sol_cli_config.secret_authority config.target ~unit_address ~key in
-  match kafka with
-  | Sol_cli_resource_binding.Managed_kafka _ ->
-    (match declared with
-     | Some _ -> Conflicting
-     | None -> Target_kafka)
-  | Sol_cli_resource_binding.External_kafka binding ->
-    (match declared with
-     | Some _ -> Conflicting
-     | None ->
-       External_secret
-         { store = binding.store
-         ; key =
-             (if String.equal key Sol_cli_manifest.kafka_sasl_password_key
-              then binding.password
-              else binding.ca)
-         })
-  | Sol_cli_resource_binding.Local_kafka _ | Sol_cli_resource_binding.No_kafka ->
-    owner_of_authority declared
+  let target = Sol_cli_kubernetes_name.sanitize_name config.target.name in
+  match
+    ( List.assoc_opt key (Sol_cli_resource_binding.kafka_secret_sources ~target kafka)
+    , declared )
+  with
+  | Some _, Some _ -> Conflicting
+  | Some (Sol_cli_secret_source.Target_kafka { secret }), None -> Target_kafka { secret }
+  | Some (Sol_cli_secret_source.External { store; key }), None ->
+    External_secret { store; key }
+  | Some Sol_cli_secret_source.Sol_managed, _ | None, _ -> owner_of_authority declared
 ;;
 
 let unit_input_owners
@@ -153,7 +145,7 @@ let check_unit_secret_write
           Secret instead"
          unit_address
          key)
-  | Some Target_kafka ->
+  | Some (Target_kafka _) ->
     Error
       (Printf.sprintf
          "%s/%s is delivered by the target's Kafka authority; the deploy writes it and \
@@ -191,12 +183,6 @@ let secret_authorities_for_plan
   let missing = ref [] in
   let mappings = ref [] in
   let conflicts = ref [] in
-  (* The target name is the sanitized identity {!apply_target} passes to the plan; the
-     Kafka delivery Secret is target-scoped, not unit-scoped. *)
-  let kafka_creds_name =
-    Sol_cli_manifest.kafka_creds_name
-      ~target:(Sol_cli_kubernetes_name.sanitize_name config.target.name)
-  in
   List.iter
     (fun (spec : Sol_cli_deployment_plan.service_spec) ->
        let unit_address = spec.domain ^ "/" ^ spec.source_name in
@@ -217,11 +203,9 @@ let secret_authorities_for_plan
             | Unmapped -> missing := (unit_address, key) :: !missing
             | Conflicting -> conflicts := (unit_address, key) :: !conflicts
             | Target_database -> ()
-            | Target_kafka ->
+            | Target_kafka { secret } ->
               mappings
-              := ( unit_address
-                 , key
-                 , Sol_cli_secret_source.Target_kafka { secret = kafka_creds_name } )
+              := (unit_address, key, Sol_cli_secret_source.Target_kafka { secret })
                  :: !mappings
             | Unit_secret ->
               mappings

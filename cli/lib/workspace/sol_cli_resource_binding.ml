@@ -418,6 +418,23 @@ let kafka_config = function
         Sol_cli_manifest.production_kafka_config
 ;;
 
+(* Both fresh deployment and rollback project this same resolved credential source.
+   The target is a delivery identity, not a second credential authority. *)
+let kafka_secret_sources ~target = function
+  | Managed_kafka _ ->
+    let secret = Sol_cli_manifest.kafka_creds_name ~target in
+    List.map
+      (fun key -> key, Sol_cli_secret_source.Target_kafka { secret })
+      (Sol_cli_manifest.kafka_required_secret_keys Sol_cli_manifest.Sasl_ssl)
+  | External_kafka binding ->
+    [ ( Sol_cli_manifest.kafka_sasl_password_key
+      , Sol_cli_secret_source.External { store = binding.store; key = binding.password } )
+    ; ( Sol_cli_manifest.kafka_ca_secret_key
+      , Sol_cli_secret_source.External { store = binding.store; key = binding.ca } )
+    ]
+  | No_kafka | Local_kafka _ -> []
+;;
+
 let kafka_authority_name ~cluster_name = "sol-kafka-" ^ cluster_name
 
 let kafka_native_connection ~cluster_name = function

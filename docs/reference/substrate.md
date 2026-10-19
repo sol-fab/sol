@@ -250,9 +250,9 @@ the workload only after ESO reports it synced, verifying that the sync names the
 spec it applied (see the deployment guide). For a target bound to an external
 database the same wait covers the class `ExternalSecret`s (`<target>-ddl-creds`,
 `<target>-dml-creds`) before the migration gate and the workloads that read them
-run. Platform Job inputs use the reserved
-`@platform/<KEY>` address and write only `sol-secrets`. Do not commit manifest
-files that contain real secret values.
+run. Managed Kafka consumers and contract Jobs use the target's resource-delivered
+`<target>-kafka-creds` Secret; external Kafka uses its binding's ESO source. Do not
+commit manifest files that contain real secret values.
 
 No per-service manifest hand-editing is required or expected. If a generated
 manifest does not fit your needs, open an issue or add a `sol.toml` escape

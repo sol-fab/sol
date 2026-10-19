@@ -7,21 +7,6 @@ type unit_key =
   ; key : string
   }
 
-type secret_address =
-  | Unit of unit_key
-  | Platform of string
-
-let parse_secret_address value =
-  match String.split_on_char '/' value with
-  | [ "@platform"; key ] ->
-    let* () = Sol_cli_secret.validate_key key in
-    Ok (Platform key)
-  | [ domain; unit_name; key ] when domain <> "" && unit_name <> "" && key <> "" ->
-    let* () = Sol_cli_secret.validate_key key in
-    Ok (Unit { domain; unit_name; key })
-  | _ -> Error "secret address must look like <domain>/<unit>/<KEY> or @platform/<KEY>"
-;;
-
 let parse_unit_key value =
   match String.split_on_char '/' value with
   | [ domain; unit_name; key ] when domain <> "" && unit_name <> "" && key <> "" ->
@@ -127,46 +112,6 @@ let required_keys ~platform_shape (toml : Sol_cli_toml.t) =
     toml.secret_keys
 ;;
 
-(* Neither database connections nor Kafka credentials are operator-written platform Job
-   inputs now. The deploy delivers database class Secrets and, for managed Kafka, the
-   resource-owned `<target>-kafka-creds` projection; external Kafka keeps its ESO delivery.
-   `sol secret set` therefore has no platform keys to write. *)
-let platform_keys ~platform_shape:_ = []
-
-let target_namespaces ~config ~facts ~workspace =
-  Sol_cli_workspace_model.services facts
-  |> List.filter (fun (service : Sol_cli_manifest.service) ->
-    not (Sol_cli_config.is_omitted_service config ~name:service.name))
-  |> Sol_cli_result.map_list (fun (service : Sol_cli_manifest.service) ->
-    Sol_cli_deployment_plan.namespace_name ~workspace ~domain:service.domain)
-  |> Result.map (List.sort_uniq String.compare)
-;;
-
-let check_platform_key ~platform_shape key =
-  if String.equal key "POSTGRES_URL"
-  then
-    Error
-      "POSTGRES_URL is not a platform Job input: a unit that consumes the target's \
-       database reads `<target>-dml-creds` and the migration Job reads \
-       `<target>-ddl-creds`, both delivered by the deploy. There is no operator value to \
-       set."
-  else if
-    List.mem
-      key
-      (Sol_cli_manifest.kafka_required_secret_keys
-         (Sol_cli_manifest.kafka_transport platform_shape))
-  then
-    Error
-      (Printf.sprintf
-         "%s is resource-owned: the deploy delivers it from the target's resolved Kafka \
-          binding into `<target>-kafka-creds` (managed) or the binding's external \
-          Secret. `sol secret set` cannot override it."
-         key)
-  else if List.mem key (platform_keys ~platform_shape)
-  then Ok ()
-  else Error (Printf.sprintf "%s is not required by this target's Sol platform Jobs" key)
-;;
-
 let namespace_and_secret ~workspace ~domain ~unit_name =
   let* namespace = Sol_cli_deployment_plan.namespace_name ~workspace ~domain in
   let* secret_name = Sol_cli_deployment_plan.k8s_name unit_name in
@@ -195,69 +140,38 @@ let check_set_permissions config facts unit_address unit_name key =
 ;;
 
 let run_set target address from_stdin from_file =
-  let open Result.Syntax in
-  let* address = parse_secret_address address in
+  let* address = parse_unit_key address in
   let* config = load_target target in
-  let* platform_shape = Sol_cli_config.platform_shape config in
   let* facts = Sol_cli_workspace_model.load_cwd () in
-  (* The namespace is "<workspace-name>-<domain>", where the name is the workspace directory's
-     basename — the same value every other command uses (`current_name`). Passing the resolved
-     root instead made the name an absolute path, so the namespace started with "/" and the
-     whole `sol secret set` flow failed validation. *)
   let workspace = Sol_cli_workspace.current_name () in
   let* ctx = destination_context config in
-  let* destination =
-    match address with
-    | Unit address ->
-      let unit_address = address.domain ^ "/" ^ address.unit_name in
-      let* _toml =
-        check_set_permissions config facts unit_address address.unit_name address.key
-      in
-      let* namespace, secret_name =
-        namespace_and_secret
-          ~workspace
-          ~domain:address.domain
-          ~unit_name:address.unit_name
-      in
-      Ok (`Unit (unit_address, namespace, secret_name, address))
-    | Platform key ->
-      let* () = check_platform_key ~platform_shape key in
-      let* namespaces = target_namespaces ~config ~facts ~workspace in
-      if namespaces = []
-      then Error "target has no active workload namespaces for Sol platform Jobs"
-      else
-        let* () = Sol_cli_secret.verify_platform_secret_destinations ~ctx ~namespaces in
-        Ok (`Platform (key, namespaces))
+  let unit_address = address.domain ^ "/" ^ address.unit_name in
+  let* _toml =
+    check_set_permissions config facts unit_address address.unit_name address.key
   in
-  (* Resolve authority and the exact destination before opening secret input. *)
+  let* namespace, secret_name =
+    namespace_and_secret ~workspace ~domain:address.domain ~unit_name:address.unit_name
+  in
+  (* Resolve ownership and destination before opening confidential input. *)
   let* value = read_value ~from_stdin ~from_file in
-  match destination with
-  | `Unit (unit_address, namespace, secret_name, address) ->
-    let* changed =
-      Sol_cli_secret.set_unit_key ~ctx ~namespace ~secret_name ~key:address.key ~value
-    in
-    (* **Set writes; activation is explicit.** Sol updates the value and stops there. A
-       running process keeps reading the value it started with until something restarts it,
-       and a value written before the workload exists has nothing to restart -- which is not
-       a failure, and is exactly the state a deploy's own secret precondition requires
-       (#1350, #1434). An unchanged deploy does not restart a running process; the
-       operator activates the value through the workload's Kubernetes rollout tool.
-       This also means a sequence of `sol secret set` calls is not an atomic rotation
-       transaction: a process that starts between two writes can observe the newer value. *)
-    Printf.printf
-      (if changed
-       then "Secret updated for %s/%s.\n%!"
-       else "Secret for %s/%s already had the requested value.\n%!")
-      unit_address
-      address.key;
-    Ok ()
-  | `Platform (key, namespaces) ->
-    let* changed = Sol_cli_secret.set_platform_key ~ctx ~namespaces ~key ~value in
-    Printf.printf
-      "Platform Job secret %s updated in %d namespace(s).\n%!"
-      key
-      (List.length changed);
-    Ok ()
+  let* changed =
+    Sol_cli_secret.set_unit_key ~ctx ~namespace ~secret_name ~key:address.key ~value
+  in
+  (* **Set writes; activation is explicit.** Sol updates the value and stops there. A
+     running process keeps reading the value it started with until something restarts it,
+     and a value written before the workload exists has nothing to restart -- which is not
+     a failure, and is exactly the state a deploy's own secret precondition requires
+     (#1350, #1434). An unchanged deploy does not restart a running process; the
+     operator activates the value through the workload's Kubernetes rollout tool.
+     This also means a sequence of `sol secret set` calls is not an atomic rotation
+     transaction: a process that starts between two writes can observe the newer value. *)
+  Printf.printf
+    (if changed
+     then "Secret updated for %s/%s.\n%!"
+     else "Secret for %s/%s already had the requested value.\n%!")
+    unit_address
+    address.key;
+  Ok ()
 ;;
 
 let current_release_uses_key ~ctx ~workspace ~unit_address ~key =
@@ -281,92 +195,72 @@ let current_release_uses_key ~ctx ~workspace ~unit_address ~key =
 
 let run_delete target address =
   let open Result.Syntax in
-  let* address = parse_secret_address address in
+  let* address = parse_unit_key address in
   let* config = load_target target in
   let* platform_shape = Sol_cli_config.platform_shape config in
   let* facts = Sol_cli_workspace_model.load_cwd () in
   let* ctx = destination_context config in
-  match address with
-  | Platform key ->
-    (match check_platform_key ~platform_shape key with
-     | Error message -> Error message
-     | Ok () ->
-       let* workspace =
-         Sol_cli_workspace.resolve_validated ~dir:(Sys.getcwd ())
-         |> Result.map_error Sol_cli_workspace.workspace_error_to_string
-       in
-       let* namespaces = target_namespaces ~config ~facts ~workspace in
-       let* deleted = Sol_cli_secret.delete_platform_key ~ctx ~namespaces ~key in
-       (match deleted with
-        | [] -> Printf.printf "No platform Job secret value existed for %s.\n%!" key
-        | _ ->
-          Printf.printf
-            "Platform Job secret %s deleted in %d namespace(s).\n%!"
-            key
-            (List.length deleted));
-       Ok ())
-  | Unit address ->
-    let unit_address = address.domain ^ "/" ^ address.unit_name in
-    let* toml = find_unit_config facts unit_address in
-    let* is_currently_declared =
-      Ok (List.mem address.key (required_keys ~platform_shape toml))
-    in
-    if is_currently_declared
-    then
+  let unit_address = address.domain ^ "/" ^ address.unit_name in
+  let* toml = find_unit_config facts unit_address in
+  let* is_currently_declared =
+    Ok (List.mem address.key (required_keys ~platform_shape toml))
+  in
+  if is_currently_declared
+  then
+    Error
+      (Printf.sprintf
+         "refusing to delete %s/%s: the unit currently declares this key"
+         unit_address
+         address.key)
+  else (
+    match
+      Sol_cli_config.secret_authority config.target ~unit_address ~key:address.key
+    with
+    | None ->
       Error
         (Printf.sprintf
-           "refusing to delete %s/%s: the unit currently declares this key"
+           "target %s has no authority mapping for %s/%s"
+           target
            unit_address
            address.key)
-    else (
-      match
-        Sol_cli_config.secret_authority config.target ~unit_address ~key:address.key
-      with
-      | None ->
+    | Some (Sol_cli_config.External _) ->
+      Error
+        (Printf.sprintf
+           "%s/%s is externally managed; Sol cannot delete it"
+           unit_address
+           address.key)
+    | Some Sol_cli_config.Sol_managed ->
+      let* workspace =
+        Sol_cli_workspace.resolve_validated ~dir:(Sys.getcwd ())
+        |> Result.map_error Sol_cli_workspace.workspace_error_to_string
+      in
+      let* in_release =
+        current_release_uses_key ~ctx ~workspace ~unit_address ~key:address.key
+      in
+      if in_release
+      then
         Error
           (Printf.sprintf
-             "target %s has no authority mapping for %s/%s"
-             target
+             "refusing to delete %s/%s: the recorded deployed release consumes this key"
              unit_address
              address.key)
-      | Some (Sol_cli_config.External _) ->
-        Error
-          (Printf.sprintf
-             "%s/%s is externally managed; Sol cannot delete it"
-             unit_address
-             address.key)
-      | Some Sol_cli_config.Sol_managed ->
-        let* workspace =
-          Sol_cli_workspace.resolve_validated ~dir:(Sys.getcwd ())
-          |> Result.map_error Sol_cli_workspace.workspace_error_to_string
+      else
+        let* namespace, secret_name =
+          namespace_and_secret
+            ~workspace
+            ~domain:address.domain
+            ~unit_name:address.unit_name
         in
-        let* in_release =
-          current_release_uses_key ~ctx ~workspace ~unit_address ~key:address.key
+        let* deleted =
+          Sol_cli_secret.delete_unit_key ~ctx ~namespace ~secret_name ~key:address.key
         in
-        if in_release
-        then
-          Error
-            (Printf.sprintf
-               "refusing to delete %s/%s: the recorded deployed release consumes this key"
-               unit_address
-               address.key)
-        else
-          let* namespace, secret_name =
-            namespace_and_secret
-              ~workspace
-              ~domain:address.domain
-              ~unit_name:address.unit_name
-          in
-          let* deleted =
-            Sol_cli_secret.delete_unit_key ~ctx ~namespace ~secret_name ~key:address.key
-          in
-          Printf.printf
-            (if deleted
-             then "Secret deleted for %s/%s.\n%!"
-             else "No secret value existed for %s/%s.\n%!")
-            unit_address
-            address.key;
-          Ok ())
+        Printf.printf
+          (if deleted
+           then "Secret deleted for %s/%s.\n%!"
+           else "No secret value existed for %s/%s.\n%!")
+          unit_address
+          address.key;
+        Ok ())
 ;;
 
 let run_status target =
@@ -437,33 +331,7 @@ let run_status target =
              in
              Printf.sprintf "%s/%s owner=%s state=%s" unit_address key owner state)))
   in
-  let* namespaces = target_namespaces ~config ~facts ~workspace in
-  let* platform_rows =
-    Sol_cli_result.map_list
-      (fun namespace ->
-         Sol_cli_secret.runtime_secret_keys ~ctx ~namespace
-         |> Result.map (fun present -> namespace, present))
-      namespaces
-  in
-  let platform_rows =
-    platform_keys ~platform_shape
-    |> List.map (fun key ->
-      let missing =
-        List.filter_map
-          (fun (namespace, present) ->
-             if List.mem key present then None else Some namespace)
-          platform_rows
-      in
-      let state =
-        if namespaces = []
-        then "unavailable (no active workload namespace)"
-        else if missing = []
-        then "present"
-        else "missing in " ^ String.concat ", " missing
-      in
-      Printf.sprintf "@platform/%s owner=sol state=%s" key state)
-  in
-  List.iter (Printf.printf "%s\n%!") (List.concat rows @ platform_rows);
+  List.iter (Printf.printf "%s\n%!") (List.concat rows);
   Ok ()
 ;;
 
@@ -497,7 +365,7 @@ let set_cmd =
          deploy-delivered `<target>-dml-creds` / `<target>-ddl-creds` class Secrets, and \
          a Kafka consumer reads the target's resolved Kafka projection: managed Kafka is \
          delivered to `<target>-kafka-creds`, while external Kafka keeps its ESO Secret. \
-         `@platform/KAFKA_SASL_PASSWORD` and `@platform/KAFKA_SSL_CA_CERT` are refused."
+         These resource-owned inputs are refused by `sol secret set`."
     ]
   in
   Cmd.v
@@ -514,16 +382,14 @@ let set_cmd =
 let delete_cmd =
   let man =
     [ `S Manpage.s_description
+    ; `P "ADDRESS is DOMAIN/UNIT/KEY for one application unit."
     ; `P
-        "ADDRESS is either DOMAIN/UNIT/KEY for one application unit or @platform/KEY for \
-         a Sol Job input."
-    ; `P
-        "Required platform Job inputs cannot be deleted. Kafka platform inputs may be \
-         deleted when this target does not use TLS."
+        "A key consumed by the current configuration or recorded deployed release cannot \
+         be deleted."
     ]
   in
   Cmd.v
-    (Cmd.info "delete" ~doc:"Delete an unused Sol-owned unit or platform Job input" ~man)
+    (Cmd.info "delete" ~doc:"Delete an unused Sol-owned unit secret" ~man)
     Term.(
       const (fun target address -> exit_msg (run_delete target address))
       $ target_arg

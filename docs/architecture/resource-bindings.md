@@ -2,8 +2,8 @@
 
 **Audience:** Contributors changing how a resource's connection reaches a unit or a generated Job.
 **Scope:** The durable model — what a unit requires, how a target resolves it, who may read it, and how
-a runtime delivers it. Implementation reality (provider defects, the `@platform` migration sequence,
-the delivery support matrix) lives in the issues; this document states the model.
+a runtime delivers it. Provider defects and remaining delivery support gaps live in
+the issues; this document states the model.
 
 ---
 
@@ -334,9 +334,9 @@ sharing of a resource; capability types
 beyond the concrete PostgreSQL and Kafka connections Sol supports today; automatic rotation; cross-cloud
 portability; environment-wide change reports.
 
-Implementation reality is tracked where it belongs: **#1344** carries the `@platform` retirement, the
-migration sequence, the v1 delivery support matrix and the current provider defects; **#1360** carries
-the authoritative-storage decision. The GitOps limitation is **temporary** — resource ownership does not
+Resource bindings supply database and Kafka credentials to their consumers and generated Jobs;
+operator writes are unit-scoped application secrets. ADR 0008 establishes managed Kafka
+authority; **#1360** retains the broader authoritative-storage decision. The GitOps limitation is **temporary** — resource ownership does not
 determine delivery capability; the flow cannot yet establish prerequisite readiness for
 installation-owned projections, and that is an implementation gap, not a model rule. Until it can,
 `sol deploy --emit-to` **refuses a database Sol provisions at plan time**, naming the binding: the setup

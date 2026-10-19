@@ -50,22 +50,12 @@ can observe the newer value. Coordinate credential overlap and the explicit
 activation of each affected workload; neither writing nor deploying makes
 multiple credential changes atomic.
 
-Platform credentials used by Sol's internal Jobs have a separate target scope.
-Database credentials are no longer one of them: the deploy delivers
-`<target>-dml-creds` to consuming units and `<target>-ddl-creds` to the migration
-Job from the target's binding, so there is no `@platform/POSTGRES_URL` to rotate.
-For SASL_SSL targets, the contract Job still requires the platform Kafka
-password and CA certificate:
-
-```bash
-your-secret-tool get kafka-sasl-password \
-  | sol secret set prod/aws/us-east-1 @platform/KAFKA_SASL_PASSWORD --from-stdin
-```
-
-Platform writes update only `sol-secrets` objects in active target namespaces;
-they never copy values into application Secrets or restart application
-workloads. `sol secret status TARGET` reports key owners and presence without
-printing values.
+Resource credentials are delivered through the target's bindings. Database
+consumers read `<target>-dml-creds`, and migration Jobs read `<target>-ddl-creds`.
+Managed Kafka consumers and contract Jobs read `<target>-kafka-creds`; external
+Kafka uses its declared ESO source. These are not operator-written application
+secrets. Managed Kafka credential rotation and partial Kafka deprovisioning are
+unsupported; an ordinary deployment refuses authority replacement or deletion.
 
 ### Explicit activation
 
@@ -99,8 +89,8 @@ nor healthy rollout alone proves successful use of the new credential.
 
 ### Deploy and rollback
 
-Deploy and rollback preserve secret values. They verify required unit Secrets
-and the shared platform inputs needed by the operation. For an external key,
+Deploy and rollback verify application Secrets and deliver resource credentials
+from the current target's bindings. For an external key,
 `sol deploy` waits for ESO `SecretSynced` with a generation-bound synced version,
 verifies the materialized key set, then verifies workload rollout. `sol secret
 status` evaluates that same readiness state without waiting. ESO sync does not
@@ -108,10 +98,10 @@ prove that an already-running process has loaded a rotated value. Rotate at the
 external authority, wait for ESO, then restart the affected workload with
 Kubernetes rollout tooling; an unchanged `sol deploy` does not restart it.
 
-Sol-owned unit and platform values update their existing Kubernetes Secret in
-place. A later deploy cannot restore a previous value from CI or a local shell.
-Required platform inputs cannot be deleted while the target's Sol Jobs require
-them; TLS-only Kafka inputs can be removed after the target no longer uses TLS.
+Sol-owned application values update their existing Kubernetes Secret in place.
+A later deploy cannot restore a previous application value from CI or a local shell.
+A key consumed by the current configuration or recorded deployed release cannot be
+deleted through `sol secret delete`.
 
 ## What is deliberately out of scope
 

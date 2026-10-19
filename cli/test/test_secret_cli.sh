@@ -8,13 +8,12 @@ status_help=$("$sol" secret status --help=plain)
 
 printf '%s\n' "$set_help" | grep -F 'TARGET' >/dev/null
 printf '%s\n' "$set_help" | grep -F 'DOMAIN/UNIT/KEY' >/dev/null
-printf '%s\n' "$set_help" | grep -F '@platform/KAFKA_SASL_PASSWORD' >/dev/null
 printf '%s\n' "$set_help" | grep -F 'refused' >/dev/null
 printf '%s\n' "$set_help" | grep -F -- '--from-stdin' >/dev/null
 printf '%s\n' "$set_help" | grep -F -- '--from-file=PATH' >/dev/null
 if printf '%s\n' "$set_help" | grep -F -- '--value=' >/dev/null; then exit 1; fi
 printf '%s\n' "$delete_help" | grep -F 'DOMAIN/UNIT/KEY' >/dev/null
-printf '%s\n' "$delete_help" | grep -F '@platform/KEY' >/dev/null
+if printf '%s\n' "$delete_help" | grep -F '@platform/KEY' >/dev/null; then exit 1; fi
 printf '%s\n' "$status_help" | grep -F 'TARGET' >/dev/null
 
 local_help=$("$sol" local --help=plain)

@@ -139,24 +139,18 @@ let run_locked ~lease ~ctx ~local ~database_selection ?config ~workspace ~facts 
     | Some config ->
       let* kafka = Sol_cli_resource_binding.resolve_kafka config in
       let* shape = Sol_cli_config.platform_shape config in
-      Ok (Some (Sol_cli_resource_binding.kafka_for_shape ~shape kafka))
+      Ok
+        (Some
+           ( Sol_cli_kubernetes_name.sanitize_name config.target.name
+           , Sol_cli_resource_binding.kafka_for_shape ~shape kafka ))
   in
-  let kafka_creds_name =
-    Option.map
-      (fun (config : Sol_cli_config.t) ->
-         Sol_cli_manifest.kafka_creds_name
-           ~target:(Sol_cli_kubernetes_name.sanitize_name config.target.name))
-      config
-  in
-  let* restored =
-    Sol_cli_rollback.service_specs_of_release ?database ?kafka ?kafka_creds_name release
-  in
+  let* restored = Sol_cli_rollback.service_specs_of_release ?database ?kafka release in
   (* The restored workloads read the current target's delivered Secret. Re-project it so
      a recreated delivery object or a changed current authority cannot leave rollback
      reading a stale credential. *)
   let* () =
     match config, kafka with
-    | Some config, Some kafka ->
+    | Some config, Some (_, kafka) ->
       Sol_cli_kafka_delivery.run
         ~ctx
         ~target:config.target
@@ -195,10 +189,7 @@ let run_locked ~lease ~ctx ~local ~database_selection ?config ~workspace ~facts 
     | _ -> Ok ()
   in
   let deps : Sol_cli_rollback.transaction_deps =
-    { database
-    ; kafka
-    ; kafka_creds_name
-    ; ensure_held = (fun () -> Sol_cli_boundary_lease.ensure_held lease)
+    { ensure_held = (fun () -> Sol_cli_boundary_lease.ensure_held lease)
     ; applied_migrations =
         (fun () ->
           match config, database_selection with
@@ -277,7 +268,14 @@ let run_locked ~lease ~ctx ~local ~database_selection ?config ~workspace ~facts 
           Sol_cli_deployment_state.record_consumer_groups ~ctx ~workspace groups)
     }
   in
-  let* () = Sol_cli_rollback.execute ~release ~migrations_dir ~current_migrations ~deps in
+  let* () =
+    Sol_cli_rollback.execute
+      ~release
+      ~specs:restored
+      ~migrations_dir
+      ~current_migrations
+      ~deps
+  in
   Printf.printf
     "Verified: workloads and pointer both name release %s.\n%!"
     release.release_id;
