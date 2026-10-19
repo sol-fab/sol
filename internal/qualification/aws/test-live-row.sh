@@ -1297,10 +1297,12 @@ has "and it names the missing input" "QUALIFIER_ROLE is not set" "$TMP/norole.ou
 lacks "and no establishment is attempted" "establish " "$TMP/norole.establish"
 
 printf '\nscenario: the app phase drives its transaction through the qualification transport\n'
-run_phase apptransport app TRANSPORT=1
+run_phase apptransport app TRANSPORT=1 STUB_DDL_NAMESPACE=sol-db-qualreg-aws-us-east-1
 is "exit 0" "$(cat "$TMP/apptransport.rc")" "0"
 has "the transport is established before Sol moves the workload" \
   "establish test-cluster qualifier us-east-1 pluto-payments" "$TMP/apptransport.establish"
+has "and it observes the database namespace the deploy declared for the migration Job" \
+  "sol-db-qualreg-aws-us-east-1" "$TMP/apptransport.establish"
 has "and the transaction uses the qualifier's kubeconfig" \
   "KUBECONFIG_TRANSPORT=$TMP/apptransport.logs/kubeconfig-qualifier.yaml" "$TMP/apptransport.transport"
 lacks "never the deploy identity's kubeconfig" \

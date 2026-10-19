@@ -749,10 +749,19 @@ phase_transport() {
   ensure_contexts || return 1
   say "transport-separation-pre"
   probe_production_separation pre || return 1
+  # The CA family observes the migration Job where the deploy declared it. That
+  # namespace is platform-provided (it may be the database's own namespace), so it
+  # is read from the deploy's `sol-database-identity:` line rather than derived.
+  local -a observe_namespaces=("$APP_NS" "$WORKER_NS")
+  local database_ns
+  database_ns="$(app_database_field namespace)"
+  if [ -n "$database_ns" ]; then
+    observe_namespaces+=("$database_ns")
+  fi
   say "transport-establish"
   if ! KUBECONFIG="$QUALIFIER_KUBECONFIG" timeout "$PHASE_TIMEOUT" \
       "$ROOT/internal/qualification/transport/establish.sh" \
-      "$CLUSTER" "$QUALIFIER_ROLE" "$AWS_REGION" "$APP_NS" "$WORKER_NS" \
+      "$CLUSTER" "$QUALIFIER_ROLE" "$AWS_REGION" "${observe_namespaces[@]}" \
       >"$LOG_DIR/transport-establish.log" 2>&1; then
     say "FAILED: transport-establish (last 40 lines; full log $LOG_DIR/transport-establish.log)"
     tail -n 40 "$LOG_DIR/transport-establish.log"
@@ -1088,7 +1097,17 @@ app_namespaces() {
 # field names are the interface; the deploy's line is a stable, documented output, and the
 # product test `database identity report is the interface the rows read` fails if they drift.
 app_database_declaration() {
-  grep -h 'sol-database-identity:' "$LOG_DIR"/app-deploy.log 2>/dev/null | tail -1
+  local log
+  # The app phase reads the final deploy's declaration; the transport, established
+  # after the first deploy, reads the gate deploy's. Prefer the final deploy when
+  # both exist, and never reproduce the namespace naming rule here.
+  for log in "$LOG_DIR"/app-deploy.log "$LOG_DIR"/app-deploy-gate.log; do
+    [ -f "$log" ] || continue
+    if grep -q 'sol-database-identity:' "$log"; then
+      grep -h 'sol-database-identity:' "$log" | tail -1
+      return 0
+    fi
+  done
 }
 
 app_database_field() {
