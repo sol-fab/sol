@@ -3832,11 +3832,15 @@ let%test "GCP preparation: an uncreated database is not a missing guard" =
   test_desired_guards_follow_create_database ()
 ;;
 
+let pre_inventory_disk_identity =
+  "https://www.googleapis.com/compute/v1/projects/acme-project/zones/us-central1-a/disks/pvc-abc"
+;;
+
 let pre_inventory_present_disk =
   Sol_cli_absence.Present
     { resource_class = "persistent disk"
     ; identity = "a disk labelled goog-k8s-cluster-name=acme-prod"
-    ; found = [ "pvc-abc" ]
+    ; found = [ pre_inventory_disk_identity ]
     ; attribution = Sol_cli_absence.Within_target "the target's disk"
     ; checked_with = "gcloud compute disks list"
     }
@@ -3974,7 +3978,7 @@ let%test "destruction: a pre-destroy identity reaches the post-destroy verdict" 
   Windtrap.equal
     (Windtrap.list (Windtrap.pair Windtrap.string (Windtrap.list Windtrap.string)))
     ~msg:"the pre-destroy disk identity is carried into the post-destroy verdict"
-    [ "persistent disk", [ "pvc-abc" ] ]
+    [ "persistent disk", [ pre_inventory_disk_identity ] ]
     !seen_prior;
   Windtrap.equal Windtrap.int ~msg:"substrate destroy ran" 1 calls.substrate;
   Windtrap.equal Windtrap.int ~msg:"absence verified" 1 calls.verify
@@ -4018,7 +4022,7 @@ let with_label_lost_disk f =
   let script =
     {|#!/bin/sh
 case "$*" in
-  *"compute disks list"*) printf 'pvc-abc\n' ;;
+  *"compute disks list"*) printf '%s' '[{"selfLink":"https://www.googleapis.com/compute/v1/projects/acme-project/zones/us-central1-a/disks/pvc-abc","zone":"https://www.googleapis.com/compute/v1/projects/acme-project/zones/us-central1-a"}]' ;;
   *"compute addresses list "*" --format json "*) printf '[]\n' ;;
 esac
 exit 0
@@ -4060,6 +4064,22 @@ let%test
               gcp_absence_target
               ~cluster_name:"acme-prod"
           in
+          let disk =
+            List.find_opt
+              (function
+                | Sol_cli_absence.Present p -> p.resource_class = "persistent disk"
+                | _ -> false)
+              observations
+          in
+          (match disk with
+           | Some (Sol_cli_absence.Present present) ->
+             Windtrap.equal
+               (Windtrap.list Windtrap.string)
+               ~msg:"the real disk probe recognizes a survivor, not a parse failure"
+               [ pre_inventory_disk_identity ]
+               present.found
+           | _ ->
+             Windtrap.fail "label loss must produce Present with the captured identity");
           { Sol_cli_destroy_verification.state = State_absent
           ; sweep = Sol_cli_absence.to_sweep observations
           ; retention = Retention_not_required "fixture"

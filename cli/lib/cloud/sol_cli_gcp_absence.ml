@@ -288,32 +288,6 @@ let checks ~project ~region ~cluster_name =
       ~identity:(cluster_name ^ "-*")
       (p [ "storage"; "buckets"; "list"; "--format"; "value(name)" ])
   ; identity_check
-      ~resource_class:"persistent disk"
-      ~identity:(Printf.sprintf "a disk labelled goog-k8s-cluster-name=%s" cluster_name)
-      ~attribution:
-        (Within_target
-           (Printf.sprintf
-              "the target's own GKE cluster label: GKE applies goog-k8s-cluster-name=%s \
-               to the disks it owns, and the disk name is not an ownership signal"
-              cluster_name))
-      ~attributable:(fun line ->
-        match String.split_on_char '\t' line with
-        | [ _name; label ] -> String.equal label cluster_name
-        | _ -> false)
-      ~normalize:(fun line ->
-        match String.split_on_char '\t' line with
-        | name :: _ -> name
-        | [] -> line)
-      (p
-         [ "compute"
-         ; "disks"
-         ; "list"
-         ; "--regions"
-         ; region
-         ; "--format"
-         ; "value(name,labels.goog-k8s-cluster-name)"
-         ])
-  ; identity_check
       ~resource_class:"firewall rule"
       ~identity:(cluster_name ^ " and gke-" ^ cluster_name ^ "-*")
       ~attribution:
@@ -675,6 +649,119 @@ let filter_to_prior prior observation =
   | observation -> observation
 ;;
 
+(* --regions excludes zonal disks. Enumerate both forms, then use provider location
+   metadata to scope them. selfLink, rather than a zone-local name, carries ownership
+   across label loss without aliasing a same-named disk in another zone. *)
+let persistent_disk_observation
+      ~previously_attributed
+      ~project
+      ~region
+      ~cluster_name
+      ~resource_class
+      ()
+  =
+  let argv = [ "compute"; "disks"; "list"; "--project"; project; "--format"; "json" ] in
+  let checked_with = checked_with argv in
+  let unknown reason = Unobservable { resource_class; reason; checked_with } in
+  let open Result.Syntax in
+  let parse disk =
+    let what = "a persistent disk" in
+    let* identity = Sol_cli_json.require ~what [ "selfLink" ] Sol_cli_json.string disk in
+    let* zone = Sol_cli_json.optional ~what [ "zone" ] Sol_cli_json.string disk in
+    let* disk_region =
+      Sol_cli_json.optional ~what [ "region" ] Sol_cli_json.string disk
+    in
+    let base = "https://www.googleapis.com/compute/v1/projects/" ^ project ^ "/" in
+    let location ~kind value =
+      let prefix = base ^ kind ^ "/" in
+      if not (String.starts_with ~prefix value)
+      then Error "a disk has an invalid location"
+      else (
+        let name =
+          String.sub
+            value
+            (String.length prefix)
+            (String.length value - String.length prefix)
+        in
+        if name = "" || String.contains name '/'
+        then Error "a disk has an invalid location"
+        else Ok name)
+    in
+    let* scope, in_region =
+      match zone, disk_region with
+      | Some zone, None ->
+        let* name = location ~kind:"zones" zone in
+        Ok (zone, String.starts_with ~prefix:(region ^ "-") name)
+      | None, Some disk_region ->
+        let* name = location ~kind:"regions" disk_region in
+        Ok (disk_region, String.equal name region)
+      | _ -> Error "a disk must have exactly one zone or region"
+    in
+    let prefix = scope ^ "/disks/" in
+    let* () =
+      if String.starts_with ~prefix identity
+      then (
+        let name =
+          String.sub
+            identity
+            (String.length prefix)
+            (String.length identity - String.length prefix)
+        in
+        if name <> "" && not (String.contains name '/')
+        then Ok ()
+        else Error "a disk has an invalid selfLink")
+      else Error "a disk selfLink disagrees with its location"
+    in
+    let* labels = Sol_cli_json.optional ~what [ "labels" ] Sol_cli_json.assoc disk in
+    let labels = Option.value labels ~default:[] in
+    let* () =
+      if
+        List.for_all
+          (function
+            | _, `String _ -> true
+            | _ -> false)
+          labels
+      then Ok ()
+      else Error "a disk has malformed labels"
+    in
+    let owned =
+      List.assoc_opt "goog-k8s-cluster-name" labels = Some (`String cluster_name)
+      || List.mem identity (prior_for resource_class previously_attributed)
+    in
+    Ok (if in_region && owned then Some identity else None)
+  in
+  match Sol_cli_process.run (Sol_cli_process.cmd ("gcloud" :: argv)) with
+  | Error (Sol_cli_process.Non_zero r) -> unknown (String.trim r.stderr)
+  | Error _ -> unknown "the gcloud CLI is unavailable"
+  | Ok { Sol_cli_process.stdout; stderr } ->
+    if not (benign_empty_list_warning stderr)
+    then unknown (String.trim stderr)
+    else (
+      let disks =
+        let* json = Sol_cli_json.decode ~what:"the persistent disk listing" stdout in
+        match Sol_cli_json.list json with
+        | Some disks -> Ok disks
+        | None -> Error "the persistent disk listing is not a list"
+      in
+      match disks with
+      | Error reason -> unknown reason
+      | Ok disks ->
+        (match Sol_cli_result.map_list parse disks with
+         | Error reason -> unknown reason
+         | Ok found ->
+           let found = List.filter_map Fun.id found |> List.sort_uniq String.compare in
+           let identity = "disks belonging to the target's GKE cluster" in
+           let attribution =
+             Within_target
+               "the exact GKE cluster label or a previously attributed provider \
+                selfLink, within the target region"
+           in
+           (match found with
+            | [] -> Absent { resource_class; identity; attribution; checked_with }
+            | found ->
+              Present { resource_class; identity; attribution; checked_with; found })))
+;;
+
 let regional_address_checked_with ~project ~region =
   Printf.sprintf
     "gcloud compute addresses list --project %s --regions %s --format=json, then gcloud \
@@ -868,6 +955,14 @@ let probes
            strict_authorization
              (authorization_secret_bindings ~resource_class ~project ~environment ())
            |> filter_to_prior authorization_identities ))
+    ; (let resource_class = "persistent disk" in
+       ( Some resource_class
+       , persistent_disk_observation
+           ~previously_attributed
+           ~project
+           ~region
+           ~cluster_name
+           ~resource_class ))
     ; (let resource_class = "regional address" in
        ( Some resource_class
        , regional_address_observation
