@@ -243,6 +243,27 @@ let existing_data = function
       (data_keys json)
 ;;
 
+(** Read one delivered value. The caller must already know the Secret is the authority's
+    projection; this only decodes what Kubernetes carries. *)
+let read_secret_key ~ctx ~namespace ~secret_name ~key =
+  let open Result.Syntax in
+  let* json = get_named_secret_json ~ctx ~name:secret_name namespace in
+  match json with
+  | None -> Error (Printf.sprintf "Secret %s/%s does not exist" namespace secret_name)
+  | Some json ->
+    (match List.assoc_opt key (data_keys json) with
+     | Some (`String encoded) ->
+       (try Ok (Base64.decode_exn encoded) with
+        | _ ->
+          Error
+            (Printf.sprintf
+               "Secret %s/%s key %s is not valid base64"
+               namespace
+               secret_name
+               key))
+     | _ -> Error (Printf.sprintf "Secret %s/%s has no key %s" namespace secret_name key))
+;;
+
 let labels_of = function
   | `Assoc fields ->
     (match List.assoc_opt "metadata" fields with
@@ -568,9 +589,10 @@ let set_unit_key ~ctx ~namespace ~secret_name ~key ~value =
   set_named_key ~ctx ~namespace ~secret_name ~key ~value ()
 ;;
 
-(* 2b: the Kafka credentials are the only platform Job inputs left; a database
-   connection is delivered by the deploy as `<target>-dml-creds` / `<target>-ddl-creds`. *)
-let platform_secret_keys = [ "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ]
+(* Database connections and Kafka credentials are both resource-delivered now: the
+   deploy writes the class Secrets and `<target>-kafka-creds`, and external Kafka keeps
+   its ESO Secret. There is no operator-written platform Job input left. *)
+let platform_secret_keys = []
 
 let set_platform_key ~ctx ~namespaces ~key ~value =
   let* () = validate_key key in
@@ -607,6 +629,35 @@ let set_platform_key ~ctx ~namespaces ~key ~value =
             (String.concat ", " namespaces))
     in
     Ok (List.rev !changed)
+;;
+
+(** Write a target-delivered key to a named Secret in each namespace. The destination
+    guard runs before every write, so an object another manager owns is refused rather than
+    overwritten. This is the writer for resource-owned projections such as
+    `<target>-kafka-creds`; `sol secret set` must never reach these keys. *)
+let set_target_key ~ctx ~namespaces ~secret_name ~key ~value =
+  let* () = validate_key key in
+  let* () = require_namespaces namespaces in
+  let changed = ref [] in
+  let* () =
+    iter_namespaces namespaces ~f:(fun namespace ->
+      let* () =
+        assert_destination_is_sol ~ctx ~resource:"secret" ~namespace ~name:secret_name
+      in
+      let* is_changed =
+        set_named_key
+          ~allow_unlabeled_runtime:true
+          ~ctx
+          ~namespace
+          ~secret_name
+          ~key
+          ~value
+          ()
+      in
+      if is_changed then changed := namespace :: !changed;
+      Ok ())
+  in
+  Ok (List.rev !changed)
 ;;
 
 let delete_platform_key ~ctx ~namespaces ~key =
@@ -931,7 +982,8 @@ let verify_external_secret_ready
     |> List.filter_map (fun (key, source) ->
       match source with
       | Sol_cli_manifest.Sol_managed -> None
-      | External _ -> Some key)
+      | External _ -> Some key
+      | Target_kafka _ -> None)
   in
   match external_keys with
   | [] -> Ok ()
@@ -1124,7 +1176,8 @@ let verify_external_secret_destination ~ctx (spec : Sol_cli_deployment_plan.serv
     |> List.filter_map (fun (key, source) ->
       match source with
       | Sol_cli_manifest.Sol_managed -> None
-      | External _ -> Some key)
+      | External _ -> Some key
+      | Target_kafka _ -> None)
   in
   match external_keys with
   | [] -> Ok ()

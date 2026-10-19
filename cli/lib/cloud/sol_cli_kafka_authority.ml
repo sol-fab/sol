@@ -76,20 +76,34 @@ let generation ~resources ~managed changes =
   let random = action "random_password.kafka" in
   let secret = action resources.secret in
   let version = action resources.version in
-  match managed, random, secret, version with
-  | false, None, None, None -> Ok Reuse
-  (* An update to the secret container is metadata-only; the version still has to
-     be unchanged. *)
-  | true, Some No_op, Some (No_op | Update), Some No_op -> Ok Reuse
-  (* A retry after a partial first apply reuses the generator value already in
-     state and only finishes the missing authority objects. This is not rotation:
-     the broker/storage absence check still has to hold before it is accepted. *)
-  | true, (Some No_op | Some Create), Some Create, Some Create -> Ok Initialize
-  | _ ->
+  let destructive = function
+    | Some Sol_cli_terraform_plan.Delete | Some Replace -> true
+    | _ -> false
+  in
+  if List.exists destructive [ random; secret; version ]
+  then
     Error
-      "Kafka generation or authority state is missing or would be replaced. Restore the \
-       recorded credential authority/state before deployment; automatic rotation and \
-       implicit authority recreation are unsupported."
+      "the plan removes or replaces the managed Kafka credential authority (the provider \
+       secret or its active version). An ordinary deploy does not tear down a broker or \
+       its credential authority; use `sol destroy <target>` for an intentional \
+       full-target teardown. Partial Kafka-only deprovisioning is unsupported because it \
+       would leave the broker and its authorized consumers disagreeing about the \
+       credential."
+  else (
+    match managed, random, secret, version with
+    | false, None, None, None -> Ok Reuse
+    (* An update to the secret container is metadata-only; the version still has to
+       be unchanged. *)
+    | true, Some No_op, Some (No_op | Update), Some No_op -> Ok Reuse
+    (* A retry after a partial first apply reuses the generator value already in
+       state and only finishes the missing authority objects. This is not rotation:
+       the broker/storage absence check still has to hold before it is accepted. *)
+    | true, (Some No_op | Some Create), Some Create, Some Create -> Ok Initialize
+    | _ ->
+      Error
+        "Kafka generation or authority state is missing or would be replaced. Restore \
+         the recorded credential authority/state before deployment; automatic rotation \
+         and implicit authority recreation are unsupported.")
 ;;
 
 type authority_state =

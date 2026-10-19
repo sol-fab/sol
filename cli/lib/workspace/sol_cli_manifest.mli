@@ -4,6 +4,7 @@ type secret_source = Sol_cli_secret_source.t =
       { store : string
       ; key : string
       }
+  | Target_kafka of { secret : string }
 
 type primitive =
   | Svc
@@ -56,11 +57,17 @@ val kafka_transport : Sol_cli_profile.platform_shape -> kafka_transport
 val kafka_tls : kafka_transport -> bool
 val kafka_transport_of_config : (string * string) list -> kafka_transport
 val kafka_connection_env : kafka_transport -> (string * string) list
+val kafka_sasl_password_key : string
 val kafka_required_secret_keys : kafka_transport -> string list
 val telemetry_env : (string * string) list
 val cluster_env : kafka_transport -> (string * string) list
 val production_kafka_config : (string * string) list
 val default_cluster_env : (string * string) list
+val kafka_creds_name : target:string -> string
+val kafka_namespace : string
+val kafka_ca_secret_name : string
+val kafka_ca_secret_key : string
+val kafka_ca_cert_file : string
 val monitoring_namespace : string
 val loki_service : string
 val loki_service_port : int
@@ -261,6 +268,7 @@ val migration_job_doc
 
 val contract_job_doc
   :  cluster_env:(string * string) list
+  -> secret_name:string option
   -> name:string
   -> namespace:string
   -> image:string

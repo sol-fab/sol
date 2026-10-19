@@ -60,6 +60,13 @@ val kafka_authority
   -> cluster_name:string
   -> Sol_cli_kafka_authority.authority_state
 
+(** Retrieve the authoritative Kafka credential value for Kubernetes delivery. *)
+val kafka_credential
+  :  Sol_cli_provider.t
+  -> Sol_cli_config.target
+  -> cluster_name:string
+  -> (string, string) result
+
 (** Positive independent absence required before first credential generation. *)
 val kafka_initialization_evidence
   :  Sol_cli_provider.t

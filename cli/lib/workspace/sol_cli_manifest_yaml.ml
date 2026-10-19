@@ -28,6 +28,7 @@ type secret_source = Sol_cli_secret_source.t =
       { store : string
       ; key : string
       }
+  | Target_kafka of { secret : string }
 
 module Workload_spec = struct
   type t =
@@ -76,6 +77,11 @@ open Sol_cli_manifest_cluster_env
    declares it. *)
 let default_secrets = []
 let runtime_secret_name = "sol-secrets"
+
+(** The target-scoped Secret the deploy writes from the resolved managed Kafka
+    authority. Only declared Kafka consumers and generated Jobs read it, and only the
+    two keys the binding requires; it is not a general application Secret. *)
+let kafka_creds_name ~target = target ^ "-kafka-creds"
 
 (** The key the database class Secrets carry and a consumer reads. It must equal
     {!Sol_cli_database_setup_render.postgres_url_key}; the deploy renderer that computes the
@@ -218,6 +224,7 @@ let secret_name_for_key ~name ~secret_sources ~db_dml_creds_name key =
   | _ ->
     (match List.assoc_opt key secret_sources with
      | Some (External _) -> external_secret_name name
+     | Some (Target_kafka { secret }) -> secret
      | Some Sol_managed | None -> workload_secret_name name)
 ;;
 
@@ -1196,15 +1203,36 @@ let migration_job_doc
     ]
 ;;
 
-let contract_job_doc ~cluster_env ~name ~namespace ~image ~command ~args =
+let contract_job_doc ~cluster_env ~secret_name ~name ~namespace ~image ~command ~args =
   let kafka_tls = kafka_tls (kafka_transport_of_config cluster_env) in
+  let kafka_keys = kafka_required_secret_keys (kafka_transport_of_config cluster_env) in
+  let kafka_secret =
+    match secret_name with
+    | Some secret_name when kafka_tls -> Some secret_name
+    | _ -> None
+  in
   let env =
     List.map
       (fun (key, value) -> Y.map [ "name", Y.string key; "value", Y.string value ])
       cluster_env
+    @
+    match kafka_secret with
+    | None -> []
+    | Some secret_name ->
+      List.map
+        (fun key ->
+           Y.map
+             [ "name", Y.string key
+             ; ( "valueFrom"
+               , Y.map
+                   [ ( "secretKeyRef"
+                     , Y.map [ "name", Y.string secret_name; "key", Y.string key ] )
+                   ] )
+             ])
+        kafka_keys
   in
   let kafka_ca_mounts =
-    if kafka_tls
+    if kafka_tls && Option.is_some kafka_secret
     then
       [ Y.map
           [ "name", Y.string kafka_ca_volume
@@ -1215,33 +1243,24 @@ let contract_job_doc ~cluster_env ~name ~namespace ~image ~command ~args =
     else []
   in
   let kafka_ca_volumes =
-    if kafka_tls
-    then
+    match kafka_secret with
+    | None -> []
+    | Some secret_name ->
       [ Y.map
           [ "name", Y.string kafka_ca_volume
           ; ( "secret"
             , Y.map
-                [ "secretName", Y.string runtime_secret_name
+                [ "secretName", Y.string secret_name
                 ; ( "items"
                   , Y.list
                       [ Y.map
                           [ "key", Y.string kafka_ca_secret_key
-                          ; "path", Y.string "ca.crt"
+                          ; "path", Y.string kafka_ca_cert_file
                           ]
                       ] )
                 ] )
           ]
       ]
-    else []
-  in
-  let env_from =
-    if kafka_tls
-    then
-      [ ( "envFrom"
-        , Y.list [ Y.map [ "secretRef", Y.map [ "name", Y.string runtime_secret_name ] ] ]
-        )
-      ]
-    else []
   in
   let container =
     Y.map
@@ -1251,7 +1270,6 @@ let contract_job_doc ~cluster_env ~name ~namespace ~image ~command ~args =
        ; "args", Y.list (List.map Y.quoted args)
        ; "env", Y.list env
        ]
-       @ env_from
        @ non_empty_list "volumeMounts" kafka_ca_mounts)
   in
   resource

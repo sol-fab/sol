@@ -259,6 +259,15 @@ let kafka_authority provider (target : Sol_cli_config.target) ~cluster_name =
       "the BYO provider has no native Kafka credential authority"
 ;;
 
+let kafka_credential provider (target : Sol_cli_config.target) ~cluster_name =
+  match provider with
+  | Sol_cli_provider.Aws ->
+    Sol_cli_aws_absence.kafka_credential ~region:target.region ~cluster_name
+  | Sol_cli_provider.Gcp -> Sol_cli_gcp_absence.kafka_credential target ~cluster_name
+  | Sol_cli_provider.Byo ->
+    Error "the BYO provider has no native Kafka credential authority"
+;;
+
 (* These are independent provider observations, not the destruction verdict or
    Terraform's success. A missing required probe cannot make generation safe. *)
 let kafka_initialization_evidence provider target ~cluster_name ~namespace ~observe_broker

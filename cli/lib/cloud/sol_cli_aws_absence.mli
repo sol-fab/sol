@@ -33,3 +33,6 @@ val kafka_authority
   :  region:string
   -> cluster_name:string
   -> Sol_cli_kafka_authority.authority_state
+
+(** Retrieve the authoritative credential value for Kubernetes delivery. *)
+val kafka_credential : region:string -> cluster_name:string -> (string, string) result

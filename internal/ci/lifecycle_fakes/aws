@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -eu
 printf 'aws %s\n' "$*" >>"$LIFECYCLE_LOG"
+  if [ "$1 $2" = "secretsmanager describe-secret" ]; then
+    if [ "${KAFKA_AUTHORITY_PRESENT:-}" = 1 ]; then
+      printf '%s\n' "${4:?secret identity required}"
+      exit 0
+    fi
+    printf "An error occurred (ResourceNotFoundException) when calling the DescribeSecret operation: Secrets Manager can't find the specified secret.\n" >&2
+    exit 254
+  fi
   if [ "$1 $2" = "elbv2 describe-load-balancers" ] &&
     case " $* " in *" --filters "*) true ;; *) false ;; esac; then
     printf 'usage: aws [options] <command> <subcommand> [<subcommand> ...] [parameters]\n' >&2

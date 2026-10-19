@@ -1101,3 +1101,30 @@ let kafka_authority ~region ~cluster_name =
             Sol_cli_kafka_authority.Authority_missing
               "the provider secret has no active version"))
 ;;
+
+(** Retrieve the authoritative Kafka credential for delivery. The value travels on stdout
+    to the caller and never in an argv, plan, release record or diagnostic. *)
+let kafka_credential ~region ~cluster_name =
+  let identity = Sol_cli_resource_binding.kafka_authority_name ~cluster_name in
+  let argv =
+    [ "aws"
+    ; "secretsmanager"
+    ; "get-secret-value"
+    ; "--secret-id"
+    ; identity
+    ; "--region"
+    ; region
+    ; "--query"
+    ; "SecretString"
+    ; "--output"
+    ; "text"
+    ]
+  in
+  match Sol_cli_process.run (Sol_cli_process.cmd argv) with
+  | Ok result when String.trim result.stderr = "" ->
+    let value = String.trim result.stdout in
+    if value = "" then Error "the provider secret has no value" else Ok value
+  | Ok result -> Error (String.trim result.stderr)
+  | Error (Sol_cli_process.Non_zero result) -> Error (String.trim result.stderr)
+  | Error _ -> Error "the aws CLI is unavailable"
+;;

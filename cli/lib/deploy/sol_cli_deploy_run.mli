@@ -85,6 +85,7 @@ val run_lifecycle
   -> present_plan:(Sol_cli_deployment_plan.t -> (unit, string) result)
   -> gates:(Sol_cli_deployment_plan.t -> (unit, string) result)
   -> database_setup:(unit -> (unit, string) result)
+  -> kafka_delivery:(unit -> (unit, string) result)
   -> post_setup_gates:(Sol_cli_deployment_plan.t -> (unit, string) result)
   -> before_apply:(Sol_cli_deployment_plan.t -> (unit, string) result)
   -> apply:
@@ -111,6 +112,7 @@ val apply
   -> confirm_group_change:bool
   -> ?resolve_setup_image:(unit -> (string option, string) result)
   -> ?database_setup:(setup_image:string option -> unit -> (unit, string) result)
+  -> ?kafka_delivery:(unit -> (unit, string) result)
   -> Sol_cli_deployment_plan.t
   -> (unit, string) result
 

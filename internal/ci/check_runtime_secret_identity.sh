@@ -3,7 +3,6 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 substrate="$root/cli/lib/deploy/sol_cli_substrate.ml"
-secret="$root/cli/lib/deploy/sol_cli_secret.ml"
 migrate="$root/cli/lib/deploy/sol_cli_migration_job.ml"
 manifest="$root/cli/lib/workspace/sol_cli_manifest_yaml.ml"
 render="$root/cli/lib/deploy/sol_cli_database_setup_render.ml"
@@ -44,13 +43,14 @@ require "the class Secret names have a single home" \
 require_absent "the substrate no longer verifies the operator's POSTGRES_URL" \
   "$substrate" 'verify_runtime_secret'
 
-# The runtime Secret survives for Kafka, and the contract Job is its remaining consumer.
-# Its name still has one home, and the Job still names it from that constant.
-require "the Kafka runtime Secret verification names it from the shared constant" \
-  "$secret" '~secret_name:Sol_cli_manifest\.runtime_secret_name'
+# The contract Job consumes the target's resolved Kafka delivery Secret, passed by name
+# from the plan. It must read only the required keys from that Secret, not envFrom every
+# application secret or fall back to the shared runtime Secret.
+require "the contract Job reads the delivered Kafka Secret by the passed name" \
+  "$manifest" '"secretKeyRef", Y\.map \[ "name", Y\.string secret_name; "key", Y\.string key \]'
 
-require "the contract Job references the shared runtime Secret" \
-  "$manifest" '"secretRef", Y\.map \[ "name", Y\.string runtime_secret_name \]'
+require "the contract Job mounts the CA from the delivered Secret" \
+  "$manifest" '"secretName", Y\.string secret_name'
 
 require "the runtime Secret name has a single home" \
   "$manifest" 'let runtime_secret_name = '

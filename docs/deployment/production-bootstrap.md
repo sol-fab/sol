@@ -325,67 +325,28 @@ TLS. Sol sets the module's `platform_profile` from the target's declared
 `shape`, independently of `observability_backend`, so a durable target whose
 telemetry goes to an external backend still gets the authenticated transport.
 
-Sol never generates or stores the workload credential. The broker's SASL users
-Secret is a **pre-platform operator input**: `sol deploy` creates the
-platform namespaces in its prerequisite stage and then, before the privileged
-platform apply, checks that the Secret exists. When it is absent the run stops
-naming the missing input and the command that creates it, rather than starting a
-release whose pods cannot mount their volumes and reporting only a timeout after
-several minutes. Create the Secret and re-run to resume.
+Terraform generates the workload credential once and stores it in the provider's
+secret manager; the same value is projected into the broker's `redpanda-users`
+Secret. The Kubernetes objects are delivery projections, not the authority.
+Neither cluster replacement nor an ordinary deploy rotates the password.
 
-Two operator steps make the transport usable, and both fail closed:
+On an ordinary deploy, after the platform prerequisites have created the broker
+and its CA, the deploy reads the authoritative password from the provider store
+and the chart-owned CA from Kubernetes, then writes only
+`KAFKA_SASL_PASSWORD` and `KAFKA_SSL_CA_CERT` to `<target>-kafka-creds` in each
+namespace that declares a Kafka consumer. A TLS contract Job reads only those
+two keys from the same Secret. Non-consumers receive nothing, and there is no
+operator step that copies Kafka credentials into unit Secrets or `sol-secrets`.
 
-1. **Create the broker's SASL users Secret in `redpanda`.** The chart's
-   `auth.sasl.secretRef` is `redpanda-users`; the chart mounts it as a required
-   volume on both the broker StatefulSet and the post-install Job, and does not
-   create it. Its `users.txt` holds `name:password:mechanism`, one user per line:
+`sol secret set` refuses `KAFKA_SASL_PASSWORD` and `KAFKA_SSL_CA_CERT`, whether
+addressed to a unit or to `@platform`: the resolved Kafka binding is their single
+producer. An application `secrets:` mapping for either key is a conflicting
+producer and fails planning. External Kafka keeps its explicitly declared ESO
+Secret instead.
 
-   ```bash
-   kubectl create secret generic redpanda-users -n redpanda \
-     --from-literal=users.txt="sol-workloads:$(your-secret-tool get sol-kafka-sasl-password):SCRAM-SHA-256"
-   ```
-
-   On a fresh target the `redpanda` namespace does not exist until the first
-   `sol deploy` has run its prerequisite stage, so the order is
-   `sol deploy <target>`, create the Secret when the run names it, then
-   `sol deploy <target>` again to resume the install. The refusal prints the
-   target's own deploy kubeconfig command and the context it writes, taken from the
-   cloud root's outputs, so reaching the cluster does not depend on knowing how this
-   provider writes kubeconfigs. The credential is
-   supplied out of band: Sol never reads it, and it never enters Terraform
-   state, a command line, a release artifact or a run log.
-
-2. **Provide platform Job inputs separately from application values.** Database
-   access is not a platform input: the deploy delivers `<target>-dml-creds` to a
-   unit that declares `uses: [app_db]` and `<target>-ddl-creds` to the migration
-   Job. For a TLS profile, contract Jobs read the Kafka password and CA from the
-   target's `sol-secrets` objects:
-
-   ```bash
-   your-secret-tool get sol-kafka-sasl-password \
-     | sol secret set prod/aws/us-east-1 @platform/KAFKA_SASL_PASSWORD --from-stdin
-   kubectl get secret redpanda-default-cert -n redpanda \
-     -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
-   sol secret set prod/aws/us-east-1 @platform/KAFKA_SSL_CA_CERT --from-file ca.crt
-   ```
-
-   These platform writes do not populate application Secrets. Set application
-   values independently for each declared unit, for example:
-
-   ```bash
-   your-secret-tool get sol-kafka-sasl-password \
-     | sol secret set prod/aws/us-east-1 payments/charge_svc/KAFKA_SASL_PASSWORD --from-stdin
-   sol secret set prod/aws/us-east-1 payments/charge_svc/KAFKA_SSL_CA_CERT --from-file ca.crt
-   ```
-
-   Repeat the unit-scoped writes for each unit that declares those keys. The CA
-   is mounted from that unit's Secret at `/etc/sol/kafka/ca.crt`; the workload
-   reads it through `KAFKA_SSL_CA_LOCATION`. The SASL user Sol renders is
-   `sol-workloads`, so the broker user and the username must agree.
-
-An ordinary `sol deploy` verifies every required key is present and non-empty
-before it applies a workload, so a production target never rolls out a workload
-that would fall back to the plaintext default or fail to verify the broker.
+The deploy fails closed when the provider authority is missing or unreadable, or
+when the broker CA Secret is absent, rather than rolling out a consumer that
+cannot authenticate or verify the broker.
 
 ## Platform storage (finding 7 of HARDEN-002 run 2)
 

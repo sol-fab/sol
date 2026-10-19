@@ -57,6 +57,26 @@ let%test
   refused (decide ~managed:false [ random Create ])
 ;;
 
+let%test "Kafka authority deletion is a full-target teardown, not a deploy action" =
+  let refused_as_teardown ?(managed = true) changes =
+    match generation ~resources ~managed changes with
+    | Error message ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the refusal names the authority and directs to sol destroy"
+        true
+        (Sol_cli_string.contains ~needle:"credential authority" message
+         && Sol_cli_string.contains ~needle:"sol destroy" message)
+    | Ok _ -> Windtrap.fail "a destructive Kafka authority plan was accepted"
+  in
+  refused_as_teardown [ random Delete; authority Delete; version Delete ];
+  refused_as_teardown [ random No_op; authority Delete; version No_op ];
+  refused_as_teardown [ random No_op; authority Replace; version Replace ];
+  (* Removing the Kafka resource from the target also plans deletion; it is the same
+     explicit teardown, not an ordinary deploy. *)
+  refused_as_teardown ~managed:false [ random Delete; authority Delete; version Delete ]
+;;
+
 let%test "Kafka addition to existing infrastructure still requires independent absence" =
   match
     generation

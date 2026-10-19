@@ -104,7 +104,7 @@ No positional: the command acts on the workspace, and a target or scope is a nar
 | `sol new workspace` | NAME | — | documented | Scaffold a new Sol workspace with a working |
 | `sol rollback` | RELEASE_ID | `--target=ENV/PROVIDER/REGION` | documented | Restore a recorded release boundary. Refuses on a |
 | `sol secret delete` | — | — | documented | Delete an unused Sol-owned unit or platform Job |
-| `sol secret set` | — | `--from-file=PATH`, `--from-stdin` | documented | Create or update a Sol-owned unit secret or platform |
+| `sol secret set` | — | `--from-file=PATH`, `--from-stdin` | documented | Create or update a Sol-owned unit secret |
 | `sol secret status` | — | — | documented | Show secret owners and delivery readiness for a |
 <!-- END GENERATED: workspace -->
 

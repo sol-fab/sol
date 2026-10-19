@@ -118,13 +118,17 @@ print('unsupported Kubernetes operation: '+repr(a),file=sys.stderr);sys.exit(90)
         for namespace in ('workspace-comms', 'workspace-payments'):
             state[namespace+'/sol-secrets'] = secret('old', 'KAFKA_SASL_PASSWORD')
         (root / 'state.json').write_text(json.dumps(state))
-        partial = execute('@platform/KAFKA_SASL_PASSWORD', fail_ns='workspace-payments')
-        require(partial.returncode != 0 and 'Forbidden' in partial.stderr, 'partial platform write lost provider error')
-        require('already updated in namespace(s): workspace-comms' in partial.stderr, 'partial write did not name its completed update')
-        state = json.loads((root / 'state.json').read_text())
-        require(state['workspace-comms/sol-secrets']['data']['KAFKA_SASL_PASSWORD'] == encode(canary), 'successful first platform write was lost')
-        require(state['workspace-payments/sol-secrets']['data']['KAFKA_SASL_PASSWORD'] == encode('old'), 'failed platform destination was modified')
-        print('ok: partial platform writes report completed destinations without activation claims')
+        before_platform = json.loads(json.dumps(state))
+        calls_before = len((root / 'calls.jsonl').read_text().splitlines())
+        platform = execute('@platform/KAFKA_SASL_PASSWORD', fail_ns='workspace-payments')
+        require(platform.returncode != 0 and 'resource-owned' in platform.stderr,
+                'Kafka platform key was not refused as resource-owned')
+        require(json.loads((root / 'state.json').read_text()) == before_platform,
+                'refused Kafka platform key wrote a destination')
+        extra = [json.loads(line) for line in (root / 'calls.jsonl').read_text().splitlines()[calls_before:]]
+        require(not any('patch' in call for call in extra),
+                'refused Kafka platform key reached a write')
+        print('ok: resource-owned Kafka keys are refused before any platform write')
         # Resolution and ownership refusals precede opening the requested secret file.
         refused = execute('payments/api_svc/UNDECLARED', from_file=str(root/'must-not-open'))
         require(refused.returncode != 0 and 'could not read' not in refused.stderr, 'invalid key reached input')

@@ -54,6 +54,12 @@ let redpanda_admin_host = "redpanda.redpanda.svc.cluster.local:9644"
    them once here. `*_host_port` is the CLI's local port-forward convention, not
    a cluster fact. *)
 let monitoring_namespace = "monitoring"
+
+(* The managed broker's namespace and the chart-created TLS projection the deploy reads
+   its CA from. The chart owns the certificate; Sol owns only the consumer projection. *)
+let kafka_namespace = "redpanda"
+let kafka_ca_secret_name = "redpanda-default-cert"
+let kafka_ca_cert_file = "ca.crt"
 let loki_service = "loki"
 let loki_service_port = 3100
 let loki_host_port = 3100

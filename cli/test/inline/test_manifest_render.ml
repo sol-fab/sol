@@ -693,6 +693,44 @@ let test_production_svc_declares_sasl_ssl () =
   assert_contains "production SASL user" workload {|KAFKA_SASL_USERNAME: "sol-workloads"|}
 ;;
 
+let production_consumer =
+  { production_spec with
+    consumes_kafka = true
+  ; secret_sources =
+      [ ( "KAFKA_SASL_PASSWORD"
+        , Sol_cli_secret_source.Target_kafka { secret = "prod-aws-us-east-1-kafka-creds" }
+        )
+      ; ( "KAFKA_SSL_CA_CERT"
+        , Sol_cli_secret_source.Target_kafka { secret = "prod-aws-us-east-1-kafka-creds" }
+        )
+      ]
+  }
+;;
+
+let test_consumer_reads_the_delivered_kafka_secret () =
+  let _ns, workload = render_spec_ok production_consumer in
+  assert_contains
+    "the SASL password is read from the target's delivered Secret"
+    workload
+    "name: prod-aws-us-east-1-kafka-creds";
+  assert_contains
+    "the SASL password key is referenced"
+    workload
+    "key: KAFKA_SASL_PASSWORD";
+  assert_contains
+    "the CA key is mounted from the delivered Secret"
+    workload
+    "key: KAFKA_SSL_CA_CERT";
+  assert_contains "the CA is mounted at the expected file" workload "path: ca.crt"
+;;
+
+let test_non_consumer_has_no_kafka_secret () =
+  let _ns, workload = render_spec_ok svc_spec in
+  assert_absent "no SASL password" workload "KAFKA_SASL_PASSWORD";
+  assert_absent "no CA key" workload "KAFKA_SSL_CA_CERT";
+  assert_absent "no delivered Kafka Secret" workload "-kafka-creds"
+;;
+
 let test_production_svc_mounts_the_ca () =
   let _ns, workload = render_spec_ok production_spec in
   assert_contains "CA volume name" workload "name: kafka-ca";
@@ -2736,6 +2774,7 @@ let test_contract_job_manifest () =
   let doc =
     Sol_cli_manifest.contract_job_doc
       ~cluster_env:Sol_cli_manifest.default_cluster_env
+      ~secret_name:None
       ~name:"sol-contract-1"
       ~namespace:"myapp-payments"
       ~image:"sol-registry:5000/myapp/charge-svc:abc123"
@@ -2763,9 +2802,8 @@ let test_contract_job_manifest () =
     "sol-secrets";
   let tls_doc =
     Sol_cli_manifest.contract_job_doc
-      ~cluster_env:
-        (Sol_cli_manifest.cluster_env Sol_cli_manifest.Sasl_ssl
-         @ [ "KAFKA_SASL_PASSWORD", "" ])
+      ~cluster_env:(Sol_cli_manifest.cluster_env Sol_cli_manifest.Sasl_ssl)
+      ~secret_name:(Some "prod-aws-us-east-1-kafka-creds")
       ~name:"sol-contract-tls"
       ~namespace:"myapp-payments"
       ~image:"sol-registry:5000/myapp/charge-svc:abc123"
@@ -2774,9 +2812,17 @@ let test_contract_job_manifest () =
     |> render_doc
   in
   assert_contains
-    "TLS contract Job consumes the platform Secret"
+    "TLS contract Job consumes the delivered Kafka Secret"
     tls_doc
-    "name: sol-secrets";
+    "name: prod-aws-us-east-1-kafka-creds";
+  assert_absent
+    "TLS contract Job does not consume the shared platform Secret"
+    tls_doc
+    "sol-secrets";
+  assert_absent
+    "TLS contract Job does not envFrom every key in a Secret"
+    tls_doc
+    "envFrom";
   assert_contains "TLS contract Job mounts the CA key" tls_doc "key: KAFKA_SSL_CA_CERT";
   assert_contains "TLS contract Job receives the SASL key" tls_doc "KAFKA_SASL_PASSWORD";
   (* #1477: the contract Job runs the TypeScript client, whose HTTPS fetch to the Schema
@@ -2808,28 +2854,60 @@ let test_contract_scope_rule () =
   let ocaml_spec = { svc_spec with language = Some Sol_cli_compat.Ocaml } in
   let ts_spec = { worker_spec with language = Some Sol_cli_compat.Typescript } in
   let undeclared = { svc_spec with language = None } in
-  let images = Windtrap.list (Windtrap.pair Windtrap.string Windtrap.string) in
+  let images services =
+    Sol_cli_contract.reconciliation_images services
+    |> List.map (fun (namespace, image, _) -> namespace, image)
+  in
+  let expected_images = Windtrap.list (Windtrap.pair Windtrap.string Windtrap.string) in
   Windtrap.equal
-    images
+    expected_images
     ~msg:"a TypeScript-only scope reconciles its own image"
     [ "myapp-comms", ts_spec.image ]
-    (Sol_cli_contract.reconciliation_images [ ts_spec ]);
+    (images [ ts_spec ]);
   Windtrap.equal
-    images
+    expected_images
     ~msg:"a mixed scope reconciles one image per language"
     [ "myapp-comms", ts_spec.image; "myapp-payments", ocaml_spec.image ]
-    (Sol_cli_contract.reconciliation_images [ ts_spec; ocaml_spec ]);
+    (images [ ts_spec; ocaml_spec ]);
   Windtrap.equal
-    images
+    expected_images
     ~msg:"units sharing a language share the workspace projection and one Job"
     [ "myapp-payments", ocaml_spec.image ]
-    (Sol_cli_contract.reconciliation_images
+    (images
        [ ocaml_spec; { ocaml_spec with image = "sol-registry:5000/myapp/other:abc123" } ]);
   Windtrap.equal
-    images
+    expected_images
     ~msg:"an undeclared language still reconciles"
     [ "myapp-payments", undeclared.image ]
-    (Sol_cli_contract.reconciliation_images [ undeclared ])
+    (images [ undeclared ]);
+  (* A managed Kafka consumer's contract Job must read the target-scoped delivered
+     Secret, never the shared platform Secret. *)
+  let kafka_consumer =
+    { ts_spec with
+      consumes_kafka = true
+    ; config = Sol_cli_manifest.production_kafka_config
+    ; secret_sources =
+        [ ( "KAFKA_SASL_PASSWORD"
+          , Sol_cli_secret_source.Target_kafka
+              { secret = "prod-aws-us-east-1-kafka-creds" } )
+        ; ( "KAFKA_SSL_CA_CERT"
+          , Sol_cli_secret_source.Target_kafka
+              { secret = "prod-aws-us-east-1-kafka-creds" } )
+        ]
+    }
+  in
+  Windtrap.equal
+    (Windtrap.list (Windtrap.pair Windtrap.string (Windtrap.option Windtrap.string)))
+    ~msg:"the contract Job reads the consumer's delivered Kafka Secret"
+    [ "myapp-comms", Some "prod-aws-us-east-1-kafka-creds" ]
+    (Sol_cli_contract.reconciliation_images [ kafka_consumer ]
+     |> List.map (fun (namespace, _, secret) -> namespace, secret));
+  Windtrap.equal
+    (Windtrap.list (Windtrap.pair Windtrap.string (Windtrap.option Windtrap.string)))
+    ~msg:"a consumer that is not the first unit of its language still supplies the Secret"
+    [ "myapp-comms", Some "prod-aws-us-east-1-kafka-creds" ]
+    (Sol_cli_contract.reconciliation_images [ ts_spec; kafka_consumer ]
+     |> List.map (fun (namespace, _, secret) -> namespace, secret))
 ;;
 
 let%test
@@ -2987,6 +3065,15 @@ let%test "svc: svc declares KAFKA_SECURITY_PROTOCOL" =
 ;;
 
 let%test "svc: production declares SASL_SSL" = test_production_svc_declares_sasl_ssl ()
+
+let%test "svc: a consumer reads the delivered Kafka Secret" =
+  test_consumer_reads_the_delivered_kafka_secret ()
+;;
+
+let%test "svc: a non-consumer has no Kafka Secret input" =
+  test_non_consumer_has_no_kafka_secret ()
+;;
+
 let%test "svc: production mounts the Kafka CA" = test_production_svc_mounts_the_ca ()
 let%test "svc: local has no Kafka CA mount" = test_local_svc_has_no_kafka_ca_mount ()
 

@@ -1,4 +1,4 @@
-let service_specs_of_release ?config ?kafka release =
+let service_specs_of_release ?config ?kafka ?kafka_creds_name release =
   let open Result.Syntax in
   let* database =
     match config with
@@ -10,7 +10,7 @@ let service_specs_of_release ?config ?kafka release =
       in
       Ok (Some (Sol_cli_kubernetes_name.sanitize_name config.target.name, selection))
   in
-  Sol_cli_rollback.service_specs_of_release ?database ?kafka release
+  Sol_cli_rollback.service_specs_of_release ?database ?kafka ?kafka_creds_name release
 ;;
 
 let k8s_name value =
@@ -1447,6 +1447,7 @@ let recording_deps
   let deps : Sol_cli_rollback.transaction_deps =
     { database = None
     ; kafka = None
+    ; kafka_creds_name = None
     ; ensure_held
     ; applied_migrations
     ; apply =
@@ -2180,6 +2181,7 @@ let modelled_deps ~release ~cluster ?(fail_at = None) ()
   in
   { database = None
   ; kafka = None
+  ; kafka_creds_name = None
   ; Sol_cli_rollback.ensure_held = (fun () -> Ok ())
   ; applied_migrations = (fun () -> Ok [])
   ; apply = apply_all 0
@@ -3086,4 +3088,38 @@ let%test "rollback refuses a historical Kafka consumer whose target has no bindi
       true
       (Sol_cli_string.contains ~needle:"no resolved Kafka binding" message)
   | Ok _ -> Windtrap.fail "rollback restored a Kafka consumer without a current binding"
+;;
+
+let%test "rollback re-resolves managed Kafka into the target's delivered Secret" =
+  let release =
+    release_with_workloads
+      ~apply_mode:Sol_cli_release.Direct
+      [ { (worker_spec ()) with uses = [ "events" ]; consumes_kafka = true } ]
+  in
+  match
+    service_specs_of_release
+      ~kafka:(Sol_cli_resource_binding.Managed_kafka "events")
+      ~kafka_creds_name:"prod-aws-us-east-1-kafka-creds"
+      release
+  with
+  | Error message -> Windtrap.fail message
+  | Ok [ (spec, _) ] ->
+    let keys = Sol_cli_manifest.kafka_required_secret_keys Sol_cli_manifest.Sasl_ssl in
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"every required Kafka key is delivered from the target's Secret"
+      true
+      (List.for_all
+         (fun key ->
+            match List.assoc_opt key spec.secret_sources with
+            | Some (Sol_cli_secret_source.Target_kafka { secret }) ->
+              String.equal secret "prod-aws-us-east-1-kafka-creds"
+            | _ -> false)
+         keys);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the historical consumer requirement is preserved"
+      true
+      spec.consumes_kafka
+  | Ok _ -> Windtrap.fail "unexpected restored workload count"
 ;;

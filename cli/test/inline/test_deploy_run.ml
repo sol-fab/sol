@@ -1115,6 +1115,7 @@ let removed_group_lifecycle ~(ctx : Sol_cli_deploy_run.context) =
     ~present_plan:(fun _ -> Ok ())
     ~gates:(fun _ -> Ok ())
     ~database_setup:(fun () -> Ok ())
+    ~kafka_delivery:(fun () -> Ok ())
     ~post_setup_gates:(fun _ -> Ok ())
     ~before_apply:(fun _ -> Ok ())
     ~apply:(fun ~lease:_ ~release_id:_ _ ->
@@ -1285,6 +1286,7 @@ let%test "lifecycle: a refused gate releases the lease before apply" =
           ~present_plan:(fun _ -> Ok ())
           ~gates:(fun _ -> Error "gate refused")
           ~database_setup:(fun () -> Ok ())
+          ~kafka_delivery:(fun () -> Ok ())
           ~post_setup_gates:(fun _ -> Ok ())
           ~before_apply:(fun _ -> Ok ())
           ~apply:(fun ~lease:_ ~release_id:_ _ ->
@@ -1329,6 +1331,9 @@ let%test "lifecycle: presentation, gates and apply run in order under one lease"
           ~database_setup:(fun () ->
             note "database_setup";
             Ok ())
+          ~kafka_delivery:(fun () ->
+            note "kafka_delivery";
+            Ok ())
           ~post_setup_gates:(fun _ ->
             note "post_setup_gates";
             Ok ())
@@ -1349,11 +1354,12 @@ let%test "lifecycle: presentation, gates and apply run in order under one lease"
       Windtrap.equal
         (Windtrap.list Windtrap.string)
         ~msg:
-          "presentation, then gates, then database setup, then the post-setup gates, \
-           then apply"
+          "presentation, then gates, then database setup, then Kafka delivery, then the \
+           post-setup gates, then apply"
         [ "present"
         ; "gates"
         ; "database_setup"
+        ; "kafka_delivery"
         ; "post_setup_gates"
         ; "before_apply"
         ; "apply"
@@ -1502,6 +1508,7 @@ let%test "lifecycle: a failed apply does not report success" =
           ~present_plan:(fun _ -> Ok ())
           ~gates:(fun _ -> Ok ())
           ~database_setup:(fun () -> Ok ())
+          ~kafka_delivery:(fun () -> Ok ())
           ~post_setup_gates:(fun _ -> Ok ())
           ~before_apply:(fun _ -> Ok ())
           ~apply:(fun ~lease:_ ~release_id:_ _ -> Error "apply failed")

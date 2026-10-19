@@ -327,23 +327,26 @@ let test_verify_rejects_an_absent_secret () =
 (* 2b: `verify_runtime_secret` (the substrate `POSTGRES_URL` check) is deleted; see the
    note beside its former test registration. *)
 
-let test_platform_set_writes_only_the_runtime_secret () =
-  with_fake_kubectl ~mode:"present" (fun ~calls ~manifests:_ ->
+let test_target_set_writes_only_the_named_secret () =
+  with_fake_kubectl ~mode:"owned-unit" (fun ~calls ~manifests:_ ->
     match
-      Sol_cli_secret.set_platform_key
+      Sol_cli_secret.set_target_key
         ~ctx
         ~namespaces:[ "payments"; "orders" ]
+        ~secret_name:"charge-svc-secrets"
         ~key:"KAFKA_SASL_PASSWORD"
         ~value:"kafka-sasl"
     with
-    | Error message -> Windtrap.failf "platform secret set failed: %s" message
+    | Error message -> Windtrap.failf "target secret set failed: %s" message
     | Ok _ ->
       let log = calls () in
       Windtrap.equal
         Windtrap.bool
-        ~msg:"the platform Secret is patched by name"
+        ~msg:"the named Secret is patched"
         true
-        (Sol_cli_string.contains ~needle:"patch secret sol-secrets -n payments" log);
+        (Sol_cli_string.contains
+           ~needle:"patch secret charge-svc-secrets -n payments"
+           log);
       Windtrap.equal
         Windtrap.bool
         ~msg:"and names only the key being written"
@@ -356,9 +359,37 @@ let test_platform_set_writes_only_the_runtime_secret () =
         (Sol_cli_string.contains ~needle:"/data/EXISTING" log);
       Windtrap.equal
         Windtrap.bool
-        ~msg:"application Secrets are not written"
+        ~msg:"another unit's Secret is not written"
         false
-        (Sol_cli_string.contains ~needle:"charge-svc-secrets" log))
+        (Sol_cli_string.contains ~needle:"other-svc-secrets" log))
+;;
+
+let test_read_secret_key_decodes_the_projection () =
+  with_fake_kubectl ~mode:"present" (fun ~calls:_ ~manifests:_ ->
+    match
+      Sol_cli_secret.read_secret_key
+        ~ctx
+        ~namespace:"payments"
+        ~secret_name:Sol_cli_manifest.runtime_secret_name
+        ~key:"EXISTING"
+    with
+    | Error message -> Windtrap.fail message
+    | Ok value ->
+      Windtrap.equal Windtrap.string ~msg:"decodes the stored value" "existing" value;
+      (match
+         Sol_cli_secret.read_secret_key
+           ~ctx
+           ~namespace:"payments"
+           ~secret_name:Sol_cli_manifest.runtime_secret_name
+           ~key:"ABSENT"
+       with
+       | Ok _ -> Windtrap.fail "an absent key must not read as a value"
+       | Error message ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"names the absent key"
+           true
+           (Sol_cli_string.contains ~needle:"has no key ABSENT" message)))
 ;;
 
 (* 2b: POSTGRES_URL is no longer a platform Job input, so the shared-scope writer
@@ -690,20 +721,21 @@ let test_contract_readiness_names_missing_tls_job_input () =
        && Sol_cli_string.contains ~needle:"KAFKA_SSL_CA_CERT" message)
 ;;
 
-let test_tls_contract_job_refuses_before_submission_without_platform_inputs () =
+let test_tls_contract_job_refuses_before_submission_without_delivered_inputs () =
   with_fake_kubectl ~mode:"missing" (fun ~calls ~manifests:_ ->
     match
       Sol_cli_contract.reconcile_in_destination
         ~ctx
         ~kafka:(Sol_cli_resource_binding.Managed_kafka "events")
+        ~secret_name:(Some "prod-aws-us-east-1-kafka-creds")
         ~namespace:"payments"
         ~image:"contract-image"
     with
-    | Ok () -> Windtrap.fail "TLS contract Job started without platform Kafka inputs"
+    | Ok () -> Windtrap.fail "TLS contract Job started without delivered Kafka inputs"
     | Error message ->
       Windtrap.equal
         Windtrap.bool
-        ~msg:"names the required Kafka platform values"
+        ~msg:"names the required Kafka delivered values"
         true
         (Sol_cli_string.contains ~needle:"KAFKA_SASL_PASSWORD" message
          && Sol_cli_string.contains ~needle:"KAFKA_SSL_CA_CERT" message);
@@ -726,8 +758,12 @@ let%test "verify: an absent Secret fails" = test_verify_rejects_an_absent_secret
    now reads the target's DML class Secret, and the substrate no longer owns the operator's
    copy of the master. *)
 
-let%test "scope: platform writes only the shared Job Secret" =
-  test_platform_set_writes_only_the_runtime_secret ()
+let%test "scope: a target write touches only the named Secret" =
+  test_target_set_writes_only_the_named_secret ()
+;;
+
+let%test "verify: a delivered Secret key is decoded, and an absent key is named" =
+  test_read_secret_key_decodes_the_projection ()
 ;;
 
 let%test "2b: platform refuses POSTGRES_URL" = test_platform_set_refuses_postgres_url ()
@@ -747,8 +783,8 @@ let%test "verify: TLS contract readiness checks both Kafka Job inputs" =
   test_contract_readiness_names_missing_tls_job_input ()
 ;;
 
-let%test "verify: TLS contract Job requires platform inputs before submit" =
-  test_tls_contract_job_refuses_before_submission_without_platform_inputs ()
+let%test "verify: TLS contract Job requires its delivered inputs before submit" =
+  test_tls_contract_job_refuses_before_submission_without_delivered_inputs ()
 ;;
 
 let%test "external Secret status reports readiness and keys" =

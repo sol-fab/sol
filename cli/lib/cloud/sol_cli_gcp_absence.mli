@@ -34,3 +34,9 @@ val kafka_authority
   :  Sol_cli_config.target
   -> cluster_name:string
   -> Sol_cli_kafka_authority.authority_state
+
+(** Retrieve the authoritative credential value for Kubernetes delivery. *)
+val kafka_credential
+  :  Sol_cli_config.target
+  -> cluster_name:string
+  -> (string, string) result

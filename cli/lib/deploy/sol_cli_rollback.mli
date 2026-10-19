@@ -8,6 +8,7 @@ val validate_resource_requirements
 val service_specs_of_release
   :  ?database:string * Sol_cli_resource_binding.postgres
   -> ?kafka:Sol_cli_resource_binding.kafka
+  -> ?kafka_creds_name:string
   -> Sol_cli_release.t
   -> ((Sol_cli_deployment_plan.service_spec * string) list, string) result
 
@@ -216,6 +217,7 @@ type transaction_deps =
        (historical consumer requirements are re-resolved against it); [None] for a
        local rollback, which keeps the recorded local connection. *)
     kafka : Sol_cli_resource_binding.kafka option
+  ; kafka_creds_name : string option
   ; ensure_held : unit -> (unit, string) result
   ; applied_migrations : unit -> (int list, string) result
   ; apply : (Sol_cli_deployment_plan.service_spec * string) list -> (unit, string) result

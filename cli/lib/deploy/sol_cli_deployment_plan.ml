@@ -272,7 +272,8 @@ let external_secret_of_spec (spec : service_spec) : (string * string) option =
       (fun (_, source) ->
          match source with
          | Sol_cli_manifest.Sol_managed -> false
-         | External _ -> true)
+         | External _ -> true
+         | Target_kafka _ -> false)
       spec.secret_sources
   in
   if has_external
@@ -300,7 +301,8 @@ let release_workload_of_spec (spec : service_spec) : Sol_cli_release_id.workload
       |> List.filter_map (fun (key, source) ->
         match source with
         | Sol_cli_manifest.Sol_managed -> None
-        | External { store; key = remote_key } -> Some (key, store, remote_key))
+        | External { store; key = remote_key } -> Some (key, store, remote_key)
+        | Target_kafka _ -> None)
   ; schedule = spec.schedule
   ; scheduled_concurrency =
       Sol_cli_toml.scheduled_concurrency_to_string spec.scheduled_concurrency

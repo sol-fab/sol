@@ -101,6 +101,26 @@ val set_unit_key
   -> value:string
   -> (bool, string) result
 
+(** Read one decoded key from a Secret the caller has already established is the
+    authority's projection. *)
+val read_secret_key
+  :  ctx:Sol_cli_kube_destination.context
+  -> namespace:string
+  -> secret_name:string
+  -> key:string
+  -> (string, string) result
+
+(** Write a target-delivered key to a named Secret in each namespace, refusing any
+    destination Sol does not own. Used for resource-owned projections such as
+    `<target>-kafka-creds`. *)
+val set_target_key
+  :  ctx:Sol_cli_kube_destination.context
+  -> namespaces:string list
+  -> secret_name:string
+  -> key:string
+  -> value:string
+  -> (string list, string) result
+
 val platform_secret_keys : string list
 
 (** The guard a delivered object passes before Sol writes it: what is already there must be

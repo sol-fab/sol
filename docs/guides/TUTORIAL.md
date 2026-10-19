@@ -931,13 +931,14 @@ render the same references and never emit values or placeholder Secret objects. 
 verifies ESO sync, materialized keys and workload readiness. GitOps relies on Argo CD and ESO to
 reconcile the emitted resources.
 
-Sol platform Jobs use the reserved `@platform` scope for their own inputs. The
-database is not one of them — the deploy delivers `<target>-dml-creds` to a unit
-that declares `uses: [app_db]` and `<target>-ddl-creds` to the migration Job. For
-SASL_SSL targets, the contract Job requires `KAFKA_SASL_PASSWORD` and
-`KAFKA_SSL_CA_CERT` through `@platform`. These values go only into the shared
-`sol-secrets` Secret used by Sol Jobs; they are never copied into application-unit
-Secrets.
+Kafka credentials are resource-owned. For a managed Kafka target the deploy reads
+the password from the provider store and the broker CA from Kubernetes, then
+writes `KAFKA_SASL_PASSWORD` and `KAFKA_SSL_CA_CERT` to `<target>-kafka-creds` in
+each namespace that declares a consumer; a TLS contract Job reads only those two
+keys. External Kafka keeps its ESO-delivered Secret. Database access is likewise
+deploy-delivered: `<target>-dml-creds` to a unit that declares `uses: [app_db]`
+and `<target>-ddl-creds` to the migration Job. `sol secret set` refuses the Kafka
+keys because the binding, not an operator mapping, is their single producer.
 
 The generated files contain the full manifest (Namespace, ServiceAccount, ConfigMap, Deployment/Service). If a service enables progressive delivery in `sol.toml`, Sol emits an Argo Rollouts `Rollout` instead of a Kubernetes `Deployment`. Argo CD applies these manifests with `ServerSideApply=true` and prunes resources that are removed.
 

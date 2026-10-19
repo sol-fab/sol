@@ -141,7 +141,29 @@ let run_locked ~lease ~ctx ~local ~database_selection ?config ~workspace ~facts 
       let* shape = Sol_cli_config.platform_shape config in
       Ok (Some (Sol_cli_resource_binding.kafka_for_shape ~shape kafka))
   in
-  let* restored = Sol_cli_rollback.service_specs_of_release ?database ?kafka release in
+  let kafka_creds_name =
+    Option.map
+      (fun (config : Sol_cli_config.t) ->
+         Sol_cli_manifest.kafka_creds_name
+           ~target:(Sol_cli_kubernetes_name.sanitize_name config.target.name))
+      config
+  in
+  let* restored =
+    Sol_cli_rollback.service_specs_of_release ?database ?kafka ?kafka_creds_name release
+  in
+  (* The restored workloads read the current target's delivered Secret. Re-project it so
+     a recreated delivery object or a changed current authority cannot leave rollback
+     reading a stale credential. *)
+  let* () =
+    match config, kafka with
+    | Some config, Some kafka ->
+      Sol_cli_kafka_delivery.run
+        ~ctx
+        ~target:config.target
+        ~kafka
+        ~services:(List.map fst restored)
+    | _ -> Ok ()
+  in
   let deliver_credentials () =
     match database_selection, target with
     | Sol_cli_resource_binding.External_postgres binding, Some target ->
@@ -175,6 +197,7 @@ let run_locked ~lease ~ctx ~local ~database_selection ?config ~workspace ~facts 
   let deps : Sol_cli_rollback.transaction_deps =
     { database
     ; kafka
+    ; kafka_creds_name
     ; ensure_held = (fun () -> Sol_cli_boundary_lease.ensure_held lease)
     ; applied_migrations =
         (fun () ->

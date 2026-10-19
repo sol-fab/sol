@@ -127,15 +127,11 @@ let required_keys ~platform_shape (toml : Sol_cli_toml.t) =
     toml.secret_keys
 ;;
 
-(* 2b: `POSTGRES_URL` is no longer a platform Job input. The database connection is
-   delivered by the deploy — `<target>-dml-creds` to a consumer unit and `<target>-ddl-creds`
-   to the migration Job — so there is no operator value to set or delete. Only the Kafka
-   credentials remain platform inputs until #1344c binds them. *)
-let platform_keys ~platform_shape =
-  match Sol_cli_manifest.kafka_transport platform_shape with
-  | Sol_cli_manifest.Plaintext -> []
-  | Sasl_ssl -> [ "KAFKA_SASL_PASSWORD"; "KAFKA_SSL_CA_CERT" ]
-;;
+(* Neither database connections nor Kafka credentials are operator-written platform Job
+   inputs now. The deploy delivers database class Secrets and, for managed Kafka, the
+   resource-owned `<target>-kafka-creds` projection; external Kafka keeps its ESO delivery.
+   `sol secret set` therefore has no platform keys to write. *)
+let platform_keys ~platform_shape:_ = []
 
 let target_namespaces ~config ~facts ~workspace =
   Sol_cli_workspace_model.services facts
@@ -154,6 +150,18 @@ let check_platform_key ~platform_shape key =
        database reads `<target>-dml-creds` and the migration Job reads \
        `<target>-ddl-creds`, both delivered by the deploy. There is no operator value to \
        set."
+  else if
+    List.mem
+      key
+      (Sol_cli_manifest.kafka_required_secret_keys
+         (Sol_cli_manifest.kafka_transport platform_shape))
+  then
+    Error
+      (Printf.sprintf
+         "%s is resource-owned: the deploy delivers it from the target's resolved Kafka \
+          binding into `<target>-kafka-creds` (managed) or the binding's external \
+          Secret. `sol secret set` cannot override it."
+         key)
   else if List.mem key (platform_keys ~platform_shape)
   then Ok ()
   else Error (Printf.sprintf "%s is not required by this target's Sol platform Jobs" key)
@@ -280,27 +288,23 @@ let run_delete target address =
   let* ctx = destination_context config in
   match address with
   | Platform key ->
-    if List.mem key (platform_keys ~platform_shape)
-    then
-      Error
-        (Printf.sprintf
-           "refusing to delete @platform/%s: the target's Sol Jobs require this key"
-           key)
-    else
-      let* workspace =
-        Sol_cli_workspace.resolve_validated ~dir:(Sys.getcwd ())
-        |> Result.map_error Sol_cli_workspace.workspace_error_to_string
-      in
-      let* namespaces = target_namespaces ~config ~facts ~workspace in
-      let* deleted = Sol_cli_secret.delete_platform_key ~ctx ~namespaces ~key in
-      (match deleted with
-       | [] -> Printf.printf "No platform Job secret value existed for %s.\n%!" key
-       | _ ->
-         Printf.printf
-           "Platform Job secret %s deleted in %d namespace(s).\n%!"
-           key
-           (List.length deleted));
-      Ok ()
+    (match check_platform_key ~platform_shape key with
+     | Error message -> Error message
+     | Ok () ->
+       let* workspace =
+         Sol_cli_workspace.resolve_validated ~dir:(Sys.getcwd ())
+         |> Result.map_error Sol_cli_workspace.workspace_error_to_string
+       in
+       let* namespaces = target_namespaces ~config ~facts ~workspace in
+       let* deleted = Sol_cli_secret.delete_platform_key ~ctx ~namespaces ~key in
+       (match deleted with
+        | [] -> Printf.printf "No platform Job secret value existed for %s.\n%!" key
+        | _ ->
+          Printf.printf
+            "Platform Job secret %s deleted in %d namespace(s).\n%!"
+            key
+            (List.length deleted));
+       Ok ())
   | Unit address ->
     let unit_address = address.domain ^ "/" ^ address.unit_name in
     let* toml = find_unit_config facts unit_address in
@@ -487,22 +491,17 @@ let exit_msg result = Sol_cli_exit.exit_on (Sol_cli_exit.of_msg result)
 let set_cmd =
   let man =
     [ `S Manpage.s_description
+    ; `P "ADDRESS is DOMAIN/UNIT/KEY for one application unit."
     ; `P
-        "ADDRESS is either DOMAIN/UNIT/KEY for one application unit or @platform/KEY for \
-         a Sol Job input."
-    ; `P
-        "Platform keys are the Kafka credentials of a TLS target, KAFKA_SASL_PASSWORD \
-         and KAFKA_SSL_CA_CERT. Platform values are written only to sol-secrets objects \
-         in active target namespaces. A database consumer reads the deploy-delivered \
-         `<target>-dml-creds` / `<target>-ddl-creds` class Secrets instead, so \
-         POSTGRES_URL is not a platform key."
+        "Resource-owned inputs are not writable here. A database consumer reads the \
+         deploy-delivered `<target>-dml-creds` / `<target>-ddl-creds` class Secrets, and \
+         a Kafka consumer reads the target's resolved Kafka projection: managed Kafka is \
+         delivered to `<target>-kafka-creds`, while external Kafka keeps its ESO Secret. \
+         `@platform/KAFKA_SASL_PASSWORD` and `@platform/KAFKA_SSL_CA_CERT` are refused."
     ]
   in
   Cmd.v
-    (Cmd.info
-       "set"
-       ~doc:"Create or update a Sol-owned unit secret or platform Job input"
-       ~man)
+    (Cmd.info "set" ~doc:"Create or update a Sol-owned unit secret" ~man)
     Term.(
       const (fun target address from_stdin from_file ->
         exit_msg (run_set target address from_stdin from_file))

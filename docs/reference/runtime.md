@@ -109,12 +109,15 @@ Deployment, Rollout, worker or scheduled function. Explicit activation uses the
 an unchanged deploy does not adopt a changed environment value. It never writes
 the platform Secret or another unit's Secret.
 
-Sol's internal Jobs use a separate fixed-name Secret, `sol-secrets`, for platform
-inputs that no unit owns. A TLS contract Job reads `KAFKA_SASL_PASSWORD` and
-mounts `KAFKA_SSL_CA_CERT` from it; `sol secret set TARGET @platform/KEY` writes
-only these Kafka platform Job inputs to `sol-secrets` objects in the target's
-active workload namespaces. It does not fan values out to application Secrets.
-Database connections are not a platform input: a unit that declares
+Kafka credentials are resource-owned, not operator-written platform inputs. For a
+managed Kafka binding, the deploy reads the authoritative password from the
+provider store and the chart-owned CA from Kubernetes, then writes
+`KAFKA_SASL_PASSWORD` and `KAFKA_SSL_CA_CERT` to `<target>-kafka-creds` in each
+namespace that declares a Kafka consumer. A TLS contract Job reads only those two
+keys from the same Secret. External Kafka keeps its ESO-delivered Secret. A
+non-consumer receives neither, and `sol secret set` refuses both keys whether
+scoped to a unit or `@platform`.
+Database connections are not a platform input either: a unit that declares
 `uses: [app_db]` reads the deploy-delivered `<target>-dml-creds` class Secret,
 and the migration Job reads `<target>-ddl-creds`.
 

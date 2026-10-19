@@ -1282,3 +1282,31 @@ let kafka_authority (target : Sol_cli_config.target) ~cluster_name =
      | Error (Sol_cli_process.Non_zero result) -> unknown (String.trim result.stderr)
      | Error _ -> unknown "the gcloud CLI is unavailable")
 ;;
+
+(** Retrieve the authoritative Kafka credential for delivery. The value travels on stdout
+    to the caller and never in an argv, plan, release record or diagnostic. *)
+let kafka_credential (target : Sol_cli_config.target) ~cluster_name =
+  let identity = Sol_cli_resource_binding.kafka_authority_name ~cluster_name in
+  match project_of target with
+  | None -> Error (unlistable ^ " for the Kafka credential")
+  | Some project ->
+    let argv =
+      [ "gcloud"
+      ; "secrets"
+      ; "versions"
+      ; "access"
+      ; "latest"
+      ; "--secret"
+      ; identity
+      ; "--project"
+      ; project
+      ]
+    in
+    (match Sol_cli_process.run (Sol_cli_process.cmd argv) with
+     | Ok result when String.trim result.stderr = "" ->
+       let value = String.trim result.stdout in
+       if value = "" then Error "the provider secret has no value" else Ok value
+     | Ok result -> Error (String.trim result.stderr)
+     | Error (Sol_cli_process.Non_zero result) -> Error (String.trim result.stderr)
+     | Error _ -> Error "the gcloud CLI is unavailable")
+;;
