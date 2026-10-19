@@ -10,6 +10,9 @@ recovery), [substrate.md](../reference/substrate.md) (what Sol generates and wha
 [compatibility.md](../deployment/compatibility.md) (what a profile admits today). This page links them instead
 of repeating them.
 
+For ambiguous provisioning outcomes and exceptional deletion guards, see
+[partial-state recovery](partial-state-recovery.md).
+
 ## 1. Choose a target
 
 A target is `<env>/<provider>/<region>` — `prod/aws/us-east-1`. It is the only thing a

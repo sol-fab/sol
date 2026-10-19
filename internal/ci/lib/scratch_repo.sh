@@ -54,5 +54,12 @@ scratch_repo_init() {
   fi
   mkdir -p "$scratch"
   git -C "$scratch" init -q "$@"
+  # A commit can leave a detached `git maintenance run --auto` writing into
+  # .git/objects/pack after the command returns. These repositories are removed
+  # immediately after their scenario, so that write races `rm -rf` and fails the
+  # test cleanup with "Directory not empty". A scratch repository needs no
+  # background maintenance; disable it at the only place they are created.
+  git -C "$scratch" config maintenance.auto false
+  git -C "$scratch" config gc.auto 0
   scratch_repo_assert "$scratch"
 }

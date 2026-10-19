@@ -135,7 +135,12 @@ private-only networking is a stronger future posture.
 group `sol:deployers`) and a cluster-wide `sol-deploy` `ClusterRole`; the
 namespace-scoped `RoleBinding` that actually grants it is applied per
 application namespace at deploy time (`Sol_cli_substrate.ensure`), not by
-Terraform, since application namespaces are created dynamically. Once the role
+Terraform, since application namespaces are created dynamically. The one
+Terraform-owned binding for this identity is the broker CA read: the deploy
+projects the chart's `redpanda-default-cert` into consumer namespaces, so the
+platform module binds a dedicated `sol-kafka-ca-reader` Role — exactly `get` on
+that one Secret in `redpanda` — to the same group. The broad `sol-deploy` role
+is never bound in the platform's namespaces. Once the role
 exists and `deploy_role_arn` is set, `sol deploy`'s output prints the
 command to run — Sol does not write your kubeconfig or the target file for
 you (AUDIT-072: Sol owns the IAM policy contract, not your local kubeconfig
@@ -429,55 +434,35 @@ Everything a target addresses inside the platform root goes through
 definition through a module addresses its resources through it
 (`module.platform.<resource>`) while AWS's does not.
 
-## Destroying a target (finding 9 of HARDEN-002 run 2)
+## Destroying a target
 
-Production RDS deletion protection stays **on** by default; that is correct and is
-not relaxed for convenience. Destruction is an explicit lifecycle:
+Use `sol destroy <target>` to inspect the operation and
+`sol destroy <target> --apply` to authorize it. The lifecycle prepares and verifies
+represented deletion guards, removes the platform and cloud infrastructure, and
+establishes the required absence and retention postconditions. Provider-specific
+preparation handles the guards; it is not a plain `terraform destroy` wrapper.
 
-1. the operator confirms the target is disposable;
-2. deletion protection is disabled **by an applied state transition** — either
-   `terraform apply -var=rds_deletion_protection=false` or `aws rds
-   modify-db-instance --no-deletion-protection`, followed by waiting for the
-   instance to leave `modifying`;
-3. Terraform takes a final snapshot. The module sets `final_snapshot_identifier`
-   whenever it will take one, defaulting to `<cluster>-postgres-final`. RDS requires
-   snapshot names to be unique, so destroying the same cluster name a second time
-   needs a fresh `rds_final_snapshot_identifier` **applied in the same step as 2** —
-   otherwise the delete fails with `DBSnapshotAlreadyExists`;
-4. `terraform destroy` completes;
-5. absence is verified. For what Terraform manages (EKS, RDS, ECR, the VPC with its
-   NAT gateways and elastic IPs), a successful `terraform destroy` plus an empty
-   state is the authority (DEC-045). `sol destroy` additionally checks what
-   Terraform does not own: load balancers created by the in-cluster cloud
-   controller, and target-tagged EBS volumes created for PersistentVolumeClaims. It
-   fails closed when any of those queries errors or returns a resource. The live
-   smoke harness (`internal/qualification/aws/live-smoke.sh`) keeps its own
-   independent inventory, including the VPC, as qualification evidence.
-   Volumes are worth the operator's attention from this release onward: the EBS
-   CSI driver and default gp3 StorageClass (see *Platform storage* above) are what
-   first make dynamically provisioned EBS volumes possible on this substrate. The
-   class reclaims with `Delete`, but that only fires when the *PVC* is deleted
-   through the API — tearing the cluster down without doing so leaves the volumes
-   behind.
+Preparation uses a checked Terraform plan. It may update the represented guarded
+resources, but must not create missing dependencies or replace a database. If a
+partial provisioning outcome leaves a resource outside state, use
+[partial-state recovery](../guides/partial-state-recovery.md) to restore ownership
+and diagnose exceptional guard failures. A rejected preparation is reported and
+the unsafe apply is not executed. Best-effort guard failure can still be followed by
+teardown of represented resources; failure to prepare a declared retention guarantee
+blocks destruction. Neither case authorizes dependency recreation or provider deletion.
 
-Passing `-var` to `terraform destroy` does **not** accomplish step 2 or 3. A destroy
-plan contains only deletes, so the provider is handed prior state and never sees the
-new value: `terraform plan -destroy -var x=B` on an applied `x = "A"` plans
-`input = "A" -> null`. Both settings have to be applied *before* the destroy.
+Passing a false guard variable to `terraform destroy` does not apply that guard
+transition. Retention and final-snapshot settings likewise need their required
+preparatory state transition; keep the selected retention policy explicit.
 
-**Known gap:** `sol destroy` therefore cannot yet destroy a protected
-production RDS instance. It runs the destroy only; it performs no preparatory
-transition, and a `-var` it forwarded would be inert for the reason above. Until the
-preparation step exists, the operator performs steps 2 and 3 directly (via
-`terraform apply` or the `aws` CLI) and may then use either `terraform destroy` or
-`sol destroy <target> --apply`.
+A successful Terraform command or empty state alone does not establish verified
+absence. Sol independently observes required native and controller-created
+resources, including storage and credential authority, and preserves required
+historical identities through teardown. Present or unobservable required resources
+prevent a verified verdict. The qualification harness independently checks provider
+reality rather than consuming Sol's success report.
 
-What is fixed here is the Terraform-level defect: `skip_final_snapshot` is no longer
-derived from `deletion_protection` — so permitting destruction no longer means
-silently forgoing the final snapshot — and an identifier is always set when a
-snapshot will be taken, so Terraform no longer refuses the destroy outright.
-`sol destroy` now runs the Sol lifecycle skeleton (prepare → verify the
-preparation landed → destroy platform → destroy cloud → verify absence); its AWS
-preparation is a declared no-op until finding 9b supplies the RDS
-deletion-protection transition and a unique snapshot identity per attempt. Until
-then, steps 2 and 3 above remain the operator's explicit path.
+PVC reclamation normally belongs to Kubernetes and its CSI driver. Preserve the
+platform teardown before substrate destruction; deleting a cluster alone does not
+establish absence of its persistent disks. Populated-storage interruption and retry
+remain live qualification obligations under #1454.
