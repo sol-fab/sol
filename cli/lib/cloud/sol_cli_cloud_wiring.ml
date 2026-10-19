@@ -566,11 +566,12 @@ let apply_deps
     terraform_layout ~cloud_target
   in
   let { var_files; vars } = inputs in
-  let plan_file = Filename.temp_file "sol-cloud-apply-" ".tfplan" in
-  let discard_plan () =
-    List.iter Sol_cli_fs.remove_reporting [ plan_file; plan_file ^ ".args" ]
+  let* private_plan =
+    Sol_cli_terraform.create_private_plan ()
+    |> Result.map_error (fun message -> Sol_cli_cloud_apply.Refused message)
   in
-  at_exit discard_plan;
+  let plan_file = Sol_cli_terraform.private_plan_path private_plan in
+  let discard_plan () = Sol_cli_terraform.discard_private_plan private_plan in
   let platform_apply ~name ~scope env platform_vars =
     terraform_failure
       (Sol_cli_run_log.run_phase run_log ~name (fun () ->

@@ -1,3 +1,12 @@
+(** Sensitive binary execution plans. Each allocation uses a private 0700
+    directory outside the workspace/cache and a precreated 0600 plan. Normal
+    callers must use [discard_private_plan] in their cleanup scope; process exit
+    is a backstop, not a promise of cleanup after a hard kill or host crash. *)
+type private_plan_file
+
+val create_private_plan : unit -> (private_plan_file, string) result
+val private_plan_path : private_plan_file -> string
+val discard_private_plan : private_plan_file -> unit
 val which_check : unit -> bool
 val operation_key : chdir:string -> backend_config:string list -> string
 

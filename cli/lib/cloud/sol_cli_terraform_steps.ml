@@ -1,3 +1,5 @@
+open Result.Syntax
+
 let terraform_outcome (r : (Sol_cli_process.output, Sol_cli_process.error) result)
   : (unit, string) result
   =
@@ -39,9 +41,10 @@ let terraform_stdout (r : (Sol_cli_process.output, Sol_cli_process.error) result
 let apply_asserted ~run_log ~phase_name ~policy ~scope ~chdir ~var_files ~vars ()
   : (unit, string) result
   =
-  let plan_file = Filename.temp_file "sol-destroy-" ".tfplan" in
+  let* private_plan = Sol_cli_terraform.create_private_plan () in
+  let plan_file = Sol_cli_terraform.private_plan_path private_plan in
   Fun.protect
-    ~finally:(fun () -> Sol_cli_fs.remove_if_present plan_file |> ignore)
+    ~finally:(fun () -> Sol_cli_terraform.discard_private_plan private_plan)
     (fun () ->
        match
          Sol_cli_terraform_plan.guarded_apply
