@@ -100,10 +100,9 @@ let rec resources_of_module json : (resource list, string) result =
 ;;
 
 let inventory_of_show_json json =
-  match Yojson.Safe.from_string json with
-  | exception Yojson.Json_error message ->
-    State_unreadable ("invalid `terraform show -json`: " ^ message)
-  | document ->
+  match Sol_cli_json.decode_sensitive ~what:"terraform show -json" json with
+  | Error message -> State_unreadable message
+  | Ok document ->
     (match Sol_cli_json.field [ "values" ] document with
      | `Null -> State_empty
      | `Assoc _ as values ->

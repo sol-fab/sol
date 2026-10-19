@@ -711,3 +711,13 @@ let%test "show_and_record (SEC-008): unreadable plan is an error" =
 let%test "show_and_record: an unavailable run log does not fail the read" =
   test_show_and_record_survives_a_failed_append ()
 ;;
+
+let%test "invalid Terraform plan diagnostics do not echo sensitive JSON fragments" =
+  match changes_of_plan_json "credentialCanaryDoNotDisclose is not JSON" with
+  | Ok _ -> Windtrap.fail "malformed plan accepted"
+  | Error message ->
+    Windtrap.equal
+      Windtrap.bool
+      false
+      (Sol_cli_string.contains ~needle:"credentialCanary" message)
+;;

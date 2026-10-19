@@ -90,21 +90,20 @@ let of_root provider ~target ~chdir =
     let cluster_of_outputs text = Result.map Option.some (build text) in
     (match Sol_cli_terraform.output_json ~chdir () with
      | Ok result ->
-       (match Yojson.Safe.from_string result.stdout with
-        | `Assoc _ ->
+       (match
+          Sol_cli_json.decode_sensitive ~what:(label ^ " Terraform outputs") result.stdout
+        with
+        | Ok (`Assoc _) ->
           (match state_holds_any ~chdir identifying_resources with
            | Error failure -> Error failure
            | Ok false -> Ok None
            | Ok true ->
              cluster_of_outputs result.stdout
              |> Result.map_error (fun message -> Outputs_unreadable message))
-        | _ ->
+        | Ok _ ->
           cluster_of_outputs result.stdout
           |> Result.map_error (fun message -> Outputs_unreadable message)
-        | exception Yojson.Json_error message ->
-          Error
-            (Outputs_unreadable
-               (Printf.sprintf "invalid %s Terraform output JSON: %s" label message)))
+        | Error message -> Error (Outputs_unreadable message))
      | Error (Sol_cli_process.Non_zero result) ->
        Error
          (Outputs_unreadable

@@ -42,7 +42,7 @@ let provisioner_kube_env path =
 let outputs_reader ~provider text =
   let open Result.Syntax in
   let* json =
-    Sol_cli_json.decode
+    Sol_cli_json.decode_sensitive
       ~what:(Printf.sprintf "invalid %s Terraform output JSON" provider)
       text
   in

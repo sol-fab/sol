@@ -7,6 +7,18 @@ let decode ~what text =
     Error (Printf.sprintf "%s: not JSON (%s)" what message)
 ;;
 
+(* Yojson's diagnostic quotes input bytes around a malformed token. State,
+   output and plan JSON can contain credentials, including on parse failure. *)
+let decode_sensitive ~what text =
+  match Yojson.Safe.from_string text with
+  | json -> Ok json
+  | exception Yojson.Json_error _ ->
+    Error
+      (Printf.sprintf
+         "%s: invalid JSON (input omitted because it may contain credentials)"
+         what)
+;;
+
 let rec field path (j : t) : t =
   match path, j with
   | [], j -> j
