@@ -1,6 +1,10 @@
 type t = Yojson.Safe.t
 
 val decode : what:string -> string -> (t, string) result
+
+(** Decode credential-bearing JSON without quoting input in parse diagnostics. *)
+val decode_sensitive : what:string -> string -> (t, string) result
+
 val field : string list -> t -> t
 val string : t -> string option
 val int : t -> int option

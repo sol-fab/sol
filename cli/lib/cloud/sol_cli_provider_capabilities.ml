@@ -600,16 +600,15 @@ let aws_authorization_assumption (reconciler : authorization_reconciler) =
       | Some _ -> Error (Printf.sprintf "sts:AssumeRole returned a non-string %s" key)
       | None -> Error (Printf.sprintf "sts:AssumeRole returned no %s" key)
     in
+    let* json = Sol_cli_json.decode_sensitive ~what:"sts:AssumeRole" output in
     let* credentials =
-      match Yojson.Safe.from_string output with
+      match json with
       | `Assoc fields ->
         (match List.assoc_opt "Credentials" fields with
          | Some (`Assoc credentials) -> Ok credentials
          | Some _ -> Error "sts:AssumeRole returned a non-object Credentials"
          | None -> Error "sts:AssumeRole returned no Credentials")
       | _ -> Error "sts:AssumeRole did not return a JSON object"
-      | exception Yojson.Json_error message ->
-        Error ("sts:AssumeRole returned invalid JSON: " ^ message)
     in
     let* access_key_id = field "AccessKeyId" credentials in
     let* secret_access_key = field "SecretAccessKey" credentials in

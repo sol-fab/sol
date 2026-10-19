@@ -552,3 +552,25 @@ let%test "authorization: GCP secret bindings retain state identity for provider 
          Windtrap.fail ("a surviving secret IAM binding must block absence: " ^ secret))
     [ "sol-prod-db-password"; "projects/acme-project/secrets/sol-prod-db-password" ]
 ;;
+
+let%test "authorization: malformed STS credentials do not escape through JSON diagnostics"
+  =
+  let canary = "STS_SECRET_CANARY_DO_NOT_DISCLOSE" in
+  let script =
+    Printf.sprintf
+      "#!/bin/sh\nprintf '%%s' %s\n"
+      (Filename.quote ("{\"Credentials\":{\"SecretAccessKey\":" ^ canary))
+  in
+  with_fake_command "aws" script (fun () ->
+    match
+      Sol_cli_provider_capabilities.aws.authorization_assumption
+        (Reconciler_role "arn:aws:iam::111122223333:role/sol-authorization")
+    with
+    | Error message ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"parser input is confidential"
+        false
+        (Sol_cli_string.contains ~needle:canary message)
+    | Ok _ -> Windtrap.fail "malformed STS credentials must fail")
+;;

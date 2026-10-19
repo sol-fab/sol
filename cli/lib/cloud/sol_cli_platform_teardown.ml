@@ -49,10 +49,9 @@ let unserved_of_show_json ~served text =
       | Some kind, Some address when not (List.mem kind served) -> Some (address, kind)
       | _ -> None)
   in
-  match Yojson.Safe.from_string text with
-  | exception Yojson.Json_error message ->
-    Error ("invalid `terraform show -json`: " ^ message)
-  | json ->
+  match Sol_cli_json.decode_sensitive ~what:"terraform show -json" text with
+  | Error message -> Error message
+  | Ok json ->
     Sol_cli_json.require
       ~what:"unexpected `terraform show -json` shape"
       [ "values"; "root_module"; "resources" ]

@@ -68,9 +68,9 @@ let changes_of_plan_json json : (change list, string) result =
         "a resource change in the plan has no address, type or mode, so it cannot be \
          asserted"
   in
-  match Yojson.Safe.from_string json with
-  | exception Yojson.Json_error message -> Error ("invalid plan JSON: " ^ message)
-  | document ->
+  match Sol_cli_json.decode_sensitive ~what:"Terraform plan" json with
+  | Error message -> Error message
+  | Ok document ->
     (match Sol_cli_json.field [ "resource_changes" ] document with
      | `List items -> Sol_cli_result.map_list change items
      | _ -> Error "the plan JSON carries no `resource_changes` array")

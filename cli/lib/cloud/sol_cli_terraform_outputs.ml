@@ -32,10 +32,10 @@ let shown (name, output) =
 ;;
 
 let displayable json =
-  match Yojson.Safe.from_string json with
-  | `Assoc outputs -> Ok (List.filter_map shown outputs)
-  | _ -> Error "terraform output -json is not an object of outputs"
-  | exception Yojson.Json_error msg -> Error msg
+  match Sol_cli_json.decode_sensitive ~what:"Terraform outputs" json with
+  | Ok (`Assoc outputs) -> Ok (List.filter_map shown outputs)
+  | Ok _ -> Error "terraform output -json is not an object of outputs"
+  | Error message -> Error message
 ;;
 
 let line (name, value) =
@@ -46,8 +46,8 @@ let line (name, value) =
 ;;
 
 let raw json ~name =
-  match Yojson.Safe.from_string json with
-  | `Assoc outputs ->
+  match Sol_cli_json.decode_sensitive ~what:"Terraform outputs" json with
+  | Ok (`Assoc outputs) ->
     (match List.assoc_opt name outputs with
      | None -> Ok None
      | Some (`Assoc fields) ->
@@ -55,26 +55,22 @@ let raw json ~name =
         | None | Some `Null -> Ok None
         | Some value -> Ok (Some (Yojson.Safe.pretty_to_string value)))
      | Some _ -> Error (Printf.sprintf "terraform output %S is not an output object" name))
-  | _ -> Error "terraform output -json is not an object of outputs"
-  | exception Yojson.Json_error msg -> Error msg
+  | Ok _ -> Error "terraform output -json is not an object of outputs"
+  | Error message -> Error message
 ;;
 
 let text json ~name =
-  match Yojson.Safe.from_string json with
-  | `Assoc outputs ->
+  match Sol_cli_json.decode_sensitive ~what:"Terraform outputs" json with
+  | Ok (`Assoc outputs) ->
     (match List.assoc_opt name outputs with
      | None -> Ok None
      | Some (`Assoc fields) ->
        (match List.assoc_opt "value" fields with
         | None | Some `Null -> Ok None
         | Some (`String value) -> Ok (Some value)
-        | Some other ->
-          Error
-            (Printf.sprintf
-               "terraform output %S is not text: %s"
-               name
-               (Yojson.Safe.pretty_to_string other)))
+        | Some _ ->
+          Error (Printf.sprintf "terraform output %S is not text (value omitted)" name))
      | Some _ -> Error (Printf.sprintf "terraform output %S is not an output object" name))
-  | _ -> Error "terraform output -json is not an object of outputs"
-  | exception Yojson.Json_error msg -> Error msg
+  | Ok _ -> Error "terraform output -json is not an object of outputs"
+  | Error message -> Error message
 ;;
