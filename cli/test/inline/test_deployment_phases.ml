@@ -289,6 +289,7 @@ let deploy_without_tag ~git_sha =
     ~registry:None
     ~confirm_group_change:false
     ~confirm_ecr_removal:false
+    ~accept_unresolved:false
     ~loki_push_url:None
     ~keep_releases:20
     ~await_delegation:None
@@ -315,6 +316,33 @@ let test_deploy_request_tags_with_resolved_sha () =
   match deploy_without_tag ~git_sha:(fun () -> Ok "abc1234") with
   | Error msg -> Windtrap.fail msg
   | Ok req -> Windtrap.equal Windtrap.string ~msg:"sha tag" "abc1234" req.image_tag
+;;
+
+let%test "request_validation: deploy carries the unresolved-state acknowledgment" =
+  match
+    Sol_cli_command_request.make_deploy_request
+      ~target:"prod/aws/us-east-1"
+      ~dry_run:false
+      ~emit_to:None
+      ~emit_plan_to:None
+      ~image_tag:(Some "sha-abc")
+      ~image_refs:[]
+      ~registry:None
+      ~confirm_group_change:false
+      ~confirm_ecr_removal:false
+      ~loki_push_url:None
+      ~keep_releases:1
+      ~await_delegation:None
+      ~accept_unresolved:true
+      ~git_sha:(fun () -> Windtrap.fail "an explicit tag must not call git")
+  with
+  | Error msg -> Windtrap.fail msg
+  | Ok req ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the request carries the acknowledgment"
+      true
+      req.accept_unresolved
 ;;
 
 let test_local_deploy_request_preserves_mode () =
@@ -351,6 +379,7 @@ let test_deploy_request_uses_explicit_tag () =
       ~registry:(Some "reg.example.com")
       ~confirm_group_change:false
       ~confirm_ecr_removal:false
+      ~accept_unresolved:false
       ~loki_push_url:None
       ~keep_releases:20
       ~await_delegation:None
@@ -373,6 +402,7 @@ let test_deploy_request_local_mode_builds_request () =
       ~registry:(Some "gcr.io/myproject")
       ~confirm_group_change:false
       ~confirm_ecr_removal:false
+      ~accept_unresolved:false
       ~loki_push_url:None
       ~keep_releases:20
       ~await_delegation:None
@@ -402,6 +432,7 @@ let test_deploy_request_gitops_action () =
       ~registry:(Some "reg")
       ~confirm_group_change:false
       ~confirm_ecr_removal:false
+      ~accept_unresolved:false
       ~loki_push_url:None
       ~keep_releases:20
       ~await_delegation:None
@@ -431,6 +462,7 @@ let test_deploy_request_dry_run_action_preserves_emit_to () =
       ~registry:(Some "reg")
       ~confirm_group_change:false
       ~confirm_ecr_removal:false
+      ~accept_unresolved:false
       ~loki_push_url:None
       ~keep_releases:20
       ~await_delegation:None
@@ -460,6 +492,7 @@ let test_deploy_request_rejects_empty_target () =
       ~registry:(Some "reg")
       ~confirm_group_change:false
       ~confirm_ecr_removal:false
+      ~accept_unresolved:false
       ~loki_push_url:None
       ~keep_releases:20
       ~await_delegation:None
@@ -480,6 +513,7 @@ let test_deploy_request_registry_omitted_stays_none () =
       ~registry:None
       ~confirm_group_change:false
       ~confirm_ecr_removal:false
+      ~accept_unresolved:false
       ~loki_push_url:None
       ~keep_releases:20
       ~await_delegation:None
@@ -508,6 +542,7 @@ let test_deploy_request_accepts_image_refs () =
       ~registry:(Some "reg")
       ~confirm_group_change:false
       ~confirm_ecr_removal:false
+      ~accept_unresolved:false
       ~loki_push_url:None
       ~keep_releases:20
       ~await_delegation:None
@@ -535,6 +570,7 @@ let test_deploy_request_rejects_mutable_image_ref () =
       ~registry:(Some "reg")
       ~confirm_group_change:false
       ~confirm_ecr_removal:false
+      ~accept_unresolved:false
       ~loki_push_url:None
       ~keep_releases:20
       ~await_delegation:None
@@ -1177,6 +1213,7 @@ let test_deploy_request_rejects_nonpositive_keep () =
       ~registry:(Some "reg")
       ~confirm_group_change:false
       ~confirm_ecr_removal:false
+      ~accept_unresolved:false
       ~loki_push_url:None
       ~keep_releases:0
       ~await_delegation:None

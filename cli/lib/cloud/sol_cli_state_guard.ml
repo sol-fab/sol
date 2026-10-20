@@ -38,19 +38,29 @@ let verdict ~constructive ~accept_unresolved status =
 ;;
 
 let check ~constructive ~accept_unresolved ~chdir ~backend_config =
-  match
-    verdict
-      ~constructive
-      ~accept_unresolved
-      (Sol_cli_terraform.previous_operation ~chdir ~backend_config)
-  with
-  | Proceed -> Ok ()
-  | Warn warning ->
-    Sol_cli_report.warn "%s" warning;
-    Ok ()
-  | Acknowledge warning ->
-    Sol_cli_terraform.acknowledge_previous_operation ~chdir ~backend_config;
-    Sol_cli_report.warn "%s" warning;
-    Ok ()
-  | Refuse message -> Error message
+  let errored = Filename.concat chdir "errored.tfstate" in
+  if constructive && Sys.file_exists errored
+  then
+    Error
+      (Printf.sprintf
+         "refusing to apply: Terraform could not persist state and left %s. Push it to \
+          the backend and remove it before retrying; --accept-unresolved acknowledges an \
+          operation record, it never pushes or discards state."
+         errored)
+  else (
+    match
+      verdict
+        ~constructive
+        ~accept_unresolved
+        (Sol_cli_terraform.previous_operation ~chdir ~backend_config)
+    with
+    | Proceed -> Ok ()
+    | Warn warning ->
+      Sol_cli_report.warn "%s" warning;
+      Ok ()
+    | Acknowledge warning ->
+      Sol_cli_terraform.acknowledge_previous_operation ~chdir ~backend_config;
+      Sol_cli_report.warn "%s" warning;
+      Ok ()
+    | Refuse message -> Error message)
 ;;
