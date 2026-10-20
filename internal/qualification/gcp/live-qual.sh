@@ -507,9 +507,23 @@ provider_authority_failure() {
 
 # A bare `404` is deliberately not a not-found token: it also appears in
 # endpoint and transport diagnostics that name nothing about the resource.
-provider_not_found() {
-  provider_authority_failure "$1" "$2" && return 1
-  grep -qiE '(NOT_FOUND|not[_. -]?found|does not exist|No URLs matched)' "$1" "$2"
+#
+# This is the single classifier for a failed *named* read, and it is the only place
+# that decides which answer a failure gives. Authority/availability outranks every
+# not-found token: gcloud reports a denied read as "denied on resource (or it may not
+# exist)", and a project that does not exist as NOT_FOUND while naming the project,
+# not the resource. `provider_authority_failure` answers the narrower question used by
+# enumeration (is this failure about authority at all); both read one rule.
+provider_failure_class() {
+  if provider_authority_failure "$1" "$2"; then
+    printf 'authority'
+    return 0
+  fi
+  if grep -qiE '(NOT_FOUND|not[_. -]?found|does not exist|No URLs matched)' "$1" "$2"; then
+    printf 'absent'
+    return 0
+  fi
+  printf 'unknown'
 }
 
 # `--parent CLASS:IDENTITY` declares that this resource lives inside another
@@ -532,29 +546,35 @@ provider_describe() {
     else
       verdict_row "$class" UNKNOWN "the named read succeeded but returned no value for $subject; a successful command with no field is not an absence"
     fi
-  elif provider_authority_failure "$err" "$out"; then
-    verdict_row "$class" UNKNOWN "the read failed on authority or availability, not on the resource: $(provider_detail "$err" "$out")"
-  elif provider_not_found "$err" "$out"; then
-    diagnostic="$(cat "$err" "$out" 2>/dev/null)"
-    if [ -n "$parent_identity" ] \
-      && [ -n "$(inventory_text_mentions "$parent_identity" "$diagnostic")" ] \
-      && [ -z "$(inventory_text_mentions "$subject" "$diagnostic")" ]; then
-      case "$(inventory_state "$parent_class")" in
-        ABSENT)
-          verdict_row "$class" ABSENT "the provider named the parent ($parent_class $parent_identity), which is independently absent, so $subject cannot exist"
-          ;;
-        PRESENT)
-          verdict_row "$class" UNKNOWN "the provider named the parent ($parent_class $parent_identity) while the parent is present, so which resource is missing is ambiguous: $(provider_detail "$err" "$out")"
-          ;;
-        *)
-          verdict_row "$class" UNKNOWN "the provider named the parent ($parent_class $parent_identity) and the parent's own state is not established: $(provider_detail "$err" "$out")"
-          ;;
-      esac
-    else
-      verdict_row "$class" ABSENT "the provider answered that $subject does not exist: $(provider_detail "$err" "$out")"
-    fi
   else
-    verdict_row "$class" UNKNOWN "the read failed without establishing that $subject is absent: $(provider_detail "$err" "$out")"
+    case "$(provider_failure_class "$err" "$out")" in
+      authority)
+        verdict_row "$class" UNKNOWN "the read failed on authority or availability, not on the resource: $(provider_detail "$err" "$out")"
+        ;;
+      absent)
+        diagnostic="$(cat "$err" "$out" 2>/dev/null)"
+        if [ -n "$parent_identity" ] \
+          && [ -n "$(inventory_text_mentions "$parent_identity" "$diagnostic")" ] \
+          && [ -z "$(inventory_text_mentions "$subject" "$diagnostic")" ]; then
+          case "$(inventory_state "$parent_class")" in
+            ABSENT)
+              verdict_row "$class" ABSENT "the provider named the parent ($parent_class $parent_identity), which is independently absent, so $subject cannot exist"
+              ;;
+            PRESENT)
+              verdict_row "$class" UNKNOWN "the provider named the parent ($parent_class $parent_identity) while the parent is present, so which resource is missing is ambiguous: $(provider_detail "$err" "$out")"
+              ;;
+            *)
+              verdict_row "$class" UNKNOWN "the provider named the parent ($parent_class $parent_identity) and the parent's own state is not established: $(provider_detail "$err" "$out")"
+              ;;
+          esac
+        else
+          verdict_row "$class" ABSENT "the provider answered that $subject does not exist: $(provider_detail "$err" "$out")"
+        fi
+        ;;
+      *)
+        verdict_row "$class" UNKNOWN "the read failed without establishing that $subject is absent: $(provider_detail "$err" "$out")"
+        ;;
+    esac
   fi
 }
 
@@ -845,12 +865,18 @@ probe_custom_role() {
       true)  verdict_row "$class" ABSENT "provider-deleted (kept in GCP's undelete window): $line" ;;
       *)     verdict_row "$class" PRESENT "an active custom role of this name exists: $line" ;;
     esac
-  elif provider_authority_failure "$err" "$out"; then
-    verdict_row "$class" UNKNOWN "the role read failed on authority or availability: $(provider_detail "$err" "$out")"
-  elif provider_not_found "$err" "$out"; then
-    verdict_row "$class" ABSENT "the provider answered that $role_id does not exist: $(provider_detail "$err" "$out")"
   else
-    verdict_row "$class" UNKNOWN "the role read failed without establishing that $role_id is absent: $(provider_detail "$err" "$out")"
+    case "$(provider_failure_class "$err" "$out")" in
+      authority)
+        verdict_row "$class" UNKNOWN "the role read failed on authority or availability: $(provider_detail "$err" "$out")"
+        ;;
+      absent)
+        verdict_row "$class" ABSENT "the provider answered that $role_id does not exist: $(provider_detail "$err" "$out")"
+        ;;
+      *)
+        verdict_row "$class" UNKNOWN "the role read failed without establishing that $role_id is absent: $(provider_detail "$err" "$out")"
+        ;;
+    esac
   fi
 }
 
@@ -1254,8 +1280,96 @@ capture_pre_teardown_inventory() {
   say "  pre-teardown inventory: $INVENTORY_TSV"
 }
 
+# The Kubernetes destination teardown runs against, selected explicitly instead of
+# inherited from whatever kubeconfig survived in the evidence directory.
+#
+# `sol destroy` releases the target's workloads before it drops the substrate, and that
+# release runs in whatever cluster `KUBECONFIG` names. A teardown is a separate invocation
+# from the run that provisioned the target, so the file it finds may name a cluster of the
+# same name that has since been replaced -- a destroy that trusts it releases the workloads
+# against the wrong cluster and records the result as this target's (#1443).
+#
+# This decides what it can, and records which of the three it was:
+#
+#   attempted   the declared cluster is readable and the attempt's kubeconfig addresses
+#               its current endpoint, so the release runs against this target's cluster;
+#   skipped     the provider positively answers that the cluster does not exist, so there
+#               is nothing to release from, and no context another cluster could answer is
+#               handed to Sol;
+#   blocked     the cluster could not be read, or could not be reached with a credential
+#               that addresses it -- UNKNOWN, never recorded as a skipped release.
+#
+# Every branch still runs the destroy and the independent inventory: the release is a
+# precondition of destruction, not the absence verdict, which stays the inventory's.
+destroy_kube_destination() {
+  local record="$LOG_DIR/destroy-kubeconfig.txt"
+  local out="$LOG_DIR/destroy-cluster-describe.out"
+  local err="$LOG_DIR/destroy-cluster-describe.err"
+  local endpoint
+  : >"$record"
+  if ! gcloud container clusters describe "$CLUSTER" --region "$REGION" --project "$PROJECT" \
+      --format='value(endpoint)' >"$out" 2>"$err"; then
+    if [ "$(provider_failure_class "$err" "$out")" = "absent" ]; then
+      # No cluster by this name. Give Sol a config that resolves no context at all, so
+      # neither a stale file in this attempt's directory nor the caller's environment can
+      # aim the release at a different, live cluster; Sol then reports the release as not
+      # applicable.
+      : >"$LOG_DIR/kubeconfig-none.yaml"
+      export KUBECONFIG="$LOG_DIR/kubeconfig-none.yaml"
+      printf 'destroy_cluster: ABSENT (the provider answered that %s does not exist)\n' "$CLUSTER" >>"$record"
+      printf 'destroy_kubeconfig: %s (empty: no context resolves)\n' "$KUBECONFIG" >>"$record"
+      printf 'destroy_release_cleanup: skipped (the cluster is genuinely absent, so there is nothing to release from)\n' >>"$record"
+      say "teardown: the cluster $CLUSTER is absent, so the workload release is skipped -- nothing to release from"
+      return 0
+    fi
+    : >"$LOG_DIR/kubeconfig-none.yaml"
+    export KUBECONFIG="$LOG_DIR/kubeconfig-none.yaml"
+    printf 'destroy_cluster: UNKNOWN (the describe did not establish whether %s exists; see %s)\n' "$CLUSTER" "$err" >>"$record"
+    printf 'destroy_release_cleanup: blocked (the cluster could not be read) -- UNKNOWN, not skipped\n' >>"$record"
+    say "teardown: could not read whether $CLUSTER exists, so whether the workloads were released is UNKNOWN"
+    say "  the destroy still runs and the independent inventory still decides absence"
+    return 0
+  fi
+  endpoint="$(tr -d '\r' <"$out" | head -n1)"
+  if [ -z "$endpoint" ]; then
+    : >"$LOG_DIR/kubeconfig-none.yaml"
+    export KUBECONFIG="$LOG_DIR/kubeconfig-none.yaml"
+    printf 'destroy_cluster: PRESENT (its endpoint could not be read)\n' >>"$record"
+    printf 'destroy_release_cleanup: blocked (no endpoint to verify a credential against) -- UNKNOWN, not skipped\n' >>"$record"
+    say "teardown: $CLUSTER exists but its endpoint could not be read, so whether the workloads were released is UNKNOWN"
+    return 0
+  fi
+  # The cluster exists. Rebuild the attempt's own kubeconfig when this session does not
+  # have one, or has one that addresses a replaced cluster of the same name.
+  if [ ! -f "$RUN_KUBECONFIG" ] || ! kubeconfig_has_cluster "$RUN_KUBECONFIG" "$CLUSTER" "$endpoint"; then
+    if ! KUBECONFIG="$RUN_KUBECONFIG" gcloud container clusters get-credentials "$CLUSTER" \
+        --region "$REGION" --project "$PROJECT" >"$LOG_DIR/destroy-kubeconfig-refresh.log" 2>&1 \
+      || ! kubeconfig_has_cluster "$RUN_KUBECONFIG" "$CLUSTER" "$endpoint"; then
+      : >"$LOG_DIR/kubeconfig-none.yaml"
+      export KUBECONFIG="$LOG_DIR/kubeconfig-none.yaml"
+      printf 'destroy_cluster: PRESENT\n' >>"$record"
+      printf 'destroy_kubeconfig: %s (could not be established; see destroy-kubeconfig-refresh.log)\n' "$RUN_KUBECONFIG" >>"$record"
+      printf 'destroy_release_cleanup: blocked (the cluster exists but no credential available here addresses it) -- UNKNOWN, not skipped\n' >>"$record"
+      say "teardown: could not establish a kubeconfig that addresses $CLUSTER, so whether the workloads were released is UNKNOWN"
+      return 0
+    fi
+  fi
+  export KUBECONFIG="$RUN_KUBECONFIG"
+  printf 'destroy_cluster: PRESENT\n' >>"$record"
+  printf 'destroy_kubeconfig: %s (verified against the cluster current endpoint)\n' "$RUN_KUBECONFIG" >>"$record"
+  if timeout 60 kubectl --kubeconfig "$RUN_KUBECONFIG" auth can-i get namespaces >/dev/null 2>&1; then
+    printf 'destroy_release_cleanup: attempted (Kubernetes answered at the cluster endpoint, so Sol releases the workloads before the substrate)\n' >>"$record"
+    say "teardown: releasing the workloads through this attempt's kubeconfig $RUN_KUBECONFIG"
+  else
+    printf 'destroy_release_cleanup: blocked (the cluster exists and the kubeconfig addresses it, but Kubernetes did not answer) -- UNKNOWN, not skipped\n' >>"$record"
+    say "teardown: Kubernetes did not answer through this attempt's kubeconfig, so whether the workloads were released is UNKNOWN"
+  fi
+  return 0
+}
+
 destroy() {
   TEARDOWN_ATTEMPTED=1
+  destroy_kube_destination
   local vars
   mapfile -t vars < <(destroy_vars)
   say "teardown: sol destroy $TARGET"

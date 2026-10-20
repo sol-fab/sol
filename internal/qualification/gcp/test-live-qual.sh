@@ -143,7 +143,7 @@ if [ "${1:-}" = "--version" ]; then
   printf '%s\n' "${STUB_SOL_VERSION:-v0.1.0-alpha.7}"
   exit 0
 fi
-printf 'sol %s [runner=%s] [setup=%s]\n' "$*" "${SOL_MIGRATION_RUNNER_IMAGE:-unset}" "${SOL_SETUP_POSTGRES_IMAGE:-unset}" >>"$ARGV_LOG"
+printf 'sol %s [runner=%s] [setup=%s] [kubeconfig=%s]\n' "$*" "${SOL_MIGRATION_RUNNER_IMAGE:-unset}" "${SOL_SETUP_POSTGRES_IMAGE:-unset}" "${KUBECONFIG:-none}" >>"$ARGV_LOG"
 if [ -n "${STUB_SOL_SLEEP:-}" ]; then sleep "$STUB_SOL_SLEEP"; fi
 case "$1" in
   deploy)
@@ -262,9 +262,29 @@ STUB
 
 cat >"$TMP/bin/gcloud" <<'STUB'
 #!/usr/bin/env bash
+printf 'gcloud %s\n' "$*" >>"$ARGV_LOG"
 case "${1:-} ${2:-}" in
   "auth configure-docker") exit 0 ;;
 esac
+# A teardown destination probe runs *before* the cluster is destroyed, so it must be
+# able to observe a live cluster in a fixture whose post-teardown inventory observes
+# it absent. This flag answers only the two calls the destination selection makes.
+if [ -n "${STUB_DESTROY_CLUSTER_ENDPOINT:-}" ]; then
+  case "$*" in
+    *"container clusters describe"*"value(endpoint)"*)
+      printf '%s\n' "$STUB_DESTROY_CLUSTER_ENDPOINT"; exit 0 ;;
+    *"container clusters get-credentials"*)
+      if [ -n "${STUB_GET_CREDENTIALS_RC:-}" ]; then
+        printf 'ERROR: (gcloud.container.clusters.get-credentials) ResponseError: code=403\n' >&2
+        exit "$STUB_GET_CREDENTIALS_RC"
+      fi
+      kc="${KUBECONFIG:-$HOME/.kube/config}"
+      sed "s/sol-qual-gcp-15g/$CLUSTER/g" "$STUB_KUBECONFIG_FIXTURE" >"$kc" 2>/dev/null || true
+      sed -i "s#https://34.0.0.1#https://${STUB_DESTROY_CLUSTER_ENDPOINT}#" "$kc" 2>/dev/null || true
+      printf 'kubeconfig entry generated for %s.\n' "$CLUSTER"
+      exit 0 ;;
+  esac
+fi
 if [ "${STUB_DESCRIBE_EMPTY:-0}" = "1" ]; then
   case "$*" in
     *"container clusters describe"*) exit 0 ;;
@@ -1824,6 +1844,72 @@ has "the teardown target declares a non-deliverable contact" \
   "letsencrypt_email: teardown@invalid" "$TMP/destroy-no-le-email.target"
 has "and teardown runs against that target" \
   "sol destroy qual/gcp/us-central1" "$TMP/destroy-no-le-email.argv"
+
+# A target that failed before its first application deploy is torn down later, in a
+# fresh invocation, from whatever kubeconfig survived in the evidence directory. If
+# that file names a cluster of the same name that has since been replaced, a teardown
+# that trusts it releases the workloads against the wrong cluster and records the
+# result as this target's (#1443).
+printf '\nscenario: teardown never releases through a replaced cluster (#1443)\n'
+PRESEED_STALE_KUBECONFIG=1 run_case destroy-replaced destroy \
+  STUB_DESTROY_CLUSTER_ENDPOINT=10.9.9.9
+is "exit 0" "$(cat "$TMP/destroy-replaced.rc")" "0"
+has "the attempt's kubeconfig is re-established at the cluster's current endpoint" \
+  "container clusters get-credentials" "$TMP/destroy-replaced.argv"
+has "the rebuilt credential names the current endpoint" \
+  "https://10.9.9.9" "$TMP/destroy-replaced.logs/run-kubeconfig.yaml"
+has "the destination records the cluster present" \
+  "destroy_cluster: PRESENT" "$TMP/destroy-replaced.logs/destroy-kubeconfig.txt"
+has "and the kubeconfig verified against its current endpoint" \
+  "verified against the cluster current endpoint" \
+  "$TMP/destroy-replaced.logs/destroy-kubeconfig.txt"
+has "so the release is recorded as attempted" \
+  "destroy_release_cleanup: attempted" "$TMP/destroy-replaced.logs/destroy-kubeconfig.txt"
+has "and Sol releases through this attempt's own kubeconfig" \
+  "[kubeconfig=$TMP/destroy-replaced.logs/run-kubeconfig.yaml]" \
+  "$TMP/destroy-replaced.argv"
+
+printf '\nscenario: a replaced cluster that cannot be re-addressed blocks the release (#1443)\n'
+PRESEED_STALE_KUBECONFIG=1 run_case destroy-replaced-blocked destroy \
+  STUB_DESTROY_CLUSTER_ENDPOINT=10.9.9.9 STUB_GET_CREDENTIALS_RC=1
+has "the destination records the cluster present" \
+  "destroy_cluster: PRESENT" "$TMP/destroy-replaced-blocked.logs/destroy-kubeconfig.txt"
+has "but the release is blocked, not skipped" \
+  "destroy_release_cleanup: blocked" \
+  "$TMP/destroy-replaced-blocked.logs/destroy-kubeconfig.txt"
+lacks "and never recorded as a skipped release" \
+  "destroy_release_cleanup: skipped" \
+  "$TMP/destroy-replaced-blocked.logs/destroy-kubeconfig.txt"
+has "so Sol is handed a config in which no context resolves" \
+  "[kubeconfig=$TMP/destroy-replaced-blocked.logs/kubeconfig-none.yaml]" \
+  "$TMP/destroy-replaced-blocked.argv"
+lacks "never the stale credential" \
+  "[kubeconfig=$TMP/destroy-replaced-blocked.logs/run-kubeconfig.yaml]" \
+  "$TMP/destroy-replaced-blocked.argv"
+has "and the destroy still runs, with the inventory deciding absence" \
+  "sol destroy" "$TMP/destroy-replaced-blocked.argv"
+
+printf '\nscenario: an absent cluster hands Sol no context at all (#1443)\n'
+run_case destroy-absent destroy STUB_PROBE_MODE=notfound
+has "the destination records the cluster positively absent" \
+  "destroy_cluster: ABSENT" "$TMP/destroy-absent.logs/destroy-kubeconfig.txt"
+has "and the release skipped, not blocked" \
+  "destroy_release_cleanup: skipped" "$TMP/destroy-absent.logs/destroy-kubeconfig.txt"
+has "so Sol is handed a config in which no context resolves" \
+  "[kubeconfig=$TMP/destroy-absent.logs/kubeconfig-none.yaml]" "$TMP/destroy-absent.argv"
+lacks "never a stale kubeconfig this attempt still holds" \
+  "[kubeconfig=$TMP/destroy-absent.logs/run-kubeconfig.yaml]" "$TMP/destroy-absent.argv"
+has "and the destroy still runs" "sol destroy" "$TMP/destroy-absent.argv"
+
+printf '\nscenario: a cluster that cannot be read is UNKNOWN, never a skipped release (#1443)\n'
+run_case destroy-unreadable destroy STUB_PROBE_MODE=transport
+has "the destination records the cluster read UNKNOWN" \
+  "destroy_cluster: UNKNOWN" "$TMP/destroy-unreadable.logs/destroy-kubeconfig.txt"
+has "and the release blocked, not skipped" \
+  "destroy_release_cleanup: blocked" "$TMP/destroy-unreadable.logs/destroy-kubeconfig.txt"
+lacks "never recorded as a skipped release" \
+  "destroy_release_cleanup: skipped" "$TMP/destroy-unreadable.logs/destroy-kubeconfig.txt"
+has "and the destroy still runs" "sol destroy" "$TMP/destroy-unreadable.argv"
 
 printf '\nscenario: no phase given\n'
 run_case_without_a_phase
