@@ -240,33 +240,45 @@ json.dump({"revision":bound["candidate"]["revision"],
 
 # The expected Kubernetes authority the CA observations must match. Recorded from
 # the read-only qualifier transport, never from the product's own report.
-record_ca_authority() {
-  local principal cluster endpoint err kubeconfig context
-  err="$LOG_DIR/ca-authority.err"
-  # `transport` records from the qualifier; the app phase overrides CA_* when a
-  # TRANSPORT=0 run observes through the deploy identity.
-  kubeconfig="${CA_KUBECONFIG:-$QUALIFIER_KUBECONFIG}"
-  context="${CA_CONTEXT:-$CLUSTER-qualifier}"
+record_authority_for() {
+  local output="$1" err="$2" role="$3" kubeconfig="$4" context="$5"
+  local principal cluster endpoint
   if ! principal="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
       auth whoami -o jsonpath='{.status.userInfo.username}' 2>"$err")"; then
-    say "could not read the observation principal; provider diagnostics are not copied into this log"
+    say "could not read the $role principal; provider diagnostics are not copied into this log"
     return 1
   fi
   if ! cluster="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
       get namespace kube-system -o jsonpath='{.metadata.uid}' 2>>"$err")"; then
-    say "could not read the observation cluster identity; provider diagnostics are not copied into this log"
+    say "could not read the $role cluster identity; provider diagnostics are not copied into this log"
     return 1
   fi
   if ! endpoint="$(kubectl --kubeconfig "$kubeconfig" --context "$context" \
       config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>>"$err")"; then
-    say "could not read the observation endpoint; provider diagnostics are not copied into this log"
+    say "could not read the $role endpoint; provider diagnostics are not copied into this log"
     return 1
   fi
-  python3 - "$LOG_DIR/ca-authority.json" "$principal" "$cluster" "$endpoint" <<'PY'
+  python3 - "$output" "$principal" "$cluster" "$endpoint" <<'PY'
 import json, sys
 json.dump({"principal": sys.argv[2], "cluster": sys.argv[3], "endpoint": sys.argv[4]},
           open(sys.argv[1], "w"))
 PY
+}
+
+record_ca_authority() {
+  # `transport` records from the qualifier; the app phase overrides CA_* when a
+  # TRANSPORT=0 run observes through the deploy identity.
+  record_authority_for "$LOG_DIR/ca-authority.json" "$LOG_DIR/ca-authority.err" observation \
+    "${CA_KUBECONFIG:-$QUALIFIER_KUBECONFIG}" "${CA_CONTEXT:-$CLUSTER-qualifier}"
+}
+
+# The migration Job is submitted by the product as the deploy identity; the CA
+# observation uses the read-only qualifier. The receipt must agree with the
+# authority that submitted it, which is not the observation authority.
+record_ca_submission_authority() {
+  record_authority_for "$LOG_DIR/ca-submission-authority.json" \
+    "$LOG_DIR/ca-submission-authority.err" submission \
+    "$DEPLOY_KUBECONFIG" "$CLUSTER-deploy"
 }
 
 # Build the driver request for one phase from inputs the row recorded earlier.
@@ -275,10 +287,10 @@ ca_request() {
   local phase="$1" capture="${2:-}" report="${3:-}" binding="${4:-}"
   python3 - "$ROOT" "$SOL_CANDIDATE" "$SOL_INSTALL" "$WORKSPACE" "$LOG_DIR" \
     "$CA_KUBECONFIG" "$CA_CONTEXT" "$ATTEMPT" "$phase" "$capture" "$report" "$binding" \
-    "$QUALIFIER_KUBECONFIG" <<'PY'
+    "$QUALIFIER_KUBECONFIG" "$LOG_DIR/ca-submission-authority.json" <<'PY'
 import json, os, sys
 (root, candidate, install, workspace, log, kubeconfig, context, attempt,
- phase, capture, report, binding, qualifier_kubeconfig) = sys.argv[1:14]
+ phase, capture, report, binding, qualifier_kubeconfig, submission_authority) = sys.argv[1:15]
 request = {
     "repository": root,
     "candidate": candidate,
@@ -300,6 +312,8 @@ request = {
     "migration_capture": os.path.join(log, "ca-migration-capture.json"),
     "application_capture": os.path.join(log, "ca-application-capture.json"),
 }
+if os.path.exists(submission_authority):
+    request["submission_authority"] = json.load(open(submission_authority))
 json.dump(request, open(os.path.join(log, "ca-request-" + phase + ".json"), "w"))
 PY
 }
@@ -749,10 +763,19 @@ phase_transport() {
   ensure_contexts || return 1
   say "transport-separation-pre"
   probe_production_separation pre || return 1
+  # The CA family observes the migration Job where the deploy declared it. That
+  # namespace is platform-provided (it may be the database's own namespace), so it
+  # is read from the deploy's `sol-database-identity:` line rather than derived.
+  local -a observe_namespaces=("$APP_NS" "$WORKER_NS")
+  local database_ns
+  database_ns="$(app_database_field namespace)"
+  if [ -n "$database_ns" ]; then
+    observe_namespaces+=("$database_ns")
+  fi
   say "transport-establish"
   if ! KUBECONFIG="$QUALIFIER_KUBECONFIG" timeout "$PHASE_TIMEOUT" \
       "$ROOT/internal/qualification/transport/establish.sh" \
-      "$CLUSTER" "$QUALIFIER_ROLE" "$AWS_REGION" "$APP_NS" "$WORKER_NS" \
+      "$CLUSTER" "$QUALIFIER_ROLE" "$AWS_REGION" "${observe_namespaces[@]}" \
       >"$LOG_DIR/transport-establish.log" 2>&1; then
     say "FAILED: transport-establish (last 40 lines; full log $LOG_DIR/transport-establish.log)"
     tail -n 40 "$LOG_DIR/transport-establish.log"
@@ -1088,7 +1111,17 @@ app_namespaces() {
 # field names are the interface; the deploy's line is a stable, documented output, and the
 # product test `database identity report is the interface the rows read` fails if they drift.
 app_database_declaration() {
-  grep -h 'sol-database-identity:' "$LOG_DIR"/app-deploy.log 2>/dev/null | tail -1
+  local log
+  # The app phase reads the final deploy's declaration; the transport, established
+  # after the first deploy, reads the gate deploy's. Prefer the final deploy when
+  # both exist, and never reproduce the namespace naming rule here.
+  for log in "$LOG_DIR"/app-deploy.log "$LOG_DIR"/app-deploy-gate.log; do
+    [ -f "$log" ] || continue
+    if grep -q 'sol-database-identity:' "$log"; then
+      grep -h 'sol-database-identity:' "$log" | tail -1
+      return 0
+    fi
+  done
 }
 
 app_database_field() {
@@ -1109,9 +1142,12 @@ app_verify_kafka_delivery() {
     esac
   done
   public="$(jq -ce '.outputs.kafka_authority.value | select(type == "object")' "$state")" || return 1
+  # Read the consumers through the same namespace-scoped observation transport as the
+  # CA. The cluster-access identity deliberately has no read in application namespaces;
+  # observing as it would report the delivery as unreadable, not as delivered.
   printf '%s' "$public" | python3 "$ROOT/internal/qualification/kafka-delivery.py" \
     --provider aws --cluster "$CLUSTER" --region "$AWS_REGION" --account "$ACCOUNT" \
-    --kubeconfig "$ACCESS_KUBECONFIG" \
+    --kubeconfig "$CA_KUBECONFIG" \
     "${consumers[@]}" \
     $(app_namespaces) >"$LOG_DIR/kafka-delivery.json"
 }
@@ -1165,6 +1201,7 @@ phase_app() {
   require_target_terraform_var_file || return 1
   ensure_contexts || return 1
   verify_identity_boundary || return 1
+  record_ca_submission_authority || return 1
   app_require_published_images || return 1
   say "runner: release $SOL_BUNDLE_VERSION names $SOL_RUNNER_IMAGE; the publisher publishes nothing"
   capture_state
@@ -1216,9 +1253,11 @@ phase_app() {
   # them until Sol's first deploy has created the declared application namespaces.
   # Establish it after that deploy (which moves no workload) and before the
   # migration step, so the CA family's migration observation has an independent
-  # read authority. With TRANSPORT=0 the same observations use the deploy
-  # identity, never the product's own report.
-  if [ "$TRANSPORT" = 1 ] && [ ! -f "$QUALIFIER_KUBECONFIG" ]; then
+  # read authority. Establish it on every app run: a kubeconfig left by an earlier
+  # attempt does not show that the current observation set (including the declared
+  # database namespace) is bound. With TRANSPORT=0 the same observations use the
+  # deploy identity, never the product's own report.
+  if [ "$TRANSPORT" = 1 ]; then
     phase_transport || return 1
   fi
   if [ "$TRANSPORT" = 1 ]; then
