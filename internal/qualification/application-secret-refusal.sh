@@ -20,7 +20,11 @@ json.dump({"probe":{"targets":{"byo/qualification":{
         "payments/secret_probe_fn":{"SOL_API_KEY":{"authority":"sol"}}}}}}},sys.stdout)
 PY
 rc=0
-(cd "$specimen" && "$sol" deploy probe/byo/qualification --registry "${image%/*}" --image-tag secret-refusal --image-ref "secret_probe_fn=$image") >"$evidence" 2>&1 || rc=$?
+# The probe is a separate workspace on a cluster that already carries the target's
+# consumer groups. Its own plan has no consumers, so the group check sees an expected
+# removal before the secret precondition; the probe moves no workload, so acknowledge
+# that change to reach the refusal this specimen exists to establish.
+(cd "$specimen" && "$sol" deploy probe/byo/qualification --confirm-group-change --registry "${image%/*}" --image-tag secret-refusal --image-ref "secret_probe_fn=$image") >"$evidence" 2>&1 || rc=$?
 if [ "$rc" = 0 ] || ! grep -Fq 'does not hold the required non-empty secret key(s): SOL_API_KEY' "$evidence"; then
   printf 'application-secret specimen did not establish the required missing-secret refusal (exit %s)\n' "$rc" >&2
   exit 1
