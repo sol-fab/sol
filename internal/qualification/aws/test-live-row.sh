@@ -977,7 +977,8 @@ seed_independent_capture() {
   # Standalone observations/destruction represent an existing attempt with captured identities.
   if { [ "$phase" = verify ] || [ "$phase" = destroy ]; } && [ "${STUB_NO_CAPTURE:-0}" != 1 ]; then
     mkdir -p "$LOG_DIR"
-    printf 'attempt=%s\nrow=qualreg\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
+    [ -e "$LOG_DIR/attempt.txt" ] ||
+      printf 'attempt=%s\nrow=qualreg\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
     python3 - "$LOG_DIR/aws-pre-teardown-identities.json" "$INSTALL/candidate.json" "$ATTEMPT" <<'PYTHON'
 import json, sys
 candidate = json.load(open(sys.argv[2]))
@@ -1950,6 +1951,28 @@ has "carries the published images" "checkout_svc=" "$TMP/resumed.logs/app-image-
 present "$TMP/resumed.logs/database-contract-pins.json" "carries the contract pins"
 not_exists "never carries the spent CA evidence" "$TMP/resumed.logs/ca-evidence"
 has "and says it is diagnostic" "diagnostic only, not promotion-eligible" "$TMP/resumed.out"
+
+printf '\nscenario: promotion eligibility needs every required phase in one attempt\n'
+run_phase ledger-missing verify
+has "a verify without a phase ledger is not promotable" \
+  "promotion_eligible=no" "$TMP/ledger-missing.logs/promotion-eligibility.txt"
+has "and says the required phases are incomplete" \
+  "required_phases_ok=no" "$TMP/ledger-missing.logs/promotion-eligibility.txt"
+mkdir -p "$TMP/ledger-ok.logs"
+printf 'phase=prepare exit=0 at=x\nphase=cloud exit=0 at=x\nphase=app exit=0 at=x\nphase=destroy exit=0 at=x\n' \
+  >"$TMP/ledger-ok.logs/phase-verdicts.txt"
+KEEP_LOG_DIR=1 run_phase ledger-ok verify
+has "a complete continuous sequence is promotable" \
+  "promotion_eligible=yes" "$TMP/ledger-ok.logs/promotion-eligibility.txt"
+has "and records the continuity" \
+  "attempt_continuity=continuous" "$TMP/ledger-ok.logs/promotion-eligibility.txt"
+printf 'phase=prepare exit=0 at=x\nphase=cloud exit=0 at=x\nphase=app exit=0 at=x\nphase=destroy exit=0 at=x\n' \
+  >>"$TMP/resumed.logs/phase-verdicts.txt"
+KEEP_LOG_DIR=1 run_phase resumed verify
+has "a resumed attempt is never promotable even with a complete ledger" \
+  "promotion_eligible=no" "$TMP/resumed.logs/promotion-eligibility.txt"
+has "and records the resumed continuity" \
+  "attempt_continuity=resumed" "$TMP/resumed.logs/promotion-eligibility.txt"
 
 printf '\nscenario: resume refuses a different specimen\n'
 mkdir -p "$TMP/resume-foreign"

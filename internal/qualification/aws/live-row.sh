@@ -88,6 +88,31 @@ refuse() {
 CLOUD_APPLIED=0
 TEARDOWN_ATTEMPTED=0
 TERMINATION_SIGNAL=""
+PHASE="${1:-}"
+
+# One attempt, one required sequence. The ledger lets `verify` decide promotion
+# eligibility from the phases that actually ran in this attempt, instead of from
+# the attempt's name alone: a failed app followed by a clean destroy is not a
+# qualified sequence.
+record_phase_verdict() {
+  local status="${1:-$?}"
+  case "${PHASE:-}" in
+    prepare | cloud | transport | app | destroy | resume | verify | inventory) ;;
+    *) return "$status" ;;
+  esac
+  [ -n "${LOG_DIR:-}" ] || return "$status"
+  mkdir -p "$LOG_DIR" 2>/dev/null || return "$status"
+  printf 'phase=%s exit=%s at=%s\n' "$PHASE" "$status" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$LOG_DIR/phase-verdicts.txt" 2>/dev/null || true
+  return "$status"
+}
+
+on_exit() {
+  local status=$?
+  record_phase_verdict "$status"
+  cleanup
+  return "$status"
+}
 
 cleanup() {
   local rc=$?
@@ -108,7 +133,7 @@ on_terminate() {
   exit 1
 }
 
-trap cleanup EXIT
+trap on_exit EXIT
 trap 'on_terminate TERM' TERM
 trap 'on_terminate INT' INT
 
@@ -1574,13 +1599,28 @@ case "${1:-}" in
   destroy) phase_destroy ;;
   resume) phase_resume ;;
   verify | inventory)
+    phases_ok=yes
+    for ledger_phase in prepare cloud app destroy; do
+      grep -q "^phase=$ledger_phase exit=0 " "$LOG_DIR/phase-verdicts.txt" 2>/dev/null ||
+        phases_ok=no
+    done
     {
-      if attempt_promotion_eligible; then
+      if attempt_promotion_eligible && [ "$phases_ok" = yes ]; then
         printf 'promotion_eligible=yes\n'
       else
         printf 'promotion_eligible=no\n'
-        printf 'resumed_from=%s\n' "$(attempt_field resumed_from || true)"
-        say "resumed attempt: this evidence is diagnostic, not promotion-eligible"
+        if attempt_promotion_eligible; then
+          say "the attempt is continuous but its required phases are incomplete; not promotion-eligible"
+        else
+          printf 'resumed_from=%s\n' "$(attempt_field resumed_from || true)"
+          say "resumed attempt: this evidence is diagnostic, not promotion-eligible"
+        fi
+      fi
+      printf 'required_phases_ok=%s\n' "$phases_ok"
+      if attempt_promotion_eligible; then
+        printf 'attempt_continuity=continuous\n'
+      else
+        printf 'attempt_continuity=resumed\n'
       fi
       printf 'attempt=%s\n' "$ATTEMPT"
     } >"$LOG_DIR/promotion-eligibility.txt"
