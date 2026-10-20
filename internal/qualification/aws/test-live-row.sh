@@ -42,6 +42,9 @@ seed_attempt() {
 refused() { if [ "$(cat "$TMP/$1.rc" 2>/dev/null)" != "0" ]; then ok "$2"; else no "$2" "non-zero" "0"; fi; }
 # A missing helper must fail the suite, not silently skip its assertion. This is the
 # defect class #1583 left: the suite exited 0 while six assertions never ran.
+# Required-helper inventory: every helper the suite calls must be listed here.
+# Adding a helper means adding it to this list; a stale list lets the next
+# "command not found" silently skip an assertion.
 for helper in ok no has lacks is exists present not_exists seed_attempt refused; do
   if ! declare -F "$helper" >/dev/null; then
     echo "test helper missing: $helper" >&2
