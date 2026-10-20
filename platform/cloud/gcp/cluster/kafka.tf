@@ -18,6 +18,27 @@ variable "kafka_reader_members" {
   default     = []
 }
 
+# The deploying principal is the identity that projects the credential into the
+# declared consumer namespaces. It is the provider's authenticated (or impersonated)
+# identity, not a workload, so it can default the reader when the target declares no
+# additional members. The provider's impersonation makes this the service account in
+# a production run.
+data "google_client_openid_userinfo" "deployer" {
+  count = var.kafka_connection == null ? 0 : 1
+}
+
+locals {
+  kafka_reader_members = (
+    length(var.kafka_reader_members) > 0
+    ? var.kafka_reader_members
+    : toset(
+      var.kafka_connection == null
+      ? []
+      : ["user:${data.google_client_openid_userinfo.deployer[0].email}"]
+    )
+  )
+}
+
 resource "google_secret_manager_secret" "kafka" {
   count     = var.kafka_connection == null ? 0 : 1
   secret_id = var.kafka_connection.secret_name
@@ -26,8 +47,8 @@ resource "google_secret_manager_secret" "kafka" {
   }
   lifecycle {
     precondition {
-      condition     = length(var.kafka_reader_members) > 0
-      error_message = "Managed Kafka requires explicit kafka_reader_members for deployment; workload readers are not inferred."
+      condition     = length(local.kafka_reader_members) > 0
+      error_message = "Managed Kafka requires an explicit reader; the deploying identity is unavailable. Set kafka_reader_members."
     }
   }
   labels = {
@@ -43,7 +64,7 @@ resource "google_secret_manager_secret_version" "kafka" {
 }
 
 resource "google_secret_manager_secret_iam_member" "kafka_reader" {
-  for_each  = var.kafka_connection == null ? toset([]) : var.kafka_reader_members
+  for_each  = var.kafka_connection == null ? toset([]) : local.kafka_reader_members
   secret_id = google_secret_manager_secret.kafka[0].id
   role      = "roles/secretmanager.secretAccessor"
   member    = each.value

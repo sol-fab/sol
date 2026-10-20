@@ -13,6 +13,7 @@ AWS_VARS = "platform/cloud/aws/cluster/variables.tf"
 GCP = "platform/cloud/gcp/cluster/main.tf"
 GCP_VARS = "platform/cloud/gcp/cluster/variables.tf"
 GCP_OUT = "platform/cloud/gcp/cluster/outputs.tf"
+GCP_KAFKA = "platform/cloud/gcp/cluster/kafka.tf"
 MODULE = "platform/cloud/modules/platform/main.tf"
 MODULE_VARS = "platform/cloud/modules/platform/variables.tf"
 DEPLOY = "platform/cloud/modules/platform/platform_deploy_rbac.tf"
@@ -68,6 +69,9 @@ CASES = [
     ("sql-live-setting-literal", edit(GCP, "deletion_protection_enabled = var.sql_deletion_protection", "deletion_protection_enabled = false"), "no longer wires the live API deletion-protection setting"),
     ("sql-deletion-protection-default-false", default_of(GCP_VARS, "sql_deletion_protection", "false"), "sql_deletion_protection no longer defaults to true"),
     ("gcp-output-renamed", edit(GCP_OUT, 'output "artifact_registry" {', 'output "artifact_registry_url" {'), 'no longer publishes "artifact_registry"'),
+    ("gcp-kafka-reader-no-deployer", edit(GCP_KAFKA, 'data "google_client_openid_userinfo" "deployer" {', 'data "google_client_openid_userinfo" "deployer_renamed" {'), "deploying identity"),
+    ("gcp-kafka-reader-var-only", edit(GCP_KAFKA, 'for_each  = var.kafka_connection == null ? toset([]) : local.kafka_reader_members', 'for_each  = var.kafka_connection == null ? toset([]) : var.kafka_reader_members'), "resolved deploying identity"),
+    ("gcp-kafka-reader-precondition-var", edit(GCP_KAFKA, 'condition     = length(local.kafka_reader_members) > 0', 'condition     = length(var.kafka_reader_members) > 0'), "resolved deploying identity"),
     ("rds-skip-final-snapshot-literal", edit(AWS, "  skip_final_snapshot     = var.rds_skip_final_snapshot", "  skip_final_snapshot     = false"), "no longer takes skip_final_snapshot from its own"),
     ("rds-final-snapshot-identifier-dropped", edit(AWS, "  final_snapshot_identifier = (", "  final_snapshot_name = ("), "sets no final_snapshot_identifier"),
     ("storage-class-unencrypted", edit(MODULE, '    encrypted = "true"', '    encrypted = "false"'), 'no longer sets encrypted = "true"'),
