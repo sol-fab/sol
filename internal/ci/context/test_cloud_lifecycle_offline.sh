@@ -2250,17 +2250,21 @@ assert_contains "INFRA-076: the unresolved operation is named" "$unresolved_log.
 assert_not_contains "INFRA-076: no terraform apply ran" "$unresolved_log.out" '[terraform-apply]' || exit 1
 
 accept_log="$tmp/infra076-accept.log"
-if (cd "$tmp/work" && FAIL_ON="" LIFECYCLE_LOG="$accept_log" \
+# The deploy path now exposes the same explicit acknowledgment as cloud apply
+# (#1600): without the flag it still refuses above, with it the operator's
+# decision is recorded and the apply proceeds. A silent bypass is still refused.
+if ! (cd "$tmp/work" && FAIL_ON="" LIFECYCLE_LOG="$accept_log" \
       "$sol" cloud apply prod/aws/us-east-1 --accept-unresolved) >"$accept_log.out" 2>&1; then
-  echo "INFRA-076: deploy accepted a bypass for an unresolved Terraform operation" >&2
+  echo "INFRA-076: the explicit acknowledgment did not proceed" >&2
+  cat "$accept_log.out" >&2
   exit 1
 fi
-assert_not_contains "INFRA-076: unresolved operation did not reach terraform apply" \
+assert_contains "INFRA-076: the explicit acknowledgment reached terraform apply" \
   "$accept_log.out" '[terraform-apply]' || exit 1
-[ ! -e "$latest/acknowledged" ] || {
-  echo "INFRA-076: refusal recorded an acknowledgement for an unresolved operation" >&2
+if ! find "$ops" -name acknowledged -type f | grep -q .; then
+  echo "INFRA-076: the explicit acknowledgment was not recorded" >&2
   exit 1
-}
+fi
 
 sleep 60 &
 live_pid=$!
