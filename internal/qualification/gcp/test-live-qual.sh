@@ -117,6 +117,12 @@ has() { if grep -qF -- "$2" "$3"; then ok "$1"; else no "$1" "contains: $2" "$(t
 lacks() { if grep -qF -- "$2" "$3"; then no "$1" "absent: $2" "present"; else ok "$1"; fi; }
 present() { if [ -s "$1" ]; then ok "$2"; else no "$2" "present and non-empty" "missing: $1"; fi; }
 not_exists() { if [ -e "$2" ]; then no "$1" "absent: $2" "present"; else ok "$1"; fi; }
+for helper in ok no is has lacks present not_exists; do
+  if ! declare -F "$helper" >/dev/null; then
+    echo "test helper missing: $helper" >&2
+    exit 1
+  fi
+done
 
 suite_environment
 

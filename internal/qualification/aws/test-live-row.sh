@@ -25,7 +25,29 @@ has() { if grep -qF -- "$2" "$3" 2>/dev/null; then ok "$1"; else no "$1" "contai
 lacks() { if grep -qF -- "$2" "$3" 2>/dev/null; then no "$1" "absent: $2" "present"; else ok "$1"; fi; }
 is() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1" "$3" "$2"; fi; }
 exists() { if [ -f "$2" ]; then ok "$1"; else no "$1" "file exists: $2" "missing"; fi; }
+present() { if [ -s "$1" ]; then ok "$2"; else no "$2" "present and non-empty" "missing: $1"; fi; }
+not_exists() { if [ -e "$2" ]; then no "$1" "absent: $2" "present"; else ok "$1"; fi; }
+# #1583 removed this helper while keeping its call sites; restore the attempt seed the
+# teardown scenarios use so their assertions run instead of printing "command not found".
+seed_attempt() {
+  local name="$1"
+  mkdir -p "$TMP/$name.logs"
+  {
+    printf 'attempt=%s\n' "$ATTEMPT"
+    printf 'row=%s\n' qualreg
+    printf 'target=%s\n' qualreg/aws/us-east-1
+    printf 'state_key=%s\n' sol/qualreg/aws/us-east-1/cloud.tfstate
+  } >"$TMP/$name.logs/attempt.txt"
+}
 refused() { if [ "$(cat "$TMP/$1.rc" 2>/dev/null)" != "0" ]; then ok "$2"; else no "$2" "non-zero" "0"; fi; }
+# A missing helper must fail the suite, not silently skip its assertion. This is the
+# defect class #1583 left: the suite exited 0 while six assertions never ran.
+for helper in ok no has lacks is exists present not_exists seed_attempt refused; do
+  if ! declare -F "$helper" >/dev/null; then
+    echo "test helper missing: $helper" >&2
+    exit 1
+  fi
+done
 
 ROOT="$TMP/root"
 WORKSPACE="$TMP/workspace"
