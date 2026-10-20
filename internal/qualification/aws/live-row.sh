@@ -117,7 +117,7 @@ source "$ROOT/internal/qualification/candidate-binding.sh"
 source "$ROOT/internal/qualification/attempt.sh"
 
 case "${1:-}" in
-  prepare | cloud | app | destroy)
+  prepare | cloud | app | destroy | resume)
     sol_under_test_resolve
     ;;
 esac
@@ -126,7 +126,7 @@ usage() {
   cat <<'USAGE'
 live-row.sh — the AWS regression row: the application contract GCP Attempt 28 established
 
-usage: live-row.sh PHASE      PHASE in: prepare | cloud | transport | app | destroy | verify
+usage: live-row.sh PHASE      PHASE in: prepare | cloud | transport | app | destroy | verify | resume
 
 required
   ATTEMPT           a unique identity for this disposable run; the target, state key and
@@ -150,6 +150,8 @@ optional (defaults shown)
   WORKSPACE=examples/pluto
   PHASE_TIMEOUT=2400             LOG_DIR=/tmp/sol-aws-row-<attempt>
   OPERATOR_ROLE_ARN=<unset>      TRANSPORT=1
+  RESUME_FROM=<spent attempt>     resume only: the attempt directory whose provisioning inputs
+                                 are carried into a new, diagnostic attempt
   APP_NS=pluto-payments          APP_SERVICE=charge-svc
   APP_PORT=80                    SCENARIO=charges
   WORKER_NS=pluto-comms          SVC_UNIT=charge_svc
@@ -1232,7 +1234,63 @@ app_verify_database_delivery() {
   say "the deploy delivered the database as $name-ddl-creds / $name-dml-creds; the consumer's unit Secret carries no master copy"
 }
 
+# A diagnostic continuation of a spent attempt. The evidence store records one CA
+# verdict per instance per attempt, so a spent attempt cannot be re-observed; the
+# new attempt carries only the provisioning inputs and is marked non-promotable.
+phase_resume() {
+  local from="${RESUME_FROM:-}" field value
+  if [ -z "$from" ]; then
+    say "resume requires RESUME_FROM=<the spent attempt directory>"
+    return 2
+  fi
+  if [ ! -f "$from/attempt.txt" ]; then
+    say "resume: $from records no attempt"
+    return 2
+  fi
+  for field in target cluster state_key; do
+    value="$(sed -n "s/^$field=//p" "$from/attempt.txt" | head -1)"
+    case "$field" in
+      target)
+        [ "$value" = "${TARGET:-}" ] || {
+          say "resume: $from targets '$value', not '${TARGET:-}'"
+          return 2
+        }
+        ;;
+      cluster)
+        [ "$value" = "${CLUSTER:-}" ] || {
+          say "resume: $from cluster is '$value', not '${CLUSTER:-}'"
+          return 2
+        }
+        ;;
+      state_key)
+        [ "$value" = "${STATE_KEY:-}" ] || {
+          say "resume: $from state key is '$value', not '${STATE_KEY:-}'"
+          return 2
+        }
+        ;;
+    esac
+  done
+  # Carry only the provisioning inputs a later phase needs. The dispatch already
+  # required a fresh evidence directory; CA evidence, kubeconfigs and
+  # transaction transcripts stay in the spent attempt.
+  cp "$from/app-image-refs.txt" "$LOG_DIR/" || return 1
+  cp "$from/database-contract-pins.json" "$LOG_DIR/" || return 1
+  if [ -f "$from/aws-pre-teardown-identities.json" ]; then
+    cp "$from/aws-pre-teardown-identities.json" "$LOG_DIR/"
+  fi
+  say "resumed attempt $ATTEMPT from $from: diagnostic only, not promotion-eligible"
+}
+
 phase_app() {
+  # A CA phase records one verdict per instance in the attempt's evidence store. A
+  # second app run in the same attempt cannot record a second verdict; the attempt is
+  # spent. Refuse with the supported paths instead of a store-level conflict.
+  if [ -e "$LOG_DIR/ca-migration.json" ] || [ -e "$LOG_DIR/ca-application.json" ]; then
+    say "attempt $ATTEMPT already recorded CA observations; an attempt's CA evidence cannot be re-recorded"
+    say "for a diagnostic continuation: live-row.sh resume with RESUME_FROM=$LOG_DIR and a new ATTEMPT/LOG_DIR"
+    say "for a promotion-eligible verdict: restart the whole row in a fresh attempt (prepare through verify)"
+    return 2
+  fi
   require_target_terraform_var_file || return 1
   ensure_contexts || return 1
   verify_identity_boundary || return 1
@@ -1488,6 +1546,22 @@ case "${1:-}" in
     say "sol-under-test: release $SOL_BUNDLE_VERSION at $SOL_INSTALL"
     say "  migration runner: $SOL_RUNNER_IMAGE"
     ;;
+  resume)
+    if [ -z "${RESUME_FROM:-}" ]; then
+      say "resume requires RESUME_FROM=<the spent attempt directory>"
+      exit 2
+    fi
+    if [ -e "$LOG_DIR/attempt.txt" ] || [ -n "$(ls -A "$LOG_DIR" 2>/dev/null)" ]; then
+      say "resume: $LOG_DIR is not empty; a resumed attempt starts a fresh evidence directory"
+      exit 2
+    fi
+    export ATTEMPT_RESUMED_FROM="$RESUME_FROM"
+    attempt_begin 0
+    mkdir -p "$LOG_DIR/state"
+    sol_under_test_record_identity "$LOG_DIR"
+    say "sol-under-test: release $SOL_BUNDLE_VERSION at $SOL_INSTALL"
+    say "  migration runner: $SOL_RUNNER_IMAGE"
+    ;;
 esac
 
 case "${1:-}" in
@@ -1496,6 +1570,19 @@ case "${1:-}" in
   transport) phase_transport ;;
   app) phase_app ;;
   destroy) phase_destroy ;;
-  verify | inventory) aws_inventory ;;
+  resume) phase_resume ;;
+  verify | inventory)
+    {
+      if attempt_promotion_eligible; then
+        printf 'promotion_eligible=yes\n'
+      else
+        printf 'promotion_eligible=no\n'
+        printf 'resumed_from=%s\n' "$(attempt_field resumed_from || true)"
+        say "resumed attempt: this evidence is diagnostic, not promotion-eligible"
+      fi
+      printf 'attempt=%s\n' "$ATTEMPT"
+    } >"$LOG_DIR/promotion-eligibility.txt"
+    aws_inventory
+    ;;
   *) usage; exit 2 ;;
 esac
