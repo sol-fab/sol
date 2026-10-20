@@ -251,23 +251,35 @@ run() {
 # distinct from the installed candidate's own sol.
 SOL_QUALIFICATION_CA="${SOL_QUALIFICATION_CA:-$ROOT/_build/default/internal/tooling/sol_qualification/bin/qualification_database_ca.exe}"
 
-# The database-contract pins the assessment re-verifies. Recorded in `prepare`
-# from the immutable install and the candidate-bound workspace; no provider state.
+# The database-contract pins and the candidate's specimen declaration. Recorded in
+# `prepare` from the immutable install and the candidate-bound workspace; no provider
+# state. The specimen is kept whole because the delivery assertion names its consumers
+# from it: the candidate declares which workloads consume the database and which Secret
+# each reads, so the row does not reconstruct those names (#1492 class).
 record_database_contract_pins() {
   mkdir -p "$LOG_DIR"
+  local bound="$LOG_DIR/database-contract-binding.json"
   if ! python3 "$ROOT/internal/qualification/database-contract-binding.py" \
       --candidate "$SOL_CANDIDATE" --install "$SOL_INSTALL" --workspace "$WORKSPACE" \
-      --target "$TARGET" \
-    | python3 -c 'import json,sys
-bound=json.load(sys.stdin); s=bound["specimen"]["declaration"]
-json.dump({"revision":bound["candidate"]["revision"],
-           "bundle_digest":bound["candidate"]["bundle_sha256"],
-           "definition_digest":bound["definition"]["digest"],
-           "specimen_digest":bound["specimen"]["digest"],
-           "requested_target":s["requested_target"],
-           "target":s["target"]}, sys.stdout)' \
-    >"$LOG_DIR/database-contract-pins.json"; then
+      --target "$TARGET" >"$bound"; then
     say "could not bind the candidate's database contract; the CA family cannot be qualified"
+    return 1
+  fi
+  if ! python3 - "$bound" "$LOG_DIR/database-contract-pins.json" \
+      "$LOG_DIR/database-contract-specimen.json" <<'PY'
+import json, sys
+bound = json.load(open(sys.argv[1]))
+s = bound["specimen"]["declaration"]
+json.dump({"revision": bound["candidate"]["revision"],
+           "bundle_digest": bound["candidate"]["bundle_sha256"],
+           "definition_digest": bound["definition"]["digest"],
+           "specimen_digest": bound["specimen"]["digest"],
+           "requested_target": s["requested_target"],
+           "target": s["target"]}, open(sys.argv[2], "w"))
+json.dump(bound["specimen"], open(sys.argv[3], "w"))
+PY
+  then
+    say "could not record the candidate's specimen; the delivery assertion cannot name its consumers"
     return 1
   fi
 }
@@ -1176,6 +1188,12 @@ app_verify_kafka_delivery() {
   if [ "$TRANSPORT" = 1 ]; then transaction="$LOG_DIR/transport-transaction.txt"; fi
   # Independent requirements for this row's selected reference applications.
   # Do not derive them from observed env refs: a missing projection must fail.
+  #
+  # The unit-to-namespace map below is still harness-owned and NOT candidate-derived:
+  # the candidate's specimen declares database consumers, not the Kafka resource
+  # identity, so there is nothing in it to match these units against. This is a known
+  # gap, not an intentional design; it is tracked separately from the database
+  # delivery assertion.
   for unit in $APP_UNITS; do
     case "$unit" in
       charge_svc | orders_svc) consumers+=(--consumer "$APP_NS/$(k8s_name "$unit")") ;;
@@ -1216,9 +1234,18 @@ app_verify_kafka_delivery() {
     $(app_namespaces) >"$LOG_DIR/kafka-delivery.json"
 }
 
+# The candidate's specimen is the consumer authority: it declares every workload that
+# consumes the target database, the Secret each reads `POSTGRES_URL` from, and the
+# containers that consume it. The row reads those names; it neither enumerates a
+# namespace map of its own nor reconstructs the unit Secret name (#1492 class).
+#
+# ADR 0007's claim is causal -- the unit reads the class credential, not the master --
+# so the second half asserts the rendered routing (the pod's `secretKeyRef`), not the
+# presence of a master copy in some other Secret. Refusal does not assert that no
+# unreferenced Secret anywhere still holds POSTGRES_URL; that is a different claim.
 app_verify_database_delivery() {
-  local name ddl dml consumer namespace declared_ns ddl_name
-  name="$(app_class_credential_name)"
+  local declared_ns ddl_name specimen consumers delivery
+  local namespace workload cred_ns cred_name containers container ref found
   declared_ns="$(app_database_field namespace)"
   ddl_name="$(app_database_field ddl-creds)"
   if [ -z "$declared_ns" ] || [ -z "$ddl_name" ]; then
@@ -1231,34 +1258,66 @@ app_verify_database_delivery() {
     say "the deploy declared its migration Job's $ddl_name in $declared_ns, and it is absent there"
     return 1
   fi
-  dml=""
-  for namespace in $(app_namespaces); do
-    if kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get secret "$name-dml-creds" -n "$namespace" \
-      >/dev/null 2>&1; then
-      dml="$namespace"
+  specimen="$LOG_DIR/database-contract-specimen.json"
+  if [ ! -s "$specimen" ]; then
+    say "the candidate's specimen is not recorded, so the delivery assertion cannot name its consumers"
+    return 1
+  fi
+  if ! consumers="$(jq -r '.declaration.workloads[]
+      | select(.database != null)
+      | [.namespace, .name, (.credential.namespace // ""), (.credential.name // ""),
+         ((.consuming_containers // []) | join(","))] | @tsv' "$specimen")"; then
+    say "the candidate's specimen could not be read; the consumer set is unknown"
+    return 1
+  fi
+  if [ -z "$consumers" ]; then
+    say "the candidate's specimen declares no database consumer, so the delivery assertion has no subject"
+    return 1
+  fi
+  # The migration Job's address is the deploy's own declaration; the consumers are the
+  # candidate's. Both are read, neither is reconstructed.
+  delivery="$ddl_name@$declared_ns (migration Job, as the deploy declared it)"
+  while IFS=$'\t' read -r namespace workload cred_ns cred_name containers; do
+    [ -n "$namespace" ] || continue
+    if [ -z "$cred_name" ] || [ -z "$cred_ns" ]; then
+      say "the candidate declared $namespace/$workload as a database consumer without a credential address"
+      return 1
     fi
-  done
-  if [ -z "$dml" ]; then
-    say "no consuming namespace carries the $name-dml-creds class Secret"
-    return 1
-  fi
-  consumer="$APP_SERVICE-secrets"
-  if kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get secret "$consumer" -n "$APP_NS" \
-    -o jsonpath='{.data.POSTGRES_URL}' 2>/dev/null | grep -q .; then
-    say "$consumer still carries POSTGRES_URL; the unit is not reading the class Secret"
-    return 1
-  fi
+    if ! kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get secret "$cred_name" -n "$cred_ns" \
+      >/dev/null 2>&1; then
+      say "the candidate declared $namespace/$workload as a database consumer, and $cred_name is absent from $cred_ns"
+      return 1
+    fi
+    found=""
+    for container in ${containers//,/ }; do
+      [ -n "$container" ] || continue
+      ref="$(kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get deployment "$workload" -n "$namespace" -o json 2>/dev/null \
+        | jq -r --arg c "$container" '
+            [.spec.template.spec.containers[]? | select(.name == $c)
+             | .env[]? | select(.name == "POSTGRES_URL")
+             | .valueFrom.secretKeyRef.name // empty] | first // ""' 2>/dev/null)"
+      if [ "$ref" != "$cred_name" ]; then
+        say "$namespace/$workload container $container reads POSTGRES_URL from '${ref:-nothing}', not the declared class Secret $cred_name"
+        return 1
+      fi
+      found=1
+    done
+    if [ -z "$found" ]; then
+      say "the candidate declared no consuming container for $namespace/$workload, so where it reads POSTGRES_URL is not established"
+      return 1
+    fi
+    delivery="$delivery, $cred_name@$cred_ns (unit consumer $workload)"
+  done <<<"$consumers"
   # The database CA family is owned by the shared candidate-bound observer. The
   # migration phase already ran at the row's migration step; the application
   # phase ran after the final deploy. This report re-reads their durable evidence
   # and refuses an incomplete or non-passing family.
   ca_qualify report "" "$LOG_DIR/ca-report.json" || return 1
   {
-    printf 'database_delivery: %s@%s (migration Job, as the deploy declared it), %s@%s (unit consumer)\n' \
-      "$ddl_name" "$declared_ns" "$name-dml-creds" "$dml"
-    printf 'database_delivery_assertion: the consumer unit Secret carries no POSTGRES_URL\n'
+    printf 'database_delivery: %s\n' "$delivery"
+    printf 'database_delivery_assertion: every declared consumer reads POSTGRES_URL from its class Secret\n'
   } >>"$LOG_DIR/prerequisites.txt"
-  say "the deploy delivered the database as $name-ddl-creds / $name-dml-creds; the consumer's unit Secret carries no master copy"
+  say "the deploy delivered the database; every declared consumer reads POSTGRES_URL from its class Secret"
 }
 
 # A diagnostic continuation of a spent attempt. The evidence store records one CA
@@ -1322,6 +1381,11 @@ phase_app() {
   ensure_contexts || return 1
   verify_identity_boundary || return 1
   record_ca_submission_authority || return 1
+  # The app phase reuses the images `cloud` published, so `prepare`'s build (and its
+  # recording) is not guaranteed here, and a resumed app phase has a fresh evidence
+  # directory. Re-record the contract: the delivery assertion names its consumers from
+  # this specimen, never from a harness-owned namespace map.
+  record_database_contract_pins || return 1
   app_require_published_images || return 1
   say "runner: release $SOL_BUNDLE_VERSION names $SOL_RUNNER_IMAGE; the publisher publishes nothing"
   capture_state

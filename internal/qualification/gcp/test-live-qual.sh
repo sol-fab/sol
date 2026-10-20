@@ -27,13 +27,23 @@ cp -R "$REPO/internal/qualification/fixtures/application-secret-refusal" "$ROOT/
 cp "$REPO/internal/qualification/transaction.py" "$ROOT/internal/qualification/"
 cat >"$ROOT/internal/qualification/database-contract-binding.py" <<'STUB'
 #!/usr/bin/env python3
-import json, sys
-# Test stub: the row's pins recorder only needs the canonical shape.
+import json, os, sys
+# Test stub: the pins recorder keeps the canonical shape, and the delivery assertion
+# reads the specimen's consumer set. The default is one consumer; a scenario overrides
+# it with STUB_SPECIMEN_CONSUMERS (a JSON list), which is how a partial or foreign
+# delivery is modelled.
+prefix = os.environ.get("STUB_CLASS_PREFIX", "qual-gcp-us-central1")
+consumers = json.loads(os.environ.get("STUB_SPECIMEN_CONSUMERS") or "[]")
+if not consumers:
+    consumers = [{"namespace": "pluto-payments", "name": "orders-svc", "database": "app-db",
+                  "credential": {"namespace": "pluto-payments", "name": prefix + "-dml-creds"},
+                  "consuming_containers": ["orders-svc"]}]
 print(json.dumps({
     "candidate": {"revision": "0" * 40, "bundle_sha256": "0" * 64},
     "definition": {"digest": "0" * 64},
     "specimen": {"digest": "0" * 64,
-                 "declaration": {"requested_target": sys.argv[-1], "target": sys.argv[-1]}},
+                 "declaration": {"requested_target": sys.argv[-1], "target": sys.argv[-1],
+                                 "workloads": consumers}},
 }))
 STUB
 git -C "$ROOT" init -q
@@ -719,6 +729,21 @@ case "$*" in
       printf 'Error from server (NotFound): secrets not found\n' >&2
       exit 1
     fi
+    exit 0
+    ;;
+  # The delivery assertion reads the consumer Deployment's rendered routing: which
+  # Secret its POSTGRES_URL env reads from. `STUB_POSTGRES_SECRET` models a unit that
+  # still reads the master copy; the default is the declared class Secret.
+  *"get deployment "*)
+    dep_name="" dep_ns="" prev=""
+    for a in $*; do
+      [ "$prev" = "deployment" ] && dep_name="$a"
+      [ "$prev" = "-n" ] && dep_ns="$a"
+      prev="$a"
+    done
+    printf '{"spec":{"template":{"spec":{"containers":[{"name":"%s","env":[{"name":"POSTGRES_URL","valueFrom":{"secretKeyRef":{"name":"%s"}}}]}]}}}}\n' \
+      "${STUB_POSTGRES_CONTAINER:-$dep_name}" \
+      "${STUB_POSTGRES_SECRET:-${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-dml-creds}"
     exit 0
     ;;
   "get secret "*"-dml-creds -n "*)
@@ -1434,7 +1459,7 @@ lacks "no secret value is passed on a command line" \
 has "the observation records no credentials" \
   "never read" "$TMP/app-ok.logs/kafka-delivery.json"
 has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
-  "database_delivery: qual-gcp-us-central1-ddl-creds@pluto-comms (migration Job, as the deploy declared it), qual-gcp-us-central1-dml-creds@pluto-payments (unit consumer)" \
+  "database_delivery: qual-gcp-us-central1-ddl-creds@pluto-comms (migration Job, as the deploy declared it), qual-gcp-us-central1-dml-creds@pluto-payments (unit consumer orders-svc)" \
   "$TMP/app-ok.logs/prerequisites.txt"
 has "a real application-secret refusal is observed" \
   "application_secret_refusal: declared SOL_API_KEY was absent" "$TMP/app-ok.logs/prerequisites.txt"
@@ -1489,19 +1514,59 @@ lacks "only a unit that protects /metrics declares the API key, so it is not a w
 is "the CA phases ran in lifecycle order" \
   "$(tr '\n' ',' <"$TMP/app-ok.logs/ca-phases.txt")" "requirements,migration,application,report,"
 
-# ADR 0007: a consumer receives its DML class credential, never the administrative
-# connection the deploy used. The delivery check reads the unit Secret; this scenario
-# makes it still carry POSTGRES_URL, so the check must refuse the phase.
-printf '\nscenario: a consumer unit Secret that still carries the master copy is refused (ADR 0007)\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_MASTER_COPY=1 run_case app-mastercopy app
-is "the app phase refuses a consumer still carrying POSTGRES_URL" \
+# ADR 0007 reframed (previously #1604): the claim is causal -- the unit reads
+# POSTGRES_URL from its DML class Secret, not the master. The assertion reads the
+# Deployment's rendered `secretKeyRef`, so a unit that reads its own Secret is refused
+# even when that Secret is otherwise empty. The old shape asserted the absence of the
+# master copy in the unit Secret; that is residue hygiene, a different claim.
+printf '\nscenario: a consumer that reads POSTGRES_URL from its own Secret is refused (ADR 0007)\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_POSTGRES_SECRET=orders-svc-secrets \
+  run_case app-mastercopy app
+is "the app phase refuses a consumer reading the master Secret" \
   "$(cat "$TMP/app-mastercopy.rc")" "1"
-has "and names the master copy rather than claiming the class credential was delivered" \
-  "still carries POSTGRES_URL" "$TMP/app-mastercopy.out"
+has "and names the Secret the unit actually reads" \
+  "reads POSTGRES_URL from 'orders-svc-secrets', not the declared class Secret" \
+  "$TMP/app-mastercopy.out"
 lacks "and the phase never reports the class credential as delivered" \
   "the deploy delivered the database as" "$TMP/app-mastercopy.out"
 lacks "and the orders scenario never runs on that unit" \
   "the alpha orders scenario completed" "$TMP/app-mastercopy.out"
+
+# The candidate's specimen declares the consumers. Here two are declared and only one
+# receives its class Secret: the old "any one namespace carries it" loop passed this.
+printf '\nscenario: a declared consumer that did not receive its class Secret is refused\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_DML_NAMESPACE=pluto-payments \
+  STUB_SPECIMEN_CONSUMERS='[{"namespace":"pluto-payments","name":"orders-svc","database":"app-db","credential":{"namespace":"pluto-payments","name":"qual-gcp-us-central1-dml-creds"},"consuming_containers":["orders-svc"]},{"namespace":"pluto-comms","name":"fulfilment-worker","database":"app-db","credential":{"namespace":"pluto-comms","name":"qual-gcp-us-central1-dml-creds"},"consuming_containers":["fulfilment-worker"]}]' \
+  run_case app-partial app
+is "a partial delivery fails the app phase" "$(cat "$TMP/app-partial.rc")" "1"
+has "and names the consumer whose class Secret is absent" \
+  "pluto-comms/fulfilment-worker as a database consumer, and qual-gcp-us-central1-dml-creds is absent from pluto-comms" \
+  "$TMP/app-partial.out"
+
+# A consumer outside the harness's old namespace map: the map never looked here, so a
+# delivery that skipped it passed. The specimen names it, so the assertion reaches it.
+printf '\nscenario: a declared consumer outside the old namespace map is still asserted\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_DML_NAMESPACE=pluto-payments \
+  STUB_SPECIMEN_CONSUMERS='[{"namespace":"pluto-payments","name":"orders-svc","database":"app-db","credential":{"namespace":"pluto-payments","name":"qual-gcp-us-central1-dml-creds"},"consuming_containers":["orders-svc"]},{"namespace":"pluto-extra","name":"orders-svc","database":"app-db","credential":{"namespace":"pluto-extra","name":"qual-gcp-us-central1-dml-creds"},"consuming_containers":["orders-svc"]}]' \
+  run_case app-outside app
+is "a consumer outside the harness's map fails the app phase" "$(cat "$TMP/app-outside.rc")" "1"
+has "and names the namespace the harness map cannot see" \
+  "pluto-extra/orders-svc as a database consumer" "$TMP/app-outside.out"
+
+# The positive half: every declared consumer delivered and reading its class Secret.
+printf '\nscenario: every declared consumer is asserted, not just the first\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_DML_NAMESPACE=pluto-payments \
+  STUB_SPECIMEN_CONSUMERS='[{"namespace":"pluto-payments","name":"orders-svc","database":"app-db","credential":{"namespace":"pluto-payments","name":"qual-gcp-us-central1-dml-creds"},"consuming_containers":["orders-svc"]},{"namespace":"pluto-payments","name":"charge-svc","database":"app-db","credential":{"namespace":"pluto-payments","name":"qual-gcp-us-central1-dml-creds"},"consuming_containers":["charge-svc"]}]' \
+  run_case app-everyconsumer app
+# The app's transaction fixture is single-use in this suite; the delivery assertion
+# runs before it and is the subject here. Assert the delivery evidence, not a second
+# end-to-end transaction.
+has "the first consumer is recorded as delivered" "unit consumer orders-svc" \
+  "$TMP/app-everyconsumer.logs/prerequisites.txt"
+has "and the second consumer too" "unit consumer charge-svc" \
+  "$TMP/app-everyconsumer.logs/prerequisites.txt"
+lacks "the delivery assertion itself did not fail" \
+  "database delivery observation failed" "$TMP/app-everyconsumer.out"
 
 printf '\nscenario: no independent CA observation identity refuses the app phase\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-no-observer app \
