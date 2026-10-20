@@ -1325,6 +1325,17 @@ run_phase apptransport app TRANSPORT=1 STUB_DDL_NAMESPACE=sol-db-qualreg-aws-us-
 is "exit 0" "$(cat "$TMP/apptransport.rc")" "0"
 has "the delivery observation cites the transport transcript" \
   "transport-transaction.txt" "$TMP/apptransport.logs/kafka-delivery.json"
+is "the transport is re-established after the final deploy" \
+  "$(grep -c '^establish ' "$TMP/apptransport.establish")" "2"
+python3 - "$TMP/apptransport.out" <<'PY'
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+first = text.index("transport-establish")
+second = text.index("transport-establish", first + 1)
+deploy = text.index("app-deploy")
+if not deploy < second:
+    raise SystemExit("the second transport establishment is not after the final deploy")
+PY
 has "the transport is established before Sol moves the workload" \
   "establish test-cluster qualifier us-east-1 pluto-payments" "$TMP/apptransport.establish"
 has "and it observes the database namespace the deploy declared for the migration Job" \
