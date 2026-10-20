@@ -192,6 +192,13 @@ must be in the environment. The database connection is not an operator input: th
 cluster root's own `postgres_url` output and delivers `<target>-ddl-creds` to the migration Job and
 `<target>-dml-creds` to a consuming unit, which the row verifies before the transaction.
 
+Kafka delivery is observed value-free. The deploy declares the delivered credential Secret in its
+own output; every expected consumer must project that Secret for the SASL password and the broker
+CA, and the Secret's metadata must exist in each consumer namespace. The transaction then supplies
+the behavioral evidence that the publisher authenticated and the worker consumed. The observer
+never reads the broker users Secret or any Secret data, so the qualification identity needs no
+broker credential material.
+
 With TRANSPORT=1 the transaction runs through the qualification transport: `transport` establishes
 the `sol:qualifiers` capability and verifies its effective surface, and the harness probes the
 production identities' surfaces before and after, none of which may hold `pods/portforward`
@@ -1097,6 +1104,13 @@ app_unit_addresses() {
 
 app_class_credential_name() { printf '%s' "$TARGET" | tr '[:upper:]/' '[:lower:]-'; }
 
+# The deploy declares the delivered Kafka credential's Secret name in its own
+# output; the row reads that declaration rather than reproducing the naming rule.
+app_kafka_credential_name() {
+  grep -h 'Kafka: delivered the managed credential to ' "$LOG_DIR"/app-deploy.log 2>/dev/null \
+    | tail -1 | sed -n 's/.*credential to \([^ ]*\) in .*/\1/p'
+}
+
 # 2b: the migration Job reads <target>-ddl-creds and a consuming unit reads
 # <target>-dml-creds, both written by the deploy's database setup step. This asserts the
 # delivered form exists and that the consumer did not also receive an operator's master
@@ -1131,8 +1145,8 @@ app_database_field() {
 }
 
 app_verify_kafka_delivery() {
-  local state="$LOG_DIR/state/cloud.tfstate" public unit
-  local consumers=()
+  local state="$LOG_DIR/state/cloud.tfstate" public unit credential
+  local consumers=() behavioral=()
   # Independent requirements for this row's selected reference applications.
   # Do not derive them from observed env refs: a missing projection must fail.
   for unit in $APP_UNITS; do
@@ -1143,13 +1157,34 @@ app_verify_kafka_delivery() {
       *) say "no Kafka qualification requirement defined for selected unit $unit"; return 1 ;;
     esac
   done
+  # The transaction is the behavioral half: it publishes through the service and
+  # consumes through the worker, so those two prove authentication and use.
+  for unit in $APP_UNITS; do
+    case "$unit" in
+      charge_svc) behavioral+=(--behavioral-consumer "$APP_NS/$(k8s_name "$unit")") ;;
+      notify_worker) behavioral+=(--behavioral-consumer "$WORKER_NS/$(k8s_name "$unit")") ;;
+    esac
+  done
+  if [ "${#behavioral[@]}" = 0 ]; then
+    say "the selected units do not include the transaction's Kafka publisher and consumer"
+    return 1
+  fi
+  credential="$(app_kafka_credential_name)"
+  if [ -z "$credential" ]; then
+    say "the deploy declared no delivered Kafka credential; the projection cannot be read"
+    return 1
+  fi
   public="$(jq -ce '.outputs.kafka_authority.value | select(type == "object")' "$state")" || return 1
-  # Read the consumers through the same namespace-scoped observation transport as the
-  # CA. The cluster-access identity deliberately has no read in application namespaces;
-  # observing as it would report the delivery as unreadable, not as delivered.
+  # The projection and Secret metadata are observed without reading credential values:
+  # Deployments through the namespace-scoped qualification transport, and the Secret's
+  # name through the deploy identity that wrote it. Credential data is never parsed.
   printf '%s' "$public" | python3 "$ROOT/internal/qualification/kafka-delivery.py" \
     --provider aws --cluster "$CLUSTER" --region "$AWS_REGION" --account "$ACCOUNT" \
     --kubeconfig "$CA_KUBECONFIG" \
+    --secret-kubeconfig "$DEPLOY_KUBECONFIG" \
+    --credential-secret "$credential" \
+    --transaction "$LOG_DIR/app-transaction.txt" \
+    "${behavioral[@]}" \
     "${consumers[@]}" \
     $(app_namespaces) >"$LOG_DIR/kafka-delivery.json"
 }
@@ -1342,7 +1377,6 @@ phase_app() {
   # assessment as the migration phase.
   ca_qualify application "$LOG_DIR/ca-application-capture.json" "$LOG_DIR/ca-application.json" || return 1
   app_verify_database_delivery || return 1
-  app_verify_kafka_delivery || return 1
   # ADR 0004: destruction removes what the lifecycle created, and the images this run published
   # live in the `pluto/<unit>` repositories Sol's own deploy created (#1413). The destroy phase's
   # independent inventory therefore decides a *populated* teardown.
@@ -1363,6 +1397,10 @@ phase_app() {
     capture_kube_evidence
     return 1
   fi
+  # The transaction is the behavioral Kafka evidence: it authenticated with the
+  # delivered credential and consumed the event. Observe the projection now that
+  # the transcript exists; the observer never reads broker credential material.
+  app_verify_kafka_delivery || return 1
   capture_kube_evidence
   capture_state
   say "the application transaction completed: the request was accepted, the worker consumed it, and"

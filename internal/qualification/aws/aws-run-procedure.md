@@ -131,13 +131,15 @@ command's output.
    set to a real receiver only when pursuing G1–G3, and the run records G as blocked otherwise.
 9. Explicit operator authorization for the live run and the release
    version (§7.6).
-10. Read access to this target's Kafka authority in AWS Secrets Manager, plus the
-   cluster-access identity's existing broker/consumer Secret reads. Sol generates and
-   persists the credential and projects it into Redpanda and declared consumers. The
-   harness never generates, replaces, or writes these credentials. `kafka-delivery.json`
-   records comparisons without values; the application transaction proves authentication
-   and message processing. Terraform state remains sensitive and remote; captured state
-   evidence contains only public references and input-presence metadata.
+10. The qualification transport's namespace-scoped Deployment reads and the deploy
+   identity's existing access to the delivered consumer Secret. The observer reads only the
+   Secret's metadata, never its data, and never reads the broker users Secret or the
+   provider's Kafka authority value. Sol generates and persists the credential and projects
+   it into Redpanda and declared consumers; the harness never generates, replaces, or writes
+   these credentials. `kafka-delivery.json` records projections and references without
+   values; the application transaction proves authentication and message processing.
+   Terraform state remains sensitive and remote; captured state evidence contains only
+   public references and input-presence metadata.
 
 ### Expected resources and cost-bearing steps
 

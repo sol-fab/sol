@@ -193,6 +193,7 @@ case "$1" in
           "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-ddl-creds" \
           "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-db-credentials" \
           "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-db-ca"
+        printf 'Kafka: delivered the managed credential to target-kafka-creds in pluto-comms, pluto-payments.\n'
         printf 'The environment for %s is reconciled.\n' "$2"
       fi
       [ "${STUB_APPLY_RC:-0}" = "0" ]
@@ -205,6 +206,7 @@ case "$1" in
         "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-ddl-creds" \
         "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-db-credentials" \
         "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-db-ca"
+        printf 'Kafka: delivered the managed credential to target-kafka-creds in pluto-comms, pluto-payments.\n'
       [ "${STUB_DEPLOY_RC:-0}" = "0" ]
     fi
     ;;
@@ -572,7 +574,13 @@ case "$*" in
       pluto-comms) name=fulfilment-worker ;;
       *) printf '{"items":[]}\n'; exit 0 ;;
     esac
-    printf '{"items":[{"metadata":{"name":"%s"},"spec":{"template":{"spec":{"containers":[{"env":[{"name":"KAFKA_SASL_PASSWORD","valueFrom":{"secretKeyRef":{"name":"target-kafka-creds","key":"KAFKA_SASL_PASSWORD"}}}],"volumeMounts":[{"name":"kafka-ca"}]}],"volumes":[{"name":"kafka-ca","secret":{"secretName":"target-kafka-creds","items":[{"key":"KAFKA_SSL_CA_CERT"}]}}]}}}}]}\n' "$name"
+    credential=target-kafka-creds
+    [ "${STUB_KAFKA_DELIVERY:-ok}" != missing ] || credential=other-kafka-creds
+    printf '{"items":[{"metadata":{"name":"%s"},"spec":{"template":{"spec":{"containers":[{"env":[{"name":"KAFKA_SASL_PASSWORD","valueFrom":{"secretKeyRef":{"name":"%s","key":"KAFKA_SASL_PASSWORD"}}}],"volumeMounts":[{"name":"kafka-ca"}]}],"volumes":[{"name":"kafka-ca","secret":{"secretName":"%s","items":[{"key":"KAFKA_SSL_CA_CERT"}]}}]}}}}]}\n' "$name" "$credential" "$credential"
+    exit 0 ;;
+  *"get secret target-kafka-creds "*"jsonpath={.metadata.name}"*)
+    if [ "${STUB_KAFKA_DELIVERY:-ok}" = denied ]; then exit 1; fi
+    printf 'target-kafka-creds\n'
     exit 0 ;;
   *"get secret "*" -o json"*)
     case "$*" in
@@ -1273,20 +1281,21 @@ export CURL_LOG="$TMP/app-curl.argv"
 : >"$CURL_LOG"
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ok app
 is "the app phase exits 0 when every step succeeds" "$(cat "$TMP/app-ok.rc")" "0"
-# A durable target whose platform did not publish the broker credential Secret has a missing
-# prerequisite, not a reason to skip the authenticated transport: the phase must refuse. Runs
-# before the delegation curl stub replaces the transaction one.
-printf '\nscenario: an absent broker credential refuses the app phase\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_NO_BROKER_CRED=1 run_case app-nobroker app
-is "the app phase refuses an absent broker credential" "$(cat "$TMP/app-nobroker.rc")" "1"
-has "missing broker input fails the independent comparison" \
-  "Kafka authority/delivery observation failed" "$TMP/app-nobroker.out"
-lacks "missing input never causes credential writes" "secret set" "$TMP/app-nobroker.argv"
-lacks "missing input never causes broker Secret creation" "create secret generic redpanda-users" "$TMP/app-nobroker.argv"
-printf '\nscenario: an unreadable broker input also refuses the app phase\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_UNREADABLE_BROKER_CRED=1 run_case app-broker-unreadable app
-is "an unreadable input blocks qualification" "$(cat "$TMP/app-broker-unreadable.rc")" "1"
-has "unknown input is never accepted" "Kafka authority/delivery observation failed" "$TMP/app-broker-unreadable.out"
+# The observer never reads the broker users Secret, so an unreadable broker credential is not
+# itself an app-phase failure; authentication is established behaviorally by the transaction.
+# What must fail closed is an unreadable delivered credential Secret or a consumer that points
+# at a different Secret.
+printf '\nscenario: an unreadable delivered credential refuses the app phase\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_KAFKA_DELIVERY=denied run_case app-kafka-denied app
+is "the app phase refuses an unreadable delivery" "$(cat "$TMP/app-kafka-denied.rc")" "1"
+has "unreadable delivery fails the value-free observation" \
+  "Kafka delivery observation failed" "$TMP/app-kafka-denied.out"
+lacks "unreadable delivery never causes credential writes" "secret set" "$TMP/app-kafka-denied.argv"
+printf '\nscenario: a consumer pointed at another Secret refuses the app phase\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_KAFKA_DELIVERY=missing run_case app-kafka-missing app
+is "a foreign projection blocks qualification" "$(cat "$TMP/app-kafka-missing.rc")" "1"
+has "a foreign projection is never accepted" "Kafka delivery observation failed" "$TMP/app-kafka-missing.out"
+lacks "a foreign projection never causes credential writes" "secret set" "$TMP/app-kafka-missing.argv"
 cp "$TMP/bin/curl" "$TMP/bin/curl.transaction"
 mv "$TMP/bin/curl.delegation" "$TMP/bin/curl"
 cp "$TMP/bin/curl" "$TMP/bin/curl.delegation"
@@ -1382,13 +1391,13 @@ has "the database setup image is pinned by digest in the release bundle (#1402, 
 has "and the harness hands no ambient override, which an installed release would refuse" \
   "[setup=unset]" "$TMP/app-ok.argv"
 lacks "Kafka delivery never uses the application secret CLI" "secret set" "$TMP/app-ok.argv"
-has "the provider authority matches broker and consumers" '"consumer_password_and_ca_match": true' "$TMP/app-ok.logs/kafka-delivery.json"
+has "the provider authority matches broker and consumers" '"credential_values": "never read"' "$TMP/app-ok.logs/kafka-delivery.json"
 lacks "no removed --target/--domain surface is used" \
   "--domain" "$TMP/app-ok.argv"
 lacks "no secret value is passed on a command line" \
   "testpass" "$TMP/app-ok.argv"
 has "the observation records no credentials" \
-  "never recorded" "$TMP/app-ok.logs/kafka-delivery.json"
+  "never read" "$TMP/app-ok.logs/kafka-delivery.json"
 has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
   "database_delivery: qual-gcp-us-central1-ddl-creds@pluto-comms (migration Job, as the deploy declared it), qual-gcp-us-central1-dml-creds@pluto-payments (unit consumer)" \
   "$TMP/app-ok.logs/prerequisites.txt"
@@ -2601,7 +2610,7 @@ is "it exits 2 with no run kubeconfig" "$(cat "$TMP/identity-nocred.rc")" "2"
 has "and says why" "no run kubeconfig" "$TMP/identity-nocred.out"
 
 printf '\nscenario: provider authority and delivered values cannot disagree\n'
-for delivery_mode in denied mismatch; do
+for delivery_mode in denied missing; do
   STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case "kafka-delivery-$delivery_mode" app "STUB_KAFKA_DELIVERY=$delivery_mode"
   is "$delivery_mode blocks application qualification" "$(cat "$TMP/kafka-delivery-$delivery_mode.rc")" "1"
   lacks "no credential writes repair $delivery_mode" "secret set" "$TMP/kafka-delivery-$delivery_mode.argv"
