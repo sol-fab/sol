@@ -1465,6 +1465,16 @@ has "while the observation authority stays the qualifier" \
   "assumed-role/qualifier/session" "$TMP/apptransport.logs/ca-authority.json"
 has "and the transaction uses the qualifier's kubeconfig" \
   "KUBECONFIG_TRANSPORT=$TMP/apptransport.logs/kubeconfig-qualifier.yaml" "$TMP/apptransport.transport"
+
+# #1597: the observer must read the transport's own transcript, not the app-phase
+# transcript that the transport run never wrote.
+has "the Kafka observer reads the transport transcript" \
+  "transport-transaction.txt" "$TMP/apptransport.logs/kafka-delivery.json"
+# #1601: the observation transport is re-established after the final deploy; one
+# establishment before the migration and one after the deploy moves the workload.
+is "the transport is established exactly twice" \
+  "$(grep -c 'transport-establish' "$TMP/apptransport.out" 2>/dev/null || true)" "2"
+
 lacks "never the deploy identity's kubeconfig" \
   "KUBECONFIG_TRANSPORT=$TMP/apptransport.logs/kubeconfig-deploy.yaml" "$TMP/apptransport.transport"
 exists "and the application's own logs are captured for the record" "$TMP/apptransport.logs/app-svc.log"
