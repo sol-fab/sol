@@ -265,6 +265,12 @@ instead of surfacing a store-level conflict. Two paths remain:
   kubeconfigs and transcripts stay in the spent attempt. `verify` records the same eligibility
   in `promotion-eligibility.txt`; a resumed attempt is never promoted.
 
+Each phase appends `phase=<name> exit=<status>` to `phase-verdicts.txt`. `verify` writes
+`promotion_eligible=yes` only when the attempt is continuous **and** `prepare`, `cloud`, `app`
+and `destroy` all exited 0 in this attempt; otherwise it records `promotion_eligible=no` and
+`required_phases_ok=no`. A clean destroy after a failed app is therefore not a qualified
+sequence.
+
 The resume target, cluster and state key must match the source attempt, or it refuses.
 
 ### VERIF-021 — managed secret projection and the fenced grant (alpha E4, E6)
