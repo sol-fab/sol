@@ -1400,6 +1400,15 @@ phase_app() {
     "$CLUSTER-deploy" "$(head -1 "$LOG_DIR/app-image-refs.txt" | cut -d= -f2-)" \
     "$LOG_DIR/application-secret-refusal.log" >>"$LOG_DIR/prerequisites.txt" || return 1
   run app-deploy bash -c "cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args" || return 1
+  # The final deploy reconciles namespaces and their RBAC. Re-establish the
+  # observation transport against the resulting namespaces before observing, so
+  # the CA/delivery reads never use a binding the deploy has just replaced.
+  if [ "$TRANSPORT" = 1 ]; then
+    phase_transport || return 1
+    CA_KUBECONFIG="$QUALIFIER_KUBECONFIG"
+    CA_CONTEXT="$CLUSTER-qualifier"
+    record_ca_authority || return 1
+  fi
   # The workloads exist now; observe the application CA delivery in the same
   # assessment as the migration phase.
   ca_qualify application "$LOG_DIR/ca-application-capture.json" "$LOG_DIR/ca-application.json" || return 1
