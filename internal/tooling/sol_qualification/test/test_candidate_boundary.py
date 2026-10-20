@@ -530,7 +530,7 @@ class Boundary(fixture.Binding):
         result = run["results"]["migration"]
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         phase = json.loads((run["root"] / "ca-migration.json").read_text())
-        self.assertIn("another Kubernetes authority", phase["error"])
+        self.assertIn("another Kubernetes authority", "\n".join(phase["errors"]))
 
     def test_boundary_real_driver_gcp_report_without_phases_fails(self):
         observer = {"principal": "gcp:qualifier", "cluster": "offline-cluster",
