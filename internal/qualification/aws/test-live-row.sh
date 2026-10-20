@@ -186,7 +186,7 @@ printf 'KUBECONFIG_TRANSPORT=%s APP_NS=%s APP_SERVICE=%s SCENARIO=%s\n' \
   >>"$TRANSPORT_LOG"
 printf 'health: ok\norder: ord_qual01\nread-back: the worker effect is visible to the service\n'
 printf 'charge id: ord_qual01\nread-back: the worker effect ord_qual01 is visible to the service\n' \
-  >"$1/app-transaction.txt"
+  >"$1/transport-transaction.txt"
 exit 0
 STUB
 chmod +x "$ROOT/internal/qualification/aws/transport-transaction.sh"
@@ -977,7 +977,8 @@ seed_independent_capture() {
   # Standalone observations/destruction represent an existing attempt with captured identities.
   if { [ "$phase" = verify ] || [ "$phase" = destroy ]; } && [ "${STUB_NO_CAPTURE:-0}" != 1 ]; then
     mkdir -p "$LOG_DIR"
-    printf 'attempt=%s\nrow=qualreg\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
+    [ -e "$LOG_DIR/attempt.txt" ] ||
+      printf 'attempt=%s\nrow=qualreg\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
     python3 - "$LOG_DIR/aws-pre-teardown-identities.json" "$INSTALL/candidate.json" "$ATTEMPT" <<'PYTHON'
 import json, sys
 candidate = json.load(open(sys.argv[2]))
@@ -1322,6 +1323,19 @@ lacks "and no establishment is attempted" "establish " "$TMP/norole.establish"
 printf '\nscenario: the app phase drives its transaction through the qualification transport\n'
 run_phase apptransport app TRANSPORT=1 STUB_DDL_NAMESPACE=sol-db-qualreg-aws-us-east-1 STUB_REQUIRE_SUBMISSION_AUTHORITY=1
 is "exit 0" "$(cat "$TMP/apptransport.rc")" "0"
+has "the delivery observation cites the transport transcript" \
+  "transport-transaction.txt" "$TMP/apptransport.logs/kafka-delivery.json"
+is "the transport is re-established after the final deploy" \
+  "$(grep -c '^establish ' "$TMP/apptransport.establish")" "2"
+python3 - "$TMP/apptransport.out" <<'PY'
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+first = text.index("transport-establish")
+second = text.index("transport-establish", first + 1)
+deploy = text.index("app-deploy")
+if not deploy < second:
+    raise SystemExit("the second transport establishment is not after the final deploy")
+PY
 has "the transport is established before Sol moves the workload" \
   "establish test-cluster qualifier us-east-1 pluto-payments" "$TMP/apptransport.establish"
 has "and it observes the database namespace the deploy declared for the migration Job" \
@@ -1948,6 +1962,28 @@ has "carries the published images" "checkout_svc=" "$TMP/resumed.logs/app-image-
 present "$TMP/resumed.logs/database-contract-pins.json" "carries the contract pins"
 not_exists "never carries the spent CA evidence" "$TMP/resumed.logs/ca-evidence"
 has "and says it is diagnostic" "diagnostic only, not promotion-eligible" "$TMP/resumed.out"
+
+printf '\nscenario: promotion eligibility needs every required phase in one attempt\n'
+run_phase ledger-missing verify
+has "a verify without a phase ledger is not promotable" \
+  "promotion_eligible=no" "$TMP/ledger-missing.logs/promotion-eligibility.txt"
+has "and says the required phases are incomplete" \
+  "required_phases_ok=no" "$TMP/ledger-missing.logs/promotion-eligibility.txt"
+mkdir -p "$TMP/ledger-ok.logs"
+printf 'phase=prepare exit=0 at=x\nphase=cloud exit=0 at=x\nphase=app exit=0 at=x\nphase=destroy exit=0 at=x\n' \
+  >"$TMP/ledger-ok.logs/phase-verdicts.txt"
+KEEP_LOG_DIR=1 run_phase ledger-ok verify
+has "a complete continuous sequence is promotable" \
+  "promotion_eligible=yes" "$TMP/ledger-ok.logs/promotion-eligibility.txt"
+has "and records the continuity" \
+  "attempt_continuity=continuous" "$TMP/ledger-ok.logs/promotion-eligibility.txt"
+printf 'phase=prepare exit=0 at=x\nphase=cloud exit=0 at=x\nphase=app exit=0 at=x\nphase=destroy exit=0 at=x\n' \
+  >>"$TMP/resumed.logs/phase-verdicts.txt"
+KEEP_LOG_DIR=1 run_phase resumed verify
+has "a resumed attempt is never promotable even with a complete ledger" \
+  "promotion_eligible=no" "$TMP/resumed.logs/promotion-eligibility.txt"
+has "and records the resumed continuity" \
+  "attempt_continuity=resumed" "$TMP/resumed.logs/promotion-eligibility.txt"
 
 printf '\nscenario: resume refuses a different specimen\n'
 mkdir -p "$TMP/resume-foreign"
