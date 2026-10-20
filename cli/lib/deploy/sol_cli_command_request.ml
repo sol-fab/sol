@@ -25,6 +25,7 @@ type deploy_request =
   ; registry : string option
   ; confirm_group_change : bool
   ; confirm_ecr_removal : bool
+  ; accept_unresolved : bool
   ; loki_push_url : string option
   ; keep_releases : int
   ; await_delegation : int option
@@ -98,6 +99,7 @@ let make_deploy_request
       ~loki_push_url
       ~keep_releases
       ~await_delegation
+      ~accept_unresolved
       ~git_sha
   =
   match invalid_image_ref image_refs with
@@ -148,6 +150,7 @@ let make_deploy_request
           ; registry
           ; confirm_group_change
           ; confirm_ecr_removal
+          ; accept_unresolved
           ; loki_push_url
           ; keep_releases
           ; await_delegation

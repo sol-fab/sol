@@ -386,7 +386,7 @@ let environment_refusal_lines ~target ~because =
   ]
 ;;
 
-let environment_stage ~target ~target_cfg ~run_log ~action () =
+let environment_stage ~target ~target_cfg ~run_log ~action ~accept_unresolved () =
   if not (allow_setup action)
   then (
     eprint_guided
@@ -404,7 +404,14 @@ let environment_stage ~target ~target_cfg ~run_log ~action () =
           target
       ];
     match
-      Sol_cli_environment_stage.apply ~assets ~run_log ~target ~var_file:None ~vars:[] ()
+      Sol_cli_environment_stage.apply
+        ~accept_unresolved
+        ~assets
+        ~run_log
+        ~target
+        ~var_file:None
+        ~vars:[]
+        ()
     with
     | Ok (Sol_cli_environment_stage.Applied { cluster; infra_dir }) ->
       print_guided [ Printf.sprintf "The environment for %s is provisioned." target ];
@@ -419,7 +426,8 @@ let environment_stage ~target ~target_cfg ~run_log ~action () =
            ("\n" ^ Sol_cli_environment_stage.failure_to_string failure))
 ;;
 
-let first_run ~target ~target_cfg ~action ~await_delegation ~run_log () =
+let first_run ~target ~target_cfg ~action ~await_delegation ~run_log ~accept_unresolved ()
+  =
   print_guided
     [ ""
     ; Printf.sprintf
@@ -435,7 +443,7 @@ let first_run ~target ~target_cfg ~action ~await_delegation ~run_log () =
     | Ok Installation_reported -> Error (Sol_cli_exit.reported ~code:1 ())
     | Error exit -> Error exit
   in
-  environment_stage ~target ~target_cfg ~run_log ~action ()
+  environment_stage ~target ~target_cfg ~run_log ~action ~accept_unresolved ()
 ;;
 
 let reconcile_environment_for_deploy
@@ -444,6 +452,7 @@ let reconcile_environment_for_deploy
       ~run_log
       ~await_delegation
       ~confirm_ecr_removal
+      ~accept_unresolved
       ()
   =
   let target_cfg = planning.Sol_cli_deploy_selection.Target_plan_input.config.target in
@@ -489,6 +498,7 @@ let reconcile_environment_for_deploy
   match
     Sol_cli_environment_stage.apply_config
       ~confirm_ecr_removal
+      ~accept_unresolved
       ~assets
       ~run_log
       ~config:planning.config
@@ -521,6 +531,7 @@ let destination_or_environment_stage
       ~action
       ~await_delegation
       ~confirm_ecr_removal
+      ~accept_unresolved
       ()
   =
   let target_cfg =
@@ -533,7 +544,14 @@ let destination_or_environment_stage
   in
   let first_run () =
     let* destination, infra_dir =
-      first_run ~target ~target_cfg ~action ~await_delegation ~run_log ()
+      first_run
+        ~target
+        ~target_cfg
+        ~action
+        ~await_delegation
+        ~run_log
+        ~accept_unresolved
+        ()
     in
     Ok (destination, true, Some infra_dir)
   in
@@ -547,6 +565,7 @@ let destination_or_environment_stage
       ~run_log
       ~await_delegation
       ~confirm_ecr_removal
+      ~accept_unresolved
       ()
     |> Result.map (fun (destination, infra_dir) -> destination, true, Some infra_dir)
   else (
@@ -940,6 +959,7 @@ let run_apply
       ~run_log
       ~confirm_group_change
       ~confirm_ecr_removal
+      ~accept_unresolved
       ~loki_push_url
       ~await_delegation
       ()
@@ -990,6 +1010,7 @@ let run_apply
       ~action:Sol_cli_command_request.Deploy_apply
       ~await_delegation
       ~confirm_ecr_removal
+      ~accept_unresolved
       ()
   in
   let target_cfg = planning.Sol_cli_deploy_selection.Target_plan_input.config.target in
@@ -1158,6 +1179,7 @@ let run (req : Sol_cli_command_request.deploy_request) =
       ~run_log
       ~confirm_group_change:req.confirm_group_change
       ~confirm_ecr_removal:req.confirm_ecr_removal
+      ~accept_unresolved:req.accept_unresolved
       ~loki_push_url:req.loki_push_url
       ~await_delegation
       ()
@@ -1170,6 +1192,7 @@ let run (req : Sol_cli_command_request.deploy_request) =
         ~action:(Sol_cli_command_request.Deploy_dry_run { emit_to })
         ~await_delegation
         ~confirm_ecr_removal:req.confirm_ecr_removal
+        ~accept_unresolved:req.accept_unresolved
         ()
     in
     run_dry_run (context_of ~destination) ~emit_to ~await_delegation
@@ -1182,6 +1205,7 @@ let run (req : Sol_cli_command_request.deploy_request) =
         ~action:(Sol_cli_command_request.Deploy_emit_to dir)
         ~await_delegation
         ~confirm_ecr_removal:req.confirm_ecr_removal
+        ~accept_unresolved:req.accept_unresolved
         ()
     in
     run_emit (context_of ~destination) ~dir
@@ -1397,6 +1421,7 @@ let cmd =
              registry
              confirm_group_change
              confirm_ecr_removal
+             accept_unresolved
              loki_push_url
              keep_releases
              await_delegation
@@ -1417,6 +1442,7 @@ let cmd =
                   ~keep_releases
                   ~await_delegation
                   ~git_sha:Sol_cli_command_request.git_sha
+                  ~accept_unresolved
                 |> Sol_cli_exit.of_msg
               in
               run req))
@@ -1429,6 +1455,7 @@ let cmd =
       $ registry_arg
       $ confirm_group_change_flag
       $ confirm_ecr_removal_flag
+      $ Cmd_cloud_tf.accept_unresolved_flag
       $ loki_push_url_arg
       $ keep_releases_arg
       $ await_delegation_arg)
