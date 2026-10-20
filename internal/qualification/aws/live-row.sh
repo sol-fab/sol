@@ -1147,6 +1147,8 @@ app_database_field() {
 app_verify_kafka_delivery() {
   local state="$LOG_DIR/state/cloud.tfstate" public unit credential
   local consumers=() behavioral=()
+  local transaction="$LOG_DIR/app-transaction.txt"
+  if [ "$TRANSPORT" = 1 ]; then transaction="$LOG_DIR/transport-transaction.txt"; fi
   # Independent requirements for this row's selected reference applications.
   # Do not derive them from observed env refs: a missing projection must fail.
   for unit in $APP_UNITS; do
@@ -1183,7 +1185,7 @@ app_verify_kafka_delivery() {
     --kubeconfig "$CA_KUBECONFIG" \
     --secret-kubeconfig "$DEPLOY_KUBECONFIG" \
     --credential-secret "$credential" \
-    --transaction "$LOG_DIR/app-transaction.txt" \
+    --transaction "$transaction" \
     "${behavioral[@]}" \
     "${consumers[@]}" \
     $(app_namespaces) >"$LOG_DIR/kafka-delivery.json"

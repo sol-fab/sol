@@ -93,7 +93,7 @@ class Delivery(unittest.TestCase):
     def tearDown(self):
         Path(self.transaction).unlink(missing_ok=True)
 
-    def read_json(self, argv):
+    def read_json(self, argv, what):
         self.calls.append(argv)
         if argv[:3] == ["gcloud", "projects", "describe"]:
             return {"projectId": "project", "projectNumber": "123"}
@@ -101,7 +101,7 @@ class Delivery(unittest.TestCase):
             return self.workloads
         self.fail(f"unexpected JSON read: {argv}")
 
-    def read_text(self, argv):
+    def read_text(self, argv, what):
         self.calls.append(argv)
         if "secret" in argv:
             return self.metadata
