@@ -59,16 +59,16 @@
    BOUNDARY_PART
    0
    (run
-   python3
-   %{dep:test_candidate_boundary.py}
-   %{dep:candidate_boundary.exe}
-   %{dep:../../../../cli/bin/database_contract_projection.exe}
-   %{dep:../../../qualification/database-contract-binding.py}
-   %{dep:../../scripts/build-release-bundle.sh}
-   %{dep:../../../../cli/test/test_database_contract_binding.py}
-   %{workspace_root}
-   %{dep:candidate-obligations.golden}
-   %{dep:../bin/qualification_database_ca.exe}))))
+    python3
+    %{dep:test_candidate_boundary.py}
+    %{dep:candidate_boundary.exe}
+    %{dep:../../../../cli/bin/database_contract_projection.exe}
+    %{dep:../../../qualification/database-contract-binding.py}
+    %{dep:../../scripts/build-release-bundle.sh}
+    %{dep:../../../../cli/test/test_database_contract_binding.py}
+    %{workspace_root}
+    %{dep:candidate-obligations.golden}
+    %{dep:../bin/qualification_database_ca.exe}))))
 
 (rule
  (alias runtest)
@@ -88,16 +88,16 @@
    BOUNDARY_PART
    1
    (run
-   python3
-   %{dep:test_candidate_boundary.py}
-   %{dep:candidate_boundary.exe}
-   %{dep:../../../../cli/bin/database_contract_projection.exe}
-   %{dep:../../../qualification/database-contract-binding.py}
-   %{dep:../../scripts/build-release-bundle.sh}
-   %{dep:../../../../cli/test/test_database_contract_binding.py}
-   %{workspace_root}
-   %{dep:candidate-obligations.golden}
-   %{dep:../bin/qualification_database_ca.exe}))))
+    python3
+    %{dep:test_candidate_boundary.py}
+    %{dep:candidate_boundary.exe}
+    %{dep:../../../../cli/bin/database_contract_projection.exe}
+    %{dep:../../../qualification/database-contract-binding.py}
+    %{dep:../../scripts/build-release-bundle.sh}
+    %{dep:../../../../cli/test/test_database_contract_binding.py}
+    %{workspace_root}
+    %{dep:candidate-obligations.golden}
+    %{dep:../bin/qualification_database_ca.exe}))))
 
 (test
  (name test_live_kubernetes)
