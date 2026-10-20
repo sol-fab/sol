@@ -1142,9 +1142,12 @@ app_verify_kafka_delivery() {
     esac
   done
   public="$(jq -ce '.outputs.kafka_authority.value | select(type == "object")' "$state")" || return 1
+  # Read the consumers through the same namespace-scoped observation transport as the
+  # CA. The cluster-access identity deliberately has no read in application namespaces;
+  # observing as it would report the delivery as unreadable, not as delivered.
   printf '%s' "$public" | python3 "$ROOT/internal/qualification/kafka-delivery.py" \
     --provider aws --cluster "$CLUSTER" --region "$AWS_REGION" --account "$ACCOUNT" \
-    --kubeconfig "$ACCESS_KUBECONFIG" \
+    --kubeconfig "$CA_KUBECONFIG" \
     "${consumers[@]}" \
     $(app_namespaces) >"$LOG_DIR/kafka-delivery.json"
 }
