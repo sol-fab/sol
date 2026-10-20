@@ -556,6 +556,13 @@ case " $* " in
     if [ "${STUB_KAFKA_DELIVERY:-ok}" = denied ]; then exit 1; fi
     printf 'target-kafka-creds\n'
     exit 0 ;;
+  # A unit Secret that still carries the administrative connection is the ADR 0007
+  # defect: the workload received the master credential instead of its DML class.
+  # This must precede the generic `-o json` branch below, whose wildcard also matches
+  # `-o jsonpath=`.
+  *" get secret charge-svc-secrets "*" -o jsonpath={.data.POSTGRES_URL}"*)
+    if [ "${STUB_MASTER_COPY:-0}" = "1" ]; then printf 'cG9zdGdyZXM6Ly8='; fi
+    exit 0 ;;
   *"get secret "*" -o json"*)
     case "$*" in
       *"get secret redpanda-users "*)
@@ -682,9 +689,6 @@ case " $* " in
     printf '%s\n' \
       "${STUB_DML_NAMESPACE:-pluto-payments} ${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-dml-creds" \
       "${STUB_DDL_NAMESPACE:-pluto-comms} ${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-ddl-creds"
-    exit 0
-    ;;
-  *" get secret charge-svc-secrets "*)
     exit 0
     ;;
   *" config view "*)
@@ -1204,6 +1208,17 @@ has "and the application phase after the final deploy" \
   "application" "$TMP/ok.logs/ca-phases.txt"
 has "and the report phase that re-reads durable evidence" \
   "report" "$TMP/ok.logs/ca-phases.txt"
+
+# ADR 0007: a consumer receives its DML class credential, never the administrative
+# connection the deploy used. The delivery check reads the unit Secret; this scenario
+# makes it still carry POSTGRES_URL, so the check must refuse the phase.
+printf '\nscenario: a consumer unit Secret that still carries the master copy is refused (ADR 0007)\n'
+run_row mastercopy TRANSPORT=0 STUB_MASTER_COPY=1
+refused mastercopy "an app phase whose consumer still carries POSTGRES_URL fails"
+has "and names the master copy rather than claiming the class credential was delivered" \
+  "still carries POSTGRES_URL" "$TMP/mastercopy.out"
+lacks "and the transaction never runs on a unit holding the administrative credential" \
+  "the application transaction completed" "$TMP/mastercopy.out"
 
 printf '\nscenario: a database CA the deploy declared but did not write to the consumer is caught (#1481)\n'
 run_row caabsent TRANSPORT=0 STUB_CA_ABSENT=1

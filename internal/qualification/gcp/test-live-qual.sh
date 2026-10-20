@@ -602,6 +602,12 @@ case "$*" in
     if [ "${STUB_KAFKA_DELIVERY:-ok}" = denied ]; then exit 1; fi
     printf 'target-kafka-creds\n'
     exit 0 ;;
+  # ADR 0007: a unit Secret that still carries the administrative connection means the
+  # workload received the master credential instead of its DML class. This must precede
+  # the generic `-o json` branch below, whose wildcard also matches `-o jsonpath=`.
+  *"get secret orders-svc-secrets "*" -o jsonpath={.data.POSTGRES_URL}"*)
+    if [ "${STUB_MASTER_COPY:-0}" = "1" ]; then printf 'cG9zdGdyZXM6Ly8='; fi
+    exit 0 ;;
   *"get secret "*" -o json"*)
     case "$*" in
       *"get secret redpanda-users "*)
@@ -1473,6 +1479,20 @@ lacks "only a unit that protects /metrics declares the API key, so it is not a w
   "$TMP/app-ok.logs/app-runtime-secrets.txt"
 is "the CA phases ran in lifecycle order" \
   "$(tr '\n' ',' <"$TMP/app-ok.logs/ca-phases.txt")" "requirements,migration,application,report,"
+
+# ADR 0007: a consumer receives its DML class credential, never the administrative
+# connection the deploy used. The delivery check reads the unit Secret; this scenario
+# makes it still carry POSTGRES_URL, so the check must refuse the phase.
+printf '\nscenario: a consumer unit Secret that still carries the master copy is refused (ADR 0007)\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_MASTER_COPY=1 run_case app-mastercopy app
+is "the app phase refuses a consumer still carrying POSTGRES_URL" \
+  "$(cat "$TMP/app-mastercopy.rc")" "1"
+has "and names the master copy rather than claiming the class credential was delivered" \
+  "still carries POSTGRES_URL" "$TMP/app-mastercopy.out"
+lacks "and the phase never reports the class credential as delivered" \
+  "the deploy delivered the database as" "$TMP/app-mastercopy.out"
+lacks "and the orders scenario never runs on that unit" \
+  "the alpha orders scenario completed" "$TMP/app-mastercopy.out"
 
 printf '\nscenario: no independent CA observation identity refuses the app phase\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-no-observer app \
