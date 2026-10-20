@@ -75,13 +75,23 @@ cp "$REPO/internal/qualification/application-secret-refusal.sh" "$ROOT/internal/
 cp -R "$REPO/internal/qualification/fixtures" "$ROOT/internal/qualification/"
 cat >"$ROOT/internal/qualification/database-contract-binding.py" <<'STUB'
 #!/usr/bin/env python3
-import json, sys
-# Test stub: the row's pins recorder only needs the canonical shape.
+import json, os, sys
+# Test stub: the pins recorder keeps the canonical shape, and the delivery assertion
+# reads the specimen's consumer set. The default is one consumer; a scenario overrides
+# it with STUB_SPECIMEN_CONSUMERS (a JSON list), which is how a partial or foreign
+# delivery is modelled.
+prefix = os.environ.get("STUB_CLASS_PREFIX", "qualreg-aws-us-east-1")
+consumers = json.loads(os.environ.get("STUB_SPECIMEN_CONSUMERS") or "[]")
+if not consumers:
+    consumers = [{"namespace": "pluto-payments", "name": "orders-svc", "database": "app-db",
+                  "credential": {"namespace": "pluto-payments", "name": prefix + "-dml-creds"},
+                  "consuming_containers": ["orders-svc"]}]
 print(json.dumps({
     "candidate": {"revision": "0" * 40, "bundle_sha256": "0" * 64},
     "definition": {"digest": "0" * 64},
     "specimen": {"digest": "0" * 64,
-                 "declaration": {"requested_target": sys.argv[-1], "target": sys.argv[-1]}},
+                 "declaration": {"requested_target": sys.argv[-1], "target": sys.argv[-1],
+                                 "workloads": consumers}},
 }))
 STUB
 
@@ -581,13 +591,6 @@ case " $* " in
     if [ "${STUB_KAFKA_DELIVERY:-ok}" = denied ]; then exit 1; fi
     printf 'target-kafka-creds\n'
     exit 0 ;;
-  # A unit Secret that still carries the administrative connection is the ADR 0007
-  # defect: the workload received the master credential instead of its DML class.
-  # This must precede the generic `-o json` branch below, whose wildcard also matches
-  # `-o jsonpath=`.
-  *" get secret charge-svc-secrets "*" -o jsonpath={.data.POSTGRES_URL}"*)
-    if [ "${STUB_MASTER_COPY:-0}" = "1" ]; then printf 'cG9zdGdyZXM6Ly8='; fi
-    exit 0 ;;
   *"get secret "*" -o json"*)
     case "$*" in
       *"get secret redpanda-users "*)
@@ -697,6 +700,21 @@ case " $* " in
       printf 'Error from server (NotFound): secrets not found\n' >&2
       exit 1
     fi
+    exit 0
+    ;;
+  # The delivery assertion reads the consumer Deployment's rendered routing: which
+  # Secret its POSTGRES_URL env reads from. `STUB_POSTGRES_SECRET` models a unit that
+  # still reads the master copy; the default is the declared class Secret.
+  *" get deployment "*)
+    dep_name="" dep_ns="" prev=""
+    for a in $*; do
+      [ "$prev" = "deployment" ] && dep_name="$a"
+      [ "$prev" = "-n" ] && dep_ns="$a"
+      prev="$a"
+    done
+    printf '{"spec":{"template":{"spec":{"containers":[{"name":"%s","env":[{"name":"POSTGRES_URL","valueFrom":{"secretKeyRef":{"name":"%s"}}}]}]}}}}\n' \
+      "${STUB_POSTGRES_CONTAINER:-$dep_name}" \
+      "${STUB_POSTGRES_SECRET:-${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-dml-creds}"
     exit 0
     ;;
   *" get secret "*"-dml-creds -n "*)
@@ -947,6 +965,33 @@ for document in root.rglob("candidate*.json"):
     document.write_text(json.dumps(candidate))
 PYTHON
 
+# A scenario that runs `app` alone seeds the specimen the database assertion reads.
+# The default is the same single consumer the binding stub emits; the delivery
+# scenarios override it with STUB_SPECIMEN_CONSUMERS to model a partial or foreign set.
+seed_database_specimen() {
+  local consumers="" prefix="qualreg-aws-us-east-1" arg
+  for arg in "$@"; do
+    case "$arg" in
+      STUB_SPECIMEN_CONSUMERS=*) consumers="${arg#*=}" ;;
+      STUB_CLASS_PREFIX=*) prefix="${arg#*=}" ;;
+    esac
+  done
+  STUB_SPECIMEN_CONSUMERS="$consumers" STUB_CLASS_PREFIX="$prefix" \
+    python3 - "$LOG_DIR/database-contract-specimen.json" <<'PY'
+import json, os, sys
+prefix = os.environ.get("STUB_CLASS_PREFIX") or "qualreg-aws-us-east-1"
+consumers = json.loads(os.environ.get("STUB_SPECIMEN_CONSUMERS") or "[]")
+if not consumers:
+    consumers = [{"namespace": "pluto-payments", "name": "orders-svc", "database": "app-db",
+                  "credential": {"namespace": "pluto-payments", "name": prefix + "-dml-creds"},
+                  "consuming_containers": ["orders-svc"]}]
+json.dump({"digest": "0" * 64,
+           "declaration": {"requested_target": "qualreg/aws/us-east-1",
+                           "target": "qualreg/aws/us-east-1",
+                           "workloads": consumers}}, open(sys.argv[1], "w"))
+PY
+}
+
 run_row() {
   local name="$1"
   shift
@@ -978,6 +1023,7 @@ json.dump({"revision": "0" * 40,
            "requested_target": sys.argv[2],
            "target": sys.argv[2]}, open(sys.argv[1], "w"))
 PY
+  seed_database_specimen "$@"
   # The app phase reuses the digests `cloud` published into Sol's repositories; a scenario that
   # runs `app` alone seeds them exactly as a publish would have.
   stub_published_refs
@@ -1061,6 +1107,7 @@ json.dump({"revision": "0" * 40,
            "requested_target": sys.argv[2],
            "target": sys.argv[2]}, open(sys.argv[1], "w"))
 PY
+    seed_database_specimen "$@"
   fi
   case "$phase" in
     prepare | cloud | app | destroy) STUB_ECR_LIFECYCLE=1 ;;
@@ -1225,7 +1272,7 @@ lacks "no secret value is passed on a command line" \
 has "the observation records no credentials" \
   "never read" "$TMP/ok.logs/kafka-delivery.json"
 has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
-  "database_delivery: qualreg-aws-us-east-1-ddl-creds@pluto-comms (migration Job, as the deploy declared it), qualreg-aws-us-east-1-dml-creds@pluto-payments (unit consumer)" \
+  "database_delivery: qualreg-aws-us-east-1-ddl-creds@pluto-comms (migration Job, as the deploy declared it), qualreg-aws-us-east-1-dml-creds@pluto-payments (unit consumer orders-svc)" \
   "$TMP/ok.logs/prerequisites.txt"
 has "the shared CA family owner ran the migration phase at the row's migration step" \
   "migration" "$TMP/ok.logs/ca-phases.txt"
@@ -1234,16 +1281,46 @@ has "and the application phase after the final deploy" \
 has "and the report phase that re-reads durable evidence" \
   "report" "$TMP/ok.logs/ca-phases.txt"
 
-# ADR 0007: a consumer receives its DML class credential, never the administrative
-# connection the deploy used. The delivery check reads the unit Secret; this scenario
-# makes it still carry POSTGRES_URL, so the check must refuse the phase.
-printf '\nscenario: a consumer unit Secret that still carries the master copy is refused (ADR 0007)\n'
-run_row mastercopy TRANSPORT=0 STUB_MASTER_COPY=1
-refused mastercopy "an app phase whose consumer still carries POSTGRES_URL fails"
-has "and names the master copy rather than claiming the class credential was delivered" \
-  "still carries POSTGRES_URL" "$TMP/mastercopy.out"
-lacks "and the transaction never runs on a unit holding the administrative credential" \
+# ADR 0007 reframed (previously #1604): the claim is causal -- the unit reads
+# POSTGRES_URL from its DML class Secret, not the master. The assertion reads the
+# Deployment's rendered `secretKeyRef`, so a unit that reads its own Secret is refused
+# even when that Secret is otherwise empty. The old shape asserted the absence of the
+# master copy in the unit Secret; that is a different claim (residue hygiene) and is
+# not what this row checks.
+printf '\nscenario: a consumer that reads POSTGRES_URL from its own Secret is refused (ADR 0007)\n'
+run_row mastercopy TRANSPORT=0 STUB_POSTGRES_SECRET=orders-svc-secrets
+refused mastercopy "an app phase whose consumer reads the master copy fails"
+has "and names the Secret the unit actually reads" \
+  "reads POSTGRES_URL from 'orders-svc-secrets', not the declared class Secret" "$TMP/mastercopy.out"
+lacks "and the transaction never runs on a unit reading the administrative credential" \
   "the application transaction completed" "$TMP/mastercopy.out"
+
+# The candidate's specimen declares the consumers. Here two are declared and only one
+# receives its class Secret: the old "any one namespace carries it" loop passed this.
+printf '\nscenario: a declared consumer that did not receive its class Secret is refused\n'
+run_row partial TRANSPORT=0 STUB_DML_NAMESPACE=pluto-payments \
+  STUB_SPECIMEN_CONSUMERS='[{"namespace":"pluto-payments","name":"orders-svc","database":"app-db","credential":{"namespace":"pluto-payments","name":"qualreg-aws-us-east-1-dml-creds"},"consuming_containers":["orders-svc"]},{"namespace":"pluto-comms","name":"fulfilment-worker","database":"app-db","credential":{"namespace":"pluto-comms","name":"qualreg-aws-us-east-1-dml-creds"},"consuming_containers":["fulfilment-worker"]}]'
+refused partial "a partial delivery fails the app phase"
+has "and names the consumer whose class Secret is absent" \
+  "pluto-comms/fulfilment-worker as a database consumer, and qualreg-aws-us-east-1-dml-creds is absent from pluto-comms" \
+  "$TMP/partial.out"
+
+# A consumer outside the harness's old namespace map: the map never looked here, so a
+# delivery that skipped it passed. The specimen names it, so the assertion reaches it.
+printf '\nscenario: a declared consumer outside the old namespace map is still asserted\n'
+run_row outside TRANSPORT=0 STUB_DML_NAMESPACE=pluto-payments \
+  STUB_SPECIMEN_CONSUMERS='[{"namespace":"pluto-payments","name":"orders-svc","database":"app-db","credential":{"namespace":"pluto-payments","name":"qualreg-aws-us-east-1-dml-creds"},"consuming_containers":["orders-svc"]},{"namespace":"pluto-extra","name":"orders-svc","database":"app-db","credential":{"namespace":"pluto-extra","name":"qualreg-aws-us-east-1-dml-creds"},"consuming_containers":["orders-svc"]}]'
+refused outside "a consumer outside the harness's map fails the app phase"
+has "and names the namespace the harness map cannot see" \
+  "pluto-extra/orders-svc as a database consumer" "$TMP/outside.out"
+
+# The positive half: every declared consumer delivered and reading its class Secret.
+printf '\nscenario: every declared consumer is asserted, not just the first\n'
+run_row everyconsumer TRANSPORT=0 STUB_DML_NAMESPACE=pluto-payments \
+  STUB_SPECIMEN_CONSUMERS='[{"namespace":"pluto-payments","name":"orders-svc","database":"app-db","credential":{"namespace":"pluto-payments","name":"qualreg-aws-us-east-1-dml-creds"},"consuming_containers":["orders-svc"]},{"namespace":"pluto-payments","name":"charge-svc","database":"app-db","credential":{"namespace":"pluto-payments","name":"qualreg-aws-us-east-1-dml-creds"},"consuming_containers":["charge-svc"]}]'
+is "both consumers delivered from the class Secret" "$(cat "$TMP/everyconsumer.rc")" "0"
+has "and the first consumer is recorded" "unit consumer orders-svc" "$TMP/everyconsumer.logs/prerequisites.txt"
+has "and the second consumer too" "unit consumer charge-svc" "$TMP/everyconsumer.logs/prerequisites.txt"
 
 printf '\nscenario: a database CA the deploy declared but did not write to the consumer is caught (#1481)\n'
 run_row caabsent TRANSPORT=0 STUB_CA_ABSENT=1
@@ -1388,6 +1465,16 @@ has "while the observation authority stays the qualifier" \
   "assumed-role/qualifier/session" "$TMP/apptransport.logs/ca-authority.json"
 has "and the transaction uses the qualifier's kubeconfig" \
   "KUBECONFIG_TRANSPORT=$TMP/apptransport.logs/kubeconfig-qualifier.yaml" "$TMP/apptransport.transport"
+
+# #1597: the observer must read the transport's own transcript, not the app-phase
+# transcript that the transport run never wrote.
+has "the Kafka observer reads the transport transcript" \
+  "transport-transaction.txt" "$TMP/apptransport.logs/kafka-delivery.json"
+# #1601: the observation transport is re-established after the final deploy; one
+# establishment before the migration and one after the deploy moves the workload.
+is "the transport is established exactly twice" \
+  "$(grep -c 'transport-establish' "$TMP/apptransport.out" 2>/dev/null || true)" "2"
+
 lacks "never the deploy identity's kubeconfig" \
   "KUBECONFIG_TRANSPORT=$TMP/apptransport.logs/kubeconfig-deploy.yaml" "$TMP/apptransport.transport"
 exists "and the application's own logs are captured for the record" "$TMP/apptransport.logs/app-svc.log"
@@ -1999,6 +2086,8 @@ is "resume succeeds" "$(cat "$TMP/resumed.rc")" "0"
 has "records the source attempt" "resumed_from=$TMP/resume-src" "$TMP/resumed.logs/attempt.txt"
 has "marks the attempt diagnostic" "promotion_eligible=no" "$TMP/resumed.logs/attempt.txt"
 has "carries the published images" "checkout_svc=" "$TMP/resumed.logs/app-image-refs.txt"
+ls -la "$TMP/resumed.logs" >&2
+ls -la "$TMP/resume-src" >&2
 present "$TMP/resumed.logs/database-contract-pins.json" "carries the contract pins"
 not_exists "never carries the spent CA evidence" "$TMP/resumed.logs/ca-evidence"
 has "and says it is diagnostic" "diagnostic only, not promotion-eligible" "$TMP/resumed.out"
