@@ -1650,11 +1650,29 @@ app_database_field() {
   app_database_declaration | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1
 }
 
+# The deploy declares the delivered Kafka credential's Secret name in its own
+# output; the row reads that declaration rather than reproducing the naming rule.
+app_kafka_credential_name() {
+  grep -h 'Kafka: delivered the managed credential to ' "$LOG_DIR"/app-deploy.log 2>/dev/null \
+    | tail -1 | sed -n 's/.*credential to \([^ ]*\) in .*/\1/p'
+}
+
 app_verify_kafka_delivery() {
-  local state="$LOG_DIR/state/cloud.tfstate" public
+  local state="$LOG_DIR/state/cloud.tfstate" public credential
+  credential="$(app_kafka_credential_name)"
+  if [ -z "$credential" ]; then
+    say "app: the deploy declared no delivered Kafka credential; the projection cannot be read"
+    return 1
+  fi
   public="$(jq -ce '.outputs.kafka_authority.value | select(type == "object")' "$state")" || return 1
+  # Value-free: projections through the run kubeconfig, Secret metadata only, and the
+  # OCaml order transaction as the behavioral authentication/consumption evidence.
   printf '%s' "$public" | python3 "$ROOT/internal/qualification/kafka-delivery.py" \
     --provider gcp --cluster "$CLUSTER" --region "$REGION" --project "$PROJECT" \
+    --secret-kubeconfig "$RUN_KUBECONFIG" \
+    --credential-secret "$credential" \
+    --transaction "$LOG_DIR/app-transaction-ocaml.txt" \
+    --behavioral-consumer pluto-comms/fulfilment-worker \
     --consumer pluto-payments/orders-svc --consumer pluto-comms/fulfilment-worker \
     $(app_namespaces) >"$LOG_DIR/kafka-delivery.json"
 }
@@ -2413,7 +2431,7 @@ phase_app() {
     finalise_bundle
     return 1
   fi
-  if ! app_verify_kafka_delivery || ! app_verify_database_delivery; then
+  if ! app_verify_database_delivery; then
     capture_app_evidence
     freeze_evidence
     finalise_bundle
@@ -2445,6 +2463,12 @@ phase_app() {
   printf 'OCaml\tB1\trun\tPOST /orders accepted the order and the response carried the submitted id\n' >>"$rows"
   printf 'OCaml\tB4\trun\tthe order read back as fulfilled or confirmed through the service\n' >>"$rows"
   printf 'OCaml\tB3\tnot-run\tthe relay row needs Kafka-topic inspection this HTTP phase does not perform\n' >>"$rows"
+  if ! app_verify_kafka_delivery; then
+    capture_app_evidence
+    freeze_evidence
+    finalise_bundle
+    return 1
+  fi
   if ! run app-transaction-ts bash -c \
       "$(declare -f $(app_helpers)); app_orders_transaction pluto-demo-ts order-svc ts 18081"; then
     capture_app_evidence

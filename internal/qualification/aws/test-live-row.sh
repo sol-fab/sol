@@ -135,6 +135,7 @@ if [ "${1:-}" = "deploy" ]; then
     "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-ddl-creds" \
     "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-db-credentials" \
     "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-db-ca"
+  printf 'Kafka: delivered the managed credential to target-kafka-creds in pluto-comms, pluto-payments.\n'
   printf 'The environment for %s is reconciled.\n' "${2:-}"
   # The cold deploy's artifact gate (#1473): with no --image-ref the target is provisioned but
   # its workloads name no immutable image, so the deploy refuses after reconciling the
@@ -172,7 +173,7 @@ printf '%s\n' "$RUNNER" >"$NO_REVISION_INSTALL/share/sol/$VERSION/migration-runn
 
 cat >"$ROOT/internal/qualification/aws/app-transaction.sh" <<'STUB'
 #!/usr/bin/env bash
-printf 'health: ok\ncharge: ch_qual01\nnotification: ch_qual01\nthe worker consumed the charge\n' \
+printf 'health: ok\ncharge id: ch_qual01\nread-back: the worker effect ch_qual01 is visible to the service\n' \
   >"$1/app-transaction.txt"
 exit 0
 STUB
@@ -184,6 +185,8 @@ printf 'KUBECONFIG_TRANSPORT=%s APP_NS=%s APP_SERVICE=%s SCENARIO=%s\n' \
   "${KUBECONFIG_TRANSPORT:-unset}" "${APP_NS:-unset}" "${APP_SERVICE:-unset}" "${SCENARIO:-unset}" \
   >>"$TRANSPORT_LOG"
 printf 'health: ok\norder: ord_qual01\nread-back: the worker effect is visible to the service\n'
+printf 'charge id: ord_qual01\nread-back: the worker effect ord_qual01 is visible to the service\n' \
+  >"$1/app-transaction.txt"
 exit 0
 STUB
 chmod +x "$ROOT/internal/qualification/aws/transport-transaction.sh"
@@ -537,15 +540,21 @@ case " $* " in
     esac
     printf '{"items":['
     comma=""
+    credential=target-kafka-creds
+    [ "${STUB_KAFKA_DELIVERY:-ok}" != missing ] || credential=other-kafka-creds
     for name in $names; do
       case " ${APP_UNITS:-checkout_svc charge_svc notify_worker orders_svc fulfilment_worker} " in
         *" ${name//-/_} "*) ;;
         *) continue ;;
       esac
-      printf '%s{"metadata":{"name":"%s"},"spec":{"template":{"spec":{"containers":[{"env":[{"name":"KAFKA_SASL_PASSWORD","valueFrom":{"secretKeyRef":{"name":"target-kafka-creds","key":"KAFKA_SASL_PASSWORD"}}}],"volumeMounts":[{"name":"kafka-ca"}]}],"volumes":[{"name":"kafka-ca","secret":{"secretName":"target-kafka-creds","items":[{"key":"KAFKA_SSL_CA_CERT"}]}}]}}}}' "$comma" "$name"
+      printf '%s{"metadata":{"name":"%s"},"spec":{"template":{"spec":{"containers":[{"env":[{"name":"KAFKA_SASL_PASSWORD","valueFrom":{"secretKeyRef":{"name":"%s","key":"KAFKA_SASL_PASSWORD"}}}],"volumeMounts":[{"name":"kafka-ca"}]}],"volumes":[{"name":"kafka-ca","secret":{"secretName":"%s","items":[{"key":"KAFKA_SSL_CA_CERT"}]}}]}}}}' "$comma" "$name" "$credential" "$credential"
       comma=,
     done
     printf ']}\n'
+    exit 0 ;;
+  *"get secret target-kafka-creds "*"jsonpath={.metadata.name}"*)
+    if [ "${STUB_KAFKA_DELIVERY:-ok}" = denied ]; then exit 1; fi
+    printf 'target-kafka-creds\n'
     exit 0 ;;
   *"get secret "*" -o json"*)
     case "$*" in
@@ -1174,7 +1183,8 @@ lacks "no operator POSTGRES_URL is set for the migration path" \
 lacks "no undeclared unit secret is invented and supplied" \
   "SOL_API_KEY" "$TMP/ok.sol"
 lacks "Kafka delivery never uses the application secret CLI" "secret set" "$TMP/ok.sol"
-has "the provider authority matches broker and consumers" '"consumer_password_and_ca_match": true' "$TMP/ok.logs/kafka-delivery.json"
+has "the delivery check is value-free" '"credential_values": "never read"' "$TMP/ok.logs/kafka-delivery.json"
+has "and the transaction is its behavioral evidence" '"consumers"' "$TMP/ok.logs/kafka-delivery.json"
 has "a real operator application-secret refusal is retained" "application_secret_refusal: declared SOL_API_KEY was absent" "$TMP/ok.logs/prerequisites.txt"
 lacks "no removed --target/--domain surface is used" \
   "--domain" "$TMP/ok.sol"
@@ -1183,7 +1193,7 @@ has "the first deploy's migration-gate refusal is recognised, not treated as a f
 lacks "no secret value is passed on a command line" \
   "testpass" "$TMP/ok.sol"
 has "the observation records no credentials" \
-  "never recorded" "$TMP/ok.logs/kafka-delivery.json"
+  "never read" "$TMP/ok.logs/kafka-delivery.json"
 has "the deploy's class-Secret delivery is asserted, not the operator's copy" \
   "database_delivery: qualreg-aws-us-east-1-ddl-creds@pluto-comms (migration Job, as the deploy declared it), qualreg-aws-us-east-1-dml-creds@pluto-payments (unit consumer)" \
   "$TMP/ok.logs/prerequisites.txt"
@@ -1916,7 +1926,7 @@ has "and the refusal says why" "declares no terraform_var_file" "$TMP/no-tfvars.
 lacks "and no Sol command runs" "sol " "$TMP/no-tfvars.sol"
 
 printf '\nscenario: independent Kafka credential observations fail closed\n'
-for mode in denied mismatch; do
+for mode in denied missing; do
   run_row "kafka-delivery-$mode" TRANSPORT=0 "STUB_KAFKA_DELIVERY=$mode"
   refused "kafka-delivery-$mode" "$mode blocks the application qualification"
   lacks "no authority repair for $mode" "secret set" "$TMP/kafka-delivery-$mode.sol"

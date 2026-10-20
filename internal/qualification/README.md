@@ -130,10 +130,12 @@ tests, not substitutes for live evidence.
 
 AWS/GCP rows let Sol generate and persist the Kafka authority, initialize Redpanda,
 and deliver consumer Secrets. They never seed broker or application Kafka credentials.
-`kafka-delivery.py` compares provider values, broker input and every expected consumer's
-password/CA projection in memory. Its evidence contains references and results only.
-The existing application transaction remains the behavioral authentication/message-flow
-proof; matching Secret contents alone does not establish broker behavior.
+`kafka-delivery.py` observes delivery value-free. It verifies the public authority's name and
+provider scope, every expected consumer's projection of the deploy-declared credential Secret
+(SASL password env and broker CA volume), and the Secret's metadata in each consumer namespace.
+It never reads the broker users Secret or any Secret data. The existing application transaction
+remains the behavioral authentication/message-flow proof; matching Secret identity alone does
+not establish broker behavior.
 
 The separate declaration-only application-secret specimen reuses a candidate application
 image and an existing application namespace. It requires a missing `SOL_API_KEY` and must
