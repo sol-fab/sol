@@ -2141,6 +2141,7 @@ is "the default row observes all four Kafka consumers" \
 lacks "credential values never enter state evidence" "qual-secret" "$TMP/ok.logs/state/cloud.tfstate"
 
 printf '\n'
+printf 'PASSED=%d FAILED=%d EXIT=%d\n' "$pass" "$fail" "$([ "$fail" -gt 0 ] && echo 1 || echo 0)"
 if [ "$fail" -gt 0 ]; then
   printf 'live-row self-test: %s passed, %s failed\n' "$pass" "$fail"
   exit 1

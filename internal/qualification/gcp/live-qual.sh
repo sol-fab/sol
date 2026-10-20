@@ -41,6 +41,7 @@ DELEGATION_WAIT_MINUTES="${DELEGATION_WAIT_MINUTES:-25}"
 LOG_DIR="${LOG_DIR:-/tmp/sol-gcp-qual-$ATTEMPT}"
 export LOG_DIR
 RUN_KUBECONFIG="$LOG_DIR/run-kubeconfig.yaml"
+APP_BUILD_CONTEXT="$LOG_DIR/app-build-context"
 export KUBECONFIG="$RUN_KUBECONFIG"
 STATE_BUCKET="${STATE_BUCKET:-sol-qualification-tfstate}"
 CLUSTER_ISSUER="${CLUSTER_ISSUER:-letsencrypt-staging}"
@@ -113,7 +114,7 @@ source "$ROOT/internal/qualification/sol-under-test.sh"
 source "$ROOT/internal/qualification/candidate-binding.sh"
 source "$ROOT/internal/qualification/attempt.sh"
 case "${1:-}" in
-  cloud | app | destroy | stop)
+  prepare | cloud | app | destroy | stop)
     sol_under_test_resolve
     ;;
 esac
@@ -129,13 +130,13 @@ case "${1:-}" in
   cloud)
     attempt_begin 1
     ;;
-  app | destroy | identity)
+  prepare | app | destroy | identity)
     attempt_begin 0
     ;;
 esac
 say "environment: work tree $ROOT, revision $(git -C "$ROOT" rev-parse --short HEAD)"
 case "${1:-}" in
-  cloud | app | destroy | stop)
+  prepare | cloud | app | destroy | stop)
     sol_under_test_record_identity "$LOG_DIR"
     say "sol-under-test: release $SOL_BUNDLE_VERSION at $SOL_INSTALL"
     say "  migration runner: $SOL_RUNNER_IMAGE"
@@ -1433,6 +1434,22 @@ trap 'on_terminate INT' INT
 
 plan_only() { [ "${PLAN_ONLY:-0}" = "1" ]; }
 
+# `prepare` runs before `cloud` and `app`: it materializes the candidate-bound build
+# context once. The cloud phase fails closed without it; the app phase reuses it and
+# never derives namespaces or Dockerfile locations from its own map.
+phase_prepare() {
+  local pins
+  if ! pins="$(sol_candidate_bind_context "$WORKSPACE" "$SOL_REVISION" "$APP_BUILD_CONTEXT")"; then
+    say "prepare: refusing to bind the application to candidate $SOL_REVISION"
+    return 1
+  fi
+  if ! sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$APP_BUILD_CONTEXT" "$pins" "$(git -C "$WORKSPACE" rev-parse HEAD)"; then
+    say "prepare: the candidate binding could not be recorded"
+    return 1
+  fi
+  say "prepare: candidate-bound build context recorded at $APP_BUILD_CONTEXT"
+}
+
 phase_cloud() {
   write_target
   run cloud-check "$SOL" check || return 1
@@ -1460,6 +1477,19 @@ phase_cloud() {
     freeze_evidence
     capture_platform_failure_evidence
 
+    finalise_bundle
+    return 1
+  fi
+  if [ ! -d "$APP_BUILD_CONTEXT" ]; then
+    say "cloud: no candidate-bound build context at $APP_BUILD_CONTEXT; run prepare first"
+    capture_pre_teardown_inventory
+    freeze_evidence
+    finalise_bundle
+    return 1
+  fi
+  if ! cold_start_boundary; then
+    capture_pre_teardown_inventory
+    freeze_evidence
     finalise_bundle
     return 1
   fi
@@ -1715,7 +1745,143 @@ app_namespaces() {
   done | sort -u
 }
 
-app_services() { printf '%s\n' orders_svc fulfilment_worker order_svc fulfillment_worker; }
+app_services() {
+  printf '%s\n' ${APP_SERVICES-orders_svc fulfilment_worker order_svc fulfillment_worker}
+}
+
+# The cold-start selection is the row's exercise set. The S1 seeds override it
+# without changing the target's own unit set, so the boundary's selection can be
+# emptied or made to omit a unit while the deployment itself stays well formed.
+refuse() { say "$@" >&2; }
+
+cold_start_services() {
+  if [ -n "${COLD_START_SERVICES+set}" ]; then
+    printf '%s\n' $COLD_START_SERVICES
+  else
+    app_services
+  fi
+}
+
+# The namespaces the target's selected units declare, taken from the candidate-bound
+# application contract -- the build context candidate-binding.sh materialized from the
+# candidate revision -- and never from the working tree, app_namespaces, or the
+# hardcoded app_context_path map. The boundary is only as good as its selection: a set
+# that omits a unit's namespace, or that silently selected nothing, would pass
+# vacuously (the #1492/#1488 reader-reimplementation defect class).
+candidate_unit_dirs() {
+  local unit dir
+  for unit in $(cold_start_services); do
+    for dir in "$APP_BUILD_CONTEXT"/app/*/"$unit"; do
+      if [ -f "$dir/Dockerfile" ]; then
+        printf '%s\n' "${dir#"$APP_BUILD_CONTEXT"/app/}"
+        break
+      fi
+    done
+  done
+}
+
+# Fails closed when the selection cannot cover every selected unit and the namespaces
+# this row is configured to exercise.
+cold_start_namespaces() {
+  local expected=0 found=0 names unit ns
+  if [ ! -d "$APP_BUILD_CONTEXT" ]; then
+    refuse "REFUSING: no candidate-bound build context at $APP_BUILD_CONTEXT, so the namespaces the"
+    refuse "target's selected units declare cannot be derived from the candidate's own contract"
+    return 1
+  fi
+  for unit in $(cold_start_services); do expected=$((expected + 1)); done
+  names="$(candidate_unit_dirs | while IFS= read -r address; do
+    printf 'pluto-%s\n' "$(app_k8s_name "${address%%/*}")"
+  done | sort -u)"
+  found="$(candidate_unit_dirs | grep -c .)"
+  if [ "$found" != "$expected" ]; then
+    refuse "REFUSING: $found of $expected selected units resolve to a candidate-bound directory, so"
+    refuse "the declared namespace set would omit a consumer (COLD_START_SERVICES='$(cold_start_services | tr '\n' ' ')')"
+    return 1
+  fi
+  if [ -z "$names" ]; then
+    refuse "REFUSING: the selected units declare no namespace, so the boundary assertion would look"
+    refuse "nowhere and pass vacuously"
+    return 1
+  fi
+  for ns in ${COLD_START_REQUIRED_NAMESPACES:-pluto-payments pluto-comms}; do
+    if ! printf '%s\n' "$names" | grep -qxF "$ns"; then
+      refuse "REFUSING: the derived namespace set ($(printf '%s' "$names" | tr '\n' ' ')) does not cover"
+      refuse "$ns, which this row is configured to exercise; the assertion would not be looking"
+      refuse "where the row claims"
+      return 1
+    fi
+  done
+  printf '%s\n' "$names"
+}
+
+# The cold-start boundary, established from the cluster rather than inferred from the
+# deploy log. The claim is "this deploy moved no workload and recorded no release". A
+# namespaced workload or release cannot exist without its namespace, so the boundary is
+# established by showing every declared namespace positively absent. The observation
+# identity's view is validated first: kube-system must be readable and a name that cannot
+# exist must answer NotFound. Present -> UNKNOWN; unreadable -> UNKNOWN; absent-probe
+# not-NotFound -> UNKNOWN. UNKNOWN never becomes ABSENT.
+cold_start_boundary() {
+  local names ns out err file="$LOG_DIR/cold-start-namespaces.txt"
+  local probe="sol-nonexistent-namespace-probe-$ATTEMPT"
+  local present=0 unknown=0
+  names="$(cold_start_namespaces)" || return 1
+  if ! timeout 60 kubectl --kubeconfig "$RUN_KUBECONFIG" get namespace kube-system -o name \
+    >/dev/null 2>"$LOG_DIR/cold-start-namespaces-authority.err"; then
+    say "UNKNOWN: the observation identity's namespace view could not be established, so"
+    say "whether a workload moved cannot be read (see cold-start-namespaces-authority.err)"
+    return 1
+  fi
+  if timeout 60 kubectl --kubeconfig "$RUN_KUBECONFIG" get namespace "$probe" -o name \
+    >/dev/null 2>"$LOG_DIR/cold-start-namespaces-absent-probe.err"; then
+    say "UNKNOWN: the observation identity answered that $probe exists, so its namespace view"
+    say "cannot establish absence"
+    return 1
+  fi
+  if ! grep -q 'NotFound' "$LOG_DIR/cold-start-namespaces-absent-probe.err" 2>/dev/null; then
+    say "UNKNOWN: a name that cannot exist did not answer NotFound, so the namespace view is"
+    say "filtered -- a namespace that does exist would answer the same way, and absence cannot be"
+    say "read from it (see cold-start-namespaces-absent-probe.err)"
+    return 1
+  fi
+  {
+    printf 'boundary_namespaces: %s\n' "$(printf '%s' "$names" | tr '\n' ' ')"
+    printf 'boundary_identity: run (%s), view validated against kube-system and an absent name\n' \
+      "$RUN_KUBECONFIG"
+  } >"$file"
+  while IFS= read -r ns; do
+    [ -n "$ns" ] || continue
+    err="$LOG_DIR/cold-start-namespace-$ns.err"
+    if out="$(timeout 60 kubectl --kubeconfig "$RUN_KUBECONFIG" get namespace "$ns" -o name 2>"$err")"; then
+      printf 'cold-start-namespace: %s PRESENT (it may hold a workload or a recorded release)\n' \
+        "$ns" >>"$file"
+      present=$((present + 1))
+    elif grep -q 'NotFound' "$err" 2>/dev/null; then
+      printf 'cold-start-namespace: %s ABSENT\n' "$ns" >>"$file"
+    else
+      printf 'cold-start-namespace: %s UNKNOWN (%s)\n' \
+        "$ns" "$(head -n 1 "$err" 2>/dev/null)" >>"$file"
+      unknown=$((unknown + 1))
+    fi
+  done <<EOF
+$names
+EOF
+  if [ "$unknown" != 0 ]; then
+    say "$unknown declared namespace(s) could not be read, so whether a workload moved is UNKNOWN"
+    say "  (see $file)"
+    return 1
+  fi
+  if [ "$present" != 0 ]; then
+    say "the cold deploy created a declared namespace before its immutable artifacts were published:"
+    say "  $(grep ' PRESENT' "$file" | sed 's/^cold-start-namespace: //' | tr '\n' ' ')"
+    say "whether it holds a workload or a recorded release cannot be established with the"
+    say "identities this row holds at this point, so the boundary is UNKNOWN, never a pass"
+    return 1
+  fi
+  say "the cold deploy moved no workload and recorded no release: every declared namespace"
+  say "  ($(printf '%s' "$names" | tr '\n' ' ')) is positively absent"
+}
 
 app_helpers() {
   printf '%s\n' say app_registry app_kube_context app_services app_k8s_name app_context_path \
@@ -2508,17 +2674,15 @@ phase_app() {
     exit 2
   fi
   write_app_target
-  local pins
-  if ! pins="$(sol_candidate_bind_context "$WORKSPACE" "$SOL_REVISION" "$LOG_DIR/app-build-context")"; then
-    say "refusing to build the application: it cannot be bound to candidate $SOL_REVISION"
+  APP_BUILD_CONTEXT="$LOG_DIR/app-build-context"
+  export APP_BUILD_CONTEXT
+  if [ ! -d "$APP_BUILD_CONTEXT" ]; then
+    say "app: no candidate-bound build context at $APP_BUILD_CONTEXT; run prepare first"
     capture_app_evidence
     freeze_evidence
     finalise_bundle
     return 1
   fi
-  APP_BUILD_CONTEXT="$LOG_DIR/app-build-context"
-  export APP_BUILD_CONTEXT
-  sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$APP_BUILD_CONTEXT" "$pins" "$(git -C "$WORKSPACE" rev-parse HEAD)"
   if ! record_database_contract_pins; then
     capture_app_evidence
     freeze_evidence
@@ -2796,6 +2960,9 @@ live-qual.sh — one GCP qualification specimen, and the evidence it produces
 usage: live-qual.sh PHASE
 
 phases
+  prepare   materialize the candidate-bound build context from the immutable install
+            and candidate workspace. The cloud and app phases reuse it and fail closed
+            without it; prepare creates no provider state.
   cloud     reconcile the whole target: `sol deploy` establishes the durable
             installation inline (its first-run offer is confirmed through `script`),
             applies the cluster and platform roots, and stops at the workloads whose
@@ -2880,6 +3047,7 @@ USAGE
 }
 
 case "${1:-}" in
+  prepare)  phase_prepare ;;
   cloud)    phase_cloud ;;
   app)      phase_app ;;
   identity) phase_identity ;;
