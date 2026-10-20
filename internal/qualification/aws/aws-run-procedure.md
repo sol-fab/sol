@@ -247,6 +247,24 @@ the bundle, run `sol destroy <target> --apply`, then the independent inventory. 
 `destroy-kubeconfig.txt` (the classification), `cloud-destroy.log`, the inventory files.
 **`verify`** runs the inventory alone. Rows: I3, I5, I7–I9, H6.
 
+### Attempt identity, retries, and promotion eligibility
+
+An attempt owns one disposable specimen and one evidence directory. A CA phase records one
+verdict per instance in that attempt, so the app phase refuses a second run in a spent attempt
+instead of surfacing a store-level conflict. Two paths remain:
+
+- **Promotion-eligible**: one attempt runs `prepare` → `cloud` → `app` → `destroy` → `verify`.
+  This is the only sequence that can produce a promotion verdict; nothing is carried from an
+  earlier attempt.
+- **Diagnostic continuation**: `live-row.sh resume` with `RESUME_FROM=<spent>` and a new
+  `ATTEMPT`/`LOG_DIR` writes a new attempt recording `resumed_from` and
+  `promotion_eligible=no`, and carries only `app-image-refs.txt`,
+  `database-contract-pins.json` and the pre-teardown identity capture. CA evidence,
+  kubeconfigs and transcripts stay in the spent attempt. `verify` records the same eligibility
+  in `promotion-eligibility.txt`; a resumed attempt is never promoted.
+
+The resume target, cluster and state key must match the source attempt, or it refuses.
+
 ### VERIF-021 — managed secret projection and the fenced grant (alpha E4, E6)
 
 This is a live cell of DEC-029's driver × runtime table, run inside the target so the

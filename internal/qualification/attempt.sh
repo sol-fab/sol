@@ -58,6 +58,17 @@ attempt_dir_continuation() {
   return 1
 }
 
+attempt_field() {
+  local key="$1" file
+  file="$(attempt_identity_file)"
+  [ -s "$file" ] || return 1
+  sed -n "s/^$key=//p" "$file" | head -1
+}
+
+attempt_promotion_eligible() {
+  [ "$(attempt_field promotion_eligible || true)" != "no" ]
+}
+
 attempt_write_identity() {
   local file
   file="$(attempt_identity_file)"
@@ -75,6 +86,12 @@ attempt_write_identity() {
     printf 'provider=%s\n' "${PROVIDER:-}"
     printf 'candidate_version=%s\n' "${SOL_CANDIDATE_VERSION:-}"
     printf 'candidate_revision=%s\n' "${SOL_CANDIDATE_REVISION:-}"
+    if [ -n "${ATTEMPT_RESUMED_FROM:-}" ]; then
+      printf 'resumed_from=%s\n' "$ATTEMPT_RESUMED_FROM"
+      printf 'promotion_eligible=no\n'
+    else
+      printf 'promotion_eligible=yes\n'
+    fi
     printf 'started=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } >"$file"
 }

@@ -1915,6 +1915,40 @@ refused no-tfvars "a target that names no terraform_var_file refuses the cloud p
 has "and the refusal says why" "declares no terraform_var_file" "$TMP/no-tfvars.out"
 lacks "and no Sol command runs" "sol " "$TMP/no-tfvars.sol"
 
+printf '\nscenario: a spent attempt refuses a second application run\n'
+mkdir -p "$TMP/spent.logs"
+: >"$TMP/spent.logs/ca-migration.json"
+KEEP_LOG_DIR=1 run_phase spent app
+is "the second application run is refused" "$(cat "$TMP/spent.rc")" "2"
+has "and names the diagnostic continuation" "live-row.sh resume" "$TMP/spent.out"
+has "and the promotion-eligible path" "restart the whole row" "$TMP/spent.out"
+
+printf '\nscenario: resume carries provisioning inputs into a diagnostic attempt\n'
+mkdir -p "$TMP/resume-src/ca-evidence/members"
+printf 'attempt=spent\nrow=qualreg\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\ncluster=test-cluster\n' \
+  >"$TMP/resume-src/attempt.txt"
+printf 'checkout_svc=example/checkout@sha256:%064d\n' 0 >"$TMP/resume-src/app-image-refs.txt"
+printf '{}\n' >"$TMP/resume-src/database-contract-pins.json"
+: >"$TMP/resume-src/ca-evidence/members/spent-verdict"
+run_phase resumed resume "RESUME_FROM=$TMP/resume-src" ATTEMPT=resumed-attempt
+is "resume succeeds" "$(cat "$TMP/resumed.rc")" "0"
+has "records the source attempt" "resumed_from=$TMP/resume-src" "$TMP/resumed.logs/attempt.txt"
+has "marks the attempt diagnostic" "promotion_eligible=no" "$TMP/resumed.logs/attempt.txt"
+has "carries the published images" "checkout_svc=" "$TMP/resumed.logs/app-image-refs.txt"
+present "$TMP/resumed.logs/database-contract-pins.json" "carries the contract pins"
+not_exists "never carries the spent CA evidence" "$TMP/resumed.logs/ca-evidence"
+has "and says it is diagnostic" "diagnostic only, not promotion-eligible" "$TMP/resumed.out"
+
+printf '\nscenario: resume refuses a different specimen\n'
+mkdir -p "$TMP/resume-foreign"
+printf 'attempt=spent\nrow=qualreg\ntarget=other/aws/us-east-1\nstate_key=sol/other/aws/us-east-1/cloud.tfstate\ncluster=test-cluster\n' \
+  >"$TMP/resume-foreign/attempt.txt"
+printf 'x\n' >"$TMP/resume-foreign/app-image-refs.txt"
+printf '{}\n' >"$TMP/resume-foreign/database-contract-pins.json"
+run_phase resumed-foreign resume "RESUME_FROM=$TMP/resume-foreign" ATTEMPT=resumed-foreign
+is "a different target is refused" "$(cat "$TMP/resumed-foreign.rc")" "2"
+has "and names the mismatch" "resume:" "$TMP/resumed-foreign.out"
+
 printf '\nscenario: independent Kafka credential observations fail closed\n'
 for mode in denied mismatch; do
   run_row "kafka-delivery-$mode" TRANSPORT=0 "STUB_KAFKA_DELIVERY=$mode"
