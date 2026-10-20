@@ -355,9 +355,12 @@ type readiness_check =
   ; reason : string
   ; accept : string -> bool
   ; argv : string list
+  ; diagnose : string list option
   }
 
-let check ?(accept = fun _ -> true) name reason argv = { name; reason; accept; argv }
+let check ?(accept = fun _ -> true) ?diagnose name reason argv =
+  { name; reason; accept; argv; diagnose }
+;;
 
 let available_deployments namespace =
   [ "wait"
@@ -513,6 +516,15 @@ let platform_certificate_checks =
              delegation or a failing ACME             challenge is the usual reason"
             declared.namespace
             declared.certificate)
+         ~diagnose:
+           [ "get"
+           ; "certificate/" ^ declared.certificate
+           ; "-n"
+           ; declared.namespace
+           ; "-o"
+           ; "jsonpath={range .status.conditions[*]}{.type}={.status} {.reason}: \
+              {.message};{end}"
+           ]
          [ "wait"
          ; "--for=condition=Ready"
          ; "certificate/" ^ declared.certificate
@@ -615,15 +627,34 @@ let readiness_checks ~provider =
 (* Probe outcomes stay typed and keep the probe's own evidence. A probe that
    could not run (refused, timed out, tool missing, malformed output) is
    [Unobservable], never promoted to a confirmed [Unmet] condition. *)
+(* A failed probe keeps the resource's own answer rather than only the wait
+   timeout. The diagnostic is a read-only command; its failure is reported as
+   unavailable and never replaces the probe's typed outcome (#1301). *)
+let readiness_diagnostic ~run check =
+  match check.diagnose with
+  | None -> ""
+  | Some argv ->
+    (match run argv with
+     | Ok output ->
+       let output = String.trim output in
+       if output = "" then "" else Printf.sprintf " [diagnostic: %s]" output
+     | Error why -> Printf.sprintf " [diagnostic unavailable: %s]" why)
+;;
+
 let readiness ~provider ~run =
   readiness_checks ~provider
   |> List.map (fun check ->
     ( check.name
     , match run check.argv with
       | Ok output when check.accept (String.trim output) -> Established
-      | Ok _ -> Unmet check.reason
+      | Ok _ -> Unmet (check.reason ^ readiness_diagnostic ~run check)
       | Error why ->
-        Unobservable (Printf.sprintf "could not observe %s: %s" check.name why) ))
+        Unobservable
+          (Printf.sprintf
+             "could not observe %s: %s%s"
+             check.name
+             why
+             (readiness_diagnostic ~run check)) ))
 ;;
 
 let readiness_invocations ~provider =

@@ -1300,6 +1300,8 @@ let readiness_with_unobservable_certificates ~provider =
     | "wait" :: "--for=condition=Ready" :: certificate :: _
       when String.starts_with ~prefix:"certificate/" certificate ->
       Error "exited with code 1: error: timed out waiting for the condition"
+    | "get" :: certificate :: _ when String.starts_with ~prefix:"certificate/" certificate
+      -> Ok "Ready=False DoesNotExist: the certificate's Secret does not exist;"
     | other -> converged_cluster provider other)
 ;;
 
@@ -1331,7 +1333,13 @@ let test_ready_requires_the_declared_certificates () =
              declared.certificate
              label)
         true
-        (Sol_cli_string.contains ~needle:declared.certificate summary)))
+        (Sol_cli_string.contains ~needle:declared.certificate summary));
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:
+        (Printf.sprintf "the reason carries the certificate's own condition (%s)" label)
+      true
+      (Sol_cli_string.contains ~needle:"Ready=False DoesNotExist" summary))
 ;;
 
 let readiness_with_storage ~provider storage_output =
