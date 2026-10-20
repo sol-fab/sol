@@ -127,6 +127,23 @@ def check_gcp_database(root):
             )
 
 
+def check_gcp_kafka(root):
+    """The GCP Kafka secret's reader is the deploying identity, explicitly."""
+    kafka = root / "platform/cloud/gcp/cluster/kafka.tf"
+    text = kafka.read_text()
+    if 'data "google_client_openid_userinfo" "deployer"' not in text:
+        fail("FAIL: the GCP Kafka secret no longer reads the deploying identity.")
+    if "data.google_client_openid_userinfo.deployer[0].email" not in text:
+        fail("FAIL: the GCP Kafka reader no longer names the deploying identity.")
+    if "condition     = length(local.kafka_reader_members) > 0" not in text:
+        fail("FAIL: the GCP Kafka precondition no longer checks the resolved deploying identity.")
+    if (
+        "for_each  = var.kafka_connection == null ? toset([]) : local.kafka_reader_members"
+        not in text
+    ):
+        fail("FAIL: the GCP Kafka grant no longer uses the resolved deploying identity.")
+
+
 def check_final_snapshot(rds):
     if tfconfig.variable_reference(rds.body.get("skip_final_snapshot")) != "rds_skip_final_snapshot":
         fail(
@@ -387,6 +404,7 @@ def main():
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     rds = check_aws_database(root)
     check_gcp_database(root)
+    check_gcp_kafka(root)
     check_final_snapshot(rds)
     check_storage_class(root)
     check_deploy_rbac(root)
