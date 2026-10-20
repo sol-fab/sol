@@ -590,6 +590,12 @@ class Boundary(fixture.Binding):
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
 if __name__ == "__main__":
-    suite = unittest.TestSuite(Boundary(name) for name in dir(Boundary) if name.startswith("test_boundary_"))
+    names = [name for name in dir(Boundary) if name.startswith("test_boundary_")]
+    # The suite launches the real driver many times and can approach dune's per-action
+    # timeout on a slow runner. Two rules run disjoint halves; neither weakens a test.
+    part = os.environ.get("BOUNDARY_PART")
+    if part is not None:
+        names = [name for index, name in enumerate(names) if index % 2 == int(part)]
+    suite = unittest.TestSuite(Boundary(name) for name in names)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     sys.exit(not result.wasSuccessful())
