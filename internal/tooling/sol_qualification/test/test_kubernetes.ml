@@ -792,6 +792,68 @@ let test_generic_list_envelope () =
   run_read read (fun _ _ _ _ outcomes -> all "PASS" outcomes)
 ;;
 
+let projected_identity =
+  `Assoc
+    [ "name", `String "identity"
+    ; ( "projected"
+      , `Assoc
+          [ ( "sources"
+            , `List
+                [ `Assoc
+                    [ ( "serviceAccountToken"
+                      , `Assoc
+                          [ "audience", `String "checkout/checkout-svc"
+                          ; "expirationSeconds", `Int 3600
+                          ; "path", `String "token"
+                          ] )
+                    ]
+                ] )
+          ] )
+    ]
+;;
+
+let test_projected_identity_volume () =
+  let read q =
+    let reply = baseline "aws" q in
+    if q.K.resource = K.Deployment
+    then
+      modify_stdout
+        (items
+           (spec (at [ "volumes" ] (fun xs -> `List (list xs @ [ projected_identity ])))))
+        reply
+    else reply
+  in
+  run_read read (fun _ _ _ _ outcomes -> all "PASS" outcomes)
+;;
+
+let test_projected_ca_volume_is_unknown () =
+  let read q =
+    let reply = baseline "aws" q in
+    if q.K.resource = K.Deployment
+    then
+      modify_stdout
+        (items
+           (spec
+              (at [ "volumes" ] (fun xs ->
+                 match list xs with
+                 | [ v ] ->
+                   `List
+                     [ `Assoc
+                         [ "name", field "name" v
+                         ; ( "projected"
+                           , `Assoc
+                               [ ( "sources"
+                                 , `List [ `Assoc [ "configMap", field "configMap" v ] ] )
+                               ] )
+                         ]
+                     ]
+                 | xs -> `List xs))))
+        reply
+    else reply
+  in
+  run_read read (fun _ _ _ _ outcomes -> all "UNKNOWN" outcomes)
+;;
+
 let () =
   Alcotest.run
     "Kubernetes CA qualification"
@@ -801,6 +863,8 @@ let () =
           [ "one shared AWS/GCP observer", test_shared
           ; "multiple namespaces and direct object schemas", test_namespaces_and_objects
           ; "generic List envelope from kubectl", test_generic_list_envelope
+          ; "identity projection is not the database CA", test_projected_identity_volume
+          ; "projected CA delivery fails closed", test_projected_ca_volume_is_unknown
           ; "container and volume chain", test_mounts
           ; "one broken consumer among healthy neighbours", test_single_consumer_failure
           ; "candidate CA key and ConfigMap identity", test_projection

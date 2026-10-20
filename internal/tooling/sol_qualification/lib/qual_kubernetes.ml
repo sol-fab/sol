@@ -150,9 +150,26 @@ let volume json : ca_volume =
   | None ->
     let sources = List.filter (fun (name, _) -> name <> "name") (object_fields json) in
     if List.length sources <> 1 then invalid "missing or ambiguous volume source";
-    ignore (object_fields (snd (List.hd sources)));
-    if optional "projected" json <> None
-    then invalid "projected volume sources are unsupported in I3";
+    let source_kind, source = List.hd sources in
+    ignore (object_fields source);
+    (* A workload-identity projection (serviceAccountToken) is unrelated to the
+       database CA and must not make the whole deployment unreadable. A projected
+       volume can also carry the CA through a configMap source; that shape is not
+       supported, so fail closed rather than call the CA absent. *)
+    if source_kind = "projected"
+    then (
+      let projected_sources =
+        match optional "sources" source with
+        | Some (`List sources) -> sources
+        | _ -> invalid "projected volume has no sources"
+      in
+      if
+        List.exists
+          (function
+            | `Assoc fields -> List.mem_assoc "configMap" fields
+            | _ -> false)
+          projected_sources
+      then invalid "projected ConfigMap volume sources are unsupported in I3");
     { volume_name; source_configmap = None; items = None }
   | Some source ->
     if
