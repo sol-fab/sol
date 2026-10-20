@@ -25,21 +25,21 @@ class ObservationError(ValueError):
     """Only messages constructed here from safe context, never provider values."""
 
 
-def read_json(argv):
+def read_json(argv, what):
     result = subprocess.run(argv, capture_output=True, timeout=60)
     if result.returncode:
         # stdout/stderr can contain a credential, even on a failed read.
         raise ObservationError(
-            f"{argv[0]} {argv[1]} failed (exit {result.returncode}); output withheld"
+            f"{argv[0]} {what} failed (exit {result.returncode}); output withheld"
         )
     return json.loads(result.stdout)
 
 
-def read_text(argv):
+def read_text(argv, what):
     result = subprocess.run(argv, capture_output=True, text=True, timeout=60)
     if result.returncode:
         raise ObservationError(
-            f"{argv[0]} {argv[1]} failed (exit {result.returncode}); output withheld"
+            f"{argv[0]} {what} failed (exit {result.returncode}); output withheld"
         )
     return result.stdout.strip()
 
@@ -60,7 +60,10 @@ def authority_scope(args):
         # Terraform exposes a project ID or project number in the full reference.
         # This is project metadata, not secret material.
         if reference != f"projects/{args.project}/secrets/{authority['secret_name']}":
-            project = read_json(["gcloud", "projects", "describe", args.project, "--format=json"])
+            project = read_json(
+                ["gcloud", "projects", "describe", args.project, "--format=json"],
+                "projects describe",
+            )
             number = project.get("projectNumber")
             if (
                 project.get("projectId") != args.project
@@ -79,9 +82,10 @@ def consumer_projections(args):
     findings = []
     consumers = []
     for namespace in args.namespaces:
-        deployments = read_json(kube + ["get", "deployments", "-n", namespace, "-o", "json"])[
-            "items"
-        ]
+        deployments = read_json(
+            kube + ["get", "deployments", "-n", namespace, "-o", "json"],
+            "deployments",
+        )["items"]
         for deployment in deployments:
             pod = deployment["spec"]["template"]["spec"]
             for container in pod["containers"]:
@@ -141,7 +145,8 @@ def credential_metadata(args, consumers):
                 namespace,
                 "-o",
                 "jsonpath={.metadata.name}",
-            ]
+            ],
+            "secret metadata",
         )
         if name != args.credential_secret:
             raise ObservationError(

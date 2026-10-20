@@ -186,7 +186,7 @@ printf 'KUBECONFIG_TRANSPORT=%s APP_NS=%s APP_SERVICE=%s SCENARIO=%s\n' \
   >>"$TRANSPORT_LOG"
 printf 'health: ok\norder: ord_qual01\nread-back: the worker effect is visible to the service\n'
 printf 'charge id: ord_qual01\nread-back: the worker effect ord_qual01 is visible to the service\n' \
-  >"$1/app-transaction.txt"
+  >"$1/transport-transaction.txt"
 exit 0
 STUB
 chmod +x "$ROOT/internal/qualification/aws/transport-transaction.sh"
@@ -1322,6 +1322,8 @@ lacks "and no establishment is attempted" "establish " "$TMP/norole.establish"
 printf '\nscenario: the app phase drives its transaction through the qualification transport\n'
 run_phase apptransport app TRANSPORT=1 STUB_DDL_NAMESPACE=sol-db-qualreg-aws-us-east-1 STUB_REQUIRE_SUBMISSION_AUTHORITY=1
 is "exit 0" "$(cat "$TMP/apptransport.rc")" "0"
+has "the delivery observation cites the transport transcript" \
+  "transport-transaction.txt" "$TMP/apptransport.logs/kafka-delivery.json"
 has "the transport is established before Sol moves the workload" \
   "establish test-cluster qualifier us-east-1 pluto-payments" "$TMP/apptransport.establish"
 has "and it observes the database namespace the deploy declared for the migration Job" \
