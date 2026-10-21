@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
+# live-* runs against a real provider target; stubbed-* runs the same suite on stubbed provider calls.
 set -euo pipefail
 umask 077
 trap '' PIPE
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 WORKSPACE="${WORKSPACE:-$ROOT/examples/pluto}"
-TFVARS="$ROOT/internal/qualification/gcp/qual-gcp.tfvars"
+TFVARS="$ROOT/internal/qualification/gcp/qual.tfvars"
 OBSERVER="${OBSERVER:-$ROOT/internal/qualification/gcp/observer.py}"
 # The structural transaction predicate shared with the AWS application rows. The
 # harness owns the transport (port-forward, HTTP exchange, polling, evidence);
@@ -3045,7 +3046,7 @@ optional (defaults shown)
   PROJECT=sol-qualification   REGION=us-central1
   BASE_DOMAIN=qual-gcp.sol-fab.dev
   PHASE_TIMEOUT=2700          how long one phase may take before the harness ends it
-  WORKSPACE=examples/pluto    TFVARS=internal/qualification/gcp/qual-gcp.tfvars
+  WORKSPACE=examples/pluto    TFVARS=internal/qualification/gcp/qual.tfvars
   LOG_DIR=/tmp/sol-gcp-qual-<attempt>   XDG_DATA_HOME
   GCP_CA_OBSERVER_SOURCE_KUBECONFIG        operator-established read-only kubeconfig; its selected
                                            context is used, with no credential acquisition

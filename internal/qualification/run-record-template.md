@@ -56,7 +56,7 @@ and nothing else may be modified.
 
 - **Procedure followed:** the active procedure for the provider — AWS:
   `internal/qualification/aws/aws-run-procedure.md`; GCP:
-  `internal/qualification/gcp/gcp-production-single-region-v1-matrix.md` — and the section
+  `internal/qualification/gcp/production-single-region-v1-matrix.md` — and the section
   name within it.
 - **Commands executed, in order, as run** — copied from the log, not reconstructed:
 

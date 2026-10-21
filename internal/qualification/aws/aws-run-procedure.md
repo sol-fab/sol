@@ -1,3 +1,4 @@
+<!-- AWS provider procedure by design; this is the AWS runbook, not a provider-neutral contract. -->
 # AWS live qualification
 
 Live AWS qualification requires explicit operator authorization before billable resources are created. The owning claim contract is `production-single-region-v1-matrix.md`; this procedure is operational guidance, not a second verdict store.
@@ -117,7 +118,7 @@ command's output.
    lifecycle. The harness is given the publisher's ARN as `PUBLISHER_ROLE_ARN` and assumes
    that role itself: publication never runs on the operator's ambient credentials, and the
    phases that publish refuse rather than fall back when the ARN is absent or the session
-   cannot be assumed (`internal/qualification/aws/live-row.sh`).
+   cannot be assumed (`internal/qualification/aws/live-qual.sh`).
 7. The qualification transport role (a name the harness is given, never a target field).
 8. A target file `examples/pluto/sol/environments.local.yml` copied from
    `aws-target.example.yml` with real values. It is untracked by design, so the record
@@ -167,7 +168,7 @@ the destroy is part of the run, not a follow-up. A run that stops early is still
 
 ### The run, phase by phase
 
-`internal/qualification/aws/live-row.sh <phase>` orchestrates Sol's public commands and reads
+`internal/qualification/aws/live-qual.sh <phase>` orchestrates Sol's public commands and reads
 provider/Kubernetes state independently. It never invokes `terraform` or `helm`: the `cloud`
 phase reconciles the *durable* installation inline (the operator's prerequisite) through the
 installed release's `sol deploy <target>` — its first-run offer is confirmed through `script`
@@ -180,7 +181,7 @@ and touch no provider state, so the specimen stays fresh for `cloud`. Evidence: 
 
 **`cloud`** — `sol deploy <target> --registry <registry>` with **no** `--image-ref`: the release
 names no digest yet, so Sol reconciles the durable installation, the cluster and the platform
-(the row's `qual-aws-row.tfvars` reach the roots through the target's `terraform_var_file`, since
+(the row's `qual.tfvars` reach the roots through the target's `terraform_var_file`, since
 `sol deploy` takes no `--var-file`) — the cluster root creates the `pluto/<unit>` repositories the
 target's release names — and then refuses at the immutable-artifact gate with `Deployment
 incomplete.`, before any workload moves (issue #1473). The phase succeeds on the reconciled
@@ -262,7 +263,7 @@ instead of surfacing a store-level conflict. Two paths remain:
 - **Promotion-eligible**: one attempt runs `prepare` → `cloud` → `app` → `destroy` → `verify`.
   This is the only sequence that can produce a promotion verdict; nothing is carried from an
   earlier attempt.
-- **Diagnostic continuation**: `live-row.sh resume` with `RESUME_FROM=<spent>` and a new
+- **Diagnostic continuation**: `live-qual.sh resume` with `RESUME_FROM=<spent>` and a new
   `ATTEMPT`/`LOG_DIR` writes a new attempt recording `resumed_from` and
   `promotion_eligible=no`, and carries only `app-image-refs.txt`,
   `database-contract-pins.json` and the pre-teardown identity capture. CA evidence,

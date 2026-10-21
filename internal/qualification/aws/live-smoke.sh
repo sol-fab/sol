@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # LEGACY, NON-AUTHORITATIVE SMOKE ENTRY POINT. The active qualification runner is
-# `live-row.sh`, and the only independent teardown/absence verdict is `absence.py`
-# invoked by `live-row.sh verify` (matrix H6). This script's cleanup below reads
+# `live-qual.sh`, and the only independent teardown/absence verdict is `absence.py`
+# invoked by `live-qual.sh verify` (matrix H6). This script's cleanup below reads
 # only the EKS cluster and one VPC filter: that is a best-effort smoke convenience,
 # NOT an H6 absence guarantee, and it must not be cited as one. Use
-# `live-row.sh verify` when the claim is "the target is gone".
+# `live-qual.sh verify` when the claim is "the target is gone".
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 WORKSPACE="${WORKSPACE:-$ROOT/examples/pluto}"

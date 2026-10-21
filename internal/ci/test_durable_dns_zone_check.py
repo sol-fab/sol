@@ -19,10 +19,10 @@ ROOT = Path(__file__).resolve().parents[2]
 GUARD = ROOT / "internal/ci/check_durable_dns_zone.py"
 COPIED_FILES = [
     "internal/ci/lib/tfconfig.py",
-    "internal/qualification/aws/live-row.sh",
-    "internal/qualification/aws/qual-aws-row.tfvars",
+    "internal/qualification/aws/live-qual.sh",
+    "internal/qualification/aws/qual.tfvars",
     "internal/qualification/gcp/live-qual.sh",
-    "internal/qualification/gcp/qual-gcp.tfvars",
+    "internal/qualification/gcp/qual.tfvars",
     "cli/lib/cloud/sol_cli_aws_absence.ml",
     "cli/lib/cloud/sol_cli_gcp_absence.ml",
     "cli/lib/cloud/sol_cli_installation_stage.ml",
@@ -121,7 +121,7 @@ def main():
     tmp = scratch()
     mutate(
         tmp,
-        "internal/qualification/aws/qual-aws-row.tfvars",
+        "internal/qualification/aws/qual.tfvars",
         "create_route53_zone = false",
         "create_route53_zone = true",
     )
@@ -139,7 +139,7 @@ def main():
     tmp = scratch()
     # A harness that never reconciles the target leaves the durable installation unowned;
     # remove every whole-target deploy, not just the first, since any of them reconciles it.
-    harness = tmp / "internal/qualification/aws/live-row.sh"
+    harness = tmp / "internal/qualification/aws/live-qual.sh"
     harness.write_text(harness.read_text().replace("deploy '$TARGET'", "plan '$TARGET'"))
     cases.append(
         (
@@ -179,7 +179,7 @@ def main():
     tmp = scratch()
     mutate(
         tmp,
-        "internal/qualification/gcp/qual-gcp.tfvars",
+        "internal/qualification/gcp/qual.tfvars",
         "create_dns_zone = false",
         "create_dns_zone = true",
     )

@@ -1,5 +1,7 @@
 # GCP qualification Attempt 17 (2026-09-28) — `Ready` on GKE Standard, Ready-state destruction, and the TLS blocker
 
+> File names here are historical: `qual-aws-row.tfvars` and `qual-gcp.tfvars` are now `qual.tfvars`, `live-row.sh` is now `live-qual.sh`, and `test-live-row.sh`/`test-live-qual.sh` are now `stubbed-qual-test.sh`.
+
 ## Summary
 
 | | |

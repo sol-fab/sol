@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# live-* runs against a real provider target; stubbed-* runs the same suite on stubbed provider calls.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -67,7 +68,7 @@ NO_REVISION_INSTALL="$TMP/install-no-revision"
 
 mkdir -p "$ROOT/internal/qualification/aws" "$ROOT/internal/qualification/transport" \
   "$WORKSPACE/sol" "$TMP/bin"
-cp "$REPO/internal/qualification/aws/live-row.sh" "$ROOT/internal/qualification/aws/"
+cp "$REPO/internal/qualification/aws/live-qual.sh" "$ROOT/internal/qualification/aws/"
 cp "$REPO/internal/qualification/aws/absence.py" "$ROOT/internal/qualification/aws/"
 cp "$REPO/internal/qualification/sol-under-test.sh" "$ROOT/internal/qualification/"
 cp "$REPO/internal/qualification/candidate-binding.sh" "$ROOT/internal/qualification/"
@@ -256,7 +257,7 @@ qualreg:
       cluster_issuer: letsencrypt-staging
       state_bucket: sol-qual-test-tfstate
       # `sol deploy` takes no --var-file; the row's roots read this file.
-      terraform_var_file: /tmp/qual-aws-row.tfvars
+      terraform_var_file: /tmp/qual.tfvars
 YAML
 
 # The workspace is the candidate's tree, and every bundle names it: a live run
@@ -1049,7 +1050,7 @@ PY
     STUB_APP_REFUSALS=1 STUB_APP_MARKER_DIR="$STUB_APP_MARKER_DIR" \
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
-    "$ROOT/internal/qualification/aws/live-row.sh" app >"$TMP/$name.out" 2>&1
+    "$ROOT/internal/qualification/aws/live-qual.sh" app >"$TMP/$name.out" 2>&1
   echo "$?" >"$TMP/$name.rc"
 }
 
@@ -1135,7 +1136,7 @@ PY
     OPERATOR_ROLE_ARN=arn:aws:iam::1:role/operator QUALIFIER_ROLE=qualifier \
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
-    "$ROOT/internal/qualification/aws/live-row.sh" "$phase" >"$TMP/$name.out" 2>&1
+    "$ROOT/internal/qualification/aws/live-qual.sh" "$phase" >"$TMP/$name.out" 2>&1
   echo "$?" >"$TMP/$name.rc"
 }
 
@@ -1167,7 +1168,7 @@ run_phase_closed_stdout() {
     OPERATOR_ROLE_ARN=arn:aws:iam::1:role/operator QUALIFIER_ROLE=qualifier \
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
-    "$ROOT/internal/qualification/aws/live-row.sh" "$phase" 2>"$TMP/$name.err" | true
+    "$ROOT/internal/qualification/aws/live-qual.sh" "$phase" 2>"$TMP/$name.err" | true
   local -a codes=("${PIPESTATUS[@]}")
   printf '%s\n' "${codes[0]}" >"$TMP/$name.rc"
 }
@@ -1202,7 +1203,7 @@ run_phase_sigterm() {
     OPERATOR_ROLE_ARN=arn:aws:iam::1:role/operator QUALIFIER_ROLE=qualifier \
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
-    "$ROOT/internal/qualification/aws/live-row.sh" "$phase" >"$TMP/$name.out" 2>&1 &
+    "$ROOT/internal/qualification/aws/live-qual.sh" "$phase" >"$TMP/$name.out" 2>&1 &
   local harness_pid=$! waited=0
   while [ ! -e "$LOG_DIR/cloud-apply.log" ] && [ "$waited" -lt 100 ]; do
     sleep 0.1
@@ -1566,7 +1567,7 @@ has "records the staging issuer in the attempt identity" \
 has "labels the attempt mechanism-only" "claim=mechanism-only" "$TMP/cloudrun.logs/attempt.txt"
 has "and marks it not promotion-eligible" "promotion_eligible=no" "$TMP/cloudrun.logs/attempt.txt"
 has "and the preview names the published digest and the row's var file" \
-  "plan qualreg/aws/us-east-1 --var-file $ROOT/internal/qualification/aws/qual-aws-row.tfvars --image-ref checkout_svc=$ECR/pluto/checkout-svc@sha256:" \
+  "plan qualreg/aws/us-east-1 --var-file $ROOT/internal/qualification/aws/qual.tfvars --image-ref checkout_svc=$ECR/pluto/checkout-svc@sha256:" \
   "$TMP/cloudrun.sol"
 lacks "the removed partial cloud apply is never invoked" "cloud apply" "$TMP/cloudrun.sol"
 lacks "and an unpublished artifact set prints no missing-file diagnostic" \
@@ -2132,7 +2133,7 @@ mkdir -p "$TMP/spent.logs"
 : >"$TMP/spent.logs/ca-migration.json"
 KEEP_LOG_DIR=1 run_phase spent app
 is "the second application run is refused" "$(cat "$TMP/spent.rc")" "2"
-has "and names the diagnostic continuation" "live-row.sh resume" "$TMP/spent.out"
+has "and names the diagnostic continuation" "live-qual.sh resume" "$TMP/spent.out"
 has "and the promotion-eligible path" "restart the whole row" "$TMP/spent.out"
 
 printf '\nscenario: resume carries provisioning inputs into a diagnostic attempt\n'

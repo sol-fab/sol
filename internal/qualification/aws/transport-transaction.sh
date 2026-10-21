@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# DEC-039 transport transaction for AWS; GCP has no qualifier principal, see #1616.
 set -uo pipefail
 
 LOG_DIR="${1:?usage: transport-transaction.sh LOG_DIR}"

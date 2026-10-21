@@ -1,5 +1,7 @@
 > Historical snapshot taken 2026-09-18. Its present-tense inventory claims are not current. See `../gcp/gcp-bootstrap-inventory.md` for durable rules and per-run inventories for current state.
 
+> File names here are historical: `qual-aws-row.tfvars` and `qual-gcp.tfvars` are now `qual.tfvars`, `live-row.sh` is now `live-qual.sh`, and `test-live-row.sh`/`test-live-qual.sh` are now `stubbed-qual-test.sh`.
+
 # GCP bootstrap inventory and lifecycle proposal
 
 > **Where the work stands — read this first.** This document is the GCP

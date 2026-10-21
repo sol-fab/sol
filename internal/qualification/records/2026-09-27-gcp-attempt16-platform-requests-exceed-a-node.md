@@ -1,5 +1,7 @@
 # GCP qualification Attempt 16 (2026-09-27) — the platform's pod requests exceed one node's allocatable capacity
 
+> File names here are historical: `qual-aws-row.tfvars` and `qual-gcp.tfvars` are now `qual.tfvars`, `live-row.sh` is now `live-qual.sh`, and `test-live-row.sh`/`test-live-qual.sh` are now `stubbed-qual-test.sh`.
+
 ## Summary
 
 | | |

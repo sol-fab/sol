@@ -186,7 +186,7 @@ repository checks rather than this harness.
 | H3 | Evidence distinguishes inspection from behavioural proof | inspect the bundle schema | each row is tagged `behavioural` or `inspection`; no inspection row passes a failure scenario | bundle schema + per-row tags |
 | H4 | Repeatable on a clean target from the declared matrix + named credentials | teardown, re-provision, re-run | second run reproduces pass/fail with only documented inputs | two bundle headers |
 | H5 | Secrets redacted | scan the bundle | zero secret values | redaction scan |
-| H6 | Teardown independently verified | after the run, `live-row.sh verify` reads every required disposable class through the provider | EKS cluster, RDS instance, subnet group and snapshots, EC2 instances, VPC, NAT gateways, elastic IPs, EBS volumes, OIDC providers, security groups, load balancers, ECR repositories, IAM roles and policies, S3 buckets, CloudWatch dashboards and log groups are each ABSENT, and every class's read succeeded and had the expected shape; a failed, unreadable, unshaped or unattributable read is UNKNOWN and fails the run | the tri-state per-class verdict, the exact queries and raw provider output (`aws-inventory.txt`, `aws-inventory-verdict.txt`) |
+| H6 | Teardown independently verified | after the run, `live-qual.sh verify` reads every required disposable class through the provider | EKS cluster, RDS instance, subnet group and snapshots, EC2 instances, VPC, NAT gateways, elastic IPs, EBS volumes, OIDC providers, security groups, load balancers, ECR repositories, IAM roles and policies, S3 buckets, CloudWatch dashboards and log groups are each ABSENT, and every class's read succeeded and had the expected shape; a failed, unreadable, unshaped or unattributable read is UNKNOWN and fails the run | the tri-state per-class verdict, the exact queries and raw provider output (`aws-inventory.txt`, `aws-inventory-verdict.txt`) |
 
 ## I. Lifecycle phases — authority, desired-state policy and transition (ADR 0003)
 
@@ -270,7 +270,7 @@ Obligations the normal run collects, so they are exercised without a separate sc
 
 1. **Make the absence verdict fire.** Section H's independent inventory queries every required
    disposable class (the run procedure lists them). Leave one residual of a class where
-   `live-row.sh verify` will observe it — or record a real leftover — so the checks are shown
+   `live-qual.sh verify` will observe it — or record a real leftover — so the checks are shown
    able to fail against real resources, not only against the offline harness's mock. A green
    absence check that has never been seen to go red is not evidence of absence.
 2. **Record the steady-state authority posture as the named identities.** Section F and `I3`:

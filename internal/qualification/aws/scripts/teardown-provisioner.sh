@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# AWS provisioner bootstrap by design; GCP reaches its provider through Workload Identity instead.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 

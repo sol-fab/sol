@@ -22,7 +22,7 @@ Paths below are relative to `internal/tooling/sol_qualification/test/` unless st
 | Healthy application delivery cannot cover missing migration CA | `test_migration_ca.ml:test_application_success_cannot_cover_migration`; "migration ConfigMap absent" |
 | Valid consistently renamed volume | `test_candidate_boundary.py:test_boundary_integrated_path_renamed_volume_passes` |
 | Nonconsumer has no CA obligation | `test_domain.ml:test_golden`; authenticated process "nonconsumer excluded; complete consumers pass"; compiled-driver scenarios |
-| Missing DDL/DML Secret is outside the CA predicate | Provider `app_verify_database_delivery` tests in `internal/qualification/aws/test-live-row.sh` and `internal/qualification/gcp/test-live-qual.sh` |
+| Missing DDL/DML Secret is outside the CA predicate | Provider `app_verify_database_delivery` tests in `internal/qualification/aws/stubbed-qual-test.sh` and `internal/qualification/gcp/stubbed-qual-test.sh` |
 | Migration Job substitution, missing execution, incomplete discovery | `test_migration_ca.ml` and `test_live_kubernetes.ml` migration cases |
 
 The comparison-only checks for extracting historical functions, unsupported fixture
