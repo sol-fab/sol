@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# live-* runs against a real provider target; stubbed-* runs the same suite on stubbed provider calls.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -14,7 +15,7 @@ ROOT="$TMP/root"
 mkdir -p "$ROOT/internal/qualification/gcp" "$ROOT/internal/qualification"
 cp "$HERE/live-qual.sh" "$ROOT/internal/qualification/gcp/"
 cp "$HERE/observer.py" "$ROOT/internal/qualification/gcp/"
-cp "$HERE/qual-gcp.tfvars" "$ROOT/internal/qualification/gcp/"
+cp "$HERE/qual.tfvars" "$ROOT/internal/qualification/gcp/"
 cp -R "$HERE/fixtures" "$ROOT/internal/qualification/gcp/"
 cp "$REPO/internal/qualification/sol-under-test.sh" "$ROOT/internal/qualification/"
 cp "$REPO/internal/qualification/candidate-binding.sh" "$ROOT/internal/qualification/"
@@ -2799,7 +2800,7 @@ has "it still reports what it saw" "resources remain" "$TMP/verify-fail.out"
 PRESEED_TARGET=1 run_case verify-clean verify
 is "a clean verification exits 0" "$(cat "$TMP/verify-clean.rc")" "0"
 lacks "a clean verification invokes no teardown" "sol destroy" "$TMP/verify-clean.argv"
-if grep -q 'NOT_FOUND: Unknown service account' "$HERE/test-live-qual.sh"; then
+if grep -q 'NOT_FOUND: Unknown service account' "$HERE/stubbed-qual-test.sh"; then
   ok "the not-found fixture is the provider's captured wording (underscore form), not a paraphrase"
 else
   no "the not-found fixture is the provider's captured wording (underscore form), not a paraphrase" \

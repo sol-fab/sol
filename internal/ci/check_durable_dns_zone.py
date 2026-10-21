@@ -29,9 +29,9 @@ import tfconfig
 PROVIDERS = {
     "aws": {
         "roots": ("platform/cloud/aws/bootstrap", "platform/cloud/aws/cluster"),
-        "harness": "internal/qualification/aws/live-row.sh",
+        "harness": "internal/qualification/aws/live-qual.sh",
         "absence": "cli/lib/cloud/sol_cli_aws_absence.ml",
-        "target": "internal/qualification/aws/qual-aws-row.tfvars",
+        "target": "internal/qualification/aws/qual.tfvars",
         "zone_type": "aws_route53_zone",
         "zone_name": "qualification",
         "backend": "s3",
@@ -43,7 +43,7 @@ PROVIDERS = {
         "roots": ("platform/cloud/gcp/bootstrap", "platform/cloud/gcp/cluster"),
         "harness": "internal/qualification/gcp/live-qual.sh",
         "absence": "cli/lib/cloud/sol_cli_gcp_absence.ml",
-        "target": "internal/qualification/gcp/qual-gcp.tfvars",
+        "target": "internal/qualification/gcp/qual.tfvars",
         "zone_type": "google_dns_managed_zone",
         "zone_name": "qualification",
         "backend": "gcs",

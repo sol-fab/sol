@@ -6,7 +6,7 @@ guard="$root/internal/ci/check_public_cloud_lifecycle.sh"
 
 runners=(
   "internal/qualification/aws/live-smoke.sh"
-  "internal/qualification/aws/live-row.sh"
+  "internal/qualification/aws/live-qual.sh"
   "internal/qualification/gcp/live-qual.sh"
 )
 

@@ -321,7 +321,7 @@ jobs:
       # and spends nothing.
       - name: Qualification harness state-machine test
         if: needs.classify.outputs.kind != 'docs-only'
-        run: internal/qualification/gcp/test-live-qual.sh
+        run: internal/qualification/gcp/stubbed-qual-test.sh
 
       - name: Kafka authority/delivery observer test
         if: needs.classify.outputs.kind != 'docs-only'
@@ -329,7 +329,7 @@ jobs:
 
       - name: AWS row harness test
         if: needs.classify.outputs.kind != 'docs-only'
-        run: internal/qualification/aws/test-live-row.sh
+        run: internal/qualification/aws/stubbed-qual-test.sh
 
       # The application a live run exercises must be built from the candidate
       # revision, not from whatever a checkout or a moving ref holds: a stale

@@ -10,7 +10,7 @@ set -euo pipefail
 root="${1:-$(git rev-parse --show-toplevel)}"
 runners=(
   "internal/qualification/aws/live-smoke.sh"
-  "internal/qualification/aws/live-row.sh"
+  "internal/qualification/aws/live-qual.sh"
   "internal/qualification/gcp/live-qual.sh"
 )
 

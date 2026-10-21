@@ -1,5 +1,7 @@
 # AWS durable hosted zone: the delegated zone adopted into durable ownership (2026-09-29)
 
+> File names here are historical: `qual-aws-row.tfvars` and `qual-gcp.tfvars` are now `qual.tfvars`, `live-row.sh` is now `live-qual.sh`, and `test-live-row.sh`/`test-live-qual.sh` are now `stubbed-qual-test.sh`.
+
 Operator instruction: choose mechanism (a) — the smallest AWS mirror of the existing GCP
 durable-zone ownership mechanism, consistent with DEC-042/DEC-043 and HARDEN-004.
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# live-* runs against a real provider target; stubbed-* runs the same suite on stubbed provider calls.
 set -uo pipefail
 umask 077
 trap '' PIPE
@@ -10,7 +11,7 @@ ROW="${ROW:-qualreg}"
 PROVIDER=aws
 ATTEMPT="${ATTEMPT:-}"
 TARGET="${TARGET:-$ROW-$ATTEMPT/aws/us-east-1}"
-TFVARS="${TFVARS:-$ROOT/internal/qualification/aws/qual-aws-row.tfvars}"
+TFVARS="${TFVARS:-$ROOT/internal/qualification/aws/qual.tfvars}"
 AWS_PROFILE="${AWS_PROFILE:-sol-qual}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 CLUSTER="${CLUSTER:?Set CLUSTER to this the run EKS cluster name}"
@@ -158,9 +159,9 @@ esac
 
 usage() {
   cat <<'USAGE'
-live-row.sh — the AWS regression row: the application contract GCP Attempt 28 established
+live-qual.sh — the AWS regression row: the application contract GCP Attempt 28 established
 
-usage: live-row.sh PHASE      PHASE in: prepare | cloud | transport | app | destroy | verify | resume
+usage: live-qual.sh PHASE      PHASE in: prepare | cloud | transport | app | destroy | verify | resume
 
 required
   ATTEMPT           a unique identity for this disposable run; the target, state key and
@@ -180,7 +181,7 @@ optional (defaults shown)
   TARGET=qualreg-<attempt>/aws/us-east-1   CONTINUE_ATTEMPT=0
   ECR_REGISTRY=<account>.dkr.ecr.us-east-1.amazonaws.com
   AWS_PROFILE=sol-qual           AWS_REGION=us-east-1
-  TFVARS=internal/qualification/aws/qual-aws-row.tfvars
+  TFVARS=internal/qualification/aws/qual.tfvars
   WORKSPACE=examples/pluto
   PHASE_TIMEOUT=2400             LOG_DIR=/tmp/sol-aws-row-<attempt>
   OPERATOR_ROLE_ARN=<unset>      TRANSPORT=1
@@ -1088,7 +1089,7 @@ app_push_images() {
   : >"$LOG_DIR/app-image-refs.txt"
   rm -f "$LOG_DIR/publisher-identity.txt"
   if [ ! -s "$LOG_DIR/app-built-tags.txt" ]; then
-    say "no built images to publish for $TARGET; run live-row.sh prepare first"
+    say "no built images to publish for $TARGET; run live-qual.sh prepare first"
     return 0
   fi
   publisher_session || return 1
@@ -1135,8 +1136,8 @@ app_require_published_images() {
     say "reusing the digests the cloud phase published into Sol's repositories"
     return 0
   fi
-  say "no published image digests for $TARGET: run live-row.sh cloud first, which provisions the"
-  say "target's repositories and publishes the images built by live-row.sh prepare"
+  say "no published image digests for $TARGET: run live-qual.sh cloud first, which provisions the"
+  say "target's repositories and publishes the images built by live-qual.sh prepare"
   return 1
 }
 
@@ -1402,7 +1403,7 @@ phase_app() {
   # spent. Refuse with the supported paths instead of a store-level conflict.
   if [ -e "$LOG_DIR/ca-migration.json" ] || [ -e "$LOG_DIR/ca-application.json" ]; then
     say "attempt $ATTEMPT already recorded CA observations; an attempt's CA evidence cannot be re-recorded"
-    say "for a diagnostic continuation: live-row.sh resume with RESUME_FROM=$LOG_DIR and a new ATTEMPT/LOG_DIR"
+    say "for a diagnostic continuation: live-qual.sh resume with RESUME_FROM=$LOG_DIR and a new ATTEMPT/LOG_DIR"
     say "for a promotion-eligible verdict: restart the whole row in a fresh attempt (prepare through verify)"
     return 2
   fi

@@ -95,7 +95,7 @@ explicitly. Run it against the installed candidate — extract the draft's bundl
 and set `SOL_INSTALL` to its `sol-<version>` prefix. Keep the draft’s archive beside
 `SOL_CANDIDATE` (`candidate.json`): the harness verifies its recorded bundle hash and
 compares installed files with that archive, including `setup-image`. Then follow the provider's
-procedure (`aws/aws-run-procedure.md`, `gcp/gcp-production-single-region-v1-matrix.md`).
+procedure (`aws/aws-run-procedure.md`, `gcp/production-single-region-v1-matrix.md`).
 
 The bundle also names the revision it was built from
 (`share/sol/<version>/REVISION`), and a live run binds the application and
