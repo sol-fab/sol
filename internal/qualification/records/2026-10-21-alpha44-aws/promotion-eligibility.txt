@@ -1,0 +1,5 @@
+promotion_eligible=no
+[00:00:13] the attempt is continuous but its required phases are incomplete; not promotion-eligible
+required_phases_ok=no
+attempt_continuity=continuous
+attempt=a44-aws-1
