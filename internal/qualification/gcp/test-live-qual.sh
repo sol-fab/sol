@@ -1071,21 +1071,21 @@ run_case() {
   if [ -n "${PRESEED_LB_ADDRESS:-}" ]; then
     mkdir -p "$LOG_DIR"
     printf '%s\n' "$PRESEED_LB_ADDRESS" >"$LOG_DIR/app-load-balancer.txt"
-    [ -s "$LOG_DIR/attempt.txt" ] || printf 'attempt=%s\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
+    [ -s "$LOG_DIR/attempt.txt" ] || printf 'attempt=%s\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
   fi
   if [ -n "${PRESEED_PRIOR_IDENTITIES:-}" ]; then
     mkdir -p "$LOG_DIR"
     printf '# attempt=%s cluster=test-cluster project=sol-qualification region=us-central1\n' \
       "$ATTEMPT" >"$LOG_DIR/inventory-pre.identities.tsv"
     printf '%s\n' "$PRESEED_PRIOR_IDENTITIES" >>"$LOG_DIR/inventory-pre.identities.tsv"
-    [ -s "$LOG_DIR/attempt.txt" ] || printf 'attempt=%s\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
+    [ -s "$LOG_DIR/attempt.txt" ] || printf 'attempt=%s\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
   fi
   if [ -n "${PRESEED_FOREIGN_PRIOR_IDENTITIES:-}" ]; then
     mkdir -p "$LOG_DIR"
     printf '# attempt=another-attempt cluster=another-cluster project=sol-qualification region=us-central1\n' \
       >"$LOG_DIR/inventory-pre.identities.tsv"
     printf '%s\n' "$PRESEED_FOREIGN_PRIOR_IDENTITIES" >>"$LOG_DIR/inventory-pre.identities.tsv"
-    [ -s "$LOG_DIR/attempt.txt" ] || printf 'attempt=%s\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
+    [ -s "$LOG_DIR/attempt.txt" ] || printf 'attempt=%s\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
   fi
   if [ -n "${PRESEED_FOREIGN_ATTEMPT:-}" ]; then
     mkdir -p "$LOG_DIR"
@@ -1094,7 +1094,7 @@ run_case() {
   if [ "${PRESEED_CREDENTIALS:-0}" = "1" ]; then
     mkdir -p "$LOG_DIR"
     printf 'apiVersion: v1\n' >"$LOG_DIR/run-kubeconfig.yaml"
-    printf 'attempt=%s\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
+    printf 'attempt=%s\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
   fi
   if [ "${PRESEED_STALE_KUBECONFIG:-0}" = "1" ]; then
     # A complete kubeconfig naming this cluster, left by an earlier run: the
@@ -1103,12 +1103,12 @@ run_case() {
     sed "s/sol-qual-gcp-15g/test-cluster/g" \
       "$REPO/internal/qualification/gcp/fixtures/kubeconfig-gcloud-real.yaml" \
       >"$LOG_DIR/run-kubeconfig.yaml"
-    printf 'attempt=%s\ncandidate_revision=%s\n' "$ATTEMPT" "$CANDIDATE_REVISION" >"$LOG_DIR/attempt.txt"
+    printf 'attempt=%s\ncandidate_revision=%s\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' "$ATTEMPT" "$CANDIDATE_REVISION" >"$LOG_DIR/attempt.txt"
   fi
   if [ "${PRESEED_INVENTORY:-0}" = "1" ]; then
     mkdir -p "$LOG_DIR"
     : >"$LOG_DIR/inventory-pre.tsv"
-    [ -s "$LOG_DIR/attempt.txt" ] || printf 'attempt=%s\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
+    [ -s "$LOG_DIR/attempt.txt" ] || printf 'attempt=%s\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
   fi
   local harness="${HARNESS_UNDER_TEST:-$HARNESS}"
   # The install-time ACME contact is not an input to teardown (#1400), so a case can
@@ -1206,6 +1206,10 @@ done
 printf '\nscenario: cloud succeeds\n'
 run_cloud_case cloud-ok
 is "exit 0" "$(cat "$TMP/cloud-ok.rc")" "0"
+has "records the staging issuer in the attempt identity" \
+  "issuer=letsencrypt-staging" "$TMP/cloud-ok.logs/attempt.txt"
+has "labels the attempt mechanism-only" "claim=mechanism-only" "$TMP/cloud-ok.logs/attempt.txt"
+has "and marks it not promotion-eligible" "promotion_eligible=no" "$TMP/cloud-ok.logs/attempt.txt"
 lacks "no destroy on the success path (the delegation boundary keeps the substrate)" "sol destroy" "$TMP/cloud-ok.argv"
 lacks "the cloud phase never runs an application deploy" "migrate apply" "$TMP/cloud-ok.argv"
 has "the target is written for the run" "cluster_name" "$TARGET_FILE"

@@ -57,6 +57,15 @@ STATE_KEY="$LEDGER_PREFIX/$TARGET/cloud.tfstate"
 WORKSPACE_NAME="${WORKSPACE_NAME:-$(basename "$WORKSPACE")}"
 RETENTION="${RETENTION:-$(sed -n 's/^ *destroy_retention: *//p' "$TARGET_FILE" 2>/dev/null | head -1)}"
 RETENTION="${RETENTION:-none}"
+# Qualification mechanism runs on staging by default; production is reserved for the
+# attempt intended to be promotion-eligible. The target declares the issuer; the label
+# records which claim the evidence supports.
+CLUSTER_ISSUER="${CLUSTER_ISSUER:-letsencrypt-staging}"
+case "$CLUSTER_ISSUER" in
+  *production) ATTEMPT_CLAIM=production ;;
+  *) ATTEMPT_CLAIM=mechanism-only ;;
+esac
+export CLUSTER_ISSUER ATTEMPT_CLAIM
 ABSENCE="$ROOT/internal/qualification/aws/absence.py"
 export ECR_REGISTRY
 
@@ -580,6 +589,24 @@ cloud_mutated() {
 # `sol deploy` takes no --var-file: the target names the file its cluster and platform roots
 # read, and a target without one would apply those roots with their default variables. The
 # run refuses rather than qualify a target that is not the row's.
+target_issuer() { sed -n 's/^ *cluster_issuer: *//p' "$TARGET_FILE" 2>/dev/null | head -1; }
+
+# The target declaration is the issuer's authority. An attempt whose label and
+# target disagree, or a target that omits the issuer, could silently qualify one
+# claim while the evidence says another; fail closed before any build or mutation.
+require_target_issuer() {
+  local declared
+  declared="$(target_issuer)"
+  if [ -z "$declared" ]; then
+    refuse "REFUSING: $TARGET_FILE does not declare cluster_issuer, so this attempt's issuer claim cannot be established"
+    return 1
+  fi
+  if [ "$declared" != "$CLUSTER_ISSUER" ]; then
+    refuse "REFUSING: the target declares cluster_issuer=$declared but this attempt is labelled $CLUSTER_ISSUER"
+    return 1
+  fi
+}
+
 require_target_terraform_var_file() {
   if grep -qE '^[[:space:]]*terraform_var_file:' "$TARGET_FILE" 2>/dev/null; then
     return 0
@@ -872,6 +899,7 @@ require_credentials() {
 phase_cloud() {
   require_credentials || return 1
   require_target_terraform_var_file || return 1
+  require_target_issuer || return 1
   capture_independent_identities --initial || return 1
   # A fixed repository name is not made fresh by a fresh target name, so record it on the way in.
   ecr_record_sol_repositories before
@@ -1116,6 +1144,7 @@ app_require_published_images() {
 # touches no provider state, so `cloud` still sees a fresh specimen.
 phase_prepare() {
   require_target_terraform_var_file || return 1
+  require_target_issuer || return 1
   app_build_images || return 1
   say "the run images are built; the cloud phase publishes them into the repositories Sol creates"
 }

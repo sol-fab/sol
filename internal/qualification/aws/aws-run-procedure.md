@@ -122,10 +122,14 @@ command's output.
 8. A target file `examples/pluto/sol/environments.local.yml` copied from
    `aws-target.example.yml` with real values. It is untracked by design, so the record
    carries its contents or a hash plus its path. It declares `profile: production-single-region`,
-   the five role ARNs, `kube_context`, the registry, `terraform_var_file` (the
+   `cluster_issuer` (`letsencrypt-staging` by default; a promotion-eligible attempt
+   overrides it to `letsencrypt-production`), the five role ARNs, `kube_context`, the registry, `terraform_var_file` (the
    qualification tfvars the cluster and platform roots read; `sol deploy` takes no
    `--var-file`, and the harness refuses a target that names none rather than deploy the
-   roots with their default variables), `cluster_endpoint_cidr` (never
+   roots with their default variables). The attempt identity records `issuer=` and
+   `claim=mechanism-only` (staging) or `claim=production` (promotion); a continuation
+   preserves the recorded issuer/claim, and a different issuer is a new attempt.
+   It also names `cluster_endpoint_cidr` (never
    `0.0.0.0/0`), `node_failure_headroom_nodes`, `destroy_retention: none`, and the two
    TypeScript units omitted. The alert fields are required by the profile preflight; they are
    set to a real receiver only when pursuing G1–G3, and the run records G as blocked otherwise.

@@ -10,6 +10,10 @@ qual:
       base_domain: <your-domain>
       dns_zone_ownership: sol        # sol | user | external -- who owns the zone
       letsencrypt_email: <ops@your-domain>
+      # Qualification mechanism runs on staging by default. A promotion-eligible
+      # attempt overrides this to letsencrypt-production; the attempt identity then
+      # records claim=production instead of claim=mechanism-only.
+      cluster_issuer: letsencrypt-staging
       kube_context: <cluster-name>
       registry: <account>.dkr.ecr.us-east-1.amazonaws.com
 
