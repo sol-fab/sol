@@ -208,6 +208,13 @@ environment_reconciled() {
   grep -qF "The environment for $TARGET is reconciled." "$LOG_DIR"/cloud-apply*.log 2>/dev/null
 }
 
+# The same cold-deploy contract as AWS: the deploy must stop at the immutable-artifact
+# gate, not merely reconcile the environment. `Deployment incomplete.` is the product's
+# marker that it refused at the right place rather than failing somewhere else.
+pending_artifacts_refused() {
+  grep -qF 'Deployment incomplete.' "$LOG_DIR"/cloud-apply*.log 2>/dev/null
+}
+
 # A deploy that refused at the installation boundary applies nothing, so teardown must stay
 # disarmed for a target this run never touched. Once the durable/cluster phase ran -- or the
 # environment was reconciled -- disposable resources exist that this run owns, so cleanup is
@@ -1477,6 +1484,14 @@ phase_cloud() {
     freeze_evidence
     capture_platform_failure_evidence
 
+    finalise_bundle
+    return 1
+  fi
+  if ! pending_artifacts_refused; then
+    say "the cold deploy reconciled the environment but did not refuse at the artifact gate"
+    say "(expected 'Deployment incomplete.' in $LOG_DIR/cloud-apply*.log)"
+    capture_pre_teardown_inventory
+    freeze_evidence
     finalise_bundle
     return 1
   fi

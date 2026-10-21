@@ -214,6 +214,9 @@ case "$1" in
           "${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-db-ca"
         printf 'Kafka: delivered the managed credential to target-kafka-creds in pluto-comms, pluto-payments.\n'
         printf 'The environment for %s is reconciled.\n' "$2"
+        if [ "${STUB_NO_PENDING_ARTIFACTS:-0}" != "1" ]; then
+          printf 'Deployment incomplete.\n'
+        fi
       fi
       [ "${STUB_APPLY_RC:-0}" = "0" ]
     else
@@ -1326,6 +1329,12 @@ printf '\nscenario: app refuses without the prepare context\n'
 PRESEED_CREDENTIALS=1 run_case app-nocontext app
 is "the app phase fails without the candidate-bound context" "$(cat "$TMP/app-nocontext.rc")" "1"
 has "and tells the operator to run prepare" "run prepare first" "$TMP/app-nocontext.out"
+
+printf '\nscenario: a cold deploy that did not refuse at the artifact gate fails\n'
+run_cloud_case cloud-no-gate STUB_NO_PENDING_ARTIFACTS=1
+is "the cloud phase fails without the artifact-gate refusal" "$(cat "$TMP/cloud-no-gate.rc")" "1"
+has "and says it did not refuse at the artifact gate" \
+  "did not refuse at the artifact gate" "$TMP/cloud-no-gate.out"
 
 printf '\nscenario: managed credential failure is never repaired by qualification\n'
 run_case credential-boundary cloud STUB_APPLY_CREDENTIAL_MISSING=1
