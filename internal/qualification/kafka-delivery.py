@@ -17,6 +17,7 @@ The qualification identity therefore never needs broker credential material.
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 
@@ -24,13 +25,50 @@ import sys
 class ObservationError(ValueError):
     """Only messages constructed here from safe context, never provider values."""
 
+    def __init__(self, message, error_class="unknown"):
+        super().__init__(message)
+        self.error_class = error_class
+
+
+def classify_kubectl(stderr, returncode):
+    """Classify a kubectl failure without returning or logging its output.
+
+    stdout/stderr can carry the cluster name, endpoint or credential material;
+    the raw text never leaves this function. Only the class is kept.
+    """
+    text = (stderr or "").lower()
+    if returncode == 127 or "executable file not found" in text or "kubectl: not found" in text:
+        return "binary"
+    if any(token in text for token in ("401", "unauthorized", "token expired",
+                                       "client to provide credentials")):
+        return "auth"
+    if any(token in text for token in ("forbidden", "cannot list", "cannot get", "cannot watch")):
+        return "rbac"
+    if any(token in text for token in ("no kubeconfig", "context", "error loading config",
+                                       "invalid configuration", "not found in")):
+        return "kubeconfig"
+    if any(token in text for token in ("dial tcp", "tls", "timeout", "connection refused",
+                                       "no route to host", "i/o timeout")):
+        return "endpoint"
+    return "unknown"
+
+
+def _kubectl_class(argv, result):
+    if os.path.basename(argv[0]) != "kubectl":
+        return "unknown"
+    stderr = result.stderr
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", "replace")
+    return classify_kubectl(stderr, result.returncode)
+
 
 def read_json(argv, what):
     result = subprocess.run(argv, capture_output=True, timeout=60)
     if result.returncode:
         # stdout/stderr can contain a credential, even on a failed read.
         raise ObservationError(
-            f"{argv[0]} {what} failed (exit {result.returncode}); output withheld"
+            f"{argv[0]} {what} failed (exit {result.returncode}); output withheld",
+            _kubectl_class(argv, result),
         )
     return json.loads(result.stdout)
 
@@ -39,7 +77,8 @@ def read_text(argv, what):
     result = subprocess.run(argv, capture_output=True, text=True, timeout=60)
     if result.returncode:
         raise ObservationError(
-            f"{argv[0]} {what} failed (exit {result.returncode}); output withheld"
+            f"{argv[0]} {what} failed (exit {result.returncode}); output withheld",
+            _kubectl_class(argv, result),
         )
     return result.stdout.strip()
 
@@ -214,6 +253,9 @@ def main():
         args.authority = json.load(sys.stdin)
         print(json.dumps(observe(args), indent=2))
     except ObservationError as error:
+        # The evidence slot is the JSON document the harness redirects here; keep
+        # the failure diagnostic machine-readable without the raw output.
+        print(json.dumps({"error": str(error), "error_class": error.error_class}, indent=2))
         print(f"Kafka delivery observation failed: {error}", file=sys.stderr)
         return 1
     except (ValueError, KeyError, TypeError, AttributeError, OSError, subprocess.SubprocessError):
