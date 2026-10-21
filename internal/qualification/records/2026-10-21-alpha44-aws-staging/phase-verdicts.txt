@@ -1,0 +1,5 @@
+phase=prepare exit=0 at=2026-10-21T07:17:39Z
+phase=cloud exit=0 at=2026-10-21T07:47:18Z
+phase=app exit=1 at=2026-10-21T08:15:43Z
+phase=destroy exit=0 at=2026-10-21T08:40:14Z
+phase=verify exit=0 at=2026-10-21T08:44:21Z

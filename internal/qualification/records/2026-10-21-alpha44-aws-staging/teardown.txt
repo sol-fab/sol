@@ -1,0 +1,3 @@
+[02:39:50] destroy returned success; the independent inventory decides absence
+[02:39:50] independent inventory (read-only): every required disposable class
+[02:40:10] the independent inventory reads ABSENT for every required disposable class
