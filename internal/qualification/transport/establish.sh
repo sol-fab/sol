@@ -182,17 +182,24 @@ admin_policy="arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
 # the narrow entry anyway, so the window gets closed either way -- but silently, and
 # only if a later run happens. Saying what was found is the difference between a
 # repaired window and an invisible one.
-left_open_window() {
+left_open_policies() {
   aws eks list-associated-access-policies --cluster-name "$cluster" --region "$region" \
-    --principal-arn "$arn" --query 'associatedAccessPolicies[].policyArn' --output text 2>/dev/null |
-    grep -q 'AmazonEKSClusterAdminPolicy'
+    --principal-arn "$arn" --query 'associatedAccessPolicies[].policyArn' --output text 2>/dev/null
 }
 
-if left_open_window; then
-  echo "  a previous run left the cluster-admin association in place; closing it before opening a new window" >&2
-  recreate_narrow_entry || lost_authority
-  echo "  establishment_window: repaired (left open by an earlier run, now closed)" >&2
-fi
+left_open="$(left_open_policies)" || left_open=""
+case "$left_open" in
+  *AmazonEKSClusterAdminPolicy*)
+    # Named, not summarised: which principal, which policy, how many. "repaired"
+    # alone hides what was found and cannot be audited later. This is a repair of a
+    # real security state, so it says what the state was; `open` on failure stays P0
+    # and is never converted into this.
+    left_open_count="$(printf '%s\n' "$left_open" | tr ' \t' '\n\n' | grep -c 'AmazonEKSClusterAdminPolicy')"
+    echo "  a previous run left ${left_open_count} cluster-admin association(s) on ${arn} (policy ${admin_policy}); closing before opening a new window" >&2
+    recreate_narrow_entry || lost_authority
+    echo "  establishment_window: repaired (principal ${arn}, policy ${admin_policy}, ${left_open_count} association(s) left open by an earlier run, now closed)" >&2
+    ;;
+esac
 
 echo "  opening a temporary establishment window (cluster-admin association)"
 aws eks associate-access-policy \

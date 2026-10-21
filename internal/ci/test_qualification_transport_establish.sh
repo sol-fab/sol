@@ -422,8 +422,10 @@ clear_evidence
 touch "$work/state/left-open"
 run_establish
 expect_exit 0 "establishment succeeds after closing what an earlier run left"
-expect_text "left the cluster-admin association in place" "the run names what it found"
-expect_text "establishment_window: repaired" "the evidence records that it was repaired"
+expect_text "cluster-admin association(s) on arn:aws:iam::111122223333:role/sol-qualifier-transport" "the run names the principal it found the association on"
+expect_text "policy arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy" "the run names the policy it found"
+expect_text "1 association(s) left open" "the run counts what it found"
+expect_text "establishment_window: repaired (principal" "the evidence record is auditable, not a bare status"
 expect_no_file "the window is closed again" "$work/state/wide"
 
 echo
