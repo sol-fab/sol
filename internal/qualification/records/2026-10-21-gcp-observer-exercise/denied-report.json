@@ -1,0 +1,1 @@
+{"phase":"application","ok":false,"errors":["could not establish read authority for configmaps in pluto-comms (exited with code 1: no); the CA family is unestablished"]}
