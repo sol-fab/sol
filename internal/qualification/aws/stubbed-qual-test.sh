@@ -2123,7 +2123,7 @@ qualreg:
       cluster_issuer: letsencrypt-staging
       state_bucket: sol-qual-test-tfstate
 YAML
-run_phase no-tfvars cloud
+expect_failure "cloud refuses a target with no terraform_var_file" run_phase no-tfvars cloud
 refused no-tfvars "a target that names no terraform_var_file refuses the cloud phase"
 has "and the refusal says why" "declares no terraform_var_file" "$TMP/no-tfvars.out"
 lacks "and no Sol command runs" "sol " "$TMP/no-tfvars.sol"

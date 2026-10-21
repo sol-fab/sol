@@ -1313,7 +1313,7 @@ has "and names the namespace the derived set does not cover" \
   "does not cover" "$TMP/colduncovered.out"
 
 printf '\nscenario: cloud refuses without the prepare context\n'
-run_case cloud-nocontext cloud
+expect_failure "cloud fails without the candidate-bound context" run_case cloud-nocontext cloud
 is "the cloud phase fails without the candidate-bound context" "$(cat "$TMP/cloud-nocontext.rc")" "1"
 has "and tells the operator to run prepare" "run prepare first" "$TMP/cloud-nocontext.out"
 
@@ -1329,13 +1329,13 @@ has "and says it did not refuse at the artifact gate" \
   "did not refuse at the artifact gate" "$TMP/cloud-no-gate.out"
 
 printf '\nscenario: managed credential failure is never repaired by qualification\n'
-run_case credential-boundary cloud STUB_APPLY_CREDENTIAL_MISSING=1
+expect_failure "credential initialization failure blocks the row" run_case credential-boundary cloud STUB_APPLY_CREDENTIAL_MISSING=1
 is "credential initialization failure blocks the row" "$(cat "$TMP/credential-boundary.rc")" "1"
 lacks "the harness never creates the broker credential" "create secret generic redpanda-users" "$TMP/credential-boundary.argv"
 lacks "the harness never uses application secret writes" "secret set" "$TMP/credential-boundary.argv"
 
 printf '\nscenario: a state object that cannot be read is recorded, not demanded\n'
-run_case credential-boundary-nostate cloud STUB_STATE_UNREADABLE=1
+expect_failure "an unreadable state object fails the row" run_case credential-boundary-nostate cloud STUB_STATE_UNREADABLE=1
 lacks "an unreadable state object does not by itself make the bundle incomplete" \
   "bundle member missing or empty: state/platform.tfstate" "$TMP/credential-boundary-nostate.out"
 has "the manifest reports what the run holds" "terraform state (platform)  MISSING" \
@@ -1343,7 +1343,7 @@ has "the manifest reports what the run holds" "terraform state (platform)  MISSI
 has "and the read that could not establish it is kept" "COULD NOT READ" "$TMP/credential-boundary-nostate.out"
 
 printf '\nscenario: a repeated invocation cannot reuse an occupied disposable target\n'
-run_case occupied cloud STUB_STATE_PRESENT=1
+expect_failure "an occupied state object refuses the row" run_case occupied cloud STUB_STATE_PRESENT=1
 is "exit 2" "$(cat "$TMP/occupied.rc")" "2"
 has "the refusal names the occupied state key" "already exists" "$TMP/occupied.out"
 lacks "nothing is applied" "sol deploy" "$TMP/occupied.argv"
