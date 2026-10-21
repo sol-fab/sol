@@ -17,19 +17,26 @@ Measured on `aws/live-qual.sh` and `gcp/live-qual.sh` at `1a9d83d6`:
 | top-level functions in the AWS suite (`^[a-z_]+()`) | 66 |
 | top-level functions in the GCP suite | 127 |
 | names present in both | 30 |
-| of those, byte-identical bodies | **6** |
-| of those, divergent bodies | **24** |
+| of those, byte-identical bodies | **7** |
+| of those, divergent bodies | **23** |
 | names present in only one suite | 36 / 97 |
 
-The six identical functions (`app_database_field`, `app_kafka_credential_name`,
-`cloud_mutated`, `environment_reconciled`, `on_terminate`,
-`pending_artifacts_refused`) are the part that is already a decision rather than a
-provider's habit. The twenty-four divergent ones with the same name are the merge
-surface: two files answering the same question their own way
-(`destroy_kube_destination`, `disposable_state_present`, `cold_start_boundary`,
-`ca_qualify`, the four `phase_*` functions). Same name, different answers, is the
+The seven identical functions (`app_class_credential_name`,
+`app_database_field`, `app_kafka_credential_name`, `cloud_mutated`,
+`environment_reconciled`, `on_terminate`, `pending_artifacts_refused`) are the part
+that is already a decision rather than a provider's habit. The twenty-three
+divergent ones with the same name are the merge surface: two files answering the
+same question their own way (`destroy_kube_destination`, `app_namespaces`,
+`ca_request`, the four `phase_*` functions). Same name, different answers, is the
 conflation shape that produces the next defect, because a reader cannot tell
 whether the difference is provider-required or accidental.
+
+Not every divergence is drift. Of the 23, **16 are semantic drift**, 5 are
+cosmetic, and 2 are legitimate provider differences that become hooks
+(`cold_start_boundary`, whose observing principal differs because only one
+provider splits cluster-access from deploy; and `disposable_state_present`, which
+is one provider API call either way). The classification is recorded per function
+in the merge work, and the count is expected to fall as phases merge.
 
 ## The interface
 
