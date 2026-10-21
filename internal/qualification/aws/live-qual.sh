@@ -847,7 +847,10 @@ phase_transport() {
     observe_namespaces+=("$database_ns")
   fi
   say "transport-establish"
-  if ! KUBECONFIG="$QUALIFIER_KUBECONFIG" timeout "$PHASE_TIMEOUT" \
+  # The refusal text is evidence, not console output: establish.sh keeps it here
+  # and prints only its class, so the tail below cannot carry a server message.
+  if ! KUBECONFIG="$QUALIFIER_KUBECONFIG" SOL_TRANSPORT_REFUSAL_EVIDENCE="$LOG_DIR/transport-refusal.txt" \
+      timeout "$PHASE_TIMEOUT" \
       "$ROOT/internal/qualification/transport/establish.sh" \
       "$CLUSTER" "$QUALIFIER_ROLE" "$AWS_REGION" "${observe_namespaces[@]}" \
       >"$LOG_DIR/transport-establish.log" 2>&1; then
