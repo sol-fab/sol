@@ -1041,7 +1041,9 @@ PY
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
     "$ROOT/internal/qualification/aws/live-qual.sh" app >"$TMP/$name.out" 2>&1
-  echo "$?" >"$TMP/$name.rc"
+  local harness_rc=$?
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 seed_independent_capture() {
@@ -1127,7 +1129,9 @@ PY
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
     "$ROOT/internal/qualification/aws/live-qual.sh" "$phase" >"$TMP/$name.out" 2>&1
-  echo "$?" >"$TMP/$name.rc"
+  local harness_rc=$?
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 run_phase_closed_stdout() {
@@ -1160,7 +1164,9 @@ run_phase_closed_stdout() {
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
     "$ROOT/internal/qualification/aws/live-qual.sh" "$phase" 2>"$TMP/$name.err" | true
   local -a codes=("${PIPESTATUS[@]}")
-  printf '%s\n' "${codes[0]}" >"$TMP/$name.rc"
+  local harness_rc="${codes[0]}"
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 run_phase_sigterm() {
@@ -1201,7 +1207,9 @@ run_phase_sigterm() {
   done
   kill -"$signal" "$harness_pid" 2>/dev/null || true
   wait "$harness_pid"
-  printf '%s\n' "$?" >"$TMP/$name.rc"
+  local harness_rc=$?
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 run_transaction() {
@@ -1219,7 +1227,9 @@ run_transaction() {
     APP_SERVICE=charge-svc APP_PORT=80 SCENARIO="$scenario" \
     PF_TIMEOUT=3 READBACK_ATTEMPTS=2 READBACK_INTERVAL=1 "$@" \
     bash "$REPO/internal/qualification/aws/transport-transaction.sh" "$dir" >"$TMP/$name.out" 2>&1
-  echo "$?" >"$TMP/$name.rc"
+  local harness_rc=$?
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 printf '\nscenario: installation failure stops cloud lifecycle at the supported interface\n'

@@ -1109,8 +1109,9 @@ run_case() {
     GCP_CA_OBSERVER_SOURCE_KUBECONFIG="$REPO/internal/qualification/gcp/fixtures/kubeconfig-gcloud-real.yaml" \
     PATH="$TMP/bin:$PATH" "$@" \
     "$harness" "$sub" >"$TMP/$name.out" 2>&1
-  echo "$? " >"$TMP/$name.rc"
-  sed -i 's/ //' "$TMP/$name.rc"
+  local harness_rc=$?
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 # A cloud/app case reuses one evidence directory: prepare materializes the
@@ -1168,8 +1169,9 @@ run_case_without_a_phase() {
     GCP_CA_OBSERVER_PRINCIPAL=gcp:qualifier@sol-qualification.iam.gserviceaccount.com \
     GCP_CA_OBSERVER_SOURCE_KUBECONFIG="$REPO/internal/qualification/gcp/fixtures/kubeconfig-gcloud-real.yaml" \
     PATH="$TMP/bin:$PATH" "$HARNESS" >"$TMP/no-phase.out" 2>&1
-  echo "$? " >"$TMP/no-phase.rc"
-  sed -i 's/ //' "$TMP/no-phase.rc"
+  local harness_rc=$?
+  printf '%s\n' "$harness_rc" >"$TMP/no-phase.rc"
+  return "$harness_rc"
 }
 
 printf '\nscenario: planning skips durable reconciliation and cleanup\n'
@@ -2560,7 +2562,9 @@ run_case_closed_stdout() {
     PATH="$TMP/bin:$PATH" "$@" \
     "$HARNESS" "$sub" 2>"$TMP/$name.err" | true
   local -a codes=("${PIPESTATUS[@]}")
-  printf '%s\n' "${codes[0]}" >"$TMP/$name.rc"
+  local harness_rc="${codes[0]}"
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 run_case_sigterm() {
@@ -2591,7 +2595,9 @@ run_case_sigterm() {
   done
   kill -"$signal" "$run_pid" 2>/dev/null || true
   wait "$run_pid"
-  printf '%s\n' "$?" >"$TMP/$name.rc"
+  local harness_rc=$?
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 printf '\nscenario: the harness survives a closed stdout reader and still tears down (attempt-5 shape)\n'
