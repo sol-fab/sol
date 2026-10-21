@@ -1,0 +1,2 @@
+[02:44:01] independent inventory (read-only): every required disposable class
+[02:44:21] the independent inventory reads ABSENT for every required disposable class

@@ -1,0 +1,15 @@
+attempt=a44-aws-2
+row=qual-a44-aws
+target=qual-a44-aws/aws/us-east-1
+state_key=sol/qual-a44-aws/aws/us-east-1/cloud.tfstate
+cluster=sol-qual-aws-a44
+provider=aws
+candidate_version=v0.1.0-alpha.44
+candidate_revision=8c74717712696f682d46571d3284138c015fa43e
+issuer=letsencrypt-staging
+claim=mechanism-only
+promotion_eligible=no
+started=2026-10-21T07:17:31Z
+continued=2026-10-21T07:20:12Z
+continued=2026-10-21T07:52:49Z
+continued=2026-10-21T08:18:28Z

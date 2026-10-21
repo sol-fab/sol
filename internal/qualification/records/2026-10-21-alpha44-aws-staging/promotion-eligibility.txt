@@ -1,0 +1,6 @@
+promotion_eligible=no
+resumed_from=
+[02:44:01] resumed attempt: this evidence is diagnostic, not promotion-eligible
+required_phases_ok=no
+attempt_continuity=resumed
+attempt=a44-aws-2
