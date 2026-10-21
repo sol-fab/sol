@@ -562,8 +562,13 @@ class Boundary(fixture.Binding):
 
     def test_boundary_real_driver_get_without_list_refuses(self):
         run = self.run_real_driver(deny_reads=True)
-        self.assertNotEqual(run["results"]["migration"].returncode, 0)
-        self.assertIn("cannot read", run["results"]["migration"].stderr)
+        result = run["results"]["migration"]
+        self.assertNotEqual(result.returncode, 0)
+        # A refusal is recorded, not just exited: the phase report is the
+        # evidence, and stderr is not the report.
+        phase = json.loads((run["root"] / "ca-migration.json").read_text())
+        self.assertFalse(phase["ok"])
+        self.assertIn("cannot read", "\n".join(phase.get("errors", [])))
 
     def test_boundary_real_driver_rejects_mismatched_evidence(self):
         run = self.run_real_driver()
