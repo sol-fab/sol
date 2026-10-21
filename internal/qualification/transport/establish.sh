@@ -110,9 +110,35 @@ kubeconfig() {
   aws eks update-kubeconfig --name "$cluster" --alias "$alias" --role-arn "$arn" >/dev/null 2>&1
 }
 
+# The operator sees the class; the server's own words go to the evidence store.
+# A refusal names identities and resources, and a terminal or CI log is read by
+# more people than the run's evidence directory is. The class is derived from the
+# status the server returned, and the text it was derived from is retained beside
+# it so the classification stays auditable rather than becoming a claim.
+classify_refusal() {
+  case "$1" in
+    *[Ff]orbidden*) echo rbac ;;
+    *[Uu]nauthorized* | *"must be logged in"* | *"connection refused"* | *"no route to host"* | *"i/o timeout"* | *x509* | *"TLS handshake"*) echo endpoint ;;
+    *"is invalid"* | *"validation failed"* | *"cannot unmarshal"* | *"unknown field"* | *BadRequest*) echo validation ;;
+    *"already exists"* | *"has been modified"* | *"the object has been modified"*) echo conflict ;;
+    *"too many requests"* | *"try again"* | *"service unavailable"* | *etcdserver* | *webhook*) echo transient ;;
+    *) echo unknown ;;
+  esac
+}
+
+retain_refusal() {
+  local file="${SOL_TRANSPORT_REFUSAL_EVIDENCE:-}"
+  if [ -z "$file" ]; then
+    file="$(mktemp "${TMPDIR:-/tmp}/sol-transport-refusal.XXXXXX")"
+  fi
+  printf '%s\n' "$1" >"$file"
+  echo "$file"
+}
+
 end_state=narrow
 
 lost_authority() {
+  echo "  establishment_window: open (the cluster-admin association may still be in place)" >&2
   echo "  COULD NOT establish that ${arn} holds only the declared transport on ${cluster}." >&2
   echo "  It may still carry the temporary cluster-admin association. Remove the access entry by hand" >&2
   echo "  before using this cluster, and treat the transport as unestablished:" >&2
@@ -135,8 +161,13 @@ cleanup() {
       echo "  the access entry is gone (describe-access-entry reports it absent): ${arn} holds no entry on ${cluster}" >&2
       ;;
   esac
+  echo "  establishment_window: closed (${arn} holds no cluster-admin association on ${cluster})" >&2
 }
 trap cleanup EXIT
+# A SIGTERM or SIGHUP runs this EXIT trap, so a cancelled run still closes the
+# window and says so; the stub suite pins that. SIGKILL cannot be trapped, so no
+# code here runs after it, and the association it leaves behind is only readable
+# from the provider -- tracked separately, not claimed here.
 
 ensure_narrow_entry
 
@@ -149,16 +180,26 @@ aws eks associate-access-policy \
   --policy-arn "$admin_policy" \
   --access-scope type=cluster >/dev/null
 
+apply_output=""
 for _ in 1 2 3 4 5 6; do
   kubeconfig
-  if kubectl --context "$alias" apply -f "$here/transport.yaml" >/dev/null 2>&1; then
+  if apply_output="$(kubectl --context "$alias" apply -f "$here/transport.yaml" 2>&1 >/dev/null)"; then
     break
   fi
   sleep 10
 done
 
-kubectl --context "$alias" get clusterrole sol-qualifier-transport >/dev/null 2>&1 ||
-  { echo "  could not apply the transport manifest" >&2; exit 1; }
+get_output=""
+if ! get_output="$(kubectl --context "$alias" get clusterrole sol-qualifier-transport 2>&1 >/dev/null)"; then
+  # Either the apply or the read that confirms it refused. Both are captured, so a
+  # refusal from the confirming read is classified rather than lost.
+  refusal="${apply_output:-${get_output:-<kubectl produced no output>}}"
+  evidence="$(retain_refusal "$refusal")"
+  echo "  could not apply the transport manifest" >&2
+  echo "  error_class: $(classify_refusal "$refusal")" >&2
+  echo "  the refused output is retained in the evidence beside this log, not printed: ${evidence##*/}" >&2
+  exit 1
+fi
 
 # The observation reads are namespace-scoped: the reusable ClusterRole is bound
 # only in the namespaces the CA family observes, and only while the temporary

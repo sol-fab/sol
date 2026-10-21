@@ -49,13 +49,28 @@ if [ "${1:-}" = "--context" ]; then shift 2; fi
 wide() { [ -f "$state/wide" ]; }
 case "$1" in
   apply)
+    if [ -f "$state/apply-signals-parent" ]; then
+      for _ in $(seq 1 500); do [ -s "$state/signal-target" ] && break; done
+      kill -TERM "$(cat "$state/signal-target")" 2>/dev/null || true
+      exit 1
+    fi
+    if [ -f "$state/apply-refused" ]; then
+      echo 'Error from server (Forbidden): clusterroles.rbac.authorization.k8s.io is forbidden: User "arn:aws:sts::111122223333:assumed-role/sol-qualifier-transport/EKSGetTokenAuth" cannot create resource "clusterroles"' >&2
+      exit 1
+    fi
     wide || exit 1
     if [ -f "$state/apply-noop" ]; then exit 0; fi
     touch "$state/role"
     ;;
   get)
     case "$2" in
-      clusterrole) [ -f "$state/role" ] ;;
+      clusterrole)
+        if [ -f "$state/get-refuses" ]; then
+          echo 'Error from server (Unauthorized): the server has asked for the client to provide credentials' >&2
+          exit 1
+        fi
+        [ -f "$state/role" ]
+        ;;
       pods) [ -f "$state/entry" ] && [ -f "$state/role" ] ;;
       secrets)
         if wide || [ -f "$state/residual" ]; then
@@ -117,10 +132,15 @@ esac
 KUBECTL
 
 chmod +x "$work/bin/aws" "$work/bin/kubectl"
+# The establishment retry loop waits between attempts for an access entry to take
+# effect. That wait is not what these cases test, so it must not spend it here.
+printf '#!/usr/bin/env bash\nexit 0\n' >"$work/bin/sleep"
+chmod +x "$work/bin/sleep"
 export PATH="$work/bin:$PATH"
 export SOL_QUALIFY_TEST_STATE="$work/state"
 export SOL_QUALIFIER_VERIFY_ATTEMPTS=2
 export SOL_QUALIFIER_VERIFY_INTERVAL_S=0
+export SOL_TRANSPORT_REFUSAL_EVIDENCE="$work/refusal.txt"
 
 failures=0
 ok() { printf '  [OK]   %s\n' "$1"; }
@@ -150,12 +170,28 @@ expect_file() {
   if [ -f "$2" ]; then ok "$1"; else bad "$1"; fi
 }
 
+expect_failure() {
+  if [ "$status" != 0 ]; then ok "$1"; else bad "$1 (observed exit 0)"; fi
+}
+
 expect_no_file() {
   if [ -f "$2" ]; then bad "$1"; else ok "$1"; fi
 }
 
 expect_text() {
   if grep -q "$1" "$work/out"; then ok "$2"; else bad "$2"; fi
+}
+
+expect_no_text() {
+  if grep -q "$1" "$work/out"; then bad "$2"; else ok "$2"; fi
+}
+
+expect_evidence_text() {
+  if [ -f "$SOL_TRANSPORT_REFUSAL_EVIDENCE" ] && grep -q "$1" "$SOL_TRANSPORT_REFUSAL_EVIDENCE"; then
+    ok "$2"
+  else
+    bad "$2"
+  fi
 }
 
 expect_argv_separated() {
@@ -227,6 +263,54 @@ expect_exit 1 "a transport that did not apply fails establishment"
 expect_no_file "the cluster-admin window is closed" "$work/state/wide"
 expect_no_file "the window is never closed by a disassociation" "$work/state/disassociated"
 expect_text "could not apply the transport manifest" "the failure names the manifest"
+expect_text "establishment_window: closed" "the failure states the window was closed"
+
+echo
+echo "establish: a refused manifest reports its class, keeps the server's words in evidence only"
+reset_state
+rm -f "$SOL_TRANSPORT_REFUSAL_EVIDENCE"
+touch "$work/state/apply-refused"
+run_establish
+expect_exit 1 "a refused transport manifest fails establishment"
+expect_text "error_class: rbac" "the operator is told the refusal's class"
+expect_text "establishment_window: closed" "the failure states the window was closed"
+expect_no_text "Forbidden" "the printed output carries no server message"
+expect_no_text "EKSGetTokenAuth" "the printed output carries no refused identity"
+expect_evidence_text "Forbidden" "the evidence retains what the API server said"
+expect_evidence_text "EKSGetTokenAuth" "the evidence retains the identity the cluster refused"
+expect_no_text "$work/" "the printed output carries no absolute evidence path"
+expect_no_file "the cluster-admin window is closed" "$work/state/wide"
+
+echo
+echo "establish: a refusal from the confirming read is classified too, not lost"
+reset_state
+rm -f "$SOL_TRANSPORT_REFUSAL_EVIDENCE"
+touch "$work/state/apply-noop" "$work/state/get-refuses"
+run_establish
+expect_exit 1 "a refusing confirming read fails establishment"
+expect_text "error_class: endpoint" "the class comes from the read that refused"
+expect_no_text "Unauthorized" "the printed output carries no server message"
+expect_evidence_text "Unauthorized" "the evidence retains the confirming read's refusal"
+
+echo
+echo "establish: a termination while the window is open still closes it"
+# Which of these discriminate: the two that read the close -- "the terminated run
+# closed the cluster-admin window" and "the terminated run states the window was
+# closed". Together they are what fails when the EXIT trap goes away. "Does not
+# report success" is necessary but not discriminating: it passes at 143 (killed by
+# SIGTERM) exactly as it would at 137 (SIGKILL), where no trap has run and nothing
+# was closed, so it must not be read as coverage of the trap.
+reset_state
+touch "$work/state/apply-signals-parent"
+"$establish" sol-qual-cluster sol-qualifier-transport us-east-1 pluto-payments pluto-comms \
+  >"$work/out" 2>&1 &
+signal_pid=$!
+echo "$signal_pid" >"$work/state/signal-target"
+if wait "$signal_pid"; then status=0; else status=$?; fi
+expect_failure "a terminated establishment does not report success"
+expect_no_file "the terminated run closed the cluster-admin window" "$work/state/wide"
+expect_text "establishment_window: closed" "the terminated run states the window was closed"
+expect_no_text "establishment_window: open" "the terminated run does not leave the window open"
 
 echo
 echo "establish: a removal that did not happen is reported, not assumed"
@@ -238,6 +322,7 @@ expect_file "the entry that survived is still there" "$work/state/entry"
 expect_file "the wide association that survived is still there" "$work/state/wide"
 expect_text "COULD NOT establish that" "the failure says the authority could not be shown to be gone"
 expect_text "delete-access-entry --cluster-name sol-qual-cluster" "the failure says how to remove it"
+expect_text "establishment_window: open" "the failure says the window may still be open"
 
 echo
 echo "establish: AWS authority beside the declared policy is refused before any window opens"
