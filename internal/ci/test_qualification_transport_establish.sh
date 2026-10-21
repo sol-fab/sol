@@ -73,6 +73,10 @@ case "$1" in
         ;;
       pods) [ -f "$state/entry" ] && [ -f "$state/role" ] ;;
       secrets)
+        if [ -f "$state/secrets-broken" ]; then
+          echo "Error from server (InternalError): an internal error has occurred" >&2
+          exit 1
+        fi
         if wide || [ -f "$state/residual" ]; then
           echo charge-svc-secrets
         else
@@ -88,6 +92,10 @@ case "$1" in
       whoami)
         if [ -f "$state/masters" ]; then
           echo '{"status":{"userInfo":{"username":"arn:aws:sts::111122223333:assumed-role/sol-qualifier-transport/EKSGetTokenAuth","groups":["system:masters","system:authenticated"]}}}'
+        elif [ -f "$state/wrong-role" ]; then
+          echo '{"status":{"userInfo":{"username":"arn:aws:sts::111122223333:assumed-role/some-other-role/EKSGetTokenAuth","groups":["sol:qualifiers","system:authenticated"]}}}'
+        elif [ -f "$state/wrong-group" ]; then
+          echo '{"status":{"userInfo":{"username":"arn:aws:sts::111122223333:assumed-role/sol-qualifier-transport/EKSGetTokenAuth","groups":["system:authenticated"]}}}'
         else
           echo '{"status":{"userInfo":{"username":"arn:aws:sts::111122223333:assumed-role/sol-qualifier-transport/EKSGetTokenAuth","groups":["sol:qualifiers","system:authenticated"]}}}'
         fi
@@ -140,7 +148,7 @@ export PATH="$work/bin:$PATH"
 export SOL_QUALIFY_TEST_STATE="$work/state"
 export SOL_QUALIFIER_VERIFY_ATTEMPTS=2
 export SOL_QUALIFIER_VERIFY_INTERVAL_S=0
-export SOL_TRANSPORT_REFUSAL_EVIDENCE="$work/refusal.txt"
+export SOL_TRANSPORT_EVIDENCE_DIR="$work/evidence"
 
 failures=0
 ok() { printf '  [OK]   %s\n' "$1"; }
@@ -186,11 +194,17 @@ expect_no_text() {
   if grep -q "$1" "$work/out"; then bad "$2"; else ok "$2"; fi
 }
 
+clear_evidence() {
+  rm -rf "$SOL_TRANSPORT_EVIDENCE_DIR"
+  mkdir -p "$SOL_TRANSPORT_EVIDENCE_DIR"
+}
+
 expect_evidence_text() {
-  if [ -f "$SOL_TRANSPORT_REFUSAL_EVIDENCE" ] && grep -q "$1" "$SOL_TRANSPORT_REFUSAL_EVIDENCE"; then
+  local file="$SOL_TRANSPORT_EVIDENCE_DIR/${3:-transport-refusal.txt}"
+  if [ -f "$file" ] && grep -q "$1" "$file"; then
     ok "$2"
   else
-    bad "$2"
+    bad "$2 (no ${3:-transport-refusal.txt} holding it)"
   fi
 }
 
@@ -228,6 +242,7 @@ expect_text "get deployments.apps" "the refusal names the observation read"
 echo
 echo "establish: a surface broader than declared is refused, and nothing broad is left behind"
 reset_state
+clear_evidence
 touch "$work/state/residual"
 run_establish
 expect_exit 1 "a residual broad grant fails establishment"
@@ -235,6 +250,9 @@ expect_no_file "the access entry is removed rather than left broad" "$work/state
 expect_no_file "the cluster-admin window is closed" "$work/state/wide"
 expect_no_file "the window is never closed by a disassociation" "$work/state/disassociated"
 expect_text "the grant is not shown to be transport-only" "the refusal names what it observed"
+expect_text "get secrets -n pluto-payments: answered" "the printed verdict says the read was answered"
+expect_no_text "charge-svc-secrets" "the printed output carries no secret name"
+expect_evidence_text "charge-svc-secrets" "the evidence retains the answered listing" transport-secrets.txt
 
 echo
 echo "establish: a grant the declared contract excludes is refused, not sampled away"
@@ -246,13 +264,52 @@ expect_no_file "the access entry is removed rather than left broad" "$work/state
 expect_text "auth can-i create pods --subresource=exec" "the refusal names the excluded verb and subresource"
 
 echo
+echo "establish: a secrets read that failed another way is unobservable, and says only that"
+reset_state
+clear_evidence
+touch "$work/state/secrets-broken"
+run_establish
+expect_exit 1 "an unobservable secrets read fails establishment"
+expect_text "get secrets -n pluto-payments: unobservable" "the printed verdict is unobservable"
+expect_no_text "InternalError" "the printed output carries no server message"
+expect_evidence_text "InternalError" "the evidence retains what the server said" transport-secrets.txt
+
+echo
 echo "establish: a mapping outside the declared group is refused"
 reset_state
+clear_evidence
 touch "$work/state/masters"
 run_establish
 expect_exit 1 "a system:masters mapping fails establishment"
 expect_no_file "the access entry is removed rather than left broad" "$work/state/entry"
 expect_text "system:masters" "the refusal names the mapping it saw"
+expect_no_text "userInfo" "the printed output carries no whoami document"
+expect_evidence_text "userInfo" "the evidence retains the whoami document" transport-whoami.txt
+
+echo
+echo "establish: a context in another group is refused, and the document stays in evidence"
+reset_state
+clear_evidence
+touch "$work/state/wrong-group"
+run_establish
+expect_exit 1 "a context outside the declared group fails establishment"
+expect_no_file "the access entry is removed rather than left broad" "$work/state/entry"
+expect_text "not in the declared group sol:qualifiers" "the refusal names the group contract"
+expect_no_text "userInfo" "the printed output carries no whoami document"
+expect_evidence_text "userInfo" "the evidence retains the whoami document" transport-whoami.txt
+
+echo
+echo "establish: a context authenticating as another principal is refused"
+reset_state
+clear_evidence
+touch "$work/state/wrong-role"
+run_establish
+expect_exit 1 "a context authenticating as another principal fails establishment"
+expect_no_file "the access entry is removed rather than left broad" "$work/state/entry"
+expect_text "does not authenticate as sol-qualifier-transport" "the refusal names the role it expected"
+expect_no_text "userInfo" "the printed output carries no whoami document"
+expect_no_text "some-other-role" "the printed output carries no observed identity"
+expect_evidence_text "some-other-role" "the evidence retains the observed identity" transport-whoami.txt
 
 echo
 echo "establish: a manifest that did not take effect fails, with the window closed"
@@ -268,7 +325,7 @@ expect_text "establishment_window: closed" "the failure states the window was cl
 echo
 echo "establish: a refused manifest reports its class, keeps the server's words in evidence only"
 reset_state
-rm -f "$SOL_TRANSPORT_REFUSAL_EVIDENCE"
+clear_evidence
 touch "$work/state/apply-refused"
 run_establish
 expect_exit 1 "a refused transport manifest fails establishment"
@@ -284,7 +341,7 @@ expect_no_file "the cluster-admin window is closed" "$work/state/wide"
 echo
 echo "establish: a refusal from the confirming read is classified too, not lost"
 reset_state
-rm -f "$SOL_TRANSPORT_REFUSAL_EVIDENCE"
+clear_evidence
 touch "$work/state/apply-noop" "$work/state/get-refuses"
 run_establish
 expect_exit 1 "a refusing confirming read fails establishment"
