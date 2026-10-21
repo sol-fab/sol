@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # live-* runs against a real provider target; stubbed-* runs the same suite on stubbed provider calls.
-set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 TMP="$(mktemp -d)"
+# The assertion semantics are shared with the other provider; this suite supplies
+# only its own helpers and its own test cases.
+# shellcheck source=/dev/null
+source "$REPO/internal/qualification/common.sh"
 export ATTEMPT="${ATTEMPT:-qual-self-test}"
 export TARGET="${TARGET:-qual/gcp/us-central1}"
 
@@ -88,9 +91,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-pass=0
-fail=0
-ok() { printf '  [OK]   %s\n' "$1"; pass=$((pass + 1)); }
 suite_environment() {
   printf 'suite: bash %s, cwd %s, scratch %s\n' "${BASH_VERSION:-?}" "$PWD" "$TMP"
   printf 'suite: stubs %s, harness %s\n' \
@@ -118,35 +118,10 @@ dump_case_output() {
     printf '           (the harness produced no output at all for this case)\n'
   fi
 }
-no() {
-  printf '  [FAIL] %s\n           expected: %s\n           actual:   %s\n' "$1" "$2" "$3"
-  fail=$((fail + 1))
-  dump_case_output
-}
-is() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1" "$3" "$2"; fi; }
-has() { if grep -qF -- "$2" "$3"; then ok "$1"; else no "$1" "contains: $2" "$(tr '\n' '|' <"$3" | cut -c1-160)"; fi; }
-lacks() { if grep -qF -- "$2" "$3"; then no "$1" "absent: $2" "present"; else ok "$1"; fi; }
-present() { if [ -s "$1" ]; then ok "$2"; else no "$2" "present and non-empty" "missing: $1"; fi; }
-not_exists() { if [ -e "$2" ]; then no "$1" "absent: $2" "present"; else ok "$1"; fi; }
+# This suite's failures carry the case's own output; the shared shell calls this and
+# does not need to know how it is produced.
+test_case_diagnostics() { dump_case_output; }
 
-# Required-helper inventory: every assertion helper the suite calls must be listed
-# here. A removed helper otherwise skips its assertions and can leave the suite
-# green -- the #1610 defect class.
-for helper in ok no is has lacks present not_exists; do
-  if ! declare -F "$helper" >/dev/null; then
-    echo "test helper missing: $helper" >&2
-    exit 1
-  fi
-done
-# Required-helper inventory: every helper the suite calls must be listed here.
-# Adding a helper means adding it to this list; a stale list lets the next
-# "command not found" silently skip an assertion.
-for helper in ok no is has lacks present not_exists; do
-  if ! declare -F "$helper" >/dev/null; then
-    echo "test helper missing: $helper" >&2
-    exit 1
-  fi
-done
 
 suite_environment
 
@@ -1134,8 +1109,9 @@ run_case() {
     GCP_CA_OBSERVER_SOURCE_KUBECONFIG="$REPO/internal/qualification/gcp/fixtures/kubeconfig-gcloud-real.yaml" \
     PATH="$TMP/bin:$PATH" "$@" \
     "$harness" "$sub" >"$TMP/$name.out" 2>&1
-  echo "$? " >"$TMP/$name.rc"
-  sed -i 's/ //' "$TMP/$name.rc"
+  local harness_rc=$?
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 # A cloud/app case reuses one evidence directory: prepare materializes the
@@ -1193,8 +1169,9 @@ run_case_without_a_phase() {
     GCP_CA_OBSERVER_PRINCIPAL=gcp:qualifier@sol-qualification.iam.gserviceaccount.com \
     GCP_CA_OBSERVER_SOURCE_KUBECONFIG="$REPO/internal/qualification/gcp/fixtures/kubeconfig-gcloud-real.yaml" \
     PATH="$TMP/bin:$PATH" "$HARNESS" >"$TMP/no-phase.out" 2>&1
-  echo "$? " >"$TMP/no-phase.rc"
-  sed -i 's/ //' "$TMP/no-phase.rc"
+  local harness_rc=$?
+  printf '%s\n' "$harness_rc" >"$TMP/no-phase.rc"
+  return "$harness_rc"
 }
 
 printf '\nscenario: planning skips durable reconciliation and cleanup\n'
@@ -2585,7 +2562,9 @@ run_case_closed_stdout() {
     PATH="$TMP/bin:$PATH" "$@" \
     "$HARNESS" "$sub" 2>"$TMP/$name.err" | true
   local -a codes=("${PIPESTATUS[@]}")
-  printf '%s\n' "${codes[0]}" >"$TMP/$name.rc"
+  local harness_rc="${codes[0]}"
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 run_case_sigterm() {
@@ -2616,7 +2595,9 @@ run_case_sigterm() {
   done
   kill -"$signal" "$run_pid" 2>/dev/null || true
   wait "$run_pid"
-  printf '%s\n' "$?" >"$TMP/$name.rc"
+  local harness_rc=$?
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 printf '\nscenario: the harness survives a closed stdout reader and still tears down (attempt-5 shape)\n'

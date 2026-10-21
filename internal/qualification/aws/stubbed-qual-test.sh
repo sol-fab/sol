@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # live-* runs against a real provider target; stubbed-* runs the same suite on stubbed provider calls.
-set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
@@ -15,19 +14,10 @@ export APP_TAG="${APP_TAG:-row-self-test}"
 export WORKSPACE_NAME=pluto
 trap 'rm -rf "$TMP"' EXIT
 
-pass=0
-fail=0
-ok() { printf '  [OK]   %s\n' "$1"; pass=$((pass + 1)); }
-no() {
-  printf '  [FAIL] %s\n           expected: %s\n           actual:   %s\n' "$1" "$2" "$3"
-  fail=$((fail + 1))
-}
-has() { if grep -qF -- "$2" "$3" 2>/dev/null; then ok "$1"; else no "$1" "contains: $2" "$(tr '\n' '|' <"$3" 2>/dev/null | cut -c1-200)"; fi; }
-lacks() { if grep -qF -- "$2" "$3" 2>/dev/null; then no "$1" "absent: $2" "present"; else ok "$1"; fi; }
-is() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1" "$3" "$2"; fi; }
-exists() { if [ -f "$2" ]; then ok "$1"; else no "$1" "file exists: $2" "missing"; fi; }
-present() { if [ -s "$1" ]; then ok "$2"; else no "$2" "present and non-empty" "missing: $1"; fi; }
-not_exists() { if [ -e "$2" ]; then no "$1" "absent: $2" "present"; else ok "$1"; fi; }
+# The assertion semantics are shared with the other provider; this suite supplies
+# only its own helpers and its own test cases.
+# shellcheck source=/dev/null
+source "$REPO/internal/qualification/common.sh"
 # #1583 removed this helper while keeping its call sites; restore the attempt seed the
 # teardown scenarios use so their assertions run instead of printing "command not found".
 seed_attempt() {
@@ -1051,7 +1041,9 @@ PY
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
     "$ROOT/internal/qualification/aws/live-qual.sh" app >"$TMP/$name.out" 2>&1
-  echo "$?" >"$TMP/$name.rc"
+  local harness_rc=$?
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 seed_independent_capture() {
@@ -1137,7 +1129,9 @@ PY
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
     "$ROOT/internal/qualification/aws/live-qual.sh" "$phase" >"$TMP/$name.out" 2>&1
-  echo "$?" >"$TMP/$name.rc"
+  local harness_rc=$?
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 run_phase_closed_stdout() {
@@ -1170,7 +1164,9 @@ run_phase_closed_stdout() {
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
     "$ROOT/internal/qualification/aws/live-qual.sh" "$phase" 2>"$TMP/$name.err" | true
   local -a codes=("${PIPESTATUS[@]}")
-  printf '%s\n' "${codes[0]}" >"$TMP/$name.rc"
+  local harness_rc="${codes[0]}"
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 run_phase_sigterm() {
@@ -1211,7 +1207,9 @@ run_phase_sigterm() {
   done
   kill -"$signal" "$harness_pid" 2>/dev/null || true
   wait "$harness_pid"
-  printf '%s\n' "$?" >"$TMP/$name.rc"
+  local harness_rc=$?
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 run_transaction() {
@@ -1229,7 +1227,9 @@ run_transaction() {
     APP_SERVICE=charge-svc APP_PORT=80 SCENARIO="$scenario" \
     PF_TIMEOUT=3 READBACK_ATTEMPTS=2 READBACK_INTERVAL=1 "$@" \
     bash "$REPO/internal/qualification/aws/transport-transaction.sh" "$dir" >"$TMP/$name.out" 2>&1
-  echo "$?" >"$TMP/$name.rc"
+  local harness_rc=$?
+  printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
+  return "$harness_rc"
 }
 
 printf '\nscenario: installation failure stops cloud lifecycle at the supported interface\n'
