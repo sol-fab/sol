@@ -263,5 +263,71 @@ class StateEvidence(unittest.TestCase):
             self.assertTrue(result["outputs"]["postgres_url"]["value"])
 
 
+class FailureClassification(unittest.TestCase):
+    def test_six_classes(self):
+        cases = [
+            ("error: You must be logged in (401 Unauthorized)", 1, "auth"),
+            ("Error from server (Forbidden): deployments is forbidden", 1, "rbac"),
+            ("error: no kubeconfig file found", 1, "kubeconfig"),
+            ("dial tcp 10.0.0.1:443: connect: connection refused", 1, "endpoint"),
+            ("exec: \"kubectl\": executable file not found in $PATH", 1, "binary"),
+            ("something else entirely", 1, "unknown"),
+        ]
+        for text, code, expected in cases:
+            with self.subTest(text=text):
+                self.assertEqual(delivery.classify_kubectl(text, code), expected)
+
+    def _fake_kubectl(self, directory, stderr):
+        path = Path(directory) / "kubectl"
+        path.write_text(f"#!/bin/sh\nprintf '%s\\n' '{stderr}' >&2\nexit 1\n")
+        path.chmod(0o755)
+        return path
+
+    def test_read_failure_records_class_not_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            kubectl = self._fake_kubectl(directory, "Error from server (Forbidden): cannot list deployments")
+            with self.assertRaises(delivery.ObservationError) as raised:
+                delivery.read_json([str(kubectl), "get", "deployments"], "deployments")
+            self.assertEqual(raised.exception.error_class, "rbac")
+            self.assertNotIn("cannot list", str(raised.exception))
+            self.assertIn("output withheld", str(raised.exception))
+
+    def test_main_writes_error_class_without_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            kubectl = self._fake_kubectl(directory, "Error from server (Forbidden): deployments is forbidden")
+            authority = {
+                "secret_name": "sol-kafka-c",
+                "reference": "arn:aws:secretsmanager:us-east-1:123456789012:secret:sol-kafka-c-abc",
+                "username": "u",
+                "mechanism": "SCRAM-SHA-256",
+            }
+            transaction = Path(directory) / "transaction"
+            transaction.write_text(
+                "charge id: ch_1\n"
+                "read-back: the worker effect ch_1 is visible to the service\n"
+            )
+            argv = [
+                "kafka-delivery.py", "--provider", "aws", "--cluster", "c",
+                "--region", "us-east-1", "--account", "123456789012",
+                "--secret-kubeconfig", str(kubectl), "--credential-secret", "credential",
+                "--transaction", str(transaction), "--behavioral-consumer", "c1",
+                "--consumer", "c1", "ns",
+            ]
+            out = io.StringIO()
+            with patch.object(delivery.sys, "argv", argv), \
+                 patch.object(delivery.sys, "stdin", io.StringIO(json.dumps(authority))), \
+                 patch.object(delivery.sys, "stdout", out):
+                self.assertEqual(delivery.main(), 1)
+            report = json.loads(out.getvalue())
+            # The class may depend on which read failed first (the
+            # transaction, the projections, or the metadata); the contract is
+            # that a class is present, it is one of the six, and no output leaks.
+            self.assertIn(
+                report["error_class"],
+                {"auth", "rbac", "kubeconfig", "endpoint", "binary", "unknown"},
+            )
+            self.assertNotIn("forbidden", json.dumps(report))
+
+
 if __name__ == "__main__":
     unittest.main()
