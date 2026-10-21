@@ -2165,6 +2165,11 @@ has "and records the continuity" \
 printf 'phase=prepare exit=0 at=x\nphase=cloud exit=0 at=x\nphase=app exit=0 at=x\nphase=destroy exit=0 at=x\n' \
   >>"$TMP/resumed.logs/phase-verdicts.txt"
 KEEP_LOG_DIR=1 run_phase resumed verify
+KEEP_LOG_DIR=1 SEED_ISSUER=letsencrypt-staging SEED_CLAIM=mechanism-only run_phase ledger-staging verify
+has "a staging attempt with a complete ledger is not promotion-eligible" \
+  "promotion_eligible=no" "$TMP/ledger-staging.logs/promotion-eligibility.txt"
+has "but its continuity is continuous, not resumed" \
+  "attempt_continuity=continuous" "$TMP/ledger-staging.logs/promotion-eligibility.txt"
 has "a resumed attempt is never promotable even with a complete ledger" \
   "promotion_eligible=no" "$TMP/resumed.logs/promotion-eligibility.txt"
 has "and records the resumed continuity" \

@@ -1719,10 +1719,13 @@ case "${1:-}" in
         fi
       fi
       printf 'required_phases_ok=%s\n' "$phases_ok"
-      if attempt_promotion_eligible; then
-        printf 'attempt_continuity=continuous\n'
-      else
+      # Continuity is whether this attempt resumed another, not whether it is
+      # promotion-eligible. A staging (mechanism-only) attempt is continuous and
+      # ineligible; reading the promotion flag here conflated the two.
+      if [ -n "$(attempt_field resumed_from || true)" ]; then
         printf 'attempt_continuity=resumed\n'
+      else
+        printf 'attempt_continuity=continuous\n'
       fi
       printf 'attempt=%s\n' "$ATTEMPT"
     } >"$LOG_DIR/promotion-eligibility.txt"
