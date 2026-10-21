@@ -126,13 +126,16 @@ classify_refusal() {
   esac
 }
 
-retain_refusal() {
-  local file="${SOL_TRANSPORT_REFUSAL_EVIDENCE:-}"
-  if [ -z "$file" ]; then
-    file="$(mktemp "${TMPDIR:-/tmp}/sol-transport-refusal.XXXXXX")"
+retain_evidence() {
+  local name="${1:?retain_evidence needs a basename}" text="$2" dir="${SOL_TRANSPORT_EVIDENCE_DIR:-}"
+  if [ -z "$dir" ]; then
+    dir="$(mktemp -d "${TMPDIR:-/tmp}/sol-transport-evidence.XXXXXX")"
   fi
-  printf '%s\n' "$1" >"$file"
-  echo "$file"
+  if ! printf '%s\n' "$text" >"${dir}/${name}"; then
+    echo "  the evidence ${name} could not be written to ${dir}; refusing to continue without it" >&2
+    exit 1
+  fi
+  echo "$name"
 }
 
 end_state=narrow
@@ -194,10 +197,10 @@ if ! get_output="$(kubectl --context "$alias" get clusterrole sol-qualifier-tran
   # Either the apply or the read that confirms it refused. Both are captured, so a
   # refusal from the confirming read is classified rather than lost.
   refusal="${apply_output:-${get_output:-<kubectl produced no output>}}"
-  evidence="$(retain_refusal "$refusal")"
+  evidence="$(retain_evidence transport-refusal.txt "$refusal")"
   echo "  could not apply the transport manifest" >&2
   echo "  error_class: $(classify_refusal "$refusal")" >&2
-  echo "  the refused output is retained in the evidence beside this log, not printed: ${evidence##*/}" >&2
+  echo "  the refused output is retained in the evidence beside this log, not printed: ${evidence}" >&2
   exit 1
 fi
 
@@ -242,45 +245,52 @@ can_i() {
 
 secrets_verdict() {
   kubeconfig
-  local out status=0
+  local out status=0 verdict evidence
   out="$(kubectl --context "$alias" get secrets -n "$verify_ns" 2>&1)" || status=$?
   if [ "$status" = 0 ]; then
-    echo "get secrets -n ${verify_ns} was answered as ${role}: ${out:-<no output>}"
-    return 1
+    verdict=answered
+  else
+    case "$out" in
+      *[Ff]orbidden* | *[Uu]nauthorized*) verdict=denied ;;
+      *) verdict=unobservable ;;
+    esac
   fi
-  case "$out" in
-    *[Ff]orbidden* | *[Uu]nauthorized*)
-      echo "get secrets -n ${verify_ns} was denied"
-      return 0
-      ;;
-    *)
-      echo "get secrets -n ${verify_ns} failed for another reason, so the grant is unobservable: ${out:-<no output>}"
-      return 2
-      ;;
-  esac
+  # The listing is the proof, not the report: a too-broad grant answers with
+  # secret names, and those belong in the evidence store, not in the run log.
+  evidence="$(retain_evidence transport-secrets.txt "${out:-<no output>}")"
+  echo "get secrets -n ${verify_ns}: ${verdict} (retained in evidence, not printed: ${evidence})"
+  if [ "$verdict" = denied ]; then
+    return 0
+  fi
+  return 1
 }
 
 probe_effective_surface() {
   kubeconfig
-  local whoami
+  local whoami evidence
   whoami="$(kubectl --context "$alias" auth whoami -o json 2>/dev/null || true)"
   case "$whoami" in
     *"assumed-role/${role}/"*) : ;;
     *)
-      echo "  the context does not authenticate as ${role}; kubectl auth whoami said: ${whoami:-<no answer>}" >&2
+      evidence="$(retain_evidence transport-whoami.txt "${whoami:-<no answer>}")"
+      echo "  the context does not authenticate as ${role} (retained in evidence, not printed: ${evidence})" >&2
+      return 1
+      ;;
+  esac
+  # The most specific diagnosis first: a mapping that carries system:masters is the
+  # finding, and it must be named even when the group check would also refuse it.
+  case "$whoami" in
+    *system:masters*)
+      evidence="$(retain_evidence transport-whoami.txt "${whoami}")"
+      echo "  the context carries system:masters, which is not the declared mapping (retained in evidence, not printed: ${evidence})" >&2
       return 1
       ;;
   esac
   case "$whoami" in
     *sol:qualifiers*) : ;;
     *)
-      echo "  the context is not in the declared group sol:qualifiers; kubectl auth whoami said: ${whoami:-<no answer>}" >&2
-      return 1
-      ;;
-  esac
-  case "$whoami" in
-    *system:masters*)
-      echo "  the context carries system:masters, which is not the declared mapping; kubectl auth whoami said: ${whoami}" >&2
+      evidence="$(retain_evidence transport-whoami.txt "${whoami:-<no answer>}")"
+      echo "  the context is not in the declared group sol:qualifiers (retained in evidence, not printed: ${evidence})" >&2
       return 1
       ;;
   esac
