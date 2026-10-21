@@ -1619,6 +1619,11 @@ KEEP_LOG_DIR=1 run_phase issuerdiff prepare
 refused issuerdiff "a continuation that declares a different issuer is refused"
 has "and names the new-ATTEMPT requirement" \
   "different issuer requires a new ATTEMPT" "$TMP/issuerdiff.out"
+has "the continuation keeps the original production issuer, not the target staging issuer" \
+  "issuer=letsencrypt-production" "$TMP/issuerdiff.logs/attempt.txt"
+has "and the original production claim" "claim=production" "$TMP/issuerdiff.logs/attempt.txt"
+lacks "it never re-derives the staging target's issuer" "issuer=letsencrypt-staging" \
+  "$TMP/issuerdiff.logs/attempt.txt"
 
 printf '\nscenario: an attempt without a declared issuer is refused\n'
 sed -i '/^ *cluster_issuer: /d' "$WORKSPACE/sol/environments.local.yml"
