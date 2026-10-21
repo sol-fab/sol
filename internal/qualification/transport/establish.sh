@@ -176,6 +176,24 @@ ensure_narrow_entry
 
 admin_policy="arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
 
+# A run killed with SIGKILL cannot execute its EXIT trap, so the association it
+# opened is still in place when the next establishment starts. Nothing else reads it:
+# the teardown inventory has no access-entry class. A later successful run recreates
+# the narrow entry anyway, so the window gets closed either way -- but silently, and
+# only if a later run happens. Saying what was found is the difference between a
+# repaired window and an invisible one.
+left_open_window() {
+  aws eks list-associated-access-policies --cluster-name "$cluster" --region "$region" \
+    --principal-arn "$arn" --query 'associatedAccessPolicies[].policyArn' --output text 2>/dev/null |
+    grep -q 'AmazonEKSClusterAdminPolicy'
+}
+
+if left_open_window; then
+  echo "  a previous run left the cluster-admin association in place; closing it before opening a new window" >&2
+  recreate_narrow_entry || lost_authority
+  echo "  establishment_window: repaired (left open by an earlier run, now closed)" >&2
+fi
+
 echo "  opening a temporary establishment window (cluster-admin association)"
 aws eks associate-access-policy \
   --cluster-name "$cluster" \
