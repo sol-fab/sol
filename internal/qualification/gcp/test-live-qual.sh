@@ -669,6 +669,49 @@ case "$*" in
       *) printf '%s\n' "${STUB_CA_CLUSTER_UID:-cluster-uid-1}" ;;
     esac
     exit 0 ;;
+  # The cold-start boundary's namespace view: kube-system must be readable, an
+  # impossible name must be NotFound, and each declared namespace is present,
+  # absent, forbidden, or timed out. UNKNOWN is never read as absence.
+  *" get namespace "*)
+    ns=""
+    prev=""
+    for a in $*; do
+      [ "$prev" = namespace ] && ns="$a"
+      prev="$a"
+    done
+    case "$ns" in
+      kube-system)
+        if [ "${STUB_NS_VIEW_UNREADABLE:-0}" = "1" ]; then
+          printf 'Error from server (Forbidden): namespaces "kube-system" is forbidden: User cannot get resource\n' >&2
+          exit 1
+        fi
+        printf 'namespace/kube-system\n'
+        exit 0
+        ;;
+      sol-nonexistent-namespace-probe-*)
+        if [ "${STUB_NS_VIEW_FILTERED:-0}" = "1" ]; then
+          printf 'Error from server (Forbidden): namespaces "%s" is forbidden: User cannot get resource\n' "$ns" >&2
+        else
+          printf 'Error from server (NotFound): namespaces "%s" not found\n' "$ns" >&2
+        fi
+        exit 1
+        ;;
+    esac
+    if [ "${STUB_COLD_NAMESPACE_PRESENT:-}" = "$ns" ]; then
+      printf 'namespace/%s\n' "$ns"
+      exit 0
+    fi
+    if [ "${STUB_COLD_NAMESPACE_FORBIDDEN:-}" = "$ns" ]; then
+      printf 'Error from server (Forbidden): namespaces "%s" is forbidden: User cannot get resource\n' "$ns" >&2
+      exit 1
+    fi
+    if [ "${STUB_COLD_NAMESPACE_TIMEOUT:-}" = "$ns" ]; then
+      printf 'Unable to connect to the server: dial tcp 10.0.0.1:443: i/o timeout\n' >&2
+      exit 1
+    fi
+    printf 'Error from server (NotFound): namespaces "%s" not found\n' "$ns" >&2
+    exit 1
+    ;;
   *"config current-context"*)
     printf '%s\n' "${STUB_CA_CONTEXT-ca-observer-selected}"
     exit 0 ;;
@@ -1021,7 +1064,7 @@ run_case() {
   if [ "${PRESEED_TARGET:-0}" = "1" ]; then
     printf '# Written by internal/qualification/gcp/live-qual.sh (test preseed)\nqual:\n  targets:\n    gcp/us-central1:\n      cluster_name: test-cluster\n      base_domain: qual-gcp.sol-fab.dev\n' >"$TARGET_FILE"
   fi
-  rm -rf "$LOG_DIR"
+  if [ "${KEEP_LOG_DIR:-0}" != "1" ]; then rm -rf "$LOG_DIR"; fi
   if [ -n "${PRESEED_LB_ADDRESS:-}" ]; then
     mkdir -p "$LOG_DIR"
     printf '%s\n' "$PRESEED_LB_ADDRESS" >"$LOG_DIR/app-load-balancer.txt"
@@ -1079,6 +1122,22 @@ run_case() {
     "$harness" "$sub" >"$TMP/$name.out" 2>&1
   echo "$? " >"$TMP/$name.rc"
   sed -i 's/ //' "$TMP/$name.rc"
+}
+
+# A cloud/app case reuses one evidence directory: prepare materializes the
+# candidate-bound build context once, then the phase under test reads it.
+run_cloud_case() {
+  local name="$1"
+  shift
+  KEEP_LOG_DIR=1 run_case "$name" prepare "$@"
+  KEEP_LOG_DIR=1 run_case "$name" cloud "$@"
+}
+
+run_app_case() {
+  local name="$1"
+  shift
+  KEEP_LOG_DIR=1 run_case "$name" prepare "$@"
+  KEEP_LOG_DIR=1 run_case "$name" app "$@"
 }
 
 # Run a *mutated* copy of the harness. The copy sits beside the real one so the
@@ -1142,7 +1201,7 @@ for scenario in absent drift failure; do
 done
 
 printf '\nscenario: cloud succeeds\n'
-run_case cloud-ok cloud
+run_cloud_case cloud-ok
 is "exit 0" "$(cat "$TMP/cloud-ok.rc")" "0"
 lacks "no destroy on the success path (the delegation boundary keeps the substrate)" "sol destroy" "$TMP/cloud-ok.argv"
 lacks "the cloud phase never runs an application deploy" "migrate apply" "$TMP/cloud-ok.argv"
@@ -1194,6 +1253,79 @@ has "the run identity and state key are in the manifest" \
 has "and the attempt identity too" "attempt: $ATTEMPT" "$TMP/cloud-ok.logs/evidence-manifest.txt"
 present "$TMP/cloud-ok.logs/inventory-pre.identity" \
   "the provider inventory carries the attempt, target and state key"
+
+has "the cold-start boundary covers every candidate-derived namespace" \
+  "boundary_namespaces: pluto-comms pluto-demo-ts pluto-payments" \
+  "$TMP/cloud-ok.logs/cold-start-namespaces.txt"
+
+printf '\nscenario: a namespace present before its artifacts is UNKNOWN, never a pass\n'
+run_cloud_case coldworkload STUB_COLD_NAMESPACE_PRESENT=pluto-demo-ts
+is "a present declared namespace fails the cloud phase" "$(cat "$TMP/coldworkload.rc")" "1"
+has "recording it as PRESENT" \
+  "cold-start-namespace: pluto-demo-ts PRESENT" "$TMP/coldworkload.logs/cold-start-namespaces.txt"
+has "and the boundary is UNKNOWN, never a pass" \
+  "UNKNOWN, never a pass" "$TMP/coldworkload.out"
+
+printf '\nscenario: a refused namespace read is UNKNOWN, never absence\n'
+run_cloud_case coldforbidden STUB_COLD_NAMESPACE_FORBIDDEN=pluto-comms
+is "a refused declared namespace fails the cloud phase" "$(cat "$TMP/coldforbidden.rc")" "1"
+has "recording the namespace as UNKNOWN" \
+  "cold-start-namespace: pluto-comms UNKNOWN" "$TMP/coldforbidden.logs/cold-start-namespaces.txt"
+lacks "and never as absence" \
+  "cold-start-namespace: pluto-comms ABSENT" "$TMP/coldforbidden.logs/cold-start-namespaces.txt"
+
+printf '\nscenario: a namespace read that timed out is UNKNOWN, never absence\n'
+run_cloud_case coldtimeout STUB_COLD_NAMESPACE_TIMEOUT=pluto-payments
+is "a timed-out declared namespace fails the cloud phase" "$(cat "$TMP/coldtimeout.rc")" "1"
+has "recording the timeout as UNKNOWN" \
+  "cold-start-namespace: pluto-payments UNKNOWN" "$TMP/coldtimeout.logs/cold-start-namespaces.txt"
+
+printf '\nscenario: an observation identity whose view cannot be established is not an absence\n'
+run_cloud_case coldnoview STUB_NS_VIEW_UNREADABLE=1
+is "an unreadable namespace view fails the cloud phase" "$(cat "$TMP/coldnoview.rc")" "1"
+has "and says the view could not be established" \
+  "namespace view could not be established" "$TMP/coldnoview.out"
+lacks "reading no declared namespace behind an unproven view" \
+  "cold-start-namespace: pluto-payments ABSENT" "$TMP/coldnoview.logs/cold-start-namespaces.txt"
+
+printf '\nscenario: a filtered namespace view cannot produce a false absence\n'
+run_cloud_case coldfiltered STUB_NS_VIEW_FILTERED=1
+is "a view that answers Forbidden for an absent name is not a boundary" "$(cat "$TMP/coldfiltered.rc")" "1"
+has "and says the view is filtered" "namespace view is" "$TMP/coldfiltered.out"
+lacks "reading no declared namespace behind a filtered view" \
+  "cold-start-namespace: pluto-payments ABSENT" "$TMP/coldfiltered.logs/cold-start-namespaces.txt"
+
+printf '\nscenario: the S1 seeds — an empty selection refuses rather than passing vacuously\n'
+run_cloud_case coldempty COLD_START_SERVICES=
+is "an empty selected-unit set fails the cloud phase" "$(cat "$TMP/coldempty.rc")" "1"
+has "and says the selection declares no namespace" \
+  "selected units declare no namespace" "$TMP/coldempty.out"
+lacks "reading no namespace behind an empty selection" \
+  "cold-start-namespace: pluto-payments ABSENT" "$TMP/coldempty.logs/cold-start-namespaces.txt"
+
+printf '\nscenario: the S1 seeds — a selection that omits a unit refuses\n'
+run_cloud_case coldselection COLD_START_SERVICES="orders_svc missing_svc"
+is "a selection that omits a unit fails the cloud phase" "$(cat "$TMP/coldselection.rc")" "1"
+has "and says which selection could not be covered" \
+  "resolve to a candidate-bound directory" "$TMP/coldselection.out"
+lacks "reading no namespace behind an unvalidated selection" \
+  "cold-start-namespace: pluto-payments ABSENT" "$TMP/coldselection.logs/cold-start-namespaces.txt"
+
+printf '\nscenario: the S1 seeds — an uncovered configured namespace refuses\n'
+run_cloud_case colduncovered COLD_START_REQUIRED_NAMESPACES=pluto-uncovered
+is "an uncovered configured namespace fails the cloud phase" "$(cat "$TMP/colduncovered.rc")" "1"
+has "and names the namespace the derived set does not cover" \
+  "does not cover" "$TMP/colduncovered.out"
+
+printf '\nscenario: cloud refuses without the prepare context\n'
+run_case cloud-nocontext cloud
+is "the cloud phase fails without the candidate-bound context" "$(cat "$TMP/cloud-nocontext.rc")" "1"
+has "and tells the operator to run prepare" "run prepare first" "$TMP/cloud-nocontext.out"
+
+printf '\nscenario: app refuses without the prepare context\n'
+PRESEED_CREDENTIALS=1 run_case app-nocontext app
+is "the app phase fails without the candidate-bound context" "$(cat "$TMP/app-nocontext.rc")" "1"
+has "and tells the operator to run prepare" "run prepare first" "$TMP/app-nocontext.out"
 
 printf '\nscenario: managed credential failure is never repaired by qualification\n'
 run_case credential-boundary cloud STUB_APPLY_CREDENTIAL_MISSING=1
@@ -1339,20 +1471,20 @@ export DOCKER_LOG="$TMP/app-docker.argv"
 : >"$DOCKER_LOG"
 export CURL_LOG="$TMP/app-curl.argv"
 : >"$CURL_LOG"
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ok app
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-ok
 is "the app phase exits 0 when every step succeeds" "$(cat "$TMP/app-ok.rc")" "0"
 # The observer never reads the broker users Secret, so an unreadable broker credential is not
 # itself an app-phase failure; authentication is established behaviorally by the transaction.
 # What must fail closed is an unreadable delivered credential Secret or a consumer that points
 # at a different Secret.
 printf '\nscenario: an unreadable delivered credential refuses the app phase\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_KAFKA_DELIVERY=denied run_case app-kafka-denied app
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_KAFKA_DELIVERY=denied run_app_case app-kafka-denied
 is "the app phase refuses an unreadable delivery" "$(cat "$TMP/app-kafka-denied.rc")" "1"
 has "unreadable delivery fails the value-free observation" \
   "Kafka delivery observation failed" "$TMP/app-kafka-denied.out"
 lacks "unreadable delivery never causes credential writes" "secret set" "$TMP/app-kafka-denied.argv"
 printf '\nscenario: a consumer pointed at another Secret refuses the app phase\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_KAFKA_DELIVERY=missing run_case app-kafka-missing app
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_KAFKA_DELIVERY=missing run_app_case app-kafka-missing
 is "a foreign projection blocks qualification" "$(cat "$TMP/app-kafka-missing.rc")" "1"
 has "a foreign projection is never accepted" "Kafka delivery observation failed" "$TMP/app-kafka-missing.out"
 lacks "a foreign projection never causes credential writes" "secret set" "$TMP/app-kafka-missing.argv"
@@ -1521,7 +1653,7 @@ is "the CA phases ran in lifecycle order" \
 # master copy in the unit Secret; that is residue hygiene, a different claim.
 printf '\nscenario: a consumer that reads POSTGRES_URL from its own Secret is refused (ADR 0007)\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_POSTGRES_SECRET=orders-svc-secrets \
-  run_case app-mastercopy app
+  run_app_case app-mastercopy
 is "the app phase refuses a consumer reading the master Secret" \
   "$(cat "$TMP/app-mastercopy.rc")" "1"
 has "and names the Secret the unit actually reads" \
@@ -1537,7 +1669,7 @@ lacks "and the orders scenario never runs on that unit" \
 printf '\nscenario: a declared consumer that did not receive its class Secret is refused\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_DML_NAMESPACE=pluto-payments \
   STUB_SPECIMEN_CONSUMERS='[{"namespace":"pluto-payments","name":"orders-svc","database":"app-db","credential":{"namespace":"pluto-payments","name":"qual-gcp-us-central1-dml-creds"},"consuming_containers":["orders-svc"]},{"namespace":"pluto-comms","name":"fulfilment-worker","database":"app-db","credential":{"namespace":"pluto-comms","name":"qual-gcp-us-central1-dml-creds"},"consuming_containers":["fulfilment-worker"]}]' \
-  run_case app-partial app
+  run_app_case app-partial
 is "a partial delivery fails the app phase" "$(cat "$TMP/app-partial.rc")" "1"
 has "and names the consumer whose class Secret is absent" \
   "pluto-comms/fulfilment-worker as a database consumer, and qual-gcp-us-central1-dml-creds is absent from pluto-comms" \
@@ -1548,7 +1680,7 @@ has "and names the consumer whose class Secret is absent" \
 printf '\nscenario: a declared consumer outside the old namespace map is still asserted\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_DML_NAMESPACE=pluto-payments \
   STUB_SPECIMEN_CONSUMERS='[{"namespace":"pluto-payments","name":"orders-svc","database":"app-db","credential":{"namespace":"pluto-payments","name":"qual-gcp-us-central1-dml-creds"},"consuming_containers":["orders-svc"]},{"namespace":"pluto-extra","name":"orders-svc","database":"app-db","credential":{"namespace":"pluto-extra","name":"qual-gcp-us-central1-dml-creds"},"consuming_containers":["orders-svc"]}]' \
-  run_case app-outside app
+  run_app_case app-outside
 is "a consumer outside the harness's map fails the app phase" "$(cat "$TMP/app-outside.rc")" "1"
 has "and names the namespace the harness map cannot see" \
   "pluto-extra/orders-svc as a database consumer" "$TMP/app-outside.out"
@@ -1557,7 +1689,7 @@ has "and names the namespace the harness map cannot see" \
 printf '\nscenario: every declared consumer is asserted, not just the first\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_DML_NAMESPACE=pluto-payments \
   STUB_SPECIMEN_CONSUMERS='[{"namespace":"pluto-payments","name":"orders-svc","database":"app-db","credential":{"namespace":"pluto-payments","name":"qual-gcp-us-central1-dml-creds"},"consuming_containers":["orders-svc"]},{"namespace":"pluto-payments","name":"charge-svc","database":"app-db","credential":{"namespace":"pluto-payments","name":"qual-gcp-us-central1-dml-creds"},"consuming_containers":["charge-svc"]}]' \
-  run_case app-everyconsumer app
+  run_app_case app-everyconsumer
 # The app's transaction fixture is single-use in this suite; the delivery assertion
 # runs before it and is the subject here. Assert the delivery evidence, not a second
 # end-to-end transaction.
@@ -1569,7 +1701,7 @@ lacks "the delivery assertion itself did not fail" \
   "database delivery observation failed" "$TMP/app-everyconsumer.out"
 
 printf '\nscenario: no independent CA observation identity refuses the app phase\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-no-observer app \
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-ca-no-observer \
   GCP_CA_OBSERVER_SOURCE_KUBECONFIG=
 is "the app phase refuses without an independent observation identity" \
   "$(cat "$TMP/app-ca-no-observer.rc")" "1"
@@ -1580,7 +1712,7 @@ not_exists "no authority was fabricated without an observer" \
 not_exists "and the shared CA owner never ran" "$TMP/app-ca-no-observer.logs/ca-phases.txt"
 
 printf '\nscenario: an observer that is the deploy identity refuses the app phase\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-operator app \
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-ca-operator \
   STUB_CA_OBSERVER_PRINCIPAL=gcp:deployer@example.com \
   GCP_CA_OBSERVER_PRINCIPAL=gcp:deployer@example.com
 is "the app phase refuses a non-independent observer" \
@@ -1589,7 +1721,7 @@ has "and names the conflation" \
   "CA observation identity is the deploy identity" "$TMP/app-ca-operator.out"
 
 printf '\nscenario: an ambient identity that is not the configured observer refuses the app phase\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-wrong-observer app \
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-ca-wrong-observer \
   STUB_CA_OBSERVER_PRINCIPAL=ambient@example.com
 is "the app phase refuses a credential that did not authenticate as the configured observer" \
   "$(cat "$TMP/app-ca-wrong-observer.rc")" "1"
@@ -1598,7 +1730,7 @@ has "and names the observed and configured principals" \
   "$TMP/app-ca-wrong-observer.out"
 
 printf '\nscenario: an observer that can read Secrets refuses the app phase\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-secret-read app \
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-ca-secret-read \
   STUB_CA_OBSERVER_ALLOW_SECRETS=1
 is "the app phase refuses an observation identity broader than read-only" \
   "$(cat "$TMP/app-ca-secret-read.rc")" "1"
@@ -1606,25 +1738,25 @@ has "and names the forbidden authority" "CA observation permission sample forbid
   "$TMP/app-ca-secret-read.out"
 
 printf '\nscenario: a representative mutation grant on the observer refuses the app phase\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-mutation app \
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-ca-mutation \
   STUB_CA_OBSERVER_ALLOW='patch deployments.apps'
 is "the app phase refuses a mutation grant" \
   "$(cat "$TMP/app-ca-mutation.rc")" "1"
 has "and names the mutation" "holds 'patch deployments.apps'" "$TMP/app-ca-mutation.out"
 
 printf '\nscenario: an observer addressing another cluster refuses the app phase\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-foreign-cluster app \
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-ca-foreign-cluster \
   STUB_CA_OBSERVER_CLUSTER_UID=other-cluster
 is "the app phase refuses a foreign observer cluster" "$(cat "$TMP/app-ca-foreign-cluster.rc")" "1"
 has "and names the cluster mismatch" "another Kubernetes cluster or endpoint" "$TMP/app-ca-foreign-cluster.out"
 
 printf '\nscenario: no selected observer context refuses the app phase\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-no-context app STUB_CA_CONTEXT=
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-ca-no-context STUB_CA_CONTEXT=
 is "the app phase refuses an unselected observer context" "$(cat "$TMP/app-ca-no-context.rc")" "1"
 has "and names the missing context" "names no selected context" "$TMP/app-ca-no-context.out"
 
 printf '\nscenario: a CA migration phase failure stops the phase before the final deploy\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-migration-fails app \
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-ca-migration-fails \
   STUB_CA_FAIL=migration
 is "the app phase fails when the shared migration observation fails" \
   "$(cat "$TMP/app-ca-migration-fails.rc")" "1"
@@ -1636,7 +1768,7 @@ lacks "and the application phase was not reached" "application" \
 not_exists "and no report was produced" "$TMP/app-ca-migration-fails.logs/ca-report.json"
 
 printf '\nscenario: a CA application phase failure prevents a report\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-application-fails app \
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-ca-application-fails \
   STUB_CA_FAIL=application
 is "the app phase fails when the shared application observation fails" \
   "$(cat "$TMP/app-ca-application-fails.rc")" "1"
@@ -1649,7 +1781,7 @@ lacks "but the report was not reached" "report" \
 not_exists "so no passing report exists" "$TMP/app-ca-application-fails.logs/ca-report.json"
 
 printf '\nscenario: a CA report failure refuses an apparently successful app phase\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-report-fails app \
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-ca-report-fails \
   STUB_CA_FAIL=report
 is "the app phase fails when the durable report does not pass" \
   "$(cat "$TMP/app-ca-report-fails.rc")" "1"
@@ -1660,7 +1792,7 @@ is "after both observation phases ran" \
   "requirements,migration,application,report,"
 
 printf '\nscenario: a supplied observer kubeconfig requires a declared principal\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-source-no-principal app \
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-ca-source-no-principal \
   GCP_CA_OBSERVER_SOURCE_KUBECONFIG="$REPO/internal/qualification/gcp/fixtures/kubeconfig-gcloud-real.yaml" \
   GCP_CA_OBSERVER_PRINCIPAL=
 is "the app phase refuses a supplied kubeconfig without a declared principal" \
@@ -1669,7 +1801,7 @@ has "and says the principal must be declared" \
   "GCP_CA_OBSERVER_PRINCIPAL is required" "$TMP/app-ca-source-no-principal.out"
 
 printf '\nscenario: a supplied observer kubeconfig can authenticate the declared principal\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-source-ok app \
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-ca-source-ok \
   GCP_CA_OBSERVER_SOURCE_KUBECONFIG="$REPO/internal/qualification/gcp/fixtures/kubeconfig-gcloud-real.yaml" \
   GCP_CA_OBSERVER_PRINCIPAL=gcp:qualifier@sol-qualification.iam.gserviceaccount.com \
   STUB_CA_FAIL=report
@@ -1685,7 +1817,7 @@ has "the only failure is the deliberately failing report" \
   "database-CA report phase did not pass" "$TMP/app-ca-source-ok.out"
 
 printf '\nscenario: candidate-bound requirements do not cover the deploy migration namespace\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-requirements-drift app \
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-ca-requirements-drift \
   STUB_CA_REQUIREMENTS_OMIT=pluto-comms
 is "the app phase refuses a requirement set that omits the migration namespace" \
   "$(cat "$TMP/app-ca-requirements-drift.rc")" "1"
@@ -1694,7 +1826,7 @@ has "and names the lifecycle/candidate disagreement" \
   "$TMP/app-ca-requirements-drift.out"
 
 printf '\nscenario: the deploy declares no migration namespace\n'
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-ca-no-migration-namespace app \
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-ca-no-migration-namespace \
   STUB_DDL_NAMESPACE=
 is "the app phase refuses a missing migration namespace" \
   "$(cat "$TMP/app-ca-no-migration-namespace.rc")" "1"
@@ -1715,7 +1847,7 @@ export CURL_LOG="$TMP/app-stall.curl"
 export DOCKER_LOG="$TMP/app-stall.docker"
 : >"$DOCKER_LOG"
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_TX_READBACK=pending \
-  run_case app-stall app APP_READBACK_ATTEMPTS=2 APP_READBACK_INTERVAL=1
+  run_app_case app-stall APP_READBACK_ATTEMPTS=2 APP_READBACK_INTERVAL=1
 is "a read-back that never reaches fulfilled fails the phase" \
   "$(cat "$TMP/app-stall.rc")" 1
 lacks "and no alpha row is recorded as run" "$(printf 'B1\trun')" \
@@ -1754,7 +1886,7 @@ run_transaction_case() {
   export CURL_LOG="$TMP/$name.curl"
   : >"$CURL_LOG"
   STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 \
-    run_case "$name" app APP_READBACK_ATTEMPTS="${TX_ATTEMPTS:-2}" APP_READBACK_INTERVAL=1 "$@"
+    run_app_case "$name" APP_READBACK_ATTEMPTS="${TX_ATTEMPTS:-2}" APP_READBACK_INTERVAL=1 "$@"
 }
 
 export STUB_PORT_FORWARD_PIDS="$TMP/tx-port-forward-pids"
@@ -1865,7 +1997,7 @@ cp "$TMP/bin/curl.delegation" "$TMP/bin/curl"
 printf '\nscenario: adversarial — a bundle that cannot pin Sol stops the run before Sol is asked to move anything\n'
 export DOCKER_LOG="$TMP/app-runner-tag.docker"
 : >"$DOCKER_LOG"
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-runner-tag app \
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-runner-tag \
   SOL_INSTALL="$TAG_RUNNER_INSTALL"
 [ "$(cat "$TMP/app-runner-tag.rc")" != "0" ] \
   && ok "the app phase refuses a bundle whose runner reference is a tag" \
@@ -1879,7 +2011,7 @@ lacks "and the harness never reaches the registry: it publishes no runner" \
 printf '\nscenario: adversarial — a run cannot qualify a prefix that is not the candidate it names\n'
 export DOCKER_LOG="$TMP/gcp-othercandidate.docker"
 : >"$DOCKER_LOG"
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case gcp-othercandidate app \
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case gcp-othercandidate \
   SOL_CANDIDATE="$TMP/candidate-other-revision.json"
 [ "$(cat "$TMP/gcp-othercandidate.rc")" != "0" ] \
   && ok "a candidate naming another revision is refused" \
@@ -1891,7 +2023,7 @@ lacks "no image is built for it" "docker build" "$DOCKER_LOG"
 lacks "and Sol is never asked to deploy" "deploy qual" "$TMP/gcp-othercandidate.argv"
 
 printf '\nscenario: adversarial — a development build is refused before any phase runs\n'
-STUB_SOL_VERSION=Sol-ed3f041f run_case app-dev app
+STUB_SOL_VERSION=Sol-ed3f041f run_app_case app-dev
 [ "$(cat "$TMP/app-dev.rc")" != "0" ] \
   && ok "the app phase refuses a development build" \
   || no "the app phase refuses a development build" "non-zero" "0"
@@ -1900,7 +2032,7 @@ has "the refusal names the installed-bundle rule" \
 lacks "and Sol never migrates" "migrate apply" "$TMP/app-dev.argv"
 
 printf '\nscenario: the app phase refuses when the run has no credentials\n'
-run_case app-nocred app
+run_app_case app-nocred
 is "it exits 2" "$(cat "$TMP/app-nocred.rc")" "2"
 has "and says why" "no run kubeconfig" "$TMP/app-nocred.out"
 lacks "and invokes no Sol command before it has somewhere to deploy" "sol deploy" "$TMP/app-nocred.argv"
@@ -2013,7 +2145,7 @@ has "and the environment a run needs" "IMPERSONATOR" "$TMP/no-phase.out"
 lacks "and not its own source" "set -euo pipefail" "$TMP/no-phase.out"
 lacks "and tears nothing down" "sol destroy" "$TMP/no-phase.argv"
 
-run_case ready-bindings cloud STUB_CLUSTER_EXISTS=1
+run_cloud_case ready-bindings STUB_CLUSTER_EXISTS=1
 if grep -qF 'get clusterrolebinding sol-platform-provisioner-cluster -o json' \
     "$TMP/ready-bindings.argv" 2>/dev/null; then
   ok "a successful install reads the cluster-scoped provisioner binding"
@@ -2079,7 +2211,7 @@ is "the leftover class is PRESENT in the structured verdict" \
   "$(jq -r '.classes[] | select(.class == "artifact-registry") | .state' "$verdict_json")" "PRESENT"
 
 printf '\nscenario: apply fails at the platform boundary\n'
-run_case cloud-fail cloud STUB_APPLY_RC=1 STUB_CLUSTER_EXISTS=1 STUB_KUBE_SIGNATURE=dial
+run_cloud_case cloud-fail STUB_APPLY_RC=1 STUB_CLUSTER_EXISTS=1 STUB_KUBE_SIGNATURE=dial
 has "a failed apply still tears down" "sol destroy" "$TMP/cloud-fail.argv"
 if [ "$(grep -c 'sol deploy' "$TMP/cloud-fail.argv")" = "1" ]; then
   ok "the harness does not run a second deploy to diagnose the platform"
@@ -2358,7 +2490,7 @@ else
 fi
 
 printf '\nscenario: the durable root would be replaced\n'
-run_case durable-refusal cloud STUB_INSTALL_REFUSED=1
+run_cloud_case durable-refusal STUB_INSTALL_REFUSED=1
 if [ "$(cat "$TMP/durable-refusal.rc")" = "0" ]; then
   no "a plan that would replace a durable prerequisite refuses" "non-zero" "0"
 else
@@ -2487,7 +2619,7 @@ creds_case() {
   local kc="$TMP/kc-$name.yaml"
   printf 'apiVersion: v1\nclusters:\n- cluster:\n    server: https://%s\n  name: c\n' \
     "$configured" >"$kc"
-  run_case "creds-$name" cloud KUBECONFIG="$kc" "$@"
+  run_cloud_case "creds-$name" KUBECONFIG="$kc" "$@"
 }
 
 creds_case sampling 136.115.125.189 STUB_CLUSTER_EXISTS=1
@@ -2508,7 +2640,7 @@ amb="$TMP/ambient-kubeconfig.yaml"
   printf 'users:\n- name: u\n  user:\n    token: x\n'
 } >"$amb"
 
-run_case "e2e-credentials" cloud KUBECONFIG="$amb" STUB_SOL_SLEEP=6 \
+run_cloud_case "e2e-credentials" KUBECONFIG="$amb" STUB_SOL_SLEEP=6 \
   CLUSTER_KUBECONFIG_POLL_S=1 STUB_STATUS_FAILS_N=3 STUB_APPLY_RC=1 STUB_CLUSTER_EXISTS=1
 
 has "the waiter recorded a poll that found no cluster" "poll-failed" \
@@ -2583,7 +2715,7 @@ has "a failed capture read records the failure in the artifact" "Error from serv
   "$TMP/creds-readfails.logs/platform-failure/pods.log"
 
 printf '\nscenario: a stop before the platform is a complete bundle\n'
-run_case bundle-pre-platform cloud STUB_APPLY_RC=1 STUB_APPLY_FAILS_AT=bootstrap
+run_cloud_case bundle-pre-platform STUB_APPLY_RC=1 STUB_APPLY_FAILS_AT=bootstrap
 lacks "a root the run never reached is not demanded of the bundle" \
   "bundle member missing or empty: state/platform.tfstate" "$TMP/bundle-pre-platform.out"
 present "$TMP/bundle-pre-platform.logs/state/cloud.tfstate" \
@@ -2597,7 +2729,7 @@ present "$TMP/bundle-pre-platform.logs/platform-failure/NO-KUBECONFIG.txt" \
   "and records that no credential bound to this run existed"
 
 printf '\nscenario: a platform state object the run could not capture is recorded, not demanded\n'
-run_case bundle-platform-reached cloud STUB_APPLY_RC=1 STUB_APPLY_ERROR=already-exists \
+run_cloud_case bundle-platform-reached STUB_APPLY_RC=1 STUB_APPLY_ERROR=already-exists \
   STUB_STATE_UNREADABLE=1
 has "the manifest records the state object it could not capture" \
   "terraform state (platform)  MISSING" "$TMP/bundle-platform-reached.logs/evidence-manifest.txt"
@@ -2607,7 +2739,7 @@ lacks "which does not by itself make the bundle incomplete" \
 
 printf '\nscenario: an unreadable bundle member\n'
 lacks "a complete bundle is not reported as incomplete" "evidence bundle is INCOMPLETE" "$TMP/cloud-fail.out"
-run_case bundle-unreadable cloud STUB_APPLY_RC=1 STUB_CLUSTER_EXISTS=1 STUB_STATE_UNREADABLE=1
+run_cloud_case bundle-unreadable STUB_APPLY_RC=1 STUB_CLUSTER_EXISTS=1 STUB_STATE_UNREADABLE=1
 has "a state object the run could not read is recorded as such" "COULD NOT READ" "$TMP/bundle-unreadable.out"
 lacks "which does not by itself make the bundle incomplete" \
   "bundle member missing or empty: state/cloud.tfstate" "$TMP/bundle-unreadable.out"
@@ -2732,7 +2864,7 @@ run_case role-unreadable destroy STUB_ROLE_STATE=error
 has "an unreadable role is UNKNOWN" "custom-role: UNKNOWN" "$TMP/role-unreadable.out"
 
 printf '\nscenario: the harness passes no dead argument\n'
-run_case cloud-vars cloud
+run_cloud_case cloud-vars
 lacks "no command-not-found diagnostic" "command not found" "$TMP/cloud-vars.out"
 has "the generated target carries the impersonator" "provisioner_impersonator: user:test@example.com" "$TARGET_FILE"
 lacks "and the cloud path passes no second copy of it" "-var=provisioner_impersonators" "$TMP/cloud-vars.argv"
@@ -2791,18 +2923,22 @@ has "and says why" "no run kubeconfig" "$TMP/identity-nocred.out"
 
 printf '\nscenario: provider authority and delivered values cannot disagree\n'
 for delivery_mode in denied missing; do
-  STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case "kafka-delivery-$delivery_mode" app "STUB_KAFKA_DELIVERY=$delivery_mode"
+  STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case "kafka-delivery-$delivery_mode" "STUB_KAFKA_DELIVERY=$delivery_mode"
   is "$delivery_mode blocks application qualification" "$(cat "$TMP/kafka-delivery-$delivery_mode.rc")" "1"
   lacks "no credential writes repair $delivery_mode" "secret set" "$TMP/kafka-delivery-$delivery_mode.argv"
 done
-STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_case app-secret-false-success app STUB_SECRET_PROBE_RC=0
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-secret-false-success STUB_SECRET_PROBE_RC=0
 is "false success of a missing application secret fails qualification" "$(cat "$TMP/app-secret-false-success.rc")" "1"
 lacks "captured state metadata excludes database credentials" "qual-secret" "$TMP/app-ok.logs/state/cloud.tfstate"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
-[ "$fail" = "0" ] || exit 1
+if [ "$fail" != "0" ]; then
+  printf 'PASSED=%d FAILED=%d EXIT=1\n' "$pass" "$fail"
+  exit 1
+fi
 dirty="$(git -C "$REPO" status --porcelain --untracked-files=all -- examples/pluto/)"
 if [ -n "$dirty" ]; then
   printf '[FAIL] the suite left the checkout dirty:\n%s\n' "$dirty"; exit 1
 fi
 printf 'checkout clean\n'
+printf 'PASSED=%d FAILED=%d EXIT=0\n' "$pass" "$fail"
