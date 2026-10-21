@@ -35,6 +35,11 @@ case "$1 $2" in
     if [ -f "$state/delete-refused" ]; then exit 254; fi
     rm -f "$state/entry" "$state/wide"
     ;;
+  "eks list-associated-access-policies")
+    if [ -f "$state/left-open" ]; then
+      echo "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+    fi
+    ;;
   "eks associate-access-policy") touch "$state/wide" "$state/associated" ;;
   "eks disassociate-access-policy") touch "$state/disassociated" ;;
   *) : ;;
@@ -407,6 +412,21 @@ run_establish
 expect_exit 1 "an extra trust principal fails establishment"
 expect_no_file "no establishment window was opened" "$work/state/associated"
 expect_text "beyond this account's root" "the refusal names the extra principal"
+
+echo
+echo "establish: a window a killed run left open is found, closed, and reported"
+reset_state
+clear_evidence
+# A run that was killed cannot execute its EXIT trap, so the association it opened is
+# still in place when the next run starts. Nothing else in the harness reads it.
+touch "$work/state/left-open"
+run_establish
+expect_exit 0 "establishment succeeds after closing what an earlier run left"
+expect_text "cluster-admin association(s) on arn:aws:iam::111122223333:role/sol-qualifier-transport" "the run names the principal it found the association on"
+expect_text "policy arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy" "the run names the policy it found"
+expect_text "1 association(s) left open" "the run counts what it found"
+expect_text "establishment_window: repaired (principal" "the evidence record is auditable, not a bare status"
+expect_no_file "the window is closed again" "$work/state/wide"
 
 echo
 if [ "$failures" -eq 0 ]; then
