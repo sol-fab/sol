@@ -78,11 +78,31 @@ expect_failure_record() {
   ok "$description (exit $rc)"
 }
 
+# A scenario's declared outcome. The helpers return the harness status (the rc
+# floor), so the expectation is stated where it is known instead of being re-derived
+# from a .rc file by every scenario. EXPECTED_RC is left set for a scenario that also
+# wants to name the exact code.
+expect_success() {
+  local description="$1"; shift
+  local rc=0
+  "$@" || rc=$?
+  EXPECTED_RC="$rc"
+  if [ "$rc" = 0 ]; then ok "$description (exit 0)"; else no "$description" "exit 0" "exit $rc"; fi
+}
+
+expect_failure() {
+  local description="$1"; shift
+  local rc=0
+  "$@" || rc=$?
+  EXPECTED_RC="$rc"
+  if [ "$rc" != 0 ]; then ok "$description (exit $rc)"; else no "$description" "a non-zero exit" "exit 0"; fi
+}
+
 # Required-helper inventory for this file. A helper removed from here otherwise
 # skips its assertions and can leave the suite green -- the #1610 defect class.
 # A suite's own helpers are inventoried by that suite.
 for helper in ok no is has lacks present not_exists exists test_case_diagnostics \
-  expect_failure expect_failure_record; do
+  expect_failure expect_failure_record expect_success; do
   if ! declare -F "$helper" >/dev/null; then
     echo "shared assertion helper missing: $helper" >&2
     exit 1
