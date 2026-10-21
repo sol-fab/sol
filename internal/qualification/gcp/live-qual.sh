@@ -45,6 +45,11 @@ APP_BUILD_CONTEXT="$LOG_DIR/app-build-context"
 export KUBECONFIG="$RUN_KUBECONFIG"
 STATE_BUCKET="${STATE_BUCKET:-sol-qualification-tfstate}"
 CLUSTER_ISSUER="${CLUSTER_ISSUER:-letsencrypt-staging}"
+case "$CLUSTER_ISSUER" in
+  *production) ATTEMPT_CLAIM=production ;;
+  *) ATTEMPT_CLAIM=mechanism-only ;;
+esac
+export CLUSTER_ISSUER ATTEMPT_CLAIM
 APP_TAG="${APP_TAG:-qual-$(date -u +%Y%m%d-%H%M%S)}"
 export APP_TAG
 # The database setup Job's image, pinned by digest. It is public, so there is nothing to

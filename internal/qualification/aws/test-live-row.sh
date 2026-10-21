@@ -30,13 +30,16 @@ not_exists() { if [ -e "$2" ]; then no "$1" "absent: $2" "present"; else ok "$1"
 # #1583 removed this helper while keeping its call sites; restore the attempt seed the
 # teardown scenarios use so their assertions run instead of printing "command not found".
 seed_attempt() {
-  local name="$1"
+  local name="$1" issuer="${SEED_ISSUER:-letsencrypt-staging}" claim="${SEED_CLAIM:-mechanism-only}"
   mkdir -p "$TMP/$name.logs"
   {
     printf 'attempt=%s\n' "$ATTEMPT"
     printf 'row=%s\n' qualreg
     printf 'target=%s\n' qualreg/aws/us-east-1
     printf 'state_key=%s\n' sol/qualreg/aws/us-east-1/cloud.tfstate
+    printf 'issuer=%s\n' "$issuer"
+    printf 'claim=%s\n' "$claim"
+    if [ "$claim" = production ]; then printf 'promotion_eligible=yes\n'; else printf 'promotion_eligible=no\n'; fi
   } >"$TMP/$name.logs/attempt.txt"
 }
 refused() { if [ "$(cat "$TMP/$1.rc" 2>/dev/null)" != "0" ]; then ok "$2"; else no "$2" "non-zero" "0"; fi; }
@@ -250,6 +253,7 @@ qualreg:
   targets:
     aws/us-east-1:
       cluster_name: test-cluster
+      cluster_issuer: letsencrypt-staging
       state_bucket: sol-qual-test-tfstate
       # `sol deploy` takes no --var-file; the row's roots read this file.
       terraform_var_file: /tmp/qual-aws-row.tfvars
@@ -922,6 +926,7 @@ stub_prepare() {
     printf 'row=%s\n' "qualreg"
     printf 'target=%s\n' "qualreg/aws/us-east-1"
     printf 'state_key=%s\n' "sol/qualreg/aws/us-east-1/cloud.tfstate"
+    printf 'issuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n'
   } >"$LOG_DIR/attempt.txt"
   : >"$LOG_DIR/app-built-tags.txt"
   # STUB_NO_BUILT_TAGS models a `prepare` that materialized the candidate-bound contract but
@@ -942,6 +947,7 @@ stub_published_refs() {
     printf 'row=%s\n' "qualreg"
     printf 'target=%s\n' "qualreg/aws/us-east-1"
     printf 'state_key=%s\n' "sol/qualreg/aws/us-east-1/cloud.tfstate"
+    printf 'issuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n'
   } >"$LOG_DIR/attempt.txt"
   : >"$LOG_DIR/app-image-refs.txt"
   for unit in checkout_svc charge_svc notify_worker orders_svc fulfilment_worker; do
@@ -1053,7 +1059,9 @@ seed_independent_capture() {
   if { [ "$phase" = verify ] || [ "$phase" = destroy ]; } && [ "${STUB_NO_CAPTURE:-0}" != 1 ]; then
     mkdir -p "$LOG_DIR"
     [ -e "$LOG_DIR/attempt.txt" ] ||
-      printf 'attempt=%s\nrow=qualreg\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\n' "$ATTEMPT" >"$LOG_DIR/attempt.txt"
+      printf 'attempt=%s\nrow=qualreg\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\nissuer=%s\nclaim=%s\npromotion_eligible=%s\n' \
+        "$ATTEMPT" "${SEED_ISSUER:-letsencrypt-staging}" "${SEED_CLAIM:-mechanism-only}" \
+        "$(if [ "${SEED_CLAIM:-mechanism-only}" = production ]; then printf yes; else printf no; fi)" >"$LOG_DIR/attempt.txt"
     python3 - "$LOG_DIR/aws-pre-teardown-identities.json" "$INSTALL/candidate.json" "$ATTEMPT" <<'PYTHON'
 import json, sys
 candidate = json.load(open(sys.argv[2]))
@@ -1553,6 +1561,10 @@ has "then refuses at the artifact gate, before any workload moves" \
   "Deployment incomplete." "$TMP/cloudrun.logs/cloud-apply.log"
 has "the run publishes the built images into the repository Sol's deploy created" \
   "docker push $ECR/pluto/charge-svc:$APP_TAG" "$TMP/cloudrun.docker"
+has "records the staging issuer in the attempt identity" \
+  "issuer=letsencrypt-staging" "$TMP/cloudrun.logs/attempt.txt"
+has "labels the attempt mechanism-only" "claim=mechanism-only" "$TMP/cloudrun.logs/attempt.txt"
+has "and marks it not promotion-eligible" "promotion_eligible=no" "$TMP/cloudrun.logs/attempt.txt"
 has "and the preview names the published digest and the row's var file" \
   "plan qualreg/aws/us-east-1 --var-file $ROOT/internal/qualification/aws/qual-aws-row.tfvars --image-ref checkout_svc=$ECR/pluto/checkout-svc@sha256:" \
   "$TMP/cloudrun.sol"
@@ -1572,6 +1584,49 @@ if grep -q '" get deploy -n "' "$TMP/cloudrun.kubectl"; then
 else
   ok "and the unobservable deployment listing shape is gone from the phase"
 fi
+
+printf '\nscenario: a fresh attempt records its staging issuer and mechanism-only claim\n'
+KEEP_LOG_DIR=1 run_phase issuerfresh prepare
+has "the fresh attempt records the staging issuer" \
+  "issuer=letsencrypt-staging" "$TMP/issuerfresh.logs/attempt.txt"
+has "and the mechanism-only claim" "claim=mechanism-only" "$TMP/issuerfresh.logs/attempt.txt"
+has "and is not promotion-eligible" "promotion_eligible=no" "$TMP/issuerfresh.logs/attempt.txt"
+has "from a fresh identity, not a continuation" "started=" "$TMP/issuerfresh.logs/attempt.txt"
+
+printf '\nscenario: the promotion attempt declares production and is labelled accordingly\n'
+sed -i 's/cluster_issuer: letsencrypt-staging/cluster_issuer: letsencrypt-production/' "$WORKSPACE/sol/environments.local.yml"
+KEEP_LOG_DIR=1 CLUSTER_ISSUER=letsencrypt-production run_phase issuerprod prepare
+has "records the production issuer" "issuer=letsencrypt-production" "$TMP/issuerprod.logs/attempt.txt"
+has "labels the attempt production" "claim=production" "$TMP/issuerprod.logs/attempt.txt"
+has "and marks it promotion-eligible" "promotion_eligible=yes" "$TMP/issuerprod.logs/attempt.txt"
+sed -i 's/cluster_issuer: letsencrypt-production/cluster_issuer: letsencrypt-staging/' "$WORKSPACE/sol/environments.local.yml"
+
+printf '\nscenario: a continuation preserves the original attempt labels\n'
+SEED_ISSUER=letsencrypt-production SEED_CLAIM=production seed_attempt issuercont
+sed -i 's/cluster_issuer: letsencrypt-staging/cluster_issuer: letsencrypt-production/' "$WORKSPACE/sol/environments.local.yml"
+KEEP_LOG_DIR=1 CLUSTER_ISSUER=letsencrypt-production run_phase issuercont prepare
+has "the continuation keeps the recorded issuer" \
+  "issuer=letsencrypt-production" "$TMP/issuercont.logs/attempt.txt"
+has "and the recorded claim" "claim=production" "$TMP/issuercont.logs/attempt.txt"
+has "and the recorded promotion eligibility" \
+  "promotion_eligible=yes" "$TMP/issuercont.logs/attempt.txt"
+has "and records that it continued" "continued=" "$TMP/issuercont.logs/attempt.txt"
+sed -i 's/cluster_issuer: letsencrypt-production/cluster_issuer: letsencrypt-staging/' "$WORKSPACE/sol/environments.local.yml"
+
+printf '\nscenario: a continuation cannot adopt a different issuer\n'
+SEED_ISSUER=letsencrypt-production SEED_CLAIM=production seed_attempt issuerdiff
+KEEP_LOG_DIR=1 run_phase issuerdiff prepare
+refused issuerdiff "a continuation that declares a different issuer is refused"
+has "and names the new-ATTEMPT requirement" \
+  "different issuer requires a new ATTEMPT" "$TMP/issuerdiff.out"
+
+printf '\nscenario: an attempt without a declared issuer is refused\n'
+sed -i '/^ *cluster_issuer: /d' "$WORKSPACE/sol/environments.local.yml"
+KEEP_LOG_DIR=1 run_phase issuermissing prepare
+refused issuermissing "an attempt whose target omits cluster_issuer is refused"
+has "and says the target does not declare an issuer" \
+  "does not declare cluster_issuer" "$TMP/issuermissing.out"
+sed -i '/^ *cluster_name: test-cluster$/a\      cluster_issuer: letsencrypt-staging' "$WORKSPACE/sol/environments.local.yml"
 
 printf '\nscenario: publication runs as the publisher identity, never the operator (SEC-011)\n'
 KEEP_LOG_DIR=1 run_phase pubrun prepare
@@ -2059,6 +2114,7 @@ qualreg:
   targets:
     aws/us-east-1:
       cluster_name: test-cluster
+      cluster_issuer: letsencrypt-staging
       state_bucket: sol-qual-test-tfstate
 YAML
 run_phase no-tfvars cloud
@@ -2076,7 +2132,7 @@ has "and the promotion-eligible path" "restart the whole row" "$TMP/spent.out"
 
 printf '\nscenario: resume carries provisioning inputs into a diagnostic attempt\n'
 mkdir -p "$TMP/resume-src/ca-evidence/members"
-printf 'attempt=spent\nrow=qualreg\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\ncluster=test-cluster\n' \
+printf 'attempt=spent\nrow=qualreg\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\ncluster=test-cluster\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' \
   >"$TMP/resume-src/attempt.txt"
 printf 'checkout_svc=example/checkout@sha256:%064d\n' 0 >"$TMP/resume-src/app-image-refs.txt"
 printf '{}\n' >"$TMP/resume-src/database-contract-pins.json"
@@ -2101,7 +2157,7 @@ has "and says the required phases are incomplete" \
 mkdir -p "$TMP/ledger-ok.logs"
 printf 'phase=prepare exit=0 at=x\nphase=cloud exit=0 at=x\nphase=app exit=0 at=x\nphase=destroy exit=0 at=x\n' \
   >"$TMP/ledger-ok.logs/phase-verdicts.txt"
-KEEP_LOG_DIR=1 run_phase ledger-ok verify
+KEEP_LOG_DIR=1 SEED_ISSUER=letsencrypt-production SEED_CLAIM=production run_phase ledger-ok verify
 has "a complete continuous sequence is promotable" \
   "promotion_eligible=yes" "$TMP/ledger-ok.logs/promotion-eligibility.txt"
 has "and records the continuity" \
@@ -2116,7 +2172,7 @@ has "and records the resumed continuity" \
 
 printf '\nscenario: resume refuses a different specimen\n'
 mkdir -p "$TMP/resume-foreign"
-printf 'attempt=spent\nrow=qualreg\ntarget=other/aws/us-east-1\nstate_key=sol/other/aws/us-east-1/cloud.tfstate\ncluster=test-cluster\n' \
+printf 'attempt=spent\nrow=qualreg\ntarget=other/aws/us-east-1\nstate_key=sol/other/aws/us-east-1/cloud.tfstate\ncluster=test-cluster\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' \
   >"$TMP/resume-foreign/attempt.txt"
 printf 'x\n' >"$TMP/resume-foreign/app-image-refs.txt"
 printf '{}\n' >"$TMP/resume-foreign/database-contract-pins.json"

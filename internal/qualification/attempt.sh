@@ -70,12 +70,48 @@ attempt_promotion_eligible() {
 }
 
 attempt_write_identity() {
-  local file
+  local file issuer claim
   file="$(attempt_identity_file)"
   mkdir -p "$LOG_DIR"
+  # Invariant: an attempt's issuer and claim are fixed when the attempt starts.
+  # A continuation -- including a diagnostic resume -- preserves the original
+  # attempt's issuer/claim and never adopts the current target's. If the operator
+  # wants a different issuer, that is a new ATTEMPT, not a continuation.
   if [ -s "$file" ]; then
+    local recorded_issuer recorded_claim
+    recorded_issuer="$(sed -n 's/^issuer=//p' "$file" | head -1)"
+    recorded_claim="$(sed -n 's/^claim=//p' "$file" | head -1)"
+    if [ -z "$recorded_issuer" ] || [ -z "$recorded_claim" ]; then
+      attempt_die "the attempt in $LOG_DIR records no issuer/claim; its claim cannot be established, so it cannot be continued"
+    fi
+    if [ "$recorded_issuer" != "${CLUSTER_ISSUER:-unset}" ]; then
+      attempt_die "the attempt recorded issuer=$recorded_issuer; this continuation declares ${CLUSTER_ISSUER:-unset}; a different issuer requires a new ATTEMPT, not a continuation"
+    fi
     printf 'continued=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$file"
+    if [ -n "${ATTEMPT_RESUMED_FROM:-}" ]; then
+      grep -q '^resumed_from=' "$file" || printf 'resumed_from=%s\n' "$ATTEMPT_RESUMED_FROM" >>"$file"
+      grep -q '^promotion_eligible=' "$file" || printf 'promotion_eligible=no\n' >>"$file"
+    elif [ "$recorded_claim" = production ]; then
+      grep -q '^promotion_eligible=' "$file" || printf 'promotion_eligible=yes\n' >>"$file"
+    else
+      grep -q '^promotion_eligible=' "$file" || printf 'promotion_eligible=no\n' >>"$file"
+    fi
     return 0
+  fi
+  if [ -n "${ATTEMPT_RESUMED_FROM:-}" ]; then
+    # A diagnostic resume is a new attempt that carries the source attempt's
+    # issuer/claim; the current target must still name the same issuer.
+    issuer="$(sed -n 's/^issuer=//p' "$ATTEMPT_RESUMED_FROM/attempt.txt" | head -1)"
+    claim="$(sed -n 's/^claim=//p' "$ATTEMPT_RESUMED_FROM/attempt.txt" | head -1)"
+    if [ -z "$issuer" ] || [ -z "$claim" ]; then
+      attempt_die "the source attempt $ATTEMPT_RESUMED_FROM records no issuer/claim; the resume cannot establish its claim"
+    fi
+    if [ "$issuer" != "${CLUSTER_ISSUER:-unset}" ]; then
+      attempt_die "the source attempt recorded issuer=$issuer; this resume declares ${CLUSTER_ISSUER:-unset}; a different issuer requires a new ATTEMPT"
+    fi
+  else
+    issuer="${CLUSTER_ISSUER:-unset}"
+    claim="${ATTEMPT_CLAIM:-unset}"
   fi
   {
     printf 'attempt=%s\n' "$ATTEMPT"
@@ -86,11 +122,15 @@ attempt_write_identity() {
     printf 'provider=%s\n' "${PROVIDER:-}"
     printf 'candidate_version=%s\n' "${SOL_CANDIDATE_VERSION:-}"
     printf 'candidate_revision=%s\n' "${SOL_CANDIDATE_REVISION:-}"
-    if [ -n "${ATTEMPT_RESUMED_FROM:-}" ]; then
-      printf 'resumed_from=%s\n' "$ATTEMPT_RESUMED_FROM"
+    printf 'issuer=%s\n' "$issuer"
+    printf 'claim=%s\n' "$claim"
+    if [ -n "${ATTEMPT_RESUMED_FROM:-}" ] || [ "$claim" != production ]; then
       printf 'promotion_eligible=no\n'
     else
       printf 'promotion_eligible=yes\n'
+    fi
+    if [ -n "${ATTEMPT_RESUMED_FROM:-}" ]; then
+      printf 'resumed_from=%s\n' "$ATTEMPT_RESUMED_FROM"
     fi
     printf 'started=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } >"$file"
