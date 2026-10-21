@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # live-* runs against a real provider target; stubbed-* runs the same suite on stubbed provider calls.
-set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
@@ -15,19 +14,10 @@ export APP_TAG="${APP_TAG:-row-self-test}"
 export WORKSPACE_NAME=pluto
 trap 'rm -rf "$TMP"' EXIT
 
-pass=0
-fail=0
-ok() { printf '  [OK]   %s\n' "$1"; pass=$((pass + 1)); }
-no() {
-  printf '  [FAIL] %s\n           expected: %s\n           actual:   %s\n' "$1" "$2" "$3"
-  fail=$((fail + 1))
-}
-has() { if grep -qF -- "$2" "$3" 2>/dev/null; then ok "$1"; else no "$1" "contains: $2" "$(tr '\n' '|' <"$3" 2>/dev/null | cut -c1-200)"; fi; }
-lacks() { if grep -qF -- "$2" "$3" 2>/dev/null; then no "$1" "absent: $2" "present"; else ok "$1"; fi; }
-is() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1" "$3" "$2"; fi; }
-exists() { if [ -f "$2" ]; then ok "$1"; else no "$1" "file exists: $2" "missing"; fi; }
-present() { if [ -s "$1" ]; then ok "$2"; else no "$2" "present and non-empty" "missing: $1"; fi; }
-not_exists() { if [ -e "$2" ]; then no "$1" "absent: $2" "present"; else ok "$1"; fi; }
+# The assertion semantics are shared with the other provider; this suite supplies
+# only its own helpers and its own test cases.
+# shellcheck source=/dev/null
+source "$REPO/internal/qualification/common.sh"
 # #1583 removed this helper while keeping its call sites; restore the attempt seed the
 # teardown scenarios use so their assertions run instead of printing "command not found".
 seed_attempt() {

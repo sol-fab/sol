@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # live-* runs against a real provider target; stubbed-* runs the same suite on stubbed provider calls.
-set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 TMP="$(mktemp -d)"
+# The assertion semantics are shared with the other provider; this suite supplies
+# only its own helpers and its own test cases.
+# shellcheck source=/dev/null
+source "$REPO/internal/qualification/common.sh"
 export ATTEMPT="${ATTEMPT:-qual-self-test}"
 export TARGET="${TARGET:-qual/gcp/us-central1}"
 
@@ -88,9 +91,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-pass=0
-fail=0
-ok() { printf '  [OK]   %s\n' "$1"; pass=$((pass + 1)); }
 suite_environment() {
   printf 'suite: bash %s, cwd %s, scratch %s\n' "${BASH_VERSION:-?}" "$PWD" "$TMP"
   printf 'suite: stubs %s, harness %s\n' \
@@ -118,35 +118,10 @@ dump_case_output() {
     printf '           (the harness produced no output at all for this case)\n'
   fi
 }
-no() {
-  printf '  [FAIL] %s\n           expected: %s\n           actual:   %s\n' "$1" "$2" "$3"
-  fail=$((fail + 1))
-  dump_case_output
-}
-is() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1" "$3" "$2"; fi; }
-has() { if grep -qF -- "$2" "$3"; then ok "$1"; else no "$1" "contains: $2" "$(tr '\n' '|' <"$3" | cut -c1-160)"; fi; }
-lacks() { if grep -qF -- "$2" "$3"; then no "$1" "absent: $2" "present"; else ok "$1"; fi; }
-present() { if [ -s "$1" ]; then ok "$2"; else no "$2" "present and non-empty" "missing: $1"; fi; }
-not_exists() { if [ -e "$2" ]; then no "$1" "absent: $2" "present"; else ok "$1"; fi; }
+# This suite's failures carry the case's own output; the shared shell calls this and
+# does not need to know how it is produced.
+test_case_diagnostics() { dump_case_output; }
 
-# Required-helper inventory: every assertion helper the suite calls must be listed
-# here. A removed helper otherwise skips its assertions and can leave the suite
-# green -- the #1610 defect class.
-for helper in ok no is has lacks present not_exists; do
-  if ! declare -F "$helper" >/dev/null; then
-    echo "test helper missing: $helper" >&2
-    exit 1
-  fi
-done
-# Required-helper inventory: every helper the suite calls must be listed here.
-# Adding a helper means adding it to this list; a stale list lets the next
-# "command not found" silently skip an assertion.
-for helper in ok no is has lacks present not_exists; do
-  if ! declare -F "$helper" >/dev/null; then
-    echo "test helper missing: $helper" >&2
-    exit 1
-  fi
-done
 
 suite_environment
 
