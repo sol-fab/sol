@@ -250,14 +250,34 @@ let run_phase () =
   in
   let phase = text request "phase" in
   let directory = text request "evidence" in
-  let ctx =
-    Sol_cli_kube_destination.of_context
-      ~kubeconfig:(text request "kubeconfig")
-      (text request "context")
-    |> get
-    |> Sol_cli_kube_destination.context_of_destination
+  let report_path = text request "report" in
+  (* A read-authority refusal is a refusal: record it with ok=false rather than
+     exiting with an unrecorded failure. An exit status alone cannot distinguish
+     a refusal from a crash. *)
+  let refuse message =
+    if report_path <> ""
+    then
+      write
+        (`Assoc
+            [ "phase", `String phase
+            ; "ok", `Bool false
+            ; "errors", `List [ `String message ]
+            ])
+        report_path;
+    exit 1
   in
-  check_read_authority ~ctx prepared;
+  let ctx =
+    try
+      Sol_cli_kube_destination.of_context
+        ~kubeconfig:(text request "kubeconfig")
+        (text request "context")
+      |> get
+      |> Sol_cli_kube_destination.context_of_destination
+    with
+    | Failure message -> refuse message
+  in
+  (try check_read_authority ~ctx prepared with
+   | Failure message -> refuse message);
   let transport = L.create ~ctx ~expected:authority () in
   let recorder = E.open_store ~directory ~run:prepared.B.run ~secrets:[] () |> evidence in
   (* One assessment spans both phases: the same reason/required-capture spec
