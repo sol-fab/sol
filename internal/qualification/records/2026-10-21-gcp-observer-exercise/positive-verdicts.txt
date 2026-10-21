@@ -1,0 +1,4 @@
+PASS	gcp/database-ca/database/ca/comms/fulfilment_worker	established
+PASS	gcp/database-ca/database/ca/demo_ts/fulfillment_worker	established
+PASS	gcp/database-ca/database/ca/demo_ts/order_svc	established
+PASS	gcp/database-ca/database/ca/payments/orders_svc	established

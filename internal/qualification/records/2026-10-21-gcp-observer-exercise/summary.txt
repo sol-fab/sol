@@ -1,0 +1,5 @@
+positive rc=0 report={"ok":true,"errors":null}
+mismatch rc=1 report={"ok":false,"errors":null}
+denied rc=1 report={"ok":false,"errors":["could not establish read authority for configmaps in pluto-comms (exited with code 1: no); the CA family is unestablished"]}
+positive_ok=yes mismatch_ok=yes denied_ok=yes expect_denied_ok=yes
+kind clusters after: 

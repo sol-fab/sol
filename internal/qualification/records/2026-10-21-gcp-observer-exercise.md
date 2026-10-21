@@ -78,12 +78,18 @@ Jobs patch, Jobs delete). No unexpected grant.
 observer, narrow-observer and admin kubeconfigs were removed. No cloud
 resource was created.
 
-Evidence (host, outside the repository): `/home/logan/qual-observer/evidence/`
-contains `positive-report.json`, `positive-capture.json`, `denied-report.json`,
-`mismatch-report.json`, `auth-can-i.txt`, `auth-can-i-unexpected.txt` (empty),
-`request-{positive,denied,mismatch}.json`, `summary.txt`,
-`kind-clusters-after.txt`, and the three `ca-evidence/` stores. The evidence
-directories are private (0700); the CA evidence store refused them otherwise.
+Evidence committed beside this record, in
+`2026-10-21-gcp-observer-exercise/`:
+
+- `positive-report.json`, `positive-verdicts.txt` — the four PASS verdicts;
+- `denied-report.json` — the named denied read;
+- `mismatch-report.json`, `mismatch-verdicts.txt` — the single FAIL and detail;
+- `auth-can-i.txt` — all 32 `auth can-i` results;
+- `summary.txt`, `cleanup.txt`.
+
+The full local capture (requests, captures, manifests and the three
+`ca-evidence/` stores) was at `/home/logan/qual-observer/evidence/`. That path
+is provenance only; this record does not depend on it being readable.
 
 ## Finding: read-authority refusal had no report
 
@@ -100,3 +106,21 @@ denied case does not exist.
 - No campaign-observer scoping claim; see `establish_gcp_ca_observer`.
 - No migration CA phase and no family report; application phase only.
 - No DML, Kafka, TLS or release verdict.
+
+## Pattern: a path that does not produce the evidence its consumers read
+
+This is the third instance of one class in this project:
+
+- #1610: the test suite called helpers that were absent (`command not found`),
+  so assertions were skipped while the suite stayed green.
+- G2 (#1613): the GCP test stub did not emit the product's
+  `Deployment incomplete.` marker, so the artifact-gate property was
+  unasserted on GCP.
+- This exercise: `check_read_authority` ran before the evidence store, so a
+  denied read exited 1 with no report — a crash and a refusal were
+  indistinguishable to the consumer reading `ok:false`.
+
+The durable rule is the same in each: a path must be exercised through the
+evidence its consumers actually read, and the fixture must carry the marker or
+record that the consumer requires. A mutation or seed must show the consumer
+fails when the path is removed. Green tests do not prove that.
