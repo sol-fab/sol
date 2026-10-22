@@ -10,6 +10,21 @@ REQUIRED_HOOKS=(
   prepare_precondition
   prepare_bind
   prepare_build
+  app_precondition
+  app_images
+  app_database_source
+  app_bootstrap_deploy
+  app_secret_refusal
+  app_transport
+  app_authorities
+  app_deploy
+  app_post_deploy
+  app_ca_report
+  app_transaction_primary
+  app_transaction_secondary
+  app_evidence
+  app_success
+  app_failed
   cloud_precondition
   cloud_plan_only
   cloud_plan
@@ -32,7 +47,8 @@ require_provider_hooks() {
     echo "the harness has no PROVIDER, so no hook surface can be checked" >&2
     return 1
   fi
-  if ! declare -F "phase_prepare_run" >/dev/null || ! declare -F "phase_cloud_run" >/dev/null; then
+  if ! declare -F "phase_prepare_run" >/dev/null || ! declare -F "phase_app_run" >/dev/null \
+    || ! declare -F "phase_cloud_run" >/dev/null; then
     echo "the shared phase bodies are not loaded (lib/phases.sh)" >&2
     return 1
   fi
