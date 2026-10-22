@@ -1329,6 +1329,20 @@ PRESEED_CREDENTIALS=1 run_case app-nocontext app
 is "the app phase fails without the candidate-bound context" "$(cat "$TMP/app-nocontext.rc")" "1"
 has "and tells the operator to run prepare" "run prepare first" "$TMP/app-nocontext.out"
 
+printf '\nscenario: a binding the run cannot record stops prepare\n'
+# Parity with the AWS row: the binding is a prepare step, and a record that cannot be
+# written stops the phase instead of being swallowed. The attempt is seeded so the
+# evidence directory is legitimately this run's, and candidate-binding.txt is a
+# directory so the record write fails.
+mkdir -p "$TMP/unrecorded.logs"
+printf 'attempt=%s\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' \
+  "$ATTEMPT" >"$TMP/unrecorded.logs/attempt.txt"
+mkdir -p "$TMP/unrecorded.logs/candidate-binding.txt"
+KEEP_LOG_DIR=1 run_case unrecorded prepare
+is "prepare refuses when the binding cannot be recorded" "$(cat "$TMP/unrecorded.rc")" "1"
+has "and names the evidence file it could not write" \
+  "prepare: the candidate binding could not be recorded (candidate-binding.txt)" "$TMP/unrecorded.out"
+
 printf '\nscenario: a cold deploy that did not refuse at the artifact gate fails\n'
 run_cloud_case cloud-no-gate STUB_NO_PENDING_ARTIFACTS=1
 is "the cloud phase fails without the artifact-gate refusal" "$(cat "$TMP/cloud-no-gate.rc")" "1"

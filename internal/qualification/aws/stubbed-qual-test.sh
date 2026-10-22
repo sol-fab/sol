@@ -1819,7 +1819,7 @@ mkdir -p "$TMP/unrecorded.logs/candidate-binding.txt"
 KEEP_LOG_DIR=1 run_phase unrecorded prepare
 refused unrecorded "prepare refuses when the binding cannot be recorded"
 has "and names the evidence file it could not write" \
-  "candidate-binding.txt" "$TMP/unrecorded.out"
+  "the candidate binding could not be recorded (candidate-binding.txt)" "$TMP/unrecorded.out"
 lacks "and builds nothing" "docker build" "$TMP/unrecorded.docker"
 
 printf '\nscenario: a plan that cannot resolve the run images fails, and is never skipped\n'
