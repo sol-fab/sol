@@ -7,6 +7,9 @@
 # calls is dead weight, and check_harness_hooks.sh enforces both directions.
 
 REQUIRED_HOOKS=(
+  prepare_precondition
+  prepare_bind
+  prepare_build
   cloud_precondition
   cloud_plan_only
   cloud_plan
@@ -29,7 +32,7 @@ require_provider_hooks() {
     echo "the harness has no PROVIDER, so no hook surface can be checked" >&2
     return 1
   fi
-  if ! declare -F "phase_cloud_run" >/dev/null; then
+  if ! declare -F "phase_prepare_run" >/dev/null || ! declare -F "phase_cloud_run" >/dev/null; then
     echo "the shared phase bodies are not loaded (lib/phases.sh)" >&2
     return 1
   fi

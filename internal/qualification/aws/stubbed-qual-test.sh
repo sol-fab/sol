@@ -1809,6 +1809,19 @@ lacks "and prepare creates no repository of its own" \
   "create-repository" "$TMP/prep.aws"
 lacks "and prepare pushes nothing" "docker push" "$TMP/prep.docker"
 
+printf '\nscenario: a binding the run cannot record stops prepare before any build\n'
+# The binding is a step of the phase, not a side effect of the build helper. If the run
+# cannot record what it bound, it must not build images whose provenance its evidence
+# cannot state. The attempt is seeded so the evidence directory is legitimately ours, and
+# `candidate-binding.txt` is a directory so the record write fails.
+seed_attempt unrecorded
+mkdir -p "$TMP/unrecorded.logs/candidate-binding.txt"
+KEEP_LOG_DIR=1 run_phase unrecorded prepare
+refused unrecorded "prepare refuses when the binding cannot be recorded"
+has "and names the evidence file it could not write" \
+  "the candidate binding could not be recorded (candidate-binding.txt)" "$TMP/unrecorded.out"
+lacks "and builds nothing" "docker build" "$TMP/unrecorded.docker"
+
 printf '\nscenario: a plan that cannot resolve the run images fails, and is never skipped\n'
 KEEP_LOG_DIR=1 run_phase coldplan prepare
 KEEP_LOG_DIR=1 run_phase coldplan cloud STUB_COLD_PLAN=1

@@ -4,6 +4,13 @@
 #
 # Ordering is not covered by check_harness_hooks.sh (it checks presence and call
 # sites only), so an ordering rule lives or dies by these entries.
+assert_prepare_bind_before_build          call prepare_build before prepare_bind
+    MEASURED: swapping the two steps in lib/phases.sh fails 44 AWS assertions
+    (320 OK / 44 FAIL). The direct ones are 'exit 0' and 'the images are built' in
+    'prepare builds the run images and touches no provider state', and 'and names the
+    evidence file it could not write' in the unrecorded-binding scenario; the rest
+    cascade through scenarios that reuse a failed prepare's evidence directory.
+    Restored from a checksummed copy and re-ran green (364 OK / 0 FAIL).
 assert_cloud_verdict_is_reconciliation    remove the environment_reconciled check
 assert_cloud_verdict_is_artifact_gate     remove the pending_artifacts_refused check
 assert_cloud_freeze_before_diagnose       call cloud_diagnose before cloud_freeze

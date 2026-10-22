@@ -1,6 +1,27 @@
 #!/usr/bin/env bash
 # GCP hook implementations for the shared phase bodies.
 
+# Nothing has to hold before the binding: the candidate document, install and workspace
+# the binding reads are validated by the binding itself, and the target check runs in the
+# cloud phase. `prepare` therefore starts at the binding on this provider.
+hook_gcp_prepare_precondition() { return 0; }
+
+hook_gcp_prepare_bind() {
+  local pins
+  if ! pins="$(sol_candidate_bind_context "$WORKSPACE" "$SOL_REVISION" "$APP_BUILD_CONTEXT")"; then
+    say "prepare: refusing to bind the application to candidate $SOL_REVISION"
+    return 1
+  fi
+  if ! sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$APP_BUILD_CONTEXT" "$pins" "$(git -C "$WORKSPACE" rev-parse HEAD)"; then
+    say "prepare: the candidate binding could not be recorded (candidate-binding.txt)"
+    return 1
+  fi
+}
+
+# This provider builds and pushes the application images in the app phase, from the
+# context `prepare` bound; `prepare` itself builds nothing.
+hook_gcp_prepare_build() { return 0; }
+
 hook_gcp_cloud_precondition() {
   write_target
   run cloud-check "$SOL" check || return 1

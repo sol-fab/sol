@@ -914,21 +914,34 @@ require_credentials() {
 phase_cloud() { phase_cloud_run; }
 
 
+# Bind the application to the candidate revision and record what the binding enforced.
+#
+# This is a `prepare` step, not a build step. The build helper is called wherever a
+# provider needs the run's images, so a binding inside it would bind as a side effect of
+# building -- and a caller that built again would bind again. The phase owns the
+# ordering: precondition, bind, then build. It touches no provider state.
+candidate_bind() {
+  local context="$APP_BUILD_CONTEXT" pins
+  if ! pins="$(sol_candidate_bind_context "$WORKSPACE" "$SOL_REVISION" "$context")"; then
+    say "refusing to build the application: it cannot be bound to candidate $SOL_REVISION"
+    return 1
+  fi
+  if ! sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$context" "$pins" "$(git -C "$WORKSPACE" rev-parse HEAD)"; then
+    say "the candidate binding could not be recorded (candidate-binding.txt), so nothing is built"
+    return 1
+  fi
+  # Record the database-contract pins the app phase re-verifies. This reads the
+  # immutable install and the candidate-bound workspace only.
+  record_database_contract_pins || return 1
+}
+
 # `prepare` builds the run's images and nothing else: a build touches no provider state, so the
 # `cloud` phase still sees a fresh target. The images stay in the local daemon; `cloud` pushes
 # them into the repositories Sol's deploy creates.
 app_build_images() {
   local unit dir ref
   : >"$LOG_DIR/app-built-tags.txt"
-  local context="$APP_BUILD_CONTEXT" pins
-  if ! pins="$(sol_candidate_bind_context "$WORKSPACE" "$SOL_REVISION" "$context")"; then
-    say "refusing to build the application: it cannot be bound to candidate $SOL_REVISION"
-    return 1
-  fi
-  sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$context" "$pins" "$(git -C "$WORKSPACE" rev-parse HEAD)"
-  # Record the database-contract pins the app phase re-verifies. This reads the
-  # immutable install and the candidate-bound workspace only.
-  record_database_contract_pins || return 1
+  local context="$APP_BUILD_CONTEXT"
   say "app images build from candidate $SOL_REVISION ($WORKSPACE at that revision, framework pinned to it)"
   for unit in $APP_UNITS; do
     if ! dir="$(unit_dir "$unit")"; then
@@ -1093,14 +1106,7 @@ app_require_published_images() {
   return 1
 }
 
-# `prepare` runs before `cloud`: it builds the application images bound to the candidate and
-# touches no provider state, so `cloud` still sees a fresh specimen.
-phase_prepare() {
-  require_target_terraform_var_file || return 1
-  require_target_issuer || return 1
-  app_build_images || return 1
-  say "the run images are built; the cloud phase publishes them into the repositories Sol creates"
-}
+phase_prepare() { phase_prepare_run; }
 
 
 # 2b moved migration verification to the post-setup gates, so on a fresh target the deploy
