@@ -33,6 +33,12 @@ TARGET_MARK="# Written by internal/qualification/gcp/live-qual.sh for $TARGET; e
 # domain instead of requiring the install-time ACME address (#1400).
 TEARDOWN_LE_EMAIL="teardown@invalid"
 
+# The namespaces this row is configured to exercise; the cold-start boundary derives the
+# per-unit namespaces from the candidate and requires this declared set to be covered.
+APP_NS="${APP_NS:-pluto-payments}"
+WORKER_NS="${WORKER_NS:-pluto-comms}"
+COLD_START_REQUIRED_NAMESPACES="${COLD_START_REQUIRED_NAMESPACES:-$APP_NS $WORKER_NS}"
+
 PROJECT="${PROJECT:-sol-qualification}"
 REGION="${REGION:-us-central1}"
 export PROJECT REGION
@@ -1647,17 +1653,6 @@ app_services() {
   printf '%s\n' ${APP_SERVICES-orders_svc fulfilment_worker order_svc fulfillment_worker}
 }
 
-# The cold-start selection is the row's exercise set. The S1 seeds override it
-# without changing the target's own unit set, so the boundary's selection can be
-# emptied or made to omit a unit while the deployment itself stays well formed.
-cold_start_services() {
-  if [ -n "${COLD_START_SERVICES+set}" ]; then
-    printf '%s\n' $COLD_START_SERVICES
-  else
-    app_services
-  fi
-}
-
 # The namespaces the target's selected units declare, taken from the candidate-bound
 # application contract -- the build context candidate-binding.sh materialized from the
 # candidate revision -- and never from the working tree, app_namespaces, or the
@@ -1679,7 +1674,7 @@ candidate_unit_dirs() {
 # Fails closed when the selection cannot cover every selected unit and the namespaces
 # this row is configured to exercise.
 cold_start_namespaces() {
-  local expected=0 found=0 names unit ns
+  local prefix="${APP_NS%-*}" expected=0 found=0 names unit ns
   if [ ! -d "$APP_BUILD_CONTEXT" ]; then
     refuse "REFUSING: no candidate-bound build context at $APP_BUILD_CONTEXT, so the namespaces the"
     refuse "target's selected units declare cannot be derived from the candidate's own contract"
@@ -1687,12 +1682,14 @@ cold_start_namespaces() {
   fi
   for unit in $(cold_start_services); do expected=$((expected + 1)); done
   names="$(candidate_unit_dirs | while IFS= read -r address; do
-    printf 'pluto-%s\n' "$(app_k8s_name "${address%%/*}")"
+    printf '%s-%s
+' "$prefix" "$(app_k8s_name "${address%%/*}")"
   done | sort -u)"
   found="$(candidate_unit_dirs | grep -c .)"
   if [ "$found" != "$expected" ]; then
     refuse "REFUSING: $found of $expected selected units resolve to a candidate-bound directory, so"
-    refuse "the declared namespace set would omit a consumer (COLD_START_SERVICES='$(cold_start_services | tr '\n' ' ')')"
+    refuse "the declared namespace set would omit a consumer (COLD_START_SERVICES='$(cold_start_services | tr '
+' ' ')')"
     return 1
   fi
   if [ -z "$names" ]; then
@@ -1700,15 +1697,18 @@ cold_start_namespaces() {
     refuse "nowhere and pass vacuously"
     return 1
   fi
-  for ns in ${COLD_START_REQUIRED_NAMESPACES:-pluto-payments pluto-comms}; do
-    if ! printf '%s\n' "$names" | grep -qxF "$ns"; then
-      refuse "REFUSING: the derived namespace set ($(printf '%s' "$names" | tr '\n' ' ')) does not cover"
+  for ns in $COLD_START_REQUIRED_NAMESPACES; do
+    if ! printf '%s
+' "$names" | grep -qxF "$ns"; then
+      refuse "REFUSING: the derived namespace set ($(printf '%s' "$names" | tr '
+' ' ')) does not cover"
       refuse "$ns, which this row is configured to exercise; the assertion would not be looking"
       refuse "where the row claims"
       return 1
     fi
   done
-  printf '%s\n' "$names"
+  printf '%s
+' "$names"
 }
 
 
@@ -1870,7 +1870,6 @@ app_verify_database_delivery() {
 
 
 
-app_k8s_name() { printf '%s' "$1" | tr '_' '-'; }
 
 app_context_path() {
   case "$1" in

@@ -83,3 +83,20 @@ PY
   fi
   say "recorded the candidate's database-contract pins and specimen for the shared CA family"
 }
+
+# The cold-start selection: the row's exercise set. COLD_START_SERVICES is the explicit
+# selection (the S1 seeds use it); APP_UNITS is the AWS row's unit set; the default is
+# the demo's unit set. The selection is row data, not a provider mechanic.
+cold_start_services() {
+  if [ -n "${COLD_START_SERVICES+set}" ]; then
+    printf '%s\n' $COLD_START_SERVICES
+  elif [ -n "${APP_UNITS:-}" ]; then
+    printf '%s\n' $APP_UNITS
+  else
+    printf '%s\n' ${APP_SERVICES-orders_svc fulfilment_worker order_svc fulfillment_worker}
+  fi
+}
+
+# A directory segment as a Kubernetes name. The candidate declares the segment; this is
+# the one place its Kubernetes spelling is decided, so no reader re-implements it.
+app_k8s_name() { printf '%s' "$1" | tr '_' '-'; }

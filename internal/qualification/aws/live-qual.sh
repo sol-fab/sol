@@ -36,6 +36,9 @@ WORKER_UNIT="${WORKER_UNIT:-notify_worker}"
 # production-single-region profile refuses a mutable tag. The profile qualifies
 # OCaml workloads only, and the example target omits the two TypeScript units.
 APP_UNITS="${APP_UNITS:-checkout_svc charge_svc notify_worker orders_svc fulfilment_worker}"
+# The namespaces this row is configured to exercise; the cold-start boundary derives the
+# per-unit namespaces from the candidate and requires this declared set to be covered.
+COLD_START_REQUIRED_NAMESPACES="${COLD_START_REQUIRED_NAMESPACES:-$APP_NS $WORKER_NS}"
 LEDGER_PREFIX="${LEDGER_PREFIX:-sol}"
 PHASE_TIMEOUT="${PHASE_TIMEOUT:-2400}"
 APP_TAG="${APP_TAG:-row-$(date -u +%Y%m%d-%H%M%S)}"
@@ -389,7 +392,7 @@ pending_artifacts_refused() {
 # silently selected nothing, would pass vacuously (#1488 review, #1492).
 candidate_unit_dirs() {
   local unit dir
-  for unit in $APP_UNITS; do
+  for unit in $(cold_start_services); do
     for dir in "$APP_BUILD_CONTEXT"/app/*/"$unit"; do
       if [ -f "$dir/Dockerfile" ]; then
         printf '%s\n' "${dir#"$APP_BUILD_CONTEXT"/app/}"
@@ -402,20 +405,22 @@ candidate_unit_dirs() {
 # Fails closed when the selection cannot be shown to cover every selected unit and the
 # namespaces this row is configured to exercise.
 cold_start_namespaces() {
-  local prefix="${APP_NS%-*}" address unit expected=0 found=0 names
+  local prefix="${APP_NS%-*}" expected=0 found=0 names unit ns
   if [ ! -d "$APP_BUILD_CONTEXT" ]; then
     refuse "REFUSING: no candidate-bound build context at $APP_BUILD_CONTEXT, so the namespaces the"
     refuse "target's selected units declare cannot be derived from the candidate's own contract"
     return 1
   fi
-  for unit in $APP_UNITS; do expected=$((expected + 1)); done
+  for unit in $(cold_start_services); do expected=$((expected + 1)); done
   names="$(candidate_unit_dirs | while IFS= read -r address; do
-    printf '%s-%s\n' "$prefix" "${address%%/*}"
+    printf '%s-%s
+' "$prefix" "$(app_k8s_name "${address%%/*}")"
   done | sort -u)"
   found="$(candidate_unit_dirs | grep -c .)"
   if [ "$found" != "$expected" ]; then
     refuse "REFUSING: $found of $expected selected units resolve to a candidate-bound directory, so"
-    refuse "the declared namespace set would omit a consumer (APP_UNITS='$APP_UNITS')"
+    refuse "the declared namespace set would omit a consumer (COLD_START_SERVICES='$(cold_start_services | tr '
+' ' ')')"
     return 1
   fi
   if [ -z "$names" ]; then
@@ -423,15 +428,18 @@ cold_start_namespaces() {
     refuse "nowhere and pass vacuously"
     return 1
   fi
-  for unit in "$APP_NS" "$WORKER_NS"; do
-    if ! printf '%s\n' "$names" | grep -qxF "$unit"; then
-      refuse "REFUSING: the derived namespace set ($(printf '%s' "$names" | tr '\n' ' ')) does not cover"
-      refuse "$unit, which this row is configured to exercise; the assertion would not be looking"
+  for ns in $COLD_START_REQUIRED_NAMESPACES; do
+    if ! printf '%s
+' "$names" | grep -qxF "$ns"; then
+      refuse "REFUSING: the derived namespace set ($(printf '%s' "$names" | tr '
+' ' ')) does not cover"
+      refuse "$ns, which this row is configured to exercise; the assertion would not be looking"
       refuse "where the row claims"
       return 1
     fi
   done
-  printf '%s\n' "$names"
+  printf '%s
+' "$names"
 }
 
 
