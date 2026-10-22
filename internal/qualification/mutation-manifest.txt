@@ -47,7 +47,17 @@ assert_destroy_absence_verdict            skip destroy_verdict after the substra
     MEASURED: replacing the verdict call with a no-op fails 6 AWS assertions
     (358 OK / 6 FAIL): 'whose verdict the independent inventory still decides',
     'the independent inventory is captured' (twice), and the three inventory identity
-    assertions. Restored from a checksummed copy and re-ran green (364 OK / 0 FAIL).
-    NAMED GAP: the same mutation against the GCP suite did not complete within its
-    bound (clean failures were printed before the bound), so GCP's destroy path has no
-    measured mutation yet; its scenarios are green but do not fail fast on this shape.
+    assertions. The same mutation against GCP fails 51 assertions (601 OK / 51 FAIL),
+    including 'the post-teardown inventory is captured', 'the promotion-verifiable
+    teardown verdict is captured', and every 'the teardown verdict ...' identity
+    assertion. The earlier GCP gap was a too-short bound on a slow suite, not a hang;
+    the run completes. Restored from checksummed copies and re-ran green on both.
+assert_destroy_kubeconfig_attempt_owned   clear the attempt-owned kubeconfig path
+    MEASURED: replacing DESTROY_KUBECONFIG with an empty path fails 7 AWS assertions
+    (357 OK / 7 FAIL), including 'the release runs against this attempt's own
+    kubeconfig', 'with the cluster present and the kubeconfig verified against its
+    current endpoint', and 'and the release recorded as attempted'. Restored and
+    re-ran green.
+assert_destroy_probe_through_attempt      make destroy_kubernetes_answers refuse
+    MEASURED: returning 1 from the probe hook fails 2 AWS assertions (362 OK / 2 FAIL):
+    'and the release recorded as attempted' (twice). Restored and re-ran green.

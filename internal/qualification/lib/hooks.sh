@@ -42,6 +42,7 @@ REQUIRED_HOOKS=(
   destroy_precondition
   destroy_prestate
   destroy_kube_destination
+  destroy_kubernetes_answers
   destroy_substrate
   destroy_verdict
   destroy_evidence

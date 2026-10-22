@@ -181,8 +181,43 @@ hook_aws_destroy_prestate() {
 
 # The teardown destination is selected explicitly, never inherited from the calling
 # shell: a destroy that trusts the ambient kubeconfig can release another cluster's
-# workloads (#1443).
-hook_aws_destroy_kube_destination() { destroy_kube_destination; }
+# workloads (#1443). DESTROY_KUBECONFIG is the attempt-owned path the skeleton set; this
+# hook establishes that exact path and sets the classified outcome.
+hook_aws_destroy_kube_destination() {
+  local describe_err="$LOG_DIR/destroy-cluster-describe.err"
+  DESTROY_CLUSTER_STATE=""
+  DESTROY_KUBECONFIG_READY=0
+  if aws eks describe-cluster --name "$CLUSTER" --region "$AWS_REGION" \
+    >"$LOG_DIR/destroy-cluster-describe.json" 2>"$describe_err"; then
+    DESTROY_CLUSTER_STATE=PRESENT
+  elif grep -q 'ResourceNotFoundException' "$describe_err" 2>/dev/null; then
+    DESTROY_CLUSTER_STATE=ABSENT
+    DESTROY_CLUSTER_REASON="describe-cluster answered ResourceNotFoundException"
+    return 0
+  else
+    DESTROY_CLUSTER_STATE=UNKNOWN
+    DESTROY_CLUSTER_REASON="describe-cluster did not answer; see $describe_err"
+    return 0
+  fi
+  # The cluster exists. Rebuild the attempt's own kubeconfig when it does not have one,
+  # or has one that addresses a replaced cluster of the same name.
+  if [ ! -f "$DESTROY_KUBECONFIG" ] || ! verify_kubeconfig_endpoint "$DESTROY_KUBECONFIG" >/dev/null 2>&1
+  then
+    if ! KUBECONFIG="$DESTROY_KUBECONFIG" aws eks update-kubeconfig --region "$AWS_REGION" \
+      --name "$CLUSTER" --alias "$CLUSTER-deploy" --role-arn "$DEPLOY_ROLE_ARN" \
+      >"$LOG_DIR/destroy-kubeconfig-refresh.log" 2>&1 \
+      || ! verify_kubeconfig_endpoint "$DESTROY_KUBECONFIG" >/dev/null 2>&1; then
+      DESTROY_CLUSTER_REASON="no credential available here addresses it"
+      return 0
+    fi
+  fi
+  DESTROY_KUBECONFIG_READY=1
+}
+
+hook_aws_destroy_kubernetes_answers() {
+  timeout 60 kubectl --kubeconfig "$DESTROY_KUBECONFIG" --context "$CLUSTER-deploy" \
+    auth can-i get namespaces >/dev/null 2>&1
+}
 
 hook_aws_destroy_substrate() {
   # Capture the state the destroy is about to change, after the release destination
