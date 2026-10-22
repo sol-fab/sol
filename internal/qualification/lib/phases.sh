@@ -3,6 +3,22 @@
 # names no provider and branches on none. Provider mechanics arrive through
 # hook_${PROVIDER}_*.
 
+# The prepare phase. The order is the contract:
+#   precondition -> bind -> build.
+#
+# The binding is a step here, not a side effect of the build: the build helper may be
+# called wherever a provider needs the run's images, and a binding inside it would bind
+# again on the second call. What must hold before a binding is a provider's question
+# (precondition), what it builds from the bound context is the provider's mechanic
+# (build); that the binding happens once, before any build, is the phase's.
+phase_prepare_run() {
+  local hook="hook_${PROVIDER}"
+  "${hook}_prepare_precondition" || return 1
+  "${hook}_prepare_bind" || return 1
+  "${hook}_prepare_build" || return 1
+  say "prepare: candidate $SOL_REVISION is bound (candidate-binding.txt)"
+}
+
 # The cloud phase. The order is the contract:
 #   precondition -> (plan-only shortcut) -> prestate -> apply -> post_apply
 #   -> reconciled? -> artifact gate refused? -> pre_verify -> cold-start boundary

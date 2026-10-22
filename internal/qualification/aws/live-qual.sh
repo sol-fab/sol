@@ -927,7 +927,7 @@ candidate_bind() {
     return 1
   fi
   if ! sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$context" "$pins" "$(git -C "$WORKSPACE" rev-parse HEAD)"; then
-    say "the candidate binding could not be recorded at $LOG_DIR/candidate-binding.txt, so nothing is built"
+    say "the candidate binding could not be recorded (candidate-binding.txt), so nothing is built"
     return 1
   fi
   # Record the database-contract pins the app phase re-verifies. This reads the
@@ -1106,15 +1106,7 @@ app_require_published_images() {
   return 1
 }
 
-# `prepare` runs before `cloud`: it binds the application to the candidate and builds the
-# run's images. It touches no provider state, so `cloud` still sees a fresh specimen.
-phase_prepare() {
-  require_target_terraform_var_file || return 1
-  require_target_issuer || return 1
-  candidate_bind || return 1
-  app_build_images || return 1
-  say "the run images are built; the cloud phase publishes them into the repositories Sol creates"
-}
+phase_prepare() { phase_prepare_run; }
 
 
 # 2b moved migration verification to the post-setup gates, so on a fresh target the deploy

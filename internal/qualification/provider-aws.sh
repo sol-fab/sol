@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 # AWS hook implementations for the shared phase bodies.
 
+# A target var file and an issuer must exist before anything is bound or built. This is
+# AWS-specific: the target's Terraform variables are this provider's input.
+hook_aws_prepare_precondition() {
+  require_target_terraform_var_file || return 1
+  require_target_issuer || return 1
+}
+
+hook_aws_prepare_bind() { candidate_bind; }
+
+hook_aws_prepare_build() {
+  app_build_images || return 1
+  say "the run images are built; the cloud phase publishes them into the repositories Sol creates"
+}
+
 hook_aws_cloud_precondition() {
   require_credentials || return 1
   require_target_terraform_var_file || return 1

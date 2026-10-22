@@ -1458,21 +1458,7 @@ trap 'on_terminate INT' INT
 
 plan_only() { [ "${PLAN_ONLY:-0}" = "1" ]; }
 
-# `prepare` runs before `cloud` and `app`: it materializes the candidate-bound build
-# context once. The cloud phase fails closed without it; the app phase reuses it and
-# never derives namespaces or Dockerfile locations from its own map.
-phase_prepare() {
-  local pins
-  if ! pins="$(sol_candidate_bind_context "$WORKSPACE" "$SOL_REVISION" "$APP_BUILD_CONTEXT")"; then
-    say "prepare: refusing to bind the application to candidate $SOL_REVISION"
-    return 1
-  fi
-  if ! sol_candidate_record_binding "$LOG_DIR" "$SOL_REVISION" "$WORKSPACE" "$APP_BUILD_CONTEXT" "$pins" "$(git -C "$WORKSPACE" rev-parse HEAD)"; then
-    say "prepare: the candidate binding could not be recorded"
-    return 1
-  fi
-  say "prepare: candidate-bound build context recorded at $APP_BUILD_CONTEXT"
-}
+phase_prepare() { phase_prepare_run; }
 
 phase_cloud() { phase_cloud_run; }
 
