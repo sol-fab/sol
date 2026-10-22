@@ -100,6 +100,8 @@ change that does not meet the interface.
    unclassified class fails the test. Fail-closed: a class the table cannot place
    is a failure, never a skip. This is #1627(a) — an EKS access entry carrying
    `AmazonEKSClusterAdminPolicy` would be caught here.
+**Named limit of the hooks guard (G3).** The completeness and call-site checks prove that every declared hook is implemented and called. They prove nothing about *order*. An ordering rule -- freeze the evidence bundle before a heavy read, verify a boundary after the apply -- is carried by `internal/qualification/mutation-manifest.txt`, and an ordering assertion with no manifest entry is untested rather than implicitly covered by the guard. A green hooks guard is not ordering evidence.
+
 4. **Per-shared-phase mutation proof, red test first.** For each merged phase, the
    proof is a mutation of the phase that must fail a specific assertion, and the
    test must be written before the phase is. A phase merged without a mutation
