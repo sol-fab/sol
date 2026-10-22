@@ -78,22 +78,7 @@ SAY_LOG="$LOG_DIR/harness.log"
 # images it guards come from the same, candidate-bound tree.
 APP_BUILD_CONTEXT="$LOG_DIR/app-build-context"
 
-say() {
-  local line
-  printf -v line '[%(%H:%M:%S)T] %s' -1 "$*"
-  printf '%s\n' "$line" >>"$SAY_LOG" 2>/dev/null || true
-  printf '%s\n' "$line" 2>/dev/null || true
-}
-
-# A refusal from inside a function whose stdout is captured (a command substitution) must not be
-# written to stdout: the message would be captured as the function's value and never reach the
-# operator. `refuse` logs like `say` and writes to stderr.
-refuse() {
-  local line
-  printf -v line '[%(%H:%M:%S)T] %s' -1 "$*"
-  printf '%s\n' "$line" >>"$SAY_LOG" 2>/dev/null || true
-  printf '%s\n' "$line" >&2 || true
-}
+# `say` and `refuse` are the shared output functions in lib/shared.sh.
 
 CLOUD_APPLIED=0
 TEARDOWN_ATTEMPTED=0
@@ -154,6 +139,8 @@ source "$ROOT/internal/qualification/attempt.sh"
 # Provider identity and the shared phase bodies. The hooks this provider must supply
 # are checked here, in the process that will call them, before any phase runs.
 PROVIDER=aws
+# shellcheck source=/dev/null
+source "$ROOT/internal/qualification/lib/shared.sh"
 # shellcheck source=/dev/null
 source "$ROOT/internal/qualification/lib/hooks.sh"
 # shellcheck source=/dev/null
@@ -272,38 +259,8 @@ run() {
 # distinct from the installed candidate's own sol.
 SOL_QUALIFICATION_CA="${SOL_QUALIFICATION_CA:-$ROOT/_build/default/internal/tooling/sol_qualification/bin/qualification_database_ca.exe}"
 
-# The database-contract pins and the candidate's specimen declaration. Recorded in
-# `prepare` from the immutable install and the candidate-bound workspace; no provider
-# state. The specimen is kept whole because the delivery assertion names its consumers
-# from it: the candidate declares which workloads consume the database and which Secret
-# each reads, so the row does not reconstruct those names (#1492 class).
-record_database_contract_pins() {
-  mkdir -p "$LOG_DIR"
-  local bound="$LOG_DIR/database-contract-binding.json"
-  if ! python3 "$ROOT/internal/qualification/database-contract-binding.py" \
-      --candidate "$SOL_CANDIDATE" --install "$SOL_INSTALL" --workspace "$WORKSPACE" \
-      --target "$TARGET" >"$bound"; then
-    say "could not bind the candidate's database contract; the CA family cannot be qualified"
-    return 1
-  fi
-  if ! python3 - "$bound" "$LOG_DIR/database-contract-pins.json" \
-      "$LOG_DIR/database-contract-specimen.json" <<'PY'
-import json, sys
-bound = json.load(open(sys.argv[1]))
-s = bound["specimen"]["declaration"]
-json.dump({"revision": bound["candidate"]["revision"],
-           "bundle_digest": bound["candidate"]["bundle_sha256"],
-           "definition_digest": bound["definition"]["digest"],
-           "specimen_digest": bound["specimen"]["digest"],
-           "requested_target": s["requested_target"],
-           "target": s["target"]}, open(sys.argv[2], "w"))
-json.dump(bound["specimen"], open(sys.argv[3], "w"))
-PY
-  then
-    say "could not record the candidate's specimen; the delivery assertion cannot name its consumers"
-    return 1
-  fi
-}
+# The database-contract pins are recorded by the shared `record_database_contract_pins`
+# in lib/shared.sh; the specimen it keeps carries the candidate's own declaration.
 
 # The expected Kubernetes authority the CA observations must match. Recorded from
 # the read-only qualifier transport, never from the product's own report.
@@ -385,31 +342,9 @@ json.dump(request, open(os.path.join(log, "ca-request-" + phase + ".json"), "w")
 PY
 }
 
-# Invoke the shared owner for one phase. A phase's exit status is not evidence:
-# the report phase re-reads the recorded captures and verdicts.
-ca_qualify() {
-  local phase="$1" capture="${2:-}" report="${3:-}" binding="${4:-}" status=0
-  if [ ! -x "$SOL_QUALIFICATION_CA" ]; then
-    say "the shared database-CA qualifier is not built at $SOL_QUALIFICATION_CA"
-    return 1
-  fi
-  if ! ca_request "$phase" "$capture" "$report" "$binding"; then
-    say "could not build the database-CA $phase request"
-    return 1
-  fi
-  # The driver bounds its own child and cleanup; this outer watchdog keeps a
-  # hung driver from hanging the phase, and names the cleanup responsibility.
-  timeout "$PHASE_TIMEOUT" "$SOL_QUALIFICATION_CA" --phase "$phase" \
-    --request "$LOG_DIR/ca-request-$phase.json" >"$LOG_DIR/ca-$phase.log" 2>&1 || status=$?
-  if [ "$status" != 0 ]; then
-    say "the shared database-CA $phase phase did not pass; see $LOG_DIR/ca-$phase.log"
-    if [ "$status" = 124 ]; then
-      say "the $phase phase exceeded ${PHASE_TIMEOUT}s; its cleanup is unestablished and remains the operator's responsibility"
-    fi
-    tail -n 20 "$LOG_DIR/ca-$phase.log"
-    return 1
-  fi
-}
+# The shared database-CA launcher is `ca_qualify` in lib/shared.sh; the provider's
+# `ca_request` builds the request it runs. A phase's exit status is not evidence: the
+# report phase re-reads the recorded captures and verdicts.
 
 # The whole-target deploy reconciles the durable installation inline (DEC-057 §2), and on an
 # account whose installation is not established it offers to set it up through one
