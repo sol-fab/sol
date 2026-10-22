@@ -160,7 +160,47 @@ hook_gcp_destroy_prestate() {
   finalise_bundle
 }
 
-hook_gcp_destroy_kube_destination() { destroy_kube_destination; }
+hook_gcp_destroy_kube_destination() {
+  local out="$LOG_DIR/destroy-cluster-describe.out"
+  local err="$LOG_DIR/destroy-cluster-describe.err"
+  local endpoint
+  DESTROY_CLUSTER_STATE=""
+  DESTROY_KUBECONFIG_READY=0
+  if ! gcloud container clusters describe "$CLUSTER" --region "$REGION" --project "$PROJECT" \
+      --format='value(endpoint)' >"$out" 2>"$err"; then
+    if [ "$(provider_failure_class "$err" "$out")" = "absent" ]; then
+      DESTROY_CLUSTER_STATE=ABSENT
+      DESTROY_CLUSTER_REASON="the provider answered that $CLUSTER does not exist"
+      return 0
+    fi
+    DESTROY_CLUSTER_STATE=UNKNOWN
+    DESTROY_CLUSTER_REASON="the describe did not establish whether $CLUSTER exists; see $err"
+    return 0
+  fi
+  endpoint="$(tr -d '\r' <"$out" | head -n1)"
+  if [ -z "$endpoint" ]; then
+    DESTROY_CLUSTER_STATE=PRESENT
+    DESTROY_CLUSTER_REASON="no endpoint to verify a credential against"
+    return 0
+  fi
+  DESTROY_CLUSTER_STATE=PRESENT
+  DESTROY_CLUSTER_ENDPOINT="$endpoint"
+  # The cluster exists. Rebuild the attempt's own kubeconfig when it does not have one,
+  # or has one that addresses a replaced cluster of the same name.
+  if [ ! -f "$DESTROY_KUBECONFIG" ] || ! kubeconfig_has_cluster "$DESTROY_KUBECONFIG" "$CLUSTER" "$endpoint"; then
+    if ! KUBECONFIG="$DESTROY_KUBECONFIG" gcloud container clusters get-credentials "$CLUSTER" \
+        --region "$REGION" --project "$PROJECT" >"$LOG_DIR/destroy-kubeconfig-refresh.log" 2>&1 \
+      || ! kubeconfig_has_cluster "$DESTROY_KUBECONFIG" "$CLUSTER" "$endpoint"; then
+      DESTROY_CLUSTER_REASON="no credential available here addresses it"
+      return 0
+    fi
+  fi
+  DESTROY_KUBECONFIG_READY=1
+}
+
+hook_gcp_destroy_kubernetes_answers() {
+  timeout 60 kubectl --kubeconfig "$DESTROY_KUBECONFIG" auth can-i get namespaces >/dev/null 2>&1
+}
 
 hook_gcp_destroy_substrate() {
   local vars

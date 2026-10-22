@@ -142,13 +142,90 @@ phase_destroy_run() {
   destroy_teardown_run
 }
 
+# The destroy destination. The attempt owns the kubeconfig path (ATTEMPT_KUBECONFIG):
+# the destination hook establishes that exact path and returns a classified outcome
+# (ABSENT, UNKNOWN, or PRESENT with the kubeconfig ready or blocked). The skeleton
+# records the outcome and probes Kubernetes through the path before the substrate
+# destroy. A destination that cannot be read never aborts the destroy: it is UNKNOWN,
+# and the independent inventory still decides absence. #1633's app-side fix uses this
+# same rule: the attempt owns the path; a provider hook establishes it or returns a
+# classified failure.
+destroy_kube_destination_run() {
+  local hook="hook_${PROVIDER}"
+  local record="$LOG_DIR/destroy-kubeconfig.txt"
+  local empty="$LOG_DIR/kubeconfig-none.yaml"
+
+  DESTROY_KUBECONFIG="${ATTEMPT_KUBECONFIG:-}"
+  DESTROY_CLUSTER_STATE=""
+  DESTROY_CLUSTER_REASON=""
+  DESTROY_CLUSTER_ENDPOINT=""
+  DESTROY_KUBECONFIG_READY=0
+
+  if [ -z "$DESTROY_KUBECONFIG" ]; then
+    DESTROY_CLUSTER_STATE=UNKNOWN
+    DESTROY_CLUSTER_REASON="the attempt declares no kubeconfig path"
+  elif ! "${hook}_destroy_kube_destination"; then
+    DESTROY_CLUSTER_STATE=UNKNOWN
+    DESTROY_CLUSTER_REASON="the destination hook did not complete"
+  fi
+  case "$DESTROY_CLUSTER_STATE" in
+    ABSENT | UNKNOWN | PRESENT) ;;
+    *)
+      DESTROY_CLUSTER_STATE=UNKNOWN
+      DESTROY_CLUSTER_REASON="the destination hook returned no classified state"
+      ;;
+  esac
+
+  : >"$record"
+  case "$DESTROY_CLUSTER_STATE" in
+    ABSENT)
+      : >"$empty"
+      export KUBECONFIG="$empty"
+      printf 'destroy_cluster: ABSENT (%s)\n' "$DESTROY_CLUSTER_REASON" >>"$record"
+      printf 'destroy_kubeconfig: %s (empty: no context resolves)\n' "$KUBECONFIG" >>"$record"
+      printf 'destroy_release_cleanup: skipped (the cluster is genuinely absent, so there is nothing to release from)\n' >>"$record"
+      say "teardown: the cluster $CLUSTER is absent, so the workload release is skipped -- nothing to release from"
+      ;;
+    UNKNOWN)
+      : >"$empty"
+      export KUBECONFIG="$empty"
+      printf 'destroy_cluster: UNKNOWN (%s)\n' "$DESTROY_CLUSTER_REASON" >>"$record"
+      printf 'destroy_release_cleanup: blocked (the cluster could not be read) -- UNKNOWN, not skipped\n' >>"$record"
+      say "teardown: could not read whether $CLUSTER exists, so whether the workloads were released is UNKNOWN"
+      say "  the destroy still runs and the independent inventory still decides absence"
+      ;;
+    PRESENT)
+      if [ "$DESTROY_KUBECONFIG_READY" != 1 ]; then
+        : >"$empty"
+        export KUBECONFIG="$empty"
+        printf 'destroy_cluster: PRESENT\n' >>"$record"
+        printf 'destroy_kubeconfig: %s (could not be established; see destroy-kubeconfig-refresh.log)\n' "$DESTROY_KUBECONFIG" >>"$record"
+        printf 'destroy_release_cleanup: blocked (%s) -- UNKNOWN, not skipped\n' \
+          "${DESTROY_CLUSTER_REASON:-no credential available here addresses it}" >>"$record"
+        say "teardown: could not establish a kubeconfig that addresses $CLUSTER, so whether the workloads were released is UNKNOWN"
+        return 0
+      fi
+      export KUBECONFIG="$DESTROY_KUBECONFIG"
+      printf 'destroy_cluster: PRESENT\n' >>"$record"
+      printf 'destroy_kubeconfig: %s (verified against the cluster current endpoint)\n' "$DESTROY_KUBECONFIG" >>"$record"
+      if "${hook}_destroy_kubernetes_answers"; then
+        printf 'destroy_release_cleanup: attempted (Kubernetes answered at the cluster endpoint, so Sol releases the workloads before the substrate)\n' >>"$record"
+        say "teardown: releasing the workloads through this attempt's kubeconfig $DESTROY_KUBECONFIG"
+      else
+        printf 'destroy_release_cleanup: blocked (the cluster exists and the kubeconfig addresses it, but Kubernetes did not answer) -- UNKNOWN, not skipped\n' >>"$record"
+        say "teardown: Kubernetes did not answer through this attempt's kubeconfig, so whether the workloads were released is UNKNOWN"
+      fi
+      ;;
+  esac
+}
+
 # The teardown sequence every destructive path uses: the scheduled phase and the
 # cleanup path that runs when a phase failed before it could start a teardown. One
 # sequence, so an emergency teardown cannot drift from the scheduled one.
 destroy_teardown_run() {
   local hook="hook_${PROVIDER}"
   TEARDOWN_ATTEMPTED=1
-  "${hook}_destroy_kube_destination" || return 1
+  destroy_kube_destination_run
   local destroy_rc=0
   "${hook}_destroy_substrate" || destroy_rc=$?
   "${hook}_destroy_verdict" || return 1

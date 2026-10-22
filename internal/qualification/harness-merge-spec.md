@@ -80,7 +80,7 @@ reproducible in-tree when this was written.
 | database CA | the CA predicate and its verdicts | where the CA is read from | shared predicate, divergent read |
 | Kafka delivery | the delivery contract and its refusal classes | broker authority and credential mechanism | the pending Kafka fix lands here |
 | cold start | what "positively absent" means | namespace/identity probes (`cloud_cold_start`) | `cold_start_namespaces` is shared now; `app_namespaces` still diverges |
-| destroy | lifecycle ordering, release gate, absence claim | substrate destroy, workload release | `--accept-unreleased` is a shared decision, not a hook |
+| destroy | lifecycle ordering, release gate, absence claim | substrate destroy, workload release, destination describe/establish/probe | `--accept-unreleased` is a shared decision, not a hook; the attempt owns the kubeconfig path and the destination hook establishes it or returns a classified failure (#1633 reuses this rule app-side) |
 | teardown inventory | the class list contract and the tri-state | provider reads per class | includes the access-entry class once #1627(a) lands |
 | records | record shape, promotion eligibility | evidence file locations | shared today in neither suite |
 

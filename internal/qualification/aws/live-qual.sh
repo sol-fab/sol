@@ -604,6 +604,8 @@ aws_inventory() {
 
 
 DEPLOY_KUBECONFIG="$LOG_DIR/kubeconfig-deploy.yaml"
+# The attempt-owned kubeconfig the destroy destination establishes and probes through.
+ATTEMPT_KUBECONFIG="$DEPLOY_KUBECONFIG"
 ACCESS_KUBECONFIG="$LOG_DIR/kubeconfig-access.yaml"
 OPERATOR_KUBECONFIG="$LOG_DIR/kubeconfig-operator.yaml"
 QUALIFIER_KUBECONFIG="$LOG_DIR/kubeconfig-qualifier.yaml"
@@ -1241,64 +1243,6 @@ phase_app() { phase_app_run; }
 #
 # Every branch still runs the destroy and the independent inventory: the release is a
 # precondition of destruction, not the absence verdict, which stays `absence.py`'s.
-destroy_kube_destination() {
-  local file="$LOG_DIR/destroy-kubeconfig.txt"
-  local describe_err="$LOG_DIR/destroy-cluster-describe.err"
-  : >"$file"
-  if aws eks describe-cluster --name "$CLUSTER" --region "$AWS_REGION" \
-    >"$LOG_DIR/destroy-cluster-describe.json" 2>"$describe_err"; then
-    :
-  elif grep -q 'ResourceNotFoundException' "$describe_err" 2>/dev/null; then
-    # No cluster by this name. Give Sol a config that resolves no context at all, so neither a
-    # stale file in this attempt's directory nor the operator's default kubeconfig can aim the
-    # release at a different, live cluster; Sol then reports the release as not applicable.
-    : >"$LOG_DIR/kubeconfig-none.yaml"
-    export KUBECONFIG="$LOG_DIR/kubeconfig-none.yaml"
-    printf 'destroy_cluster: ABSENT (describe-cluster answered ResourceNotFoundException)\n' >>"$file"
-    printf 'destroy_kubeconfig: %s (empty: no context resolves)\n' "$LOG_DIR/kubeconfig-none.yaml" >>"$file"
-    printf 'destroy_release_cleanup: skipped (the cluster is genuinely absent, so there is nothing to release from)\n' >>"$file"
-    say "teardown: the cluster $CLUSTER is absent, so the workload release is skipped -- nothing to release from"
-    return 0
-  else
-    : >"$LOG_DIR/kubeconfig-none.yaml"
-    export KUBECONFIG="$LOG_DIR/kubeconfig-none.yaml"
-    printf 'destroy_cluster: UNKNOWN (describe-cluster did not answer; see %s)\n' "$describe_err" >>"$file"
-    printf 'destroy_release_cleanup: blocked (the cluster could not be read) -- UNKNOWN, not skipped\n' >>"$file"
-    say "teardown: could not read whether $CLUSTER exists, so whether the workloads were released is UNKNOWN"
-    say "  the destroy still runs and the independent inventory still decides absence"
-    return 0
-  fi
-  # The cluster exists. Rebuild the attempt's own kubeconfig when this session does not have
-  # one, or has one that addresses a replaced cluster of the same name.
-  if [ ! -f "$DEPLOY_KUBECONFIG" ] || ! verify_kubeconfig_endpoint "$DEPLOY_KUBECONFIG" >/dev/null 2>&1
-  then
-    if ! KUBECONFIG="$DEPLOY_KUBECONFIG" aws eks update-kubeconfig --region "$AWS_REGION" \
-      --name "$CLUSTER" --alias "$CLUSTER-deploy" --role-arn "$DEPLOY_ROLE_ARN" \
-      >"$LOG_DIR/destroy-kubeconfig-refresh.log" 2>&1 \
-      || ! verify_kubeconfig_endpoint "$DEPLOY_KUBECONFIG" >/dev/null 2>&1; then
-      : >"$LOG_DIR/kubeconfig-none.yaml"
-      export KUBECONFIG="$LOG_DIR/kubeconfig-none.yaml"
-      printf 'destroy_cluster: PRESENT\n' >>"$file"
-      printf 'destroy_kubeconfig: %s (could not be established; see destroy-kubeconfig-refresh.log)\n' "$DEPLOY_KUBECONFIG" >>"$file"
-      printf 'destroy_release_cleanup: blocked (the cluster exists but no credential available here addresses it) -- UNKNOWN, not skipped\n' >>"$file"
-      say "teardown: could not establish a kubeconfig that addresses $CLUSTER, so whether the workloads were released is UNKNOWN"
-      return 0
-    fi
-  fi
-  export KUBECONFIG="$DEPLOY_KUBECONFIG"
-  printf 'destroy_cluster: PRESENT\n' >>"$file"
-  printf 'destroy_kubeconfig: %s (verified against the cluster current endpoint)\n' "$DEPLOY_KUBECONFIG" >>"$file"
-  if timeout 60 kubectl --kubeconfig "$DEPLOY_KUBECONFIG" --context "$CLUSTER-deploy" \
-    auth can-i get namespaces >/dev/null 2>&1; then
-    printf 'destroy_release_cleanup: attempted (Kubernetes answered at the cluster endpoint, so Sol releases the workloads before the substrate)\n' >>"$file"
-    say "teardown: releasing the workloads through this attempt's kubeconfig $DEPLOY_KUBECONFIG"
-  else
-    printf 'destroy_release_cleanup: blocked (the cluster exists and the kubeconfig addresses it, but Kubernetes did not answer) -- UNKNOWN, not skipped\n' >>"$file"
-    say "teardown: Kubernetes did not answer through this attempt's kubeconfig, so whether the workloads were released is UNKNOWN"
-  fi
-  return 0
-}
-
 phase_destroy() { phase_destroy_run; }
 
 case "${1:-}" in

@@ -48,6 +48,8 @@ DELEGATION_WAIT_MINUTES="${DELEGATION_WAIT_MINUTES:-25}"
 LOG_DIR="${LOG_DIR:-/tmp/sol-gcp-qual-$ATTEMPT}"
 export LOG_DIR
 RUN_KUBECONFIG="$LOG_DIR/run-kubeconfig.yaml"
+# The attempt-owned kubeconfig the destroy destination establishes and probes through.
+ATTEMPT_KUBECONFIG="$RUN_KUBECONFIG"
 APP_BUILD_CONTEXT="$LOG_DIR/app-build-context"
 export KUBECONFIG="$RUN_KUBECONFIG"
 STATE_BUCKET="${STATE_BUCKET:-sol-qualification-tfstate}"
@@ -1324,72 +1326,6 @@ capture_pre_teardown_inventory() {
 #
 # Every branch still runs the destroy and the independent inventory: the release is a
 # precondition of destruction, not the absence verdict, which stays the inventory's.
-destroy_kube_destination() {
-  local record="$LOG_DIR/destroy-kubeconfig.txt"
-  local out="$LOG_DIR/destroy-cluster-describe.out"
-  local err="$LOG_DIR/destroy-cluster-describe.err"
-  local endpoint
-  : >"$record"
-  if ! gcloud container clusters describe "$CLUSTER" --region "$REGION" --project "$PROJECT" \
-      --format='value(endpoint)' >"$out" 2>"$err"; then
-    if [ "$(provider_failure_class "$err" "$out")" = "absent" ]; then
-      # No cluster by this name. Give Sol a config that resolves no context at all, so
-      # neither a stale file in this attempt's directory nor the caller's environment can
-      # aim the release at a different, live cluster; Sol then reports the release as not
-      # applicable.
-      : >"$LOG_DIR/kubeconfig-none.yaml"
-      export KUBECONFIG="$LOG_DIR/kubeconfig-none.yaml"
-      printf 'destroy_cluster: ABSENT (the provider answered that %s does not exist)\n' "$CLUSTER" >>"$record"
-      printf 'destroy_kubeconfig: %s (empty: no context resolves)\n' "$KUBECONFIG" >>"$record"
-      printf 'destroy_release_cleanup: skipped (the cluster is genuinely absent, so there is nothing to release from)\n' >>"$record"
-      say "teardown: the cluster $CLUSTER is absent, so the workload release is skipped -- nothing to release from"
-      return 0
-    fi
-    : >"$LOG_DIR/kubeconfig-none.yaml"
-    export KUBECONFIG="$LOG_DIR/kubeconfig-none.yaml"
-    printf 'destroy_cluster: UNKNOWN (the describe did not establish whether %s exists; see %s)\n' "$CLUSTER" "$err" >>"$record"
-    printf 'destroy_release_cleanup: blocked (the cluster could not be read) -- UNKNOWN, not skipped\n' >>"$record"
-    say "teardown: could not read whether $CLUSTER exists, so whether the workloads were released is UNKNOWN"
-    say "  the destroy still runs and the independent inventory still decides absence"
-    return 0
-  fi
-  endpoint="$(tr -d '\r' <"$out" | head -n1)"
-  if [ -z "$endpoint" ]; then
-    : >"$LOG_DIR/kubeconfig-none.yaml"
-    export KUBECONFIG="$LOG_DIR/kubeconfig-none.yaml"
-    printf 'destroy_cluster: PRESENT (its endpoint could not be read)\n' >>"$record"
-    printf 'destroy_release_cleanup: blocked (no endpoint to verify a credential against) -- UNKNOWN, not skipped\n' >>"$record"
-    say "teardown: $CLUSTER exists but its endpoint could not be read, so whether the workloads were released is UNKNOWN"
-    return 0
-  fi
-  # The cluster exists. Rebuild the attempt's own kubeconfig when this session does not
-  # have one, or has one that addresses a replaced cluster of the same name.
-  if [ ! -f "$RUN_KUBECONFIG" ] || ! kubeconfig_has_cluster "$RUN_KUBECONFIG" "$CLUSTER" "$endpoint"; then
-    if ! KUBECONFIG="$RUN_KUBECONFIG" gcloud container clusters get-credentials "$CLUSTER" \
-        --region "$REGION" --project "$PROJECT" >"$LOG_DIR/destroy-kubeconfig-refresh.log" 2>&1 \
-      || ! kubeconfig_has_cluster "$RUN_KUBECONFIG" "$CLUSTER" "$endpoint"; then
-      : >"$LOG_DIR/kubeconfig-none.yaml"
-      export KUBECONFIG="$LOG_DIR/kubeconfig-none.yaml"
-      printf 'destroy_cluster: PRESENT\n' >>"$record"
-      printf 'destroy_kubeconfig: %s (could not be established; see destroy-kubeconfig-refresh.log)\n' "$RUN_KUBECONFIG" >>"$record"
-      printf 'destroy_release_cleanup: blocked (the cluster exists but no credential available here addresses it) -- UNKNOWN, not skipped\n' >>"$record"
-      say "teardown: could not establish a kubeconfig that addresses $CLUSTER, so whether the workloads were released is UNKNOWN"
-      return 0
-    fi
-  fi
-  export KUBECONFIG="$RUN_KUBECONFIG"
-  printf 'destroy_cluster: PRESENT\n' >>"$record"
-  printf 'destroy_kubeconfig: %s (verified against the cluster current endpoint)\n' "$RUN_KUBECONFIG" >>"$record"
-  if timeout 60 kubectl --kubeconfig "$RUN_KUBECONFIG" auth can-i get namespaces >/dev/null 2>&1; then
-    printf 'destroy_release_cleanup: attempted (Kubernetes answered at the cluster endpoint, so Sol releases the workloads before the substrate)\n' >>"$record"
-    say "teardown: releasing the workloads through this attempt's kubeconfig $RUN_KUBECONFIG"
-  else
-    printf 'destroy_release_cleanup: blocked (the cluster exists and the kubeconfig addresses it, but Kubernetes did not answer) -- UNKNOWN, not skipped\n' >>"$record"
-    say "teardown: Kubernetes did not answer through this attempt's kubeconfig, so whether the workloads were released is UNKNOWN"
-  fi
-  return 0
-}
-
 cleanup() {
   local rc=$?
   stop_cluster_kubeconfig_waiter
