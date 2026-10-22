@@ -22,6 +22,131 @@ hook_gcp_prepare_bind() {
 # context `prepare` bound; `prepare` itself builds nothing.
 hook_gcp_prepare_build() { return 0; }
 
+hook_gcp_app_precondition() {
+  # The application row keeps its specimen: capture happens either way, and destroy is
+  # a deliberate separate phase.
+  KEEP=1
+  KEEP_REASON="the application row keeps its specimen: capture happens either way, and destroy is a deliberate separate phase"
+  APP_STATE=failed
+  if [ ! -s "$RUN_KUBECONFIG" ]; then
+    say "app: no run kubeconfig in $LOG_DIR — run the cloud phase first, which establishes it"
+    exit 2
+  fi
+  write_app_target
+  APP_BUILD_CONTEXT="$LOG_DIR/app-build-context"
+  export APP_BUILD_CONTEXT
+  if [ ! -d "$APP_BUILD_CONTEXT" ]; then
+    say "app: no candidate-bound build context at $APP_BUILD_CONTEXT; run prepare first"
+    return 1
+  fi
+}
+
+# This provider's publication lifecycle is here: its cluster-named Artifact Registry
+# exists only after the cloud phase, so the build and push run immediately before the
+# digest-pinned deploy, in the same phase. `prepare` bound the context first.
+hook_gcp_app_images() {
+  say "app images build from candidate $SOL_REVISION ($WORKSPACE at that revision, framework pinned to it)"
+  if ! run app-build bash -c "$(declare -f $(app_helpers)); build_app_images"; then
+    return 1
+  fi
+  if ! run app-push bash -c "$(declare -f $(app_helpers)); push_app_images"; then
+    return 1
+  fi
+  say "runner: release $SOL_BUNDLE_VERSION names $SOL_RUNNER_IMAGE; the publisher publishes nothing"
+}
+
+hook_gcp_app_database_source() { app_capture_database_source; }
+
+hook_gcp_app_bootstrap_deploy() {
+  local image_ref_args="$1"
+  # Establish namespaces/database setup; a first deployment may stop at its migration
+  # gate. Any other failure is not an accepted bootstrap outcome.
+  if ! run app-deploy-bootstrap "$SOL" deploy "$TARGET" --registry "$(app_registry)" $image_ref_args; then
+    grep -Fq 'the required migration set is not applied' "$LOG_DIR/app-deploy-bootstrap.log" || return 1
+  fi
+}
+
+hook_gcp_app_secret_refusal() {
+  bash "$ROOT/internal/qualification/application-secret-refusal.sh" "$SOL" \
+    "$(app_kube_context)" "$(head -1 "$LOG_DIR/app-image-refs.txt" | cut -d= -f2-)" \
+    "$LOG_DIR/application-secret-refusal.log" >>"$LOG_DIR/prerequisites.txt" || return 1
+  printf 'scoped_out: "A deploy refuses to move workloads against an unapplied migration" (this row applies migrations before its steady-state deploy)\n' >>"$LOG_DIR/prerequisites.txt"
+}
+
+# This provider establishes its qualification transport in the cloud phase; the app
+# phase has no separate transport setup or re-establishment.
+hook_gcp_app_transport() { return 0; }
+
+# The migration Job is submitted by the deploy identity, but its CA is read by a
+# separate read-only identity. Record both authorities before the migration step so
+# the shared launcher can validate the receipt without conflating them.
+hook_gcp_app_authorities() {
+  record_gcp_deploy_authority || return 1
+  establish_gcp_ca_observer || return 1
+}
+
+hook_gcp_app_deploy() {
+  local image_ref_args="$1"
+  run app-deploy "$SOL" deploy "$TARGET" --registry "$(app_registry)" $image_ref_args || return 1
+}
+
+hook_gcp_app_post_deploy() { return 0; }
+
+# The report re-reads the durable phase captures, candidate binding and recorded
+# verdicts. A successful phase exit is not a family pass.
+hook_gcp_app_ca_report() {
+  ca_qualify report "" "$LOG_DIR/ca-report.json" || return 1
+  {
+    printf 'database_ca: the shared candidate-bound observer established the GCP application and migration CA family\n'
+    printf 'database_ca_report: %s\n' "$LOG_DIR/ca-report.json"
+    printf 'database_ca_observation_identity: %s\n' "$(authority_field "$LOG_DIR/ca-authority.json" principal)"
+    printf 'database_ca_submission_identity: %s\n' "$(authority_field "$LOG_DIR/ca-deploy-authority.json" principal)"
+  } >>"$LOG_DIR/prerequisites.txt"
+}
+
+hook_gcp_app_transaction_primary() {
+  local rows="$LOG_DIR/alpha-rows.txt"
+  : >"$rows"
+  if ! run app-transaction-ocaml bash -c \
+      "$(declare -f $(app_helpers)); app_orders_transaction pluto-payments orders-svc ocaml 18080"; then
+    return 1
+  fi
+  printf 'OCaml\tB1\trun\tPOST /orders accepted the order and the response carried the submitted id\n' >>"$rows"
+  printf 'OCaml\tB4\trun\tthe order read back as fulfilled or confirmed through the service\n' >>"$rows"
+  printf 'OCaml\tB3\tnot-run\tthe relay row needs Kafka-topic inspection this HTTP phase does not perform\n' >>"$rows"
+}
+
+# The second language namespace: the skeleton observes Kafka delivery between the two
+# transactions, so each namespace's rows are written beside its own transaction.
+hook_gcp_app_transaction_secondary() {
+  local rows="$LOG_DIR/alpha-rows.txt"
+  if ! run app-transaction-ts bash -c \
+      "$(declare -f $(app_helpers)); app_orders_transaction pluto-demo-ts order-svc ts 18081"; then
+    return 1
+  fi
+  printf 'TypeScript\tB1\trun\tPOST /orders accepted the order and the response carried the submitted id\n' >>"$rows"
+  printf 'TypeScript\tB4\trun\tthe order read back as fulfilled or confirmed through the service\n' >>"$rows"
+  printf 'TypeScript\tB3\tnot-run\tthe relay row needs Kafka-topic inspection this HTTP phase does not perform\n' >>"$rows"
+}
+
+hook_gcp_app_evidence() { finalise_bundle; }
+
+hook_gcp_app_success() {
+  APP_STATE=succeeded
+  say "the alpha orders scenario completed in both language namespaces: the OCaml orders-svc in"
+  say "pluto-payments and the TypeScript order-svc in pluto-demo-ts each accepted an order and"
+  say "read its fulfilment back through the transport; the rows each namespace ran are recorded"
+  say "in alpha-rows.txt (B1 and B4 asserted; B3 needs broker inspection this phase does not do)"
+}
+
+# Every failing path freezes the evidence bundle before the phase returns, so the
+# diagnostics describe the state as found rather than a state a later read changed.
+hook_gcp_app_failed() {
+  capture_app_evidence
+  freeze_evidence
+  finalise_bundle
+}
+
 hook_gcp_cloud_precondition() {
   write_target
   run cloud-check "$SOL" check || return 1

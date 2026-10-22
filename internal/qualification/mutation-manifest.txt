@@ -11,6 +11,16 @@ assert_prepare_bind_before_build          call prepare_build before prepare_bind
     evidence file it could not write' in the unrecorded-binding scenario; the rest
     cascade through scenarios that reuse a failed prepare's evidence directory.
     Restored from a checksummed copy and re-ran green (364 OK / 0 FAIL).
+assert_app_spent_attempt_refused          remove the ca-migration.json spent guard
+    MEASURED: renaming the guard's file to ca-migration.json.disabled makes the GCP
+    spent-attempt scenario fail its two message assertions, 'and names the diagnostic
+    continuation' and 'and the promotion-eligible path' (GCP 650 OK / 2 FAIL). The
+    phase still exits 2, but for the missing-kubeconfig reason, which is why the
+    assertion is on the refusal text and not the code. Restored and re-ran green.
+assert_app_migration_ca_before_deploy     move the final deploy before the migration CA
+    MEASURED: swapping the ca_qualify migration block and the app_deploy step fails
+    exactly one assertion, 'the final deploy never ran' (GCP 651 OK / 1 FAIL); restored
+    from a checksummed copy and re-ran green (652 OK / 0 FAIL).
 assert_cloud_verdict_is_reconciliation    remove the environment_reconciled check
 assert_cloud_verdict_is_artifact_gate     remove the pending_artifacts_refused check
 assert_cloud_freeze_before_diagnose       call cloud_diagnose before cloud_freeze

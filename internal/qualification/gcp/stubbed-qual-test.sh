@@ -1343,6 +1343,18 @@ is "prepare refuses when the binding cannot be recorded" "$(cat "$TMP/unrecorded
 has "and names the evidence file it could not write" \
   "prepare: the candidate binding could not be recorded (candidate-binding.txt)" "$TMP/unrecorded.out"
 
+printf '\nscenario: a spent attempt refuses a second application run\n'
+# The CA evidence store admits one verdict per instance per attempt on every provider;
+# the guard is the phase's, so GCP gets the same refusal AWS had.
+mkdir -p "$TMP/spent.logs"
+printf 'attempt=%s\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' \
+  "$ATTEMPT" >"$TMP/spent.logs/attempt.txt"
+: >"$TMP/spent.logs/ca-migration.json"
+KEEP_LOG_DIR=1 run_case spent app
+is "the second application run is refused" "$(cat "$TMP/spent.rc")" "2"
+has "and names the diagnostic continuation" "live-qual.sh resume" "$TMP/spent.out"
+has "and the promotion-eligible path" "restart the whole row" "$TMP/spent.out"
+
 printf '\nscenario: a cold deploy that did not refuse at the artifact gate fails\n'
 run_cloud_case cloud-no-gate STUB_NO_PENDING_ARTIFACTS=1
 is "the cloud phase fails without the artifact-gate refusal" "$(cat "$TMP/cloud-no-gate.rc")" "1"
