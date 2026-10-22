@@ -1437,36 +1437,7 @@ destroy_kube_destination() {
   return 0
 }
 
-phase_destroy() {
-  # Checked *before* TEARDOWN_ATTEMPTED: a destroy that cannot start must not record that a
-  # teardown was attempted, or an inventory that was never taken reads as a failed teardown.
-  require_credentials || return 1
-  TEARDOWN_ATTEMPTED=1
-  if [ ! -f "$LOG_DIR/aws-pre-teardown-identities.json" ]; then
-    say "independent identity capture is missing; teardown is blocked, not verified absent"
-    return 1
-  fi
-  capture_independent_identities || return 1
-  destroy_kube_destination
-  capture_state
-  local destroy_rc=0 verdict_rc=0
-  run cloud-destroy bash -c "cd '$WORKSPACE' && exec '$SOL' destroy '$TARGET' --apply --var-file '$TFVARS'" || destroy_rc=$?
-  if [ "$destroy_rc" = 0 ]; then
-    say "destroy returned success; the independent inventory decides absence"
-  else
-    say "destroy exited non-zero; the independent inventory decides absence"
-  fi
-  aws_inventory || verdict_rc=$?
-  # Sol's repositories are the target's, so the independent inventory above decides them: every
-  # `pluto/<unit>` repository this run published into must read ABSENT after teardown. The run owns
-  # no repositories of its own (issue #1413), so there is nothing outside the inventory to remove.
-  ecr_record_sol_repositories after-destroy
-  if [ "$verdict_rc" != 0 ]; then
-    say "the independent inventory does not read ABSENT, so teardown is not complete"
-    return 1
-  fi
-  return "$destroy_rc"
-}
+phase_destroy() { phase_destroy_run; }
 
 disposable_state_present() {
   aws s3api head-object --bucket "$(target_state_bucket)" --key "$STATE_KEY" >/dev/null 2>&1

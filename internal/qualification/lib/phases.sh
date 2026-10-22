@@ -125,3 +125,33 @@ phase_cloud_run() {
   fi
   "${hook}_cloud_reconciled" || { "${hook}_cloud_failed"; return 1; }
 }
+
+# The destroy phase. The order is the contract:
+#   precondition -> prestate -> kube destination -> substrate destroy -> absence
+#   verdict -> evidence.
+#
+# The destroy's exit code is deliberately not the verdict: a destroy can exit non-zero
+# after removing the substrate, and it can exit zero while resources remain. The
+# independent inventory decides absence. TEARDOWN_ATTEMPTED is set only once the
+# preconditions and prestate have passed, so a destroy that cannot start is not
+# recorded as attempted and a later inventory does not read as a failed teardown.
+phase_destroy_run() {
+  local hook="hook_${PROVIDER}"
+  "${hook}_destroy_precondition" || return 1
+  "${hook}_destroy_prestate" || return 1
+  destroy_teardown_run
+}
+
+# The teardown sequence every destructive path uses: the scheduled phase and the
+# cleanup path that runs when a phase failed before it could start a teardown. One
+# sequence, so an emergency teardown cannot drift from the scheduled one.
+destroy_teardown_run() {
+  local hook="hook_${PROVIDER}"
+  TEARDOWN_ATTEMPTED=1
+  "${hook}_destroy_kube_destination" || return 1
+  local destroy_rc=0
+  "${hook}_destroy_substrate" || destroy_rc=$?
+  "${hook}_destroy_verdict" || return 1
+  "${hook}_destroy_evidence"
+  return "$destroy_rc"
+}

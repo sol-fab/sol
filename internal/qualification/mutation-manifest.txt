@@ -29,3 +29,11 @@ assert_cloud_freeze_before_diagnose       call cloud_diagnose before cloud_freez
     restored and re-run green). This is the entry that proves the ordering class is
     covered; the hooks guard cannot see it.
 assert_cloud_boundary_after_apply         move cold_start_boundary before the apply
+assert_destroy_absence_verdict            skip destroy_verdict after the substrate destroy
+    MEASURED: replacing the verdict call with a no-op fails 6 AWS assertions
+    (358 OK / 6 FAIL): 'whose verdict the independent inventory still decides',
+    'the independent inventory is captured' (twice), and the three inventory identity
+    assertions. Restored from a checksummed copy and re-ran green (364 OK / 0 FAIL).
+    NAMED GAP: the same mutation against the GCP suite did not complete within its
+    bound (clean failures were printed before the bound), so GCP's destroy path has no
+    measured mutation yet; its scenarios are green but do not fail fast on this shape.

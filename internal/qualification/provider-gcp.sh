@@ -147,6 +147,48 @@ hook_gcp_app_failed() {
   finalise_bundle
 }
 
+hook_gcp_destroy_precondition() {
+  write_target
+  CLOUD_APPLIED=1
+}
+
+# The teardown inventory is taken and frozen before anything is destroyed, so the
+# bundle describes the state the destroy found.
+hook_gcp_destroy_prestate() {
+  capture_pre_teardown_inventory
+  freeze_evidence
+  finalise_bundle
+}
+
+hook_gcp_destroy_kube_destination() { destroy_kube_destination; }
+
+hook_gcp_destroy_substrate() {
+  local vars
+  mapfile -t vars < <(destroy_vars)
+  say "teardown: sol destroy $TARGET"
+  ( cd "$WORKSPACE" && "$SOL" destroy "$TARGET" --apply "${vars[@]}" ) \
+    >"$LOG_DIR/destroy.log" 2>&1 || say "  (destroy exited non-zero; the verification below decides)"
+  return 0
+}
+
+# The absence verdict stays the independent inventory's, and the process status is
+# decided by cleanup from TEARDOWN_OK; the destroy's own exit code is not the verdict.
+hook_gcp_destroy_verdict() {
+  if verify_absent; then
+    say "teardown verified: absent"
+    TEARDOWN_OK=1
+  else
+    say "teardown NOT verified: resources remain — see $LOG_DIR/inventory-*.tsv and inventory-*.log"
+    TEARDOWN_OK=0
+  fi
+  return 0
+}
+
+hook_gcp_destroy_evidence() {
+  bundle_manifest
+  verify_bundle || true
+}
+
 hook_gcp_cloud_precondition() {
   write_target
   run cloud-check "$SOL" check || return 1

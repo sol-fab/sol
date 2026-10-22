@@ -1392,25 +1392,6 @@ destroy_kube_destination() {
   return 0
 }
 
-destroy() {
-  TEARDOWN_ATTEMPTED=1
-  destroy_kube_destination
-  local vars
-  mapfile -t vars < <(destroy_vars)
-  say "teardown: sol destroy $TARGET"
-  ( cd "$WORKSPACE" && "$SOL" destroy "$TARGET" --apply "${vars[@]}" ) \
-    >"$LOG_DIR/destroy.log" 2>&1 || say "  (destroy exited non-zero; the verification below decides)"
-  if verify_absent; then
-    say "teardown verified: absent"
-    TEARDOWN_OK=1
-  else
-    say "teardown NOT verified: resources remain — see $LOG_DIR/inventory-*.tsv and inventory-*.log"
-    TEARDOWN_OK=0
-  fi
-  bundle_manifest
-  verify_bundle || true
-}
-
 cleanup() {
   local rc=$?
   stop_cluster_kubeconfig_waiter
@@ -1425,7 +1406,7 @@ cleanup() {
   local mutated=0
   if [ "$CLOUD_APPLIED" = "1" ] || cloud_mutated; then mutated=1; fi
   if [ "$TEARDOWN_ATTEMPTED" = "0" ] && [ "$mutated" = "1" ]; then
-    destroy || true
+    destroy_teardown_run || true
   fi
   say "logs: $LOG_DIR"
   if plan_only; then
@@ -1654,14 +1635,7 @@ capture_ready_evidence() {
   fi
 }
 
-phase_destroy() {
-  write_target
-  CLOUD_APPLIED=1
-  capture_pre_teardown_inventory
-  freeze_evidence
-  finalise_bundle
-  destroy
-}
+phase_destroy() { phase_destroy_run; }
 
 app_registry() { printf '%s-docker.pkg.dev/%s/%s' "$REGION" "$PROJECT" "$CLUSTER"; }
 
