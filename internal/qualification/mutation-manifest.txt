@@ -1,0 +1,10 @@
+# One entry per assertion in lib/phases.sh. Each names the assertion and the
+# perturbation that must turn the suite red; a phase assertion with no entry here is
+# untested, and the ordering classes below are the reason this file exists.
+#
+# Ordering is not covered by check_harness_hooks.sh (it checks presence and call
+# sites only), so an ordering rule lives or dies by these entries.
+assert_cloud_verdict_is_reconciliation    remove the environment_reconciled check
+assert_cloud_verdict_is_artifact_gate     remove the pending_artifacts_refused check
+assert_cloud_freeze_before_diagnose       call cloud_diagnose before cloud_freeze
+assert_cloud_boundary_after_apply         move cold_start_boundary before the apply

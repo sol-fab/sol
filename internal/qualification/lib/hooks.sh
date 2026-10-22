@@ -1,20 +1,36 @@
 #!/usr/bin/env bash
 # The hook contract. A phase calls hooks; a provider implements them. This file
 # declares what every provider must supply, so a missing implementation is a
-# load-time error rather than a mid-run 127.
+# load-time error rather than a mid-run 127 on a path nobody exercised.
 #
-# REQUIRED_HOOKS grows as phases extract. An entry here must also be called from
-# lib/phases.sh: a declared hook nobody calls is dead weight, and the call-site
-# coverage check exists to catch that.
+# Every entry here must also be called from lib/phases.sh: a declared hook nobody
+# calls is dead weight, and check_harness_hooks.sh enforces both directions.
 
-REQUIRED_HOOKS=()
+REQUIRED_HOOKS=(
+  cloud_precondition
+  cloud_plan_only
+  cloud_plan
+  cloud_prestate
+  cloud_post_apply
+  cloud_not_reconciled
+  cloud_not_refused
+  cloud_pre_verify
+  cloud_reconciled
+  cloud_freeze
+  cloud_diagnose
+  cloud_failed
+)
 
-# require_provider_hooks -- called by live-qual.sh at startup and by the shared test
-# shell, in the process that will actually call the hooks.
+# Called by live-qual.sh at startup and by the shared test shell: the process that
+# will actually call the hooks validates the surface it was handed.
 require_provider_hooks() {
   local hook
   if [ -z "${PROVIDER:-}" ]; then
     echo "the harness has no PROVIDER, so no hook surface can be checked" >&2
+    return 1
+  fi
+  if ! declare -F "phase_cloud_run" >/dev/null; then
+    echo "the shared phase bodies are not loaded (lib/phases.sh)" >&2
     return 1
   fi
   for hook in "${REQUIRED_HOOKS[@]}"; do

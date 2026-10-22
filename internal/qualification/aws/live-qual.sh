@@ -151,6 +151,17 @@ source "$ROOT/internal/qualification/sol-under-test.sh"
 source "$ROOT/internal/qualification/candidate-binding.sh"
 source "$ROOT/internal/qualification/attempt.sh"
 
+# Provider identity and the shared phase bodies. The hooks this provider must supply
+# are checked here, in the process that will call them, before any phase runs.
+PROVIDER=aws
+# shellcheck source=/dev/null
+source "$ROOT/internal/qualification/lib/hooks.sh"
+# shellcheck source=/dev/null
+source "$ROOT/internal/qualification/lib/phases.sh"
+# shellcheck source=/dev/null
+source "$ROOT/internal/qualification/provider-aws.sh"
+require_provider_hooks || exit 1
+
 case "${1:-}" in
   prepare | cloud | app | destroy | resume)
     sol_under_test_resolve
@@ -900,69 +911,7 @@ require_credentials() {
   return 1
 }
 
-phase_cloud() {
-  require_credentials || return 1
-  require_target_terraform_var_file || return 1
-  require_target_issuer || return 1
-  capture_independent_identities --initial || return 1
-  # A fixed repository name is not made fresh by a fresh target name, so record it on the way in.
-  ecr_record_sol_repositories before
-  # The cold deploy. `sol deploy` establishes the durable installation inline, applies the
-  # environment's cluster and platform roots (which create `pluto/<unit>`), and then -- because
-  # this run has published no images yet -- refuses at the immutable-artifact gate with
-  # "Deployment incomplete" (#1473). That refusal is this phase's contract on a fresh profiled
-  # target: infrastructure reconciled, no workload moved, no release recorded. The deploy's exit
-  # code is not what decides the phase.
-  local deploy_rc=0
-  bootstrap_deploy cloud-apply || deploy_rc=$?
-  if cloud_mutated; then CLOUD_APPLIED=1; fi
-
-  capture_independent_identities || return 1
-  if ! environment_reconciled; then
-    say "the bootstrap deploy did not reconcile the environment $TARGET (full log $LOG_DIR/cloud-apply.log)"
-    return 1
-  fi
-  # The environment stage ran; the artifact gate is the next step the same deploy checks. Its
-  # refusal is the cold-start claim -- provisioned, nothing applied.
-  if ! pending_artifacts_refused; then
-    say "the cold deploy reconciled the environment but did not refuse at the artifact gate"
-    say "(expected 'Deployment incomplete.' in $LOG_DIR/cloud-apply*.log)"
-    return 1
-  fi
-  # Infrastructure reconciled is not the same as workloads moved. Before this run publishes the
-  # immutable artifacts, establish from the cluster that the cold deploy moved no workload and
-  # recorded no release -- the distinction #1473 makes and a successful cold-start row must show,
-  # over the complete declared namespace set derived from the candidate-bound contract.
-  ensure_contexts || return 1
-  cold_start_boundary || return 1
-  # Publish the images `prepare` built into the repositories the deploy just created, then preview
-  # the whole target with the digests those pushes resolved to. `sol plan` is the read-only
-  # whole-target preview; `sol deploy` is the only command that reconciles the substrate.
-  app_push_images || return 1
-  say "cloud-plan"
-  local plan_image_refs plan_rc=0
-  plan_image_refs="$(app_image_ref_args)"
-  if [ -z "$plan_image_refs" ]; then
-    say "the run published no image digests, so the whole-target preview has nothing to name"
-    return 1
-  fi
-  if ! timeout "$PHASE_TIMEOUT" bash -c "cd '$WORKSPACE' && exec '$SOL' plan '$TARGET' --var-file '$TFVARS' $plan_image_refs" \
-    >"$LOG_DIR/cloud-plan.log" 2>&1; then
-    plan_rc=1
-  fi
-  if [ "$plan_rc" != 0 ]; then
-    say "FAILED: cloud-plan (last 40 lines; full log $LOG_DIR/cloud-plan.log)"
-    tail -n 40 "$LOG_DIR/cloud-plan.log"
-    return 1
-  fi
-  run nodes kubectl --kubeconfig "$ACCESS_KUBECONFIG" get nodes -o wide || return 1
-  capture_kube_evidence
-  capture_state
-  # Recorded, not asserted: whether the apply created them is Sol's business, and the reading
-  # that matters is the one after teardown (below), which must be ABSENT.
-  ecr_record_sol_repositories after
-  say "the substrate and platform install completed; evidence in $LOG_DIR"
-}
+phase_cloud() { phase_cloud_run; }
 
 
 # `prepare` builds the run's images and nothing else: a build touches no provider state, so the

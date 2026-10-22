@@ -119,6 +119,17 @@ assert_environment
 source "$ROOT/internal/qualification/sol-under-test.sh"
 source "$ROOT/internal/qualification/candidate-binding.sh"
 source "$ROOT/internal/qualification/attempt.sh"
+
+# Provider identity and the shared phase bodies. The hooks this provider must supply
+# are checked here, in the process that will call them, before any phase runs.
+PROVIDER=gcp
+# shellcheck source=/dev/null
+source "$ROOT/internal/qualification/lib/hooks.sh"
+# shellcheck source=/dev/null
+source "$ROOT/internal/qualification/lib/phases.sh"
+# shellcheck source=/dev/null
+source "$ROOT/internal/qualification/provider-gcp.sh"
+require_provider_hooks || exit 1
 case "${1:-}" in
   prepare | cloud | app | destroy | stop)
     sol_under_test_resolve
@@ -1463,93 +1474,7 @@ phase_prepare() {
   say "prepare: candidate-bound build context recorded at $APP_BUILD_CONTEXT"
 }
 
-phase_cloud() {
-  write_target
-  run cloud-check "$SOL" check || return 1
-  local vars; mapfile -t vars < <(cloud_vars)
-
-  if plan_only; then
-    run cloud-plan "$SOL" plan "$TARGET" "${vars[@]}" || return 1
-    say "PLAN_ONLY=1: no infrastructure mutation requested; durable setup skipped"
-    return 0
-  fi
-
-  start_cluster_kubeconfig_waiter
-  local deploy_rc=0
-  bootstrap_deploy cloud-apply || deploy_rc=$?
-  if cloud_mutated; then CLOUD_APPLIED=1; fi
-
-  # The whole-target deploy reconciles the durable installation inline and is expected to
-  # stop at the workloads whose digests the app phase has not published yet: their Artifact
-  # Registry repositories did not exist when this phase began. What decides the phase is
-  # the reconciled environment.
-  if ! environment_reconciled; then
-    INSTALL_STATE=failed
-    say "the whole-target deploy did not reconcile the environment -- capturing the discriminator before any teardown"
-    capture_pre_teardown_inventory
-    freeze_evidence
-    capture_platform_failure_evidence
-
-    finalise_bundle
-    return 1
-  fi
-  if ! pending_artifacts_refused; then
-    say "the cold deploy reconciled the environment but did not refuse at the artifact gate"
-    say "(expected 'Deployment incomplete.' in $LOG_DIR/cloud-apply*.log)"
-    capture_pre_teardown_inventory
-    freeze_evidence
-    finalise_bundle
-    return 1
-  fi
-  if [ ! -d "$APP_BUILD_CONTEXT" ]; then
-    say "cloud: no candidate-bound build context at $APP_BUILD_CONTEXT; run prepare first"
-    capture_pre_teardown_inventory
-    freeze_evidence
-    finalise_bundle
-    return 1
-  fi
-  if ! cold_start_boundary; then
-    capture_pre_teardown_inventory
-    freeze_evidence
-    finalise_bundle
-    return 1
-  fi
-  INSTALL_STATE=succeeded
-
-  capture_ready_evidence
-
-  if [ ! -s "$LOG_DIR/nameservers.txt" ] && ! gcloud dns managed-zones describe "$ZONE_NAME" --project "$PROJECT" \
-    --format='value(nameServers)' >"$LOG_DIR/nameservers.txt" 2>"$LOG_DIR/nameservers.err"; then
-    say "could not read the zone's nameservers — the delegation half cannot proceed"
-    capture_pre_teardown_inventory
-    freeze_evidence
-    finalise_bundle
-    return 1
-  fi
-  say "authoritative nameservers for $BASE_DOMAIN (paste these at Squarespace as NS records named 'qual-gcp'):"
-  tr ';' '\n' <"$LOG_DIR/nameservers.txt" | sed 's/^/    /' 2>/dev/null || true
-
-  capture_pre_teardown_inventory
-  freeze_evidence
-  finalise_bundle
-
-  local deadline=$(( $(date +%s) + DELEGATION_WAIT_MINUTES * 60 ))
-  say "waiting up to ${DELEGATION_WAIT_MINUTES}m for the delegation to resolve (Ctrl-C to continue later)"
-  while [ "$(date +%s)" -lt "$deadline" ]; do
-    ns_now="$(dns_ns "$BASE_DOMAIN")"
-    if [ -n "$ns_now" ]; then
-      say "delegation observed: $(printf '%s' "$ns_now" | tr '\n' ' ')"
-      KEEP=1
-      return 0
-    fi
-    sleep 15
-  done
-  say "delegation not observed within ${DELEGATION_WAIT_MINUTES}m."
-  say "This is 'waiting on an external prerequisite', not a Sol failure: finish the NS"
-  say "records at Squarespace, then run: CLUSTER=$CLUSTER ... live-qual.sh destroy"
-  KEEP=1
-  return 0
-}
+phase_cloud() { phase_cloud_run; }
 
 cluster_describable() {
   local name
