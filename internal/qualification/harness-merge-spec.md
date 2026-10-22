@@ -77,7 +77,7 @@ reproducible in-tree when this was written.
 | cloud | ordering, pre/post inventory, what a phase verdict means | substrate apply, kubeconfig/identity capture, node readiness | `destroy_kube_destination` divergence sits here |
 | transport | window semantics, surface contract | principal creation, access mapping, window open/close | #1616 / #1626 own the AWS side; GCP has no qualifier principal |
 | app | ordering, contract changes, migration gate | workflow invocation, credential delivery | `app_verify_*_delivery` diverge by provider credential mechanism |
-| database CA | the CA predicate and its verdicts | where the CA is read from | shared predicate, divergent read |
+| database CA | the CA predicate and its verdicts | where the CA is read from | shared predicate and shared request contract (scenario from the provider hook; submission authority under one name); only the read is provider-specific |
 | Kafka delivery | the delivery contract and its refusal classes | broker authority and credential mechanism | the pending Kafka fix lands here |
 | cold start | what "positively absent" means | namespace/identity probes (`cloud_cold_start`) | `cold_start_namespaces` is shared now; `app_namespaces` still diverges |
 | destroy | lifecycle ordering, release gate, absence claim | substrate destroy, workload release, destination describe/establish/probe | `--accept-unreleased` is a shared decision, not a hook; the attempt owns the kubeconfig path and the destination hook establishes it or returns a classified failure (#1633 reuses this rule app-side) |

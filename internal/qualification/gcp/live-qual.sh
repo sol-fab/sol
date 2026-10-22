@@ -2023,7 +2023,7 @@ record_gcp_deploy_authority() {
     return 1
   fi
   kube_authority_json "$RUN_KUBECONFIG" "$(app_kube_context)" \
-    "$LOG_DIR/ca-deploy-authority.json"
+    "$LOG_DIR/ca-submission-authority.json"
 }
 
 authority_field() {
@@ -2061,19 +2061,24 @@ establish_gcp_ca_observer() {
     return 1
   fi
   CA_OBSERVER_CONTEXT="$context"
+  # The CA driver's request uses the attempt's CA kubeconfig/context names. The observer
+  # is this row's independent qualifier identity, so the same path is the qualifier path.
+  CA_KUBECONFIG="$CA_OBSERVER_KUBECONFIG"
+  CA_CONTEXT="$CA_OBSERVER_CONTEXT"
+  QUALIFIER_KUBECONFIG="$CA_OBSERVER_KUBECONFIG"
   if ! kube_authority_json "$CA_OBSERVER_KUBECONFIG" "$context" "$LOG_DIR/ca-authority.json"; then
     return 1
   fi
-  if [ ! -s "$LOG_DIR/ca-deploy-authority.json" ]; then
+  if [ ! -s "$LOG_DIR/ca-submission-authority.json" ]; then
     say "app: the deploy authority was not recorded, so the observation identity cannot be shown to be separate"
     return 1
   fi
   observer_principal="$(authority_field "$LOG_DIR/ca-authority.json" principal)"
-  deploy_principal="$(authority_field "$LOG_DIR/ca-deploy-authority.json" principal)"
+  deploy_principal="$(authority_field "$LOG_DIR/ca-submission-authority.json" principal)"
   observer_cluster="$(authority_field "$LOG_DIR/ca-authority.json" cluster)"
   observer_endpoint="$(authority_field "$LOG_DIR/ca-authority.json" endpoint)"
-  deploy_cluster="$(authority_field "$LOG_DIR/ca-deploy-authority.json" cluster)"
-  deploy_endpoint="$(authority_field "$LOG_DIR/ca-deploy-authority.json" endpoint)"
+  deploy_cluster="$(authority_field "$LOG_DIR/ca-submission-authority.json" cluster)"
+  deploy_endpoint="$(authority_field "$LOG_DIR/ca-submission-authority.json" endpoint)"
   if [ "$observer_principal" != "$expected_observer" ]; then
     say "app: the CA observation identity authenticated as $observer_principal, not the configured observer $expected_observer; the CA family is unestablished"
     return 1
@@ -2180,39 +2185,6 @@ expect_denied() {
 
 # Build the shared driver's request from inputs this row recorded. Nothing here
 # is taken from the product's own report.
-ca_request() {
-  local phase="$1" capture="${2:-}" report="${3:-}" binding="${4:-}"
-  python3 - "$ROOT" "$SOL_CANDIDATE" "$SOL_INSTALL" "$WORKSPACE" "$LOG_DIR" \
-    "$CA_OBSERVER_KUBECONFIG" "$CA_OBSERVER_CONTEXT" "$ATTEMPT" "$phase" "$capture" "$report" "$binding" <<'PY'
-import json, os, sys
-(root, candidate, install, workspace, log, observer_kubeconfig, observer_context,
- attempt, phase, capture, report, binding) = sys.argv[1:13]
-request = {
-    "repository": root,
-    "candidate": candidate,
-    "install": install,
-    "workspace": workspace,
-    "pins": json.load(open(os.path.join(log, "database-contract-pins.json"))),
-    "authority": json.load(open(os.path.join(log, "ca-authority.json"))),
-    "submission_authority": json.load(open(os.path.join(log, "ca-deploy-authority.json"))),
-    "kubeconfig": observer_kubeconfig,
-    "context": observer_context,
-    "identity_scope": "qualifier",
-    "attempt": attempt,
-    "assessment": "database-ca",
-    "scenario": "gcp",
-    "evidence": os.path.join(log, "ca-evidence"),
-    "phase": phase,
-    "capture": capture,
-    "report": report,
-    "binding": binding,
-    "migration_capture": os.path.join(log, "ca-migration-capture.json"),
-    "application_capture": os.path.join(log, "ca-application-capture.json"),
-}
-json.dump(request, open(os.path.join(log, "ca-request-" + phase + ".json"), "w"))
-PY
-}
-
 # The shared database-CA launcher is `ca_qualify` in lib/shared.sh; the provider's
 # `ca_request` builds the request it runs. A phase's exit status is not evidence: the
 # report phase re-reads the recorded captures and verdicts.

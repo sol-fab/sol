@@ -310,41 +310,6 @@ record_ca_submission_authority() {
 
 # Build the driver request for one phase from inputs the row recorded earlier.
 # Nothing here is read from the product's own report.
-ca_request() {
-  local phase="$1" capture="${2:-}" report="${3:-}" binding="${4:-}"
-  python3 - "$ROOT" "$SOL_CANDIDATE" "$SOL_INSTALL" "$WORKSPACE" "$LOG_DIR" \
-    "$CA_KUBECONFIG" "$CA_CONTEXT" "$ATTEMPT" "$phase" "$capture" "$report" "$binding" \
-    "$QUALIFIER_KUBECONFIG" "$LOG_DIR/ca-submission-authority.json" <<'PY'
-import json, os, sys
-(root, candidate, install, workspace, log, kubeconfig, context, attempt,
- phase, capture, report, binding, qualifier_kubeconfig, submission_authority) = sys.argv[1:15]
-request = {
-    "repository": root,
-    "candidate": candidate,
-    "install": install,
-    "workspace": workspace,
-    "pins": json.load(open(os.path.join(log, "database-contract-pins.json"))),
-    "authority": json.load(open(os.path.join(log, "ca-authority.json"))),
-    "kubeconfig": kubeconfig,
-    "context": context,
-    "identity_scope": "qualifier" if kubeconfig == qualifier_kubeconfig else "deploy",
-    "attempt": attempt,
-    "assessment": "database-ca",
-    "scenario": "aws",
-    "evidence": os.path.join(log, "ca-evidence"),
-    "phase": phase,
-    "capture": capture,
-    "report": report,
-    "binding": binding,
-    "migration_capture": os.path.join(log, "ca-migration-capture.json"),
-    "application_capture": os.path.join(log, "ca-application-capture.json"),
-}
-if os.path.exists(submission_authority):
-    request["submission_authority"] = json.load(open(submission_authority))
-json.dump(request, open(os.path.join(log, "ca-request-" + phase + ".json"), "w"))
-PY
-}
-
 # The shared database-CA launcher is `ca_qualify` in lib/shared.sh; the provider's
 # `ca_request` builds the request it runs. A phase's exit status is not evidence: the
 # report phase re-reads the recorded captures and verdicts.

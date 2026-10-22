@@ -1571,12 +1571,14 @@ has "the migration request names the gcp scenario" \
 has "the request names the independent observation identity" \
   "gcp:qualifier@sol-qualification.iam.gserviceaccount.com" \
   "$TMP/app-ok.logs/ca-request-migration.json"
+has "and derives the observed identity's scope" \
+  '"identity_scope": "qualifier"' "$TMP/app-ok.logs/ca-request-migration.json"
 has "and the deploy identity as the submission authority" \
   "gcp:deployer@example.com" "$TMP/app-ok.logs/ca-request-migration.json"
 has "the observer authority is recorded separately from the deploy authority" \
   "gcp:qualifier@sol-qualification.iam.gserviceaccount.com" "$TMP/app-ok.logs/ca-authority.json"
 has "the deploy authority is recorded for the migration receipt" \
-  "gcp:deployer@example.com" "$TMP/app-ok.logs/ca-deploy-authority.json"
+  "gcp:deployer@example.com" "$TMP/app-ok.logs/ca-submission-authority.json"
 has "the observer authenticated as the declared principal" \
   "configured_observer_principal: gcp:qualifier@sol-qualification.iam.gserviceaccount.com" \
   "$TMP/app-ok.logs/ca-observer.txt"
