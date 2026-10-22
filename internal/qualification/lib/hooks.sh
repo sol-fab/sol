@@ -3,7 +3,8 @@
 # declares what every provider must supply, so a missing implementation is a
 # load-time error rather than a mid-run 127 on a path nobody exercised.
 #
-# Every entry here must also be called from lib/phases.sh: a declared hook nobody
+# Every entry here must also be called from a shared lifecycle file (lib/phases.sh
+# for phase hooks, attempt.sh for the attempt lifecycle): a declared hook nobody
 # calls is dead weight, and check_harness_hooks.sh enforces both directions.
 
 REQUIRED_HOOKS=(
@@ -33,6 +34,7 @@ REQUIRED_HOOKS=(
   cloud_not_reconciled
   cloud_not_refused
   cloud_pre_verify
+  cloud_cold_start
   cloud_reconciled
   cloud_freeze
   cloud_diagnose
@@ -43,6 +45,8 @@ REQUIRED_HOOKS=(
   destroy_substrate
   destroy_verdict
   destroy_evidence
+  # Attempt lifecycle, called from attempt.sh rather than a phase body.
+  disposable_state_present
 )
 
 # Called by live-qual.sh at startup and by the shared test shell: the process that

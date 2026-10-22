@@ -149,7 +149,7 @@ attempt_record_specimen() {
 
 attempt_check_fresh() {
   local continuing="$1"
-  if ! disposable_state_present; then
+  if ! "hook_${PROVIDER}_disposable_state_present"; then
     # The attempt's kubeconfig, captures and logs describe the specimen it
     # provisioned. Reusing the attempt for a second specimen leaves the first
     # one's credentials and evidence in place, which is how a run came to read a

@@ -132,10 +132,6 @@ case "${1:-}" in
     ;;
 esac
 
-disposable_state_present() {
-  gcloud storage objects describe "gs://$STATE_BUCKET/$STATE_KEY" --project "$PROJECT" \
-    >/dev/null 2>&1
-}
 
 mkdir -p "$LOG_DIR"
 SAY_LOG="$LOG_DIR/harness.log"
@@ -1715,73 +1711,6 @@ cold_start_namespaces() {
   printf '%s\n' "$names"
 }
 
-# The cold-start boundary, established from the cluster rather than inferred from the
-# deploy log. The claim is "this deploy moved no workload and recorded no release". A
-# namespaced workload or release cannot exist without its namespace, so the boundary is
-# established by showing every declared namespace positively absent. The observation
-# identity's view is validated first: kube-system must be readable and a name that cannot
-# exist must answer NotFound. Present -> UNKNOWN; unreadable -> UNKNOWN; absent-probe
-# not-NotFound -> UNKNOWN. UNKNOWN never becomes ABSENT.
-cold_start_boundary() {
-  local names ns out err file="$LOG_DIR/cold-start-namespaces.txt"
-  local probe="sol-nonexistent-namespace-probe-$ATTEMPT"
-  local present=0 unknown=0
-  names="$(cold_start_namespaces)" || return 1
-  if ! timeout 60 kubectl --kubeconfig "$RUN_KUBECONFIG" get namespace kube-system -o name \
-    >/dev/null 2>"$LOG_DIR/cold-start-namespaces-authority.err"; then
-    say "UNKNOWN: the observation identity's namespace view could not be established, so"
-    say "whether a workload moved cannot be read (see cold-start-namespaces-authority.err)"
-    return 1
-  fi
-  if timeout 60 kubectl --kubeconfig "$RUN_KUBECONFIG" get namespace "$probe" -o name \
-    >/dev/null 2>"$LOG_DIR/cold-start-namespaces-absent-probe.err"; then
-    say "UNKNOWN: the observation identity answered that $probe exists, so its namespace view"
-    say "cannot establish absence"
-    return 1
-  fi
-  if ! grep -q 'NotFound' "$LOG_DIR/cold-start-namespaces-absent-probe.err" 2>/dev/null; then
-    say "UNKNOWN: a name that cannot exist did not answer NotFound, so the namespace view is"
-    say "filtered -- a namespace that does exist would answer the same way, and absence cannot be"
-    say "read from it (see cold-start-namespaces-absent-probe.err)"
-    return 1
-  fi
-  {
-    printf 'boundary_namespaces: %s\n' "$(printf '%s' "$names" | tr '\n' ' ')"
-    printf 'boundary_identity: run (%s), view validated against kube-system and an absent name\n' \
-      "$RUN_KUBECONFIG"
-  } >"$file"
-  while IFS= read -r ns; do
-    [ -n "$ns" ] || continue
-    err="$LOG_DIR/cold-start-namespace-$ns.err"
-    if out="$(timeout 60 kubectl --kubeconfig "$RUN_KUBECONFIG" get namespace "$ns" -o name 2>"$err")"; then
-      printf 'cold-start-namespace: %s PRESENT (it may hold a workload or a recorded release)\n' \
-        "$ns" >>"$file"
-      present=$((present + 1))
-    elif grep -q 'NotFound' "$err" 2>/dev/null; then
-      printf 'cold-start-namespace: %s ABSENT\n' "$ns" >>"$file"
-    else
-      printf 'cold-start-namespace: %s UNKNOWN (%s)\n' \
-        "$ns" "$(head -n 1 "$err" 2>/dev/null)" >>"$file"
-      unknown=$((unknown + 1))
-    fi
-  done <<EOF
-$names
-EOF
-  if [ "$unknown" != 0 ]; then
-    say "$unknown declared namespace(s) could not be read, so whether a workload moved is UNKNOWN"
-    say "  (see $file)"
-    return 1
-  fi
-  if [ "$present" != 0 ]; then
-    say "the cold deploy created a declared namespace before its immutable artifacts were published:"
-    say "  $(grep ' PRESENT' "$file" | sed 's/^cold-start-namespace: //' | tr '\n' ' ')"
-    say "whether it holds a workload or a recorded release cannot be established with the"
-    say "identities this row holds at this point, so the boundary is UNKNOWN, never a pass"
-    return 1
-  fi
-  say "the cold deploy moved no workload and recorded no release: every declared namespace"
-  say "  ($(printf '%s' "$names" | tr '\n' ' ')) is positively absent"
-}
 
 app_helpers() {
   printf '%s\n' say app_registry app_kube_context app_services app_k8s_name app_context_path \
