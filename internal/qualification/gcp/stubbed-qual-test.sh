@@ -16,16 +16,23 @@ export TARGET="${TARGET:-qual/gcp/us-central1}"
 # its own location, so a copy of the files it sources is sufficient.
 ROOT="$TMP/root"
 mkdir -p "$ROOT/internal/qualification/gcp" "$ROOT/internal/qualification"
+# The harness's runtime file set is derived from one manifest rather than listed
+# here. A hand-written copy list is a second authority over what live-qual.sh
+# sources, and two of them drift from it and from each other.
+copy_sandbox_manifest() {
+  local rel
+  mkdir -p "$ROOT/internal/qualification"
+  while IFS= read -r rel; do
+    case "$rel" in '' | '#'*) continue ;; esac
+    cp -R "$REPO/internal/qualification/$rel" "$ROOT/internal/qualification/"
+  done <"$REPO/internal/qualification/sandbox-manifest.txt"
+}
+
 cp "$HERE/live-qual.sh" "$ROOT/internal/qualification/gcp/"
 cp "$HERE/observer.py" "$ROOT/internal/qualification/gcp/"
 cp "$HERE/qual.tfvars" "$ROOT/internal/qualification/gcp/"
 cp -R "$HERE/fixtures" "$ROOT/internal/qualification/gcp/"
-cp "$REPO/internal/qualification/sol-under-test.sh" "$ROOT/internal/qualification/"
-cp "$REPO/internal/qualification/candidate-binding.sh" "$ROOT/internal/qualification/"
-cp "$REPO/internal/qualification/attempt.sh" "$ROOT/internal/qualification/"
-cp "$REPO/internal/qualification/kafka-delivery.py" "$ROOT/internal/qualification/"
-cp "$REPO/internal/qualification/state-evidence.py" "$ROOT/internal/qualification/"
-cp "$REPO/internal/qualification/application-secret-refusal.sh" "$ROOT/internal/qualification/"
+copy_sandbox_manifest
 mkdir -p "$ROOT/internal/qualification/fixtures"
 cp -R "$REPO/internal/qualification/fixtures/application-secret-refusal" "$ROOT/internal/qualification/fixtures/"
 cp "$REPO/internal/qualification/transaction.py" "$ROOT/internal/qualification/"

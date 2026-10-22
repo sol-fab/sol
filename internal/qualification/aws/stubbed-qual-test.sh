@@ -56,16 +56,22 @@ NO_RUNNER_INSTALL="$TMP/install-no-runner"
 TAG_RUNNER_INSTALL="$TMP/install-tag-runner"
 NO_REVISION_INSTALL="$TMP/install-no-revision"
 
+# The harness's runtime file set is derived from one manifest rather than listed
+# here. A hand-written copy list is a second authority over what live-qual.sh
+# sources, and two of them drift from it and from each other.
+copy_sandbox_manifest() {
+  local rel
+  mkdir -p "$ROOT/internal/qualification"
+  while IFS= read -r rel; do
+    case "$rel" in '' | '#'*) continue ;; esac
+    cp -R "$REPO/internal/qualification/$rel" "$ROOT/internal/qualification/"
+  done <"$REPO/internal/qualification/sandbox-manifest.txt"
+}
 mkdir -p "$ROOT/internal/qualification/aws" "$ROOT/internal/qualification/transport" \
   "$WORKSPACE/sol" "$TMP/bin"
 cp "$REPO/internal/qualification/aws/live-qual.sh" "$ROOT/internal/qualification/aws/"
 cp "$REPO/internal/qualification/aws/absence.py" "$ROOT/internal/qualification/aws/"
-cp "$REPO/internal/qualification/sol-under-test.sh" "$ROOT/internal/qualification/"
-cp "$REPO/internal/qualification/candidate-binding.sh" "$ROOT/internal/qualification/"
-cp "$REPO/internal/qualification/attempt.sh" "$ROOT/internal/qualification/"
-cp "$REPO/internal/qualification/kafka-delivery.py" "$ROOT/internal/qualification/"
-cp "$REPO/internal/qualification/state-evidence.py" "$ROOT/internal/qualification/"
-cp "$REPO/internal/qualification/application-secret-refusal.sh" "$ROOT/internal/qualification/"
+copy_sandbox_manifest
 cp -R "$REPO/internal/qualification/fixtures" "$ROOT/internal/qualification/"
 cat >"$ROOT/internal/qualification/database-contract-binding.py" <<'STUB'
 #!/usr/bin/env python3

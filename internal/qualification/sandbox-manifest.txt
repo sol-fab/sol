@@ -1,0 +1,18 @@
+# Files the qualification harness sources or executes at runtime, and which the
+# stubbed suites therefore copy into their scratch root.
+#
+# One list, not one per suite: a hand-maintained copy list in each suite is a second
+# authority over what live-qual.sh needs, and the two drift. Paths are relative to
+# internal/qualification/.
+sol-under-test.sh
+candidate-binding.sh
+attempt.sh
+kafka-delivery.py
+state-evidence.py
+application-secret-refusal.sh
+transaction.py
+aws/absence.py
+gcp/observer.py
+lib
+provider-aws.sh
+provider-gcp.sh
