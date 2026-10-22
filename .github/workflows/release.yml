@@ -110,7 +110,10 @@ jobs:
       - name: Set up OCaml
         uses: ocaml/setup-ocaml@v3
         with:
-          ocaml-compiler: 5.4.1
+          # Same cache invalidation and quoting as the CI jobs: a restored opam root
+          # must not decide whether the compiler resolves.
+          ocaml-compiler: "5.4.1"
+          cache-prefix: v4
 
       - name: Pin extracted opam packages
         uses: ./.github/actions/pin-opam-packages

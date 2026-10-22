@@ -105,7 +105,12 @@ jobs:
         if: needs.classify.outputs.kind != 'docs-only'
         uses: ocaml/setup-ocaml@v3
         with:
-          ocaml-compiler: 5.4.1
+          # Quoted per the action's guidance. The cache prefix is bumped because a
+          # restored opam root can resolve the compiler against stale repository state
+          # and fail with "no opam release matches" even though the repository serves
+          # 5.4.1; a stale cache must not decide the toolchain.
+          ocaml-compiler: "5.4.1"
+          cache-prefix: v4
 
       - name: Cache opam download cache
         if: needs.classify.outputs.kind != 'docs-only'
@@ -426,7 +431,12 @@ jobs:
       - name: Set up OCaml
         uses: ocaml/setup-ocaml@v3
         with:
-          ocaml-compiler: 5.4.1
+          # Quoted per the action's guidance. The cache prefix is bumped because a
+          # restored opam root can resolve the compiler against stale repository state
+          # and fail with "no opam release matches" even though the repository serves
+          # 5.4.1; a stale cache must not decide the toolchain.
+          ocaml-compiler: "5.4.1"
+          cache-prefix: v4
 
       - name: Cache opam download cache
         # Use the same download cache as the `test` job.
@@ -760,7 +770,12 @@ jobs:
       - name: Set up OCaml
         uses: ocaml/setup-ocaml@v3
         with:
-          ocaml-compiler: 5.4.1
+          # Quoted per the action's guidance. The cache prefix is bumped because a
+          # restored opam root can resolve the compiler against stale repository state
+          # and fail with "no opam release matches" even though the repository serves
+          # 5.4.1; a stale cache must not decide the toolchain.
+          ocaml-compiler: "5.4.1"
+          cache-prefix: v4
 
       - name: Cache opam download cache
         uses: actions/cache@v4
