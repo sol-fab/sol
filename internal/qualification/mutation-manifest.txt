@@ -7,4 +7,8 @@
 assert_cloud_verdict_is_reconciliation    remove the environment_reconciled check
 assert_cloud_verdict_is_artifact_gate     remove the pending_artifacts_refused check
 assert_cloud_freeze_before_diagnose       call cloud_diagnose before cloud_freeze
+    MEASURED: swapping the two steps in lib/phases.sh fails exactly one assertion,
+    'the bundle is frozen before the heavy Kubernetes reads' (GCP 646 OK / 1 FAIL,
+    restored and re-run green). This is the entry that proves the ordering class is
+    covered; the hooks guard cannot see it.
 assert_cloud_boundary_after_apply         move cold_start_boundary before the apply
