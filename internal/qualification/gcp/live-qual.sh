@@ -78,14 +78,8 @@ esac
 ZONE_NAME="$(printf '%s' "$BASE_DOMAIN" | tr '.' '-')"
 ZONE_LABEL="${BASE_DOMAIN%%.*}"
 
-say() {
-  local line
-  printf -v line '[%(%H:%M:%S)T] %s' -1 "$*"
-  if [ -n "${SAY_LOG:-}" ]; then
-    printf '%s\n' "$line" >>"$SAY_LOG" 2>/dev/null || true
-  fi
-  printf '%s\n' "$line" 2>/dev/null || true
-}
+# `say`, `refuse`, `ca_qualify` and the database-contract pins are the shared
+# functions in lib/shared.sh.
 
 dns_ns() {
   local name="$1" out
@@ -123,6 +117,8 @@ source "$ROOT/internal/qualification/attempt.sh"
 # Provider identity and the shared phase bodies. The hooks this provider must supply
 # are checked here, in the process that will call them, before any phase runs.
 PROVIDER=gcp
+# shellcheck source=/dev/null
+source "$ROOT/internal/qualification/lib/shared.sh"
 # shellcheck source=/dev/null
 source "$ROOT/internal/qualification/lib/hooks.sh"
 # shellcheck source=/dev/null
@@ -1658,8 +1654,6 @@ app_services() {
 # The cold-start selection is the row's exercise set. The S1 seeds override it
 # without changing the target's own unit set, so the boundary's selection can be
 # emptied or made to omit a unit while the deployment itself stays well formed.
-refuse() { say "$@" >&2; }
-
 cold_start_services() {
   if [ -n "${COLD_START_SERVICES+set}" ]; then
     printf '%s\n' $COLD_START_SERVICES
@@ -2118,39 +2112,8 @@ app_wait_port_forward() {
 # re-reads the durable captures and verdicts.
 # ---------------------------------------------------------------------------
 
-# The database-contract pins the shared driver re-verifies. Recorded from the
-# immutable install and candidate-bound workspace; no provider state.
-record_database_contract_pins() {
-  mkdir -p "$LOG_DIR"
-  local bound="$LOG_DIR/database-contract-binding.json"
-  if ! python3 "$ROOT/internal/qualification/database-contract-binding.py" \
-      --candidate "$SOL_CANDIDATE" --install "$SOL_INSTALL" --workspace "$WORKSPACE" \
-      --target "$TARGET" >"$bound"; then
-    say "app: could not bind the candidate's database contract; the CA family cannot be qualified"
-    return 1
-  fi
-  # The specimen is kept whole because the delivery assertion names its consumers from
-  # it: the candidate declares which workloads consume the database and which Secret
-  # each reads, so the row does not reconstruct those names (#1492 class).
-  if ! python3 - "$bound" "$LOG_DIR/database-contract-pins.json" \
-      "$LOG_DIR/database-contract-specimen.json" <<'PY'
-import json, sys
-bound = json.load(open(sys.argv[1]))
-s = bound["specimen"]["declaration"]
-json.dump({"revision": bound["candidate"]["revision"],
-           "bundle_digest": bound["candidate"]["bundle_sha256"],
-           "definition_digest": bound["definition"]["digest"],
-           "specimen_digest": bound["specimen"]["digest"],
-           "requested_target": s["requested_target"],
-           "target": s["target"]}, open(sys.argv[2], "w"))
-json.dump(bound["specimen"], open(sys.argv[3], "w"))
-PY
-  then
-    say "app: could not record the candidate's specimen; the delivery assertion cannot name its consumers"
-    return 1
-  fi
-  say "app: recorded the candidate's database-contract pins and specimen for the shared CA family"
-}
+# The database-contract pins are recorded by the shared `record_database_contract_pins`
+# in lib/shared.sh; the specimen it keeps carries the candidate's own declaration.
 
 # Read one Kubernetes authority through an explicit kubeconfig/context. The
 # principal is Kubernetes' authenticated answer, and the cluster identity is the
@@ -2386,32 +2349,9 @@ json.dump(request, open(os.path.join(log, "ca-request-" + phase + ".json"), "w")
 PY
 }
 
-# Invoke the shared owner for one phase. A phase's exit status is not evidence:
-# the report phase re-reads the recorded captures and verdicts.
-ca_qualify() {
-  local phase="$1" capture="${2:-}" report="${3:-}" binding="${4:-}" status=0
-  if [ ! -x "$SOL_QUALIFICATION_CA" ]; then
-    say "app: the shared database-CA qualifier is not built at $SOL_QUALIFICATION_CA"
-    return 1
-  fi
-  if ! ca_request "$phase" "$capture" "$report" "$binding"; then
-    say "app: could not build the database-CA $phase request"
-    return 1
-  fi
-  timeout "$PHASE_TIMEOUT" "$SOL_QUALIFICATION_CA" --phase "$phase" \
-    --request "$LOG_DIR/ca-request-$phase.json" >"$LOG_DIR/ca-$phase.log" 2>&1 || status=$?
-  if [ "$status" != 0 ]; then
-    say "app: the shared database-CA $phase phase did not pass; see $LOG_DIR/ca-$phase.log"
-    if [ "$status" = 124 ]; then
-      say "     the $phase phase exceeded ${PHASE_TIMEOUT}s; its cleanup is unestablished and remains the operator's responsibility"
-    fi
-    tail -n 20 "$LOG_DIR/ca-$phase.log" || true
-    if [ -n "$report" ] && [ -s "$report" ]; then
-      tail -n 20 "$report" || true
-    fi
-    return 1
-  fi
-}
+# The shared database-CA launcher is `ca_qualify` in lib/shared.sh; the provider's
+# `ca_request` builds the request it runs. A phase's exit status is not evidence: the
+# report phase re-reads the recorded captures and verdicts.
 
 app_orders_transaction() {
   local ns="$1" service="$2" label="$3" port="$4"

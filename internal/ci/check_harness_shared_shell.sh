@@ -17,6 +17,7 @@ source "$root/internal/qualification/providers.sh"
 
 shared=(
   "internal/qualification/common.sh"
+  "internal/qualification/lib/shared.sh"
 )
 
 status=0
