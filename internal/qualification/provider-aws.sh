@@ -167,6 +167,53 @@ hook_aws_app_success() {
 # bundle to finalise here.
 hook_aws_app_failed() { return 0; }
 
+# Checked before TEARDOWN_ATTEMPTED is set by the skeleton: a destroy that cannot
+# refresh its credentials must not record that a teardown was attempted.
+hook_aws_destroy_precondition() { require_credentials; }
+
+hook_aws_destroy_prestate() {
+  if [ ! -f "$LOG_DIR/aws-pre-teardown-identities.json" ]; then
+    say "independent identity capture is missing; teardown is blocked, not verified absent"
+    return 1
+  fi
+  capture_independent_identities || return 1
+}
+
+# The teardown destination is selected explicitly, never inherited from the calling
+# shell: a destroy that trusts the ambient kubeconfig can release another cluster's
+# workloads (#1443).
+hook_aws_destroy_kube_destination() { destroy_kube_destination; }
+
+hook_aws_destroy_substrate() {
+  # Capture the state the destroy is about to change, after the release destination
+  # has been decided and before Sol runs.
+  capture_state
+  local destroy_rc=0
+  run cloud-destroy bash -c "cd '$WORKSPACE' && exec '$SOL' destroy '$TARGET' --apply --var-file '$TFVARS'" || destroy_rc=$?
+  if [ "$destroy_rc" = 0 ]; then
+    say "destroy returned success; the independent inventory decides absence"
+  else
+    say "destroy exited non-zero; the independent inventory decides absence"
+  fi
+  return "$destroy_rc"
+}
+
+hook_aws_destroy_verdict() {
+  local verdict_rc=0
+  aws_inventory || verdict_rc=$?
+  # Sol's repositories are the target's, so the independent inventory above decides
+  # them: every `pluto/<unit>` repository this run published into must read ABSENT
+  # after teardown. The run owns no repositories of its own (#1413).
+  ecr_record_sol_repositories after-destroy
+  if [ "$verdict_rc" != 0 ]; then
+    say "the independent inventory does not read ABSENT, so teardown is not complete"
+    return 1
+  fi
+}
+
+# The identity and state captures above are the evidence; there is no bundle to freeze.
+hook_aws_destroy_evidence() { return 0; }
+
 hook_aws_cloud_precondition() {
   require_credentials || return 1
   require_target_terraform_var_file || return 1

@@ -37,6 +37,12 @@ REQUIRED_HOOKS=(
   cloud_freeze
   cloud_diagnose
   cloud_failed
+  destroy_precondition
+  destroy_prestate
+  destroy_kube_destination
+  destroy_substrate
+  destroy_verdict
+  destroy_evidence
 )
 
 # Called by live-qual.sh at startup and by the shared test shell: the process that
@@ -48,7 +54,7 @@ require_provider_hooks() {
     return 1
   fi
   if ! declare -F "phase_prepare_run" >/dev/null || ! declare -F "phase_app_run" >/dev/null \
-    || ! declare -F "phase_cloud_run" >/dev/null; then
+    || ! declare -F "phase_destroy_run" >/dev/null || ! declare -F "phase_cloud_run" >/dev/null; then
     echo "the shared phase bodies are not loaded (lib/phases.sh)" >&2
     return 1
   fi
