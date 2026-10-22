@@ -6,9 +6,10 @@
 # shell run the same check at load through require_provider_hooks, so a missing hook
 # fails the run that would have called it.
 #
-# Call-site coverage: every declared hook is actually called from lib/phases.sh. A
-# hook that is declared, implemented and never called is dead weight -- the shape a
-# check takes when someone adds the declaration and forgets the wiring.
+# Call-site coverage: every declared hook is actually called from a shared lifecycle
+# file -- lib/phases.sh for phase hooks, attempt.sh for the attempt lifecycle. A hook
+# that is declared, implemented and never called is dead weight -- the shape a check
+# takes when someone adds the declaration and forgets the wiring.
 #
 # LIMIT, stated so nobody assumes otherwise: this checks presence and call sites, not
 # ORDER. An ordering rule (freeze before a heavy read) is carried by the mutation
@@ -23,8 +24,17 @@ source "$root/internal/qualification/lib/hooks.sh"
 
 status=0
 for hook in "${REQUIRED_HOOKS[@]}"; do
-  if ! grep -q "\"\${hook}_${hook}\"\|_${hook}\"\|_${hook}\b" "$root/internal/qualification/lib/phases.sh"; then
-    echo "call-site coverage: hook $hook is declared but lib/phases.sh never calls it" >&2
+  called=""
+  for shared in \
+    "$root/internal/qualification/lib/phases.sh" \
+    "$root/internal/qualification/attempt.sh"; do
+    if grep -q "\"\${hook}_${hook}\"\|_${hook}\"\|_${hook}\b" "$shared"; then
+      called=1
+      break
+    fi
+  done
+  if [ -z "$called" ]; then
+    echo "call-site coverage: hook $hook is declared but no shared lifecycle file calls it" >&2
     status=1
   fi
   for provider in "${PROVIDERS[@]}"; do

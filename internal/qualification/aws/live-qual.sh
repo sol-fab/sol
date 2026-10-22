@@ -434,87 +434,6 @@ cold_start_namespaces() {
   printf '%s\n' "$names"
 }
 
-# The cold-start boundary, established from the cluster rather than inferred from the deploy log.
-#
-# The claim is "this deploy moved no workload and recorded no release". A namespaced workload or
-# release cannot exist without its namespace, so the boundary is established by showing every
-# namespace the target's selected units declare to be **positively absent**. Reading it this way
-# is what makes the claim observable at this point in the lifecycle: an identity with no grant in
-# the namespace is answered Forbidden for a namespaced read (RBAC is evaluated before namespace
-# existence), which is exactly what the deploy identity is before it has deployed, so a list of
-# Deployments is unreadable here and could never establish the claim (#1488).
-#
-# The observation runs under the cluster-access identity, and its view is validated before any
-# absence is trusted: a namespace that must exist must be readable, and a name that cannot exist
-# must answer NotFound rather than Forbidden. A view that answered NotFound because it is
-# filtered could otherwise turn an unreadable look-up into a false boundary, and this observation
-# gates a decision about a live target -- so it fails closed.
-#
-# What it establishes: no namespaced workload (Deployment/CronJob/Job/Rollout) and no
-# `sol.dev/type=release` ConfigMap can exist in the declared namespaces. It does not establish
-# anything about cluster-scoped objects, which the target's roots own and Sol's teardown removes;
-# and a namespace that does exist makes the boundary UNKNOWN here rather than passing, because
-# what it might contain cannot be read with the identities this row holds.
-cold_start_boundary() {
-  local names ns out err file="$LOG_DIR/cold-start-namespaces.txt"
-  local probe="sol-nonexistent-namespace-probe-$ATTEMPT"
-  local present=0 unknown=0
-  names="$(cold_start_namespaces)" || return 1
-  if ! timeout 60 kubectl --kubeconfig "$ACCESS_KUBECONFIG" get namespace kube-system -o name \
-    >/dev/null 2>"$LOG_DIR/cold-start-namespaces-authority.err"; then
-    say "UNKNOWN: the cluster-access identity's namespace view could not be established, so"
-    say "whether a workload moved cannot be read (see cold-start-namespaces-authority.err)"
-    return 1
-  fi
-  if timeout 60 kubectl --kubeconfig "$ACCESS_KUBECONFIG" get namespace "$probe" -o name \
-    >/dev/null 2>"$LOG_DIR/cold-start-namespaces-absent-probe.err"; then
-    say "UNKNOWN: the observation identity answered that $probe exists, so its namespace view"
-    say "cannot establish absence"
-    return 1
-  fi
-  if ! grep -q 'NotFound' "$LOG_DIR/cold-start-namespaces-absent-probe.err" 2>/dev/null; then
-    say "UNKNOWN: a name that cannot exist did not answer NotFound, so the namespace view is"
-    say "filtered -- a namespace that does exist would answer the same way, and absence cannot be"
-    say "read from it (see cold-start-namespaces-absent-probe.err)"
-    return 1
-  fi
-  {
-    printf 'boundary_namespaces: %s\n' "$(printf '%s' "$names" | tr '\n' ' ')"
-    printf 'boundary_identity: cluster-access (%s), view validated against kube-system and an absent name\n' \
-      "$ACCESS_KUBECONFIG"
-  } >"$file"
-  while IFS= read -r ns; do
-    [ -n "$ns" ] || continue
-    err="$LOG_DIR/cold-start-namespace-$ns.err"
-    if out="$(timeout 60 kubectl --kubeconfig "$ACCESS_KUBECONFIG" get namespace "$ns" -o name 2>"$err")"; then
-      printf 'cold-start-namespace: %s PRESENT (it may hold a workload or a recorded release)\n' \
-        "$ns" >>"$file"
-      present=$((present + 1))
-    elif grep -q 'NotFound' "$err" 2>/dev/null; then
-      printf 'cold-start-namespace: %s ABSENT\n' "$ns" >>"$file"
-    else
-      printf 'cold-start-namespace: %s UNKNOWN (%s)\n' \
-        "$ns" "$(head -n 1 "$err" 2>/dev/null)" >>"$file"
-      unknown=$((unknown + 1))
-    fi
-  done <<EOF
-$names
-EOF
-  if [ "$unknown" != 0 ]; then
-    say "$unknown declared namespace(s) could not be read, so whether a workload moved is UNKNOWN"
-    say "  (see $file)"
-    return 1
-  fi
-  if [ "$present" != 0 ]; then
-    say "the cold deploy created a declared namespace before its immutable artifacts were published:"
-    say "  $(grep ' PRESENT' "$file" | sed 's/^cold-start-namespace: //' | tr '\n' ' ')"
-    say "whether it holds a workload or a recorded release cannot be established with the"
-    say "identities this row holds at this point, so the boundary is UNKNOWN, never a pass"
-    return 1
-  fi
-  say "the cold deploy moved no workload and recorded no release: every declared namespace"
-  say "  ($(printf '%s' "$names" | tr '\n' ' ')) is positively absent"
-}
 
 # `sol deploy` prints this once the durable installation and the environment are
 # reconciled, before it moves on to the workloads. It is the signal that the bootstrap
@@ -1373,10 +1292,6 @@ destroy_kube_destination() {
 }
 
 phase_destroy() { phase_destroy_run; }
-
-disposable_state_present() {
-  aws s3api head-object --bucket "$(target_state_bucket)" --key "$STATE_KEY" >/dev/null 2>&1
-}
 
 case "${1:-}" in
   cloud)

@@ -28,7 +28,12 @@ assert_cloud_freeze_before_diagnose       call cloud_diagnose before cloud_freez
     'the bundle is frozen before the heavy Kubernetes reads' (GCP 646 OK / 1 FAIL,
     restored and re-run green). This is the entry that proves the ordering class is
     covered; the hooks guard cannot see it.
-assert_cloud_boundary_after_apply         move cold_start_boundary before the apply
+assert_cloud_boundary_after_apply         call cloud_cold_start before the apply
+assert_cloud_cold_start_hook_called       call a missing hook instead of cloud_cold_start
+    MEASURED: renaming the call in lib/phases.sh to a hook no provider implements fails
+    32 AWS assertions (332 OK / 32 FAIL), including 'exit 0', 'and it establishes the
+    boundary from the cluster over every declared namespace', and 'reading namespaces
+    rather than a namespaced workload listing'. Restored and re-ran green.
 assert_destroy_absence_verdict            skip destroy_verdict after the substrate destroy
     MEASURED: replacing the verdict call with a no-op fails 6 AWS assertions
     (358 OK / 6 FAIL): 'whose verdict the independent inventory still decides',

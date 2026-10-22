@@ -32,11 +32,12 @@ conflation shape that produces the next defect, because a reader cannot tell
 whether the difference is provider-required or accidental.
 
 Not every divergence is drift. Of the 23, **16 are semantic drift**, 5 are
-cosmetic, and 2 are legitimate provider differences that become hooks
-(`cold_start_boundary`, whose observing principal differs because only one
-provider splits cluster-access from deploy; and `disposable_state_present`, which
-is one provider API call either way). The classification is recorded per function
-in the merge work, and the count is expected to fall as phases merge.
+cosmetic, and 2 are legitimate provider differences that become hooks. Those two
+are now hooks: `cloud_cold_start` (the observing principal differs because only one
+provider splits cluster-access from deploy) and `disposable_state_present` (one
+provider API call either way, called by the shared attempt lifecycle). The
+classification is recorded per function in the merge work, and the count is
+expected to fall as phases merge.
 
 ## The interface
 
@@ -78,7 +79,7 @@ reproducible in-tree when this was written.
 | app | ordering, contract changes, migration gate | workflow invocation, credential delivery | `app_verify_*_delivery` diverge by provider credential mechanism |
 | database CA | the CA predicate and its verdicts | where the CA is read from | shared predicate, divergent read |
 | Kafka delivery | the delivery contract and its refusal classes | broker authority and credential mechanism | the pending Kafka fix lands here |
-| cold start | what "positively absent" means | namespace/identity probes | `cold_start_boundary` and `cold_start_namespaces` diverge |
+| cold start | what "positively absent" means | namespace/identity probes (`cloud_cold_start`) | `cold_start_namespaces` still diverges |
 | destroy | lifecycle ordering, release gate, absence claim | substrate destroy, workload release | `--accept-unreleased` is a shared decision, not a hook |
 | teardown inventory | the class list contract and the tri-state | provider reads per class | includes the access-entry class once #1627(a) lands |
 | records | record shape, promotion eligibility | evidence file locations | shared today in neither suite |

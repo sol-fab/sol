@@ -119,7 +119,7 @@ phase_cloud_run() {
     return 1
   fi
   "${hook}_cloud_pre_verify" || { "${hook}_cloud_failed"; return 1; }
-  if ! cold_start_boundary; then
+  if ! "${hook}_cloud_cold_start"; then
     "${hook}_cloud_failed"
     return 1
   fi

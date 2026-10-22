@@ -20,7 +20,7 @@ has() { if grep -qF -- "$2" "$3" 2>/dev/null; then ok "$1"; else no "$1" "contai
 lacks() { if grep -qF -- "$2" "$3" 2>/dev/null; then no "$1" "absent: $2" "present"; else ok "$1"; fi; }
 
 STATE_PRESENT=1 # 0 = the disposable state key exists
-disposable_state_present() { return "$STATE_PRESENT"; }
+hook_aws_disposable_state_present() { return "$STATE_PRESENT"; }
 say() { :; }
 # shellcheck source=attempt.sh
 source "$HERE/attempt.sh"
@@ -43,6 +43,23 @@ STATE_PRESENT=1 begin "$d" alpha7 "$(printf 'a%.0s' $(seq 1 40))" && ok "the fre
 has "the identity names the attempt" "attempt=alpha7" "$d/attempt.txt"
 has "and the candidate it qualifies" "candidate_revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "$d/attempt.txt"
 has "and the specimen it provisioned" "specimen=sol-qual" "$d/attempt.txt"
+printf '\nscenario: an existing disposable state is not a fresh target\n'
+d="$TMP/present"
+STATE_PRESENT=0
+if out="$(begin "$d" alpha7 "$(printf 'a%.0s' $(seq 1 40))" 1 2>&1)"; then
+  no "an existing state key is refused as a fresh target" "non-zero" "0"
+else
+  ok "an existing state key is refused as a fresh target"
+fi
+case "$out" in
+  *"already exists"*) ok "and the refusal says the state key exists" ;;
+  *) no "and the refusal says the state key exists" "already exists" "$out" ;;
+esac
+if CONTINUE_ATTEMPT=1 begin "$d" alpha8 "$(printf 'a%.0s' $(seq 1 40))" 1 >/dev/null 2>&1; then
+  ok "and an explicit continuation against it is allowed"
+else
+  no "and an explicit continuation against it is allowed" "0" "$?"
+fi
 printf '\nscenario: one attempt is one specimen\n'
 d="$TMP/specimen"
 mkdir -p "$d"
