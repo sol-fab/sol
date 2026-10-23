@@ -236,6 +236,76 @@ let gcp_cloud_ready outputs =
   | _ -> false
 ;;
 
+let deploy_access ~region (outputs : gcp_outputs) () =
+  let open Result.Syntax in
+  let* () = gcp_platform_toolchain_result () in
+  let path = Filename.temp_file "sol-gcp-deploy-" ".kubeconfig" in
+  at_exit (fun () -> Sol_cli_fs.remove_reporting path);
+  gcp_provisioner_kubeconfig_result ~region outputs (fun ~env ->
+    let run args =
+      Sol_cli_process.run (Sol_cli_process.cmd ~env args)
+      |> Result.map (fun (output : Sol_cli_process.output) -> output.stdout)
+      |> Result.map_error Sol_cli_process.error_to_string
+    in
+    let* token =
+      run
+        [ "kubectl"
+        ; "create"
+        ; "token"
+        ; "sol-deploy"
+        ; "-n"
+        ; "monitoring"
+        ; "--duration=1h"
+        ]
+    in
+    let* cluster =
+      run [ "kubectl"; "config"; "view"; "-o"; "jsonpath={.clusters[0].name}" ]
+    in
+    let cluster = String.trim cluster in
+    if cluster = ""
+    then Error "the GCP provisioner kubeconfig names no cluster for the deploy context"
+    else (
+      let provisioner_kubeconfig =
+        match List.assoc_opt "KUBECONFIG" env with
+        | Some value when not (Sol_cli_string.is_blank value) -> value
+        | _ -> ""
+      in
+      if provisioner_kubeconfig = ""
+      then Error "the GCP provisioner kubeconfig has no KUBECONFIG path"
+      else
+        let* provisioner_kubeconfig = Sol_cli_fs.read_file provisioner_kubeconfig in
+        let* () = Sol_cli_fs.write_atomic ~perm:0o600 path provisioner_kubeconfig in
+        let token = String.trim token in
+        let* _ =
+          run
+            [ "kubectl"
+            ; "config"
+            ; "set-credentials"
+            ; "sol-deploy"
+            ; "--token"
+            ; token
+            ; "--kubeconfig"
+            ; path
+            ]
+        in
+        let* _ =
+          run
+            [ "kubectl"
+            ; "config"
+            ; "set-context"
+            ; "sol-deploy"
+            ; "--cluster"
+            ; cluster
+            ; "--user"
+            ; "sol-deploy"
+            ; "--kubeconfig"
+            ; path
+            ]
+        in
+        Sol_cli_kube_destination.of_context ~kubeconfig:path "sol-deploy"
+        |> Result.map Option.some))
+;;
+
 let database_egress_cidrs_json outputs =
   match outputs.database_egress_cidrs with
   | [] -> None
@@ -353,7 +423,7 @@ let cluster ~region outputs : Sol_cli_cluster.t =
                          hold the authority the lifecycle needs next: %s"
                         why)))
         }
-  ; deploy_access = (fun () -> Ok None)
+  ; deploy_access = (fun () -> deploy_access ~region outputs ())
   }
 ;;
 

@@ -148,7 +148,26 @@ let namespace_doc ~ns =
     [ "metadata", Y.map [ "name", Y.string ns ] ]
 ;;
 
-let role_binding_doc ~ns ~name ~cluster_role ~group =
+let role_binding_doc ~ns ~name ~cluster_role ~group ?service_account () =
+  let group_subject =
+    Y.map
+      [ "kind", Y.string "Group"
+      ; "name", Y.string group
+      ; "apiGroup", Y.string "rbac.authorization.k8s.io"
+      ]
+  in
+  let service_account_subject =
+    match service_account with
+    | None -> []
+    | Some (namespace, name) ->
+      [ Y.map
+          [ "kind", Y.string "ServiceAccount"
+          ; "name", Y.string name
+          ; "namespace", Y.string namespace
+          ; "apiGroup", Y.string "rbac.authorization.k8s.io"
+          ]
+      ]
+  in
   resource
     ~api_version:"rbac.authorization.k8s.io/v1"
     ~kind:"RoleBinding"
@@ -159,23 +178,18 @@ let role_binding_doc ~ns ~name ~cluster_role ~group =
           ; "kind", Y.string "ClusterRole"
           ; "name", Y.string cluster_role
           ] )
-    ; ( "subjects"
-      , Y.list
-          [ Y.map
-              [ "kind", Y.string "Group"
-              ; "name", Y.string group
-              ; "apiGroup", Y.string "rbac.authorization.k8s.io"
-              ]
-          ] )
+    ; "subjects", Y.list (group_subject :: service_account_subject)
     ]
 ;;
 
 let deploy_role_binding_doc ~ns =
   role_binding_doc
+    ~service_account:("monitoring", "sol-deploy")
     ~ns
     ~name:"sol-deploy"
     ~cluster_role:"sol-deploy"
     ~group:"sol:deployers"
+    ()
 ;;
 
 let operator_role_binding_doc ~ns =
@@ -184,6 +198,7 @@ let operator_role_binding_doc ~ns =
     ~name:"sol-operator"
     ~cluster_role:"sol-operator-diagnostics"
     ~group:"sol:operators"
+    ()
 ;;
 
 let service_account_doc ~ns ~name =
