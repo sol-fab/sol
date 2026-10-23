@@ -6,20 +6,27 @@ Next steps:
 
   1. Set the repository variables the workflow reads (Settings -> Secrets and
      variables -> Actions -> Variables):
+       SOL_VERSION                      the Sol release that generated this workspace
        SOL_TARGET                       <env>/<provider>/<region>, declared in sol/environments.yml
        SOL_REGISTRY                     image registry prefix
        SOL_DEPLOY_ROLE_ARN              AWS: the target's deploy identity (OIDC-assumed)
        SOL_DEPLOY_SERVICE_ACCOUNT       GCP: the deploy service account (Workload Identity)
        SOL_AUTHORIZATION_ROLE_ARN       AWS: the target's fenced authorization reconciler
        SOL_AUTHORIZATION_SERVICE_ACCOUNT GCP: the target's reconciler service account
-  2. Configure the provider-side OIDC trust for those identities (docs/deployment/ci.md).
+  2. Bootstrap the target once if it is cold: a target needs a declared
+     `kube_context` and its registry repositories before this workflow can reach
+     it. Run `sol deploy <target>` once from a machine with the provisioning
+     identity, add the printed `kube_context`, then enable CI.
+  3. Configure the provider-side OIDC trust for those identities (docs/deployment/ci.md).
      No long-lived cloud credentials are stored in the repository.
-  3. Protect the `sol-authorization` environment with required reviewers
+  4. Protect the `sol-authorization` environment with required reviewers
      (Settings -> Environments). The `authorize` job runs under it, so adopting a
      workload cloud grant is a reviewed action separate from the deploy.
 
-  The workflow runs the same `sol deploy <target>` lifecycle as local execution
-  and never infers a target. Secret values are seeded out of band with
+  The workflow installs the release named by SOL_VERSION — it never builds Sol
+  from the workspace — then builds and pushes images, applies migrations and
+  runs the same `sol deploy <target>` lifecycle as local execution. It never
+  infers a target. Secret values are seeded out of band with
   `sol secret set <TARGET> <domain>/<unit>/<KEY>`. Resource credentials are delivered
   through the target's resource bindings.
 |}

@@ -152,7 +152,9 @@ cluster.
 **Direct mode** — the CLI renders and applies:
 
 ```bash
-sol deploy prod/aws/us-east-1 --registry 123456789.dkr.ecr.us-east-1.amazonaws.com --image-tag "$SHA"
+# A production-profile target requires immutable references:
+sol deploy prod/aws/us-east-1 \
+  --image-ref charge_svc=123456789.dkr.ecr.us-east-1.amazonaws.com/acme/charge-svc@sha256:<digest>
 ```
 
 **GitOps mode** — the CLI renders and you commit the result, and a controller applies it:
@@ -205,6 +207,13 @@ It writes `.github/workflows/sol-ci.yml` (also scaffolded by `sol new workspace`
 repository variables and provider-side trust it expects. It never overwrites a workflow you have
 edited; pass `--force` when you mean to replace one. The generated workflow is checked in at
 [`examples/pluto/.github/workflows/sol-ci.yml`](../../examples/pluto/.github/workflows/sol-ci.yml).
+
+The workflow installs the Sol release named by the `SOL_VERSION` repository
+variable — it never builds Sol from the workspace — then logs in to the image
+registry, builds and pushes the units, records their digests, applies migrations
+and deploys with `--image-ref`. It expects a target that already declares a
+`kube_context` and whose registry repositories exist: run `sol deploy <target>`
+once first, add the printed context, then enable CI.
 
 The workflow authenticates with **GitHub OIDC** — no long-lived cloud credentials are stored in the
 repository. It uses two identities, deliberately separate (`DEC-062` rule 1): the **deploy** identity
@@ -279,11 +288,12 @@ report `ready` for an observation the deploy would reject.
 ESO rotation is manual: rotate at the external authority, wait for ESO sync, then restart the
 affected workload with Kubernetes rollout tooling. An unchanged `sol deploy` is not a restart.
 
-The deploy step is the same lifecycle as local execution — `sol deploy <target>` then
-`sol migrate <target>` — so nothing about the plan, the render or the apply exists in the workflow.
-GitOps mode uses the same workflow with `--emit-to` in place of the direct deploy, and the
-`platform/cloud/delivery/argocd/application.yaml` `Application` reconciles what it writes; Sol
-ships one CI workflow, not a separate copy per mode.
+The deploy step is the same lifecycle as local execution — `sol migrate apply <target>` then
+`sol deploy <target>` — so nothing about the plan, the render or the apply exists in the workflow.
+The generated workflow ships the direct form, with one `--image-ref` per service. For GitOps,
+replace the deploy step with `sol deploy --emit-to`; the
+`platform/cloud/delivery/argocd/application.yaml` `Application` reconciles what it writes, and
+the rendered inputs are the same.
 
 ## 6. What you bring, and what Sol brings
 

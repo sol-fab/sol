@@ -4,19 +4,28 @@
 # `sol ci init github` writes it into an existing workspace, so there is one
 # source of truth rather than a copy per path.
 #
+# The workflow deploys to a target that has already been bootstrapped: the
+# target declares `kube_context`, and its registry repositories exist. The first
+# `sol deploy <target>` establishes both; run it once, add the printed
+# `kube_context` to the target, then enable this workflow. A cold-start CI path
+# is not part of this workflow yet.
+#
 # Authentication is GitHub OIDC: no long-lived cloud credentials are stored in
 # this repository. Before the jobs can run, configure the provider-side trust
 # (docs/deployment/ci.md) and set these repository variables (Settings -> Secrets
 # and variables -> Actions -> Variables):
 #
+#   SOL_VERSION                      the Sol release that generated this workspace,
+#                                    e.g. v0.1.0-alpha.44. The workflow downloads
+#                                    that exact release; it never builds Sol from
+#                                    this workspace.
 #   SOL_TARGET                       <env>/<provider>/<region>, e.g.
 #                                    prod/aws/us-east-1. It must be declared in
 #                                    sol/environments.yml. The workflow never
-#                                    infers a target from the branch or the
-#                                    event.
+#                                    infers a target from the branch or the event.
 #   SOL_REGISTRY                     image registry prefix, e.g.
-#                                      123456789.dkr.ecr.us-east-1.amazonaws.com
-#                                      us-central1-docker.pkg.dev/my-project/{{name}}
+#                                      123456789012.dkr.ecr.us-east-1.amazonaws.com
+#                                      us-central1-docker.pkg.dev/my-project/my-cluster
 #   SOL_DEPLOY_ROLE_ARN              AWS: the deploy identity (the target's
 #                                    `deploy_role_arn`); assumed through OIDC.
 #   SOL_DEPLOY_SERVICE_ACCOUNT       GCP: the deploy service account;
@@ -51,6 +60,7 @@ permissions:
   id-token: write
 
 env:
+  SOL_VERSION: ${{ vars.SOL_VERSION }}
   SOL_TARGET: ${{ vars.SOL_TARGET }}
   SOL_REGISTRY: ${{ vars.SOL_REGISTRY }}
   IMAGE_TAG: ${{ github.sha }}
@@ -101,17 +111,56 @@ jobs:
           workload_identity_provider: ${{ vars.SOL_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.SOL_DEPLOY_SERVICE_ACCOUNT }}
 
+      - name: Log in to AWS ECR
+        if: vars.SOL_DEPLOY_ROLE_ARN != ''
+        env:
+          AWS_REGION: ${{ vars.SOL_AWS_REGION }}
+        run: |
+          set -euo pipefail
+          : "${SOL_REGISTRY:?set the SOL_REGISTRY repository variable}"
+          : "${AWS_REGION:?set the SOL_AWS_REGION repository variable}"
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "${SOL_REGISTRY%%/*}"
+
+      - name: Log in to GCP Artifact Registry
+        if: vars.SOL_DEPLOY_SERVICE_ACCOUNT != ''
+        run: |
+          set -euo pipefail
+          : "${SOL_REGISTRY:?set the SOL_REGISTRY repository variable}"
+          gcloud auth configure-docker "${SOL_REGISTRY%%/*}"
+
+      - name: Require a deploy identity and registry
+        run: |
+          set -euo pipefail
+          : "${SOL_REGISTRY:?set the SOL_REGISTRY repository variable}"
+          if [ -z "${{ vars.SOL_DEPLOY_ROLE_ARN }}" ] && [ -z "${{ vars.SOL_DEPLOY_SERVICE_ACCOUNT }}" ]; then
+            echo "::error::set SOL_DEPLOY_ROLE_ARN (AWS) or SOL_DEPLOY_SERVICE_ACCOUNT (GCP)"
+            exit 1
+          fi
+
       - name: Build and push images
         run: |
           set -euo pipefail
-          short_sha=${IMAGE_TAG::7}
-          find app -name Dockerfile | while read -r dockerfile; do
-            dir=$(dirname "$dockerfile")
-            unit=$(basename "$dir" | tr '_' '-')
-            image="${SOL_REGISTRY}/{{name}}/${unit}:${short_sha}"
+          : "${SOL_REGISTRY:?set the SOL_REGISTRY repository variable}"
+          short_sha="${IMAGE_TAG::7}"
+          : > image-refs.txt
+          find app -name Dockerfile -print0 | while IFS= read -r -d '' dockerfile; do
+            dir="$(dirname "$dockerfile")"
+            service="$(basename "$dir")"
+            image_unit="$(printf '%s' "$service" | tr '_' '-')"
+            image="${SOL_REGISTRY}/{{name}}/${image_unit}:${short_sha}"
             docker build --provenance=false --sbom=false -t "$image" -f "$dockerfile" .
             docker push "$image"
+            digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$image")"
+            printf '%s=%s\n' "$service" "$digest" >> image-refs.txt
           done
+          test -s image-refs.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sol-image-refs
+          path: image-refs.txt
+          if-no-files-found: error
 
   authorize:
     needs: build-images
@@ -121,19 +170,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: "5.4.1"
-          opam-depext: false
-
-      - name: Install system deps
-        run: sudo apt-get install -y librdkafka-dev libpq-dev
-
-      - name: Install opam deps
-        run: opam install . --deps-only -y
-
-      - name: Build sol
-        run: eval $(opam env) && dune build cli/bin/main.exe
+      - name: Install the Sol release
+        run: |
+          set -euo pipefail
+          : "${SOL_VERSION:?set the SOL_VERSION repository variable to the release that generated this workspace}"
+          url="https://github.com/sol-fab/sol/releases/download/${SOL_VERSION}/sol-${SOL_VERSION}-linux-x86_64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/sol"
+          curl -fsSL "$url" | tar -xz -C "$RUNNER_TEMP/sol" --strip-components=1
+          echo "$RUNNER_TEMP/sol/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/sol/bin/sol" assets
 
       - name: Authenticate (AWS OIDC)
         if: vars.SOL_AUTHORIZATION_ROLE_ARN != ''
@@ -153,15 +198,15 @@ jobs:
         if: vars.SOL_AUTHORIZATION_ROLE_ARN != '' || vars.SOL_AUTHORIZATION_SERVICE_ACCOUNT != ''
         run: |
           set -euo pipefail
-          eval $(opam env)
-          _build/default/cli/bin/main.exe grants plan "$SOL_TARGET"
+          : "${SOL_TARGET:?set the SOL_TARGET repository variable}"
+          sol grants plan "$SOL_TARGET"
 
       - name: Apply workload authorization
         if: vars.SOL_AUTHORIZATION_ROLE_ARN != '' || vars.SOL_AUTHORIZATION_SERVICE_ACCOUNT != ''
         run: |
           set -euo pipefail
-          eval $(opam env)
-          _build/default/cli/bin/main.exe grants apply "$SOL_TARGET"
+          : "${SOL_TARGET:?set the SOL_TARGET repository variable}"
+          sol grants apply "$SOL_TARGET"
 
   deploy:
     needs: authorize
@@ -171,19 +216,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: "5.4.1"
-          opam-depext: false
-
-      - name: Install system deps
-        run: sudo apt-get install -y librdkafka-dev libpq-dev
-
-      - name: Install opam deps
-        run: opam install . --deps-only -y
-
-      - name: Build sol
-        run: eval $(opam env) && dune build cli/bin/main.exe
+      - name: Install the Sol release
+        run: |
+          set -euo pipefail
+          : "${SOL_VERSION:?set the SOL_VERSION repository variable to the release that generated this workspace}"
+          url="https://github.com/sol-fab/sol/releases/download/${SOL_VERSION}/sol-${SOL_VERSION}-linux-x86_64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/sol"
+          curl -fsSL "$url" | tar -xz -C "$RUNNER_TEMP/sol" --strip-components=1
+          echo "$RUNNER_TEMP/sol/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/sol/bin/sol" assets
 
       - name: Authenticate (AWS OIDC)
         if: vars.SOL_DEPLOY_ROLE_ARN != ''
@@ -199,16 +240,25 @@ jobs:
           workload_identity_provider: ${{ vars.SOL_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.SOL_DEPLOY_SERVICE_ACCOUNT }}
 
-      - name: Deploy
-        run: |
-          set -euo pipefail
-          eval $(opam env)
-          _build/default/cli/bin/main.exe deploy "$SOL_TARGET" \
-            --registry "$SOL_REGISTRY" \
-            --image-tag "${IMAGE_TAG::7}"
+      - uses: actions/download-artifact@v4
+        with:
+          name: sol-image-refs
+          path: .
 
-      - name: Migrate
+      - name: Apply migrations
         run: |
           set -euo pipefail
-          eval $(opam env)
-          _build/default/cli/bin/main.exe migrate "$SOL_TARGET"
+          : "${SOL_TARGET:?set the SOL_TARGET repository variable}"
+          sol migrate apply "$SOL_TARGET"
+
+      - name: Deploy immutable images
+        run: |
+          set -euo pipefail
+          : "${SOL_TARGET:?set the SOL_TARGET repository variable}"
+          : "${SOL_REGISTRY:?set the SOL_REGISTRY repository variable}"
+          mapfile -t refs < image-refs.txt
+          args=()
+          for ref in "${refs[@]}"; do
+            args+=(--image-ref "$ref")
+          done
+          sol deploy "$SOL_TARGET" --registry "$SOL_REGISTRY" "${args[@]}"

@@ -49,7 +49,19 @@ let test_writes_an_oidc_workflow () =
       assert_contains "AWS OIDC assumption" content "role-to-assume";
       assert_contains "GCP Workload Identity" content "workload_identity_provider";
       assert_contains "explicit target" content {|deploy "$SOL_TARGET"|};
-      assert_contains "migrate runs the same lifecycle" content {|migrate "$SOL_TARGET"|};
+      assert_contains
+        "migrate runs the same lifecycle"
+        content
+        {|migrate apply "$SOL_TARGET"|};
+      assert_contains "the releases are named" content "SOL_VERSION";
+      assert_contains
+        "the workflow installs the release"
+        content
+        "sol-${SOL_VERSION}-linux-x86_64.tar.gz";
+      check_bool
+        "the workflow does not build sol from the workspace"
+        false
+        (Sol_cli_string.contains ~needle:"cli/bin/main.exe" content);
       assert_contains "gated authorization job" content "environment: sol-authorization";
       assert_contains
         "authorization runs grants apply"
