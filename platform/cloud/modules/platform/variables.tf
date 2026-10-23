@@ -87,10 +87,75 @@ variable "postgres_persistent_storage" {
 }
 
 variable "grafana_admin_password" {
-  description = "Grafana admin password."
+  description = "Break-glass Grafana admin password. When null, Sol generates one; retrieve it from the chart's `grafana` Secret in the monitoring namespace. SSO is the normal login path."
   type        = string
-  default     = "admin"
+  default     = null
   sensitive   = true
+}
+
+variable "grafana_oidc_provider" {
+  description = "Grafana OIDC provider family: google uses Google's OIDC endpoints; custom requires explicit endpoints."
+  type        = string
+  default     = "google"
+  validation {
+    condition     = contains(["google", "custom"], var.grafana_oidc_provider)
+    error_message = "grafana_oidc_provider must be one of: google, custom."
+  }
+}
+
+variable "grafana_oidc_client_id" {
+  description = "OIDC client ID for Grafana. Required whenever Grafana is installed."
+  type        = string
+  default     = ""
+}
+
+variable "grafana_oidc_client_secret" {
+  description = "OIDC client secret for Grafana. Required whenever Grafana is installed; supply it out of band as TF_VAR_grafana_oidc_client_secret so it is never on the terraform command line."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "grafana_oidc_auth_url" {
+  description = "OIDC authorization endpoint. Empty uses the provider's default (Google) or is required for custom."
+  type        = string
+  default     = ""
+}
+
+variable "grafana_oidc_token_url" {
+  description = "OIDC token endpoint. Empty uses the provider's default (Google) or is required for custom."
+  type        = string
+  default     = ""
+}
+
+variable "grafana_oidc_api_url" {
+  description = "OIDC userinfo endpoint. Empty uses the provider's default (Google) or is required for custom."
+  type        = string
+  default     = ""
+}
+
+variable "grafana_oidc_name" {
+  description = "Display name of the SSO button on the Grafana login page."
+  type        = string
+  default     = "Google"
+}
+
+variable "grafana_oidc_scopes" {
+  description = "Space-separated OIDC scopes."
+  type        = string
+  default     = "openid email profile"
+}
+
+variable "grafana_oidc_allowed_groups" {
+  description = "Optional OIDC group names allowed to sign in; empty allows any authenticated user."
+  type        = list(string)
+  default     = []
+}
+
+variable "grafana_oidc_role_attribute_path" {
+  description = "Grafana role mapping expression over the OIDC claims. The default maps the sol-grafana-admins group to Admin and everyone else to Viewer."
+  type        = string
+  default     = "contains(groups[*], 'sol-grafana-admins') && 'Admin' || 'Viewer'"
 }
 
 variable "loki_persistent_storage" {

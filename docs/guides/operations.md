@@ -26,6 +26,43 @@ provider for managed resources. Sol's deployment result establishes whether its
 own operation reached the required postconditions; it is not a replacement for
 those systems' operational interfaces.
 
+### Grafana SSO
+
+A production target installs one Grafana at
+`https://grafana.<base_domain>`, protected by the `grafana-tls` certificate and
+an OIDC login. Anonymous access is disabled; Grafana refuses to install when the
+SSO inputs are absent. The deploy reports the URL.
+
+The client is created at the identity provider with the redirect URI
+`https://grafana.<base_domain>/login/generic_oauth`. Supply the values out of
+band so the client secret never appears on the Terraform command line:
+
+```bash
+export TF_VAR_grafana_oidc_client_id="<client-id>"
+export TF_VAR_grafana_oidc_client_secret="<client-secret>"
+# Google is the default provider; these are optional for it:
+# export TF_VAR_grafana_oidc_allowed_groups='["sol-observability"]'
+# export TF_VAR_grafana_oidc_role_attribute_path="contains(groups[*], 'sol-observability-admins') && 'Admin' || 'Viewer'"
+sol deploy <target>
+```
+
+For a standard OIDC provider other than Google, also set
+`TF_VAR_grafana_oidc_provider=custom` and the explicit
+`TF_VAR_grafana_oidc_auth_url`, `TF_VAR_grafana_oidc_token_url` and
+`TF_VAR_grafana_oidc_api_url`; `TF_VAR_grafana_oidc_name` names the login button.
+`TF_VAR_grafana_oidc_client_secret` is declared sensitive, so Sol refuses to
+pass it as a Terraform `--var`; the environment is the supported path.
+
+The break-glass admin password is generated when
+`TF_VAR_grafana_admin_password` is unset. Read it from the chart's Secret:
+
+```bash
+kubectl -n monitoring get secret grafana   -o jsonpath='{.data.admin-password}' | base64 -d
+```
+
+No central Grafana spans targets: each target has its own instance, identity
+configuration and URL.
+
 ## Roll back an application release
 
 ```bash

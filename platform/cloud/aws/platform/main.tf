@@ -16,6 +16,10 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~> 2.27"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
 }
 
@@ -39,6 +43,16 @@ module "platform" {
   postgres_password                       = var.postgres_password
   postgres_persistent_storage             = var.postgres_persistent_storage
   grafana_admin_password                  = var.grafana_admin_password
+  grafana_oidc_provider                   = var.grafana_oidc_provider
+  grafana_oidc_client_id                  = var.grafana_oidc_client_id
+  grafana_oidc_client_secret              = var.grafana_oidc_client_secret
+  grafana_oidc_auth_url                   = var.grafana_oidc_auth_url
+  grafana_oidc_token_url                  = var.grafana_oidc_token_url
+  grafana_oidc_api_url                    = var.grafana_oidc_api_url
+  grafana_oidc_name                       = var.grafana_oidc_name
+  grafana_oidc_scopes                     = var.grafana_oidc_scopes
+  grafana_oidc_allowed_groups             = var.grafana_oidc_allowed_groups
+  grafana_oidc_role_attribute_path        = var.grafana_oidc_role_attribute_path
   loki_persistent_storage                 = var.loki_persistent_storage
   prometheus_persistent_storage           = var.prometheus_persistent_storage
   observability_backend                   = var.observability_backend
