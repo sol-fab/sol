@@ -183,9 +183,9 @@
     {
       "id": "observability-access",
       "label": "Observability SSO access",
-      "aws": "none",
-      "gcp": "none",
-      "gap": "Per-target Grafana TLS+OIDC is not implemented."
+      "aws": "partial",
+      "gcp": "partial",
+      "gap": "TLS+OIDC configuration and guards are in place; live login and dashboard visibility are not yet verified."
     }
   ]
 }

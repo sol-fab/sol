@@ -271,7 +271,7 @@ GitHub Issues, and detailed evidence is under `internal/qualification/`.
 | Kafka durability and recovery | partial | partial | RF/acked-loss/consumer-resume evidence is not complete; #1593 blocks AWS delivery observation. |
 | Availability and node-loss recovery | none | none | No measured node-loss/recovery evidence. |
 | Alert delivery and acknowledgement | none | none | No named receiver/owner has acknowledged a delivered alert. |
-| Observability SSO access | none | none | Per-target Grafana TLS+OIDC is not implemented. |
+| Observability SSO access | partial | partial | TLS+OIDC configuration and guards are in place; live login and dashboard visibility are not yet verified. |
 
 Evidence: `local` = repeatable local test; `live` = deployed and behaviorally
 verified; `partial` = some evidence; `prod` = production-profile evidence;

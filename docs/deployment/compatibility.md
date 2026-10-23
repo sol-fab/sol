@@ -56,8 +56,9 @@ gated by OIDC. Anonymous access is disabled; Google OIDC is the default and any
 standard OIDC provider is configurable at the target level. The deploy reports
 the URL, and the dashboards must show the target's real logs, metrics and
 traces. This is a per-target boundary; a central cross-environment observability
-plane is outside this contract. Cloud access is a current gap (no TLS+OIDC path
-yet).
+plane is outside this contract. The platform requires TLS+OIDC SSO for every
+installed Grafana and guards the anonymous/admin shape; live login and dashboard
+verification remain the qualification evidence.
 
 ## Pinned inputs
 
