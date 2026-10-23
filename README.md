@@ -174,13 +174,21 @@ published npm packages, all Apache-2.0:
   label vocabularies, Loki push shape, and W3C `traceparent` propagation, so TS
   and OCaml workloads land in the same Grafana panels and Tempo traces.
 - [`@sol-fab/svc`](https://github.com/sol-fab/sol-typescript) — the service
-  lifecycle contract: bounded drain (`drainTimeoutMs`, matching the OCaml
-  `sol-svc`'s `drain_timeout_s`) and idempotent `SIGTERM`/`SIGINT` handling.
-- [`@sol-fab/worker`](https://github.com/sol-fab/sol-typescript) — the
-  worker lifecycle contract, for a unit that owns no request boundary. It has no
-  `on_ready` equivalent yet (DEC-028), which is one of the triggers that stages
-  TypeScript behind the production profile (DEC-026 §2) — see
-  [compatibility](docs/deployment/compatibility.md).
+  lifecycle contract: readiness, shutdown delay, bounded drain
+  (`drainTimeoutMs`, matching the OCaml `sol-svc`'s `drain_timeout_s`),
+  idempotent `SIGTERM`/`SIGINT` handling, workload-identity verification and
+  declared-peer helpers.
+- [`@sol-fab/worker`](https://github.com/sol-fab/sol-typescript) — the worker
+  lifecycle contract plus `createWorkerHealth`: group-join readiness,
+  heartbeat liveness and the `/readyz`/`/livez` responses the manifest probes.
+- [`@sol-fab/fn`](https://github.com/sol-fab/sol-typescript) — the run-once
+  `-fn` contract: exit 0/1/130, SIGTERM cancellation, invocation metrics and the
+  Pushgateway push.
+
+`@sol-fab/worker` 0.2.0 and `@sol-fab/fn` 0.1.0 are source-complete; publication
+and live generated-workspace evidence are the remaining admission gate for the
+TypeScript production preflight — see
+[compatibility](docs/deployment/compatibility.md).
 
 Ownership follows the extraction: `@sol-fab/kafka` and `@sol-fab/obs` each live
 in their own public repository with their own CI, while `@sol-fab/svc` and
@@ -248,7 +256,7 @@ GitHub Issues, and detailed evidence is under `internal/qualification/`.
 | OCaml `-fn` | partial | none | none | [local](cli/test/golden_path_ocaml.sh) | The local golden path adds an fn ad hoc; no fn is in the reference app and no cloud CronJob scenario exists. |
 | TypeScript `-svc` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | No live AWS scenario; GCP is mechanism-only on alpha.52. The demo pins @sol-fab/svc@0.2.0 while the scaffold pins 0.3.0. |
 | TypeScript `-worker` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | No live AWS scenario; GCP is mechanism-only on alpha.52. The demo pins @sol-fab/svc@0.2.0 while the scaffold pins 0.3.0. |
-| TypeScript `-fn` | none | none | none | — | No runtime package, scaffold, or CronJob entrypoint; `sol new fn --language typescript` refuses. |
+| TypeScript `-fn` | none | none | none | — | `@sol-fab/fn@0.1.0` and the `fn-ts` scaffold are source-complete; publish then verify a generated workspace and CronJob. |
 
 ### Lifecycle and observability
 

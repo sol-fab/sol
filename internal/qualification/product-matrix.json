@@ -69,7 +69,7 @@
       "aws": "none",
       "gcp": "none",
       "evidence": {},
-      "gap": "No runtime package, scaffold, or CronJob entrypoint; `sol new fn --language typescript` refuses."
+      "gap": "`@sol-fab/fn@0.1.0` and the `fn-ts` scaffold are source-complete; the package is not published, so no generated-workspace build or CronJob deployment evidence yet."
     }
   ],
   "lifecycle": [

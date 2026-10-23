@@ -39,9 +39,9 @@ measure.
 
 | Environment | OCaml | TypeScript |
 |---|---|---|
-| local (`sol local deploy`, `sol local run`) | `-svc`, `-worker`, `-fn` | `-svc`, `-worker`, `-fn` once the TypeScript function runtime lands |
-| AWS (`aws/<region>` target) | `-svc`, `-worker`, `-fn` | `-svc`, `-worker`, `-fn` once the TypeScript function runtime and readiness parity land |
-| GCP (`gcp/<region>` target) | `-svc`, `-worker`, `-fn` | `-svc`, `-worker`, `-fn` once the TypeScript function runtime and readiness parity land |
+| local (`sol local deploy`, `sol local run`) | `-svc`, `-worker`, `-fn` | `-svc`, `-worker`, `-fn` once `@sol-fab/worker@0.2.0` and `@sol-fab/fn@0.1.0` are published |
+| AWS (`aws/<region>` target) | `-svc`, `-worker`, `-fn` | `-svc`, `-worker`, `-fn` once the TypeScript packages are published and the generated-workspace/live evidence lands |
+| GCP (`gcp/<region>` target) | `-svc`, `-worker`, `-fn` | `-svc`, `-worker`, `-fn` once the TypeScript packages are published and the generated-workspace/live evidence lands |
 
 Local is development by design. AWS and GCP are both contracted at the production
 profile. BYO is a development/experimental driver, not a production target.
@@ -84,8 +84,8 @@ does not need `$SOL_HOME` or a Sol source checkout to build.
 | Alloy chart | 1.12.1 | `platform/shared/components.json` (`versions`) |
 | Tempo chart | 2.3.0 | `platform/shared/components.json` (`versions`) |
 | Prometheus chart | 25.20.1 | `platform/shared/components.json` (`versions`) |
-| TypeScript framework | `@sol-fab/svc` 0.3.0, `@sol-fab/worker` 0.1.0, `@sol-fab/kafka` 0.5.2, `@sol-fab/obs` 0.4.0, `@sol-fab/jobs` 0.1.2, `@sol-fab/outbox` 0.1.0, `@sol-fab/retry` 0.1.0 | the workspace manifests; the example demo still pins `@sol-fab/svc` 0.2.0 (a tracked gap) |
-| TypeScript `-fn` | not published yet; the contract requires the same run-once CronJob contract as OCaml | tracked in the README support table |
+| TypeScript framework | `@sol-fab/svc` 0.3.0, `@sol-fab/worker` 0.2.0, `@sol-fab/fn` 0.1.0, `@sol-fab/kafka` 0.5.2, `@sol-fab/obs` 0.4.0, `@sol-fab/jobs` 0.1.2, `@sol-fab/outbox` 0.1.0, `@sol-fab/retry` 0.1.0 | the workspace manifests; `worker`/`fn` are source-complete in sol-typescript#19/#20 and publication is pending |
+| TypeScript `-fn` | `@sol-fab/fn` 0.1.0 source in sol-typescript#20; publication and generated-workspace smoke pending | tracked in the README support table |
 | Workspace framework deps | per-workspace immutable pins (DEC-025) | the workspace's `dune-project`, `*.opam`, `package-lock.json` |
 
 `dev` runs the same charts at single-replica scale, so the component versions
@@ -102,9 +102,10 @@ These are gaps in the evidence table, not exclusions from the contract:
 - GCP now has a namespace-scoped `sol-deploy` ServiceAccount token identity;
   live evidence of its use is still required.
 - GCP managed Kafka and partial-state teardown are unverified (#1603, #1605).
-- TypeScript function and worker-readiness source is complete in
-  `sol-typescript#19/#20` but the packages are unpublished, so `main` cannot
-  install them yet.
+- TypeScript function and worker readiness are source-complete in
+  `sol-typescript#19/#20`, but the packages are unpublished; the generated
+  workspace cannot install them until `@sol-fab/worker@0.2.0` and
+  `@sol-fab/fn@0.1.0` land on npm.
 - AWS's independent Kafka delivery observation is blocked (#1593).
 - Per-target Grafana TLS+OIDC configuration is implemented and guarded; live
   login and dashboard visibility remain the qualification evidence.
