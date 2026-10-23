@@ -84,19 +84,55 @@ PY
   say "recorded the candidate's database-contract pins and specimen for the shared CA family"
 }
 
-# The cold-start selection: the row's exercise set. COLD_START_SERVICES is the explicit
-# selection (the S1 seeds use it); APP_UNITS is the AWS row's unit set; the default is
-# the demo's unit set. The selection is row data, not a provider mechanic.
-cold_start_services() {
-  if [ -n "${COLD_START_SERVICES+set}" ]; then
-    printf '%s\n' $COLD_START_SERVICES
-  elif [ -n "${APP_UNITS:-}" ]; then
+# The row's application unit set. APP_UNITS is the AWS row's list; APP_SERVICES is the
+# GCP row's; the default is the demo's. The set is row data, not a provider mechanic.
+app_services() {
+  if [ -n "${APP_UNITS:-}" ]; then
     printf '%s\n' $APP_UNITS
   else
     printf '%s\n' ${APP_SERVICES-orders_svc fulfilment_worker order_svc fulfillment_worker}
   fi
 }
 
+# The cold-start selection: the row's exercise set. COLD_START_SERVICES is the explicit
+# selection (the S1 seeds use it); otherwise the full app set.
+cold_start_services() {
+  if [ -n "${COLD_START_SERVICES+set}" ]; then
+    printf '%s\n' $COLD_START_SERVICES
+  else
+    app_services
+  fi
+}
+
 # A directory segment as a Kubernetes name. The candidate declares the segment; this is
 # the one place its Kubernetes spelling is decided, so no reader re-implements it.
 app_k8s_name() { printf '%s' "$1" | tr '_' '-'; }
+
+# The candidate-bound address of each app unit (the path under app/), taken from the build
+# context candidate-binding.sh materialized. Never the working tree and never a hardcoded
+# service-to-path map: the candidate's own layout is the authority.
+app_unit_addresses() {
+  local unit dir
+  if [ ! -d "$APP_BUILD_CONTEXT" ]; then
+    refuse "REFUSING: no candidate-bound build context at $APP_BUILD_CONTEXT, so the units' namespaces"
+    refuse "cannot be derived from the candidate's own contract"
+    return 1
+  fi
+  for unit in $(app_services); do
+    for dir in "$APP_BUILD_CONTEXT"/app/*/"$unit"; do
+      if [ -f "$dir/Dockerfile" ]; then
+        printf '%s\n' "${dir#"$APP_BUILD_CONTEXT"/app/}"
+        break
+      fi
+    done
+  done | sort -u
+}
+
+# The namespaces the app's units declare: the row's app-namespace prefix and the first
+# segment of each candidate-bound address, spelled once by app_k8s_name.
+app_namespaces() {
+  local prefix="${APP_NS%-*}" address
+  for address in $(app_unit_addresses); do
+    printf '%s-%s\n' "$prefix" "$(app_k8s_name "${address%%/*}")"
+  done | sort -u
+}
