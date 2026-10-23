@@ -33,6 +33,15 @@ val resolve : unit -> (t, error) result
 val dir : t -> string
 val form : t -> form
 
+(** Whether [value] is a lowercase 40-hex commit. The one rule callers use to
+    decide that a framework revision may be pinned. *)
+val is_revision : string -> bool
+
+(** The exact Sol revision this asset tree belongs to: the release bundle's
+    REVISION file, or HEAD of the checkout. Refuses a missing or malformed
+    revision rather than letting a caller pin a moving ref. *)
+val revision : t -> (string, string) result
+
 type cloud_role =
   | Bootstrap
   | Cluster

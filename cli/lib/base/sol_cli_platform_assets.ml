@@ -157,6 +157,52 @@ let resolve () =
 let dir t = t.dir
 let form t = t.form
 
+let is_revision value =
+  String.length value = 40
+  && String.for_all (fun c -> (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) value
+;;
+
+let revision t =
+  match t.form with
+  | Installed _ ->
+    (match first_line (Filename.concat t.dir "REVISION") with
+     | Some revision when is_revision revision -> Ok revision
+     | Some revision ->
+       Error
+         (Printf.sprintf
+            "the release bundle at %s names revision %S, which is not a 40-hex commit"
+            t.dir
+            revision)
+     | None ->
+       Error
+         (Printf.sprintf
+            "the release bundle at %s has no REVISION file, so the framework revision a \
+             generated workspace should pin cannot be determined"
+            t.dir))
+  | Checkout ->
+    (match
+       Sol_cli_process.run
+         (Sol_cli_process.cmd [ "git"; "-C"; t.dir; "rev-parse"; "HEAD" ])
+     with
+     | Ok { stdout; _ } ->
+       let revision = String.trim stdout in
+       if is_revision revision
+       then Ok revision
+       else
+         Error
+           (Printf.sprintf
+              "the Sol checkout at %s does not name a 40-hex HEAD commit (git returned \
+               %S)"
+              t.dir
+              revision)
+     | Error error ->
+       Error
+         (Printf.sprintf
+            "the Sol checkout at %s cannot name its framework revision: %s"
+            t.dir
+            (Sol_cli_process.error_to_string error)))
+;;
+
 type cloud_role =
   | Bootstrap
   | Cluster

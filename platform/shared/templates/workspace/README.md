@@ -14,18 +14,21 @@ The Sol framework is an ordinary opam dependency, declared in `{{basename}}.opam
 alongside the rest of this workspace's dependencies. Nothing is vendored into
 this directory, and the workspace has no knowledge of where Sol's source lives.
 
-- **Released framework:** `opam install . --deps-only` resolves the version you
-  declare in `{{basename}}.opam`.
-- **Development framework (tracking Sol `main`):** install the framework from a
-  Sol checkout, which makes your switch satisfy the declared dependency:
+The framework packages are pinned to the exact Sol revision this workspace was
+generated from. `opam install . --deps-only` fetches that commit, so the
+workspace is reproducible and does not depend on a moving branch.
+
+- **Normal build:** `opam install . --deps-only` uses the pinned revision. No
+  Sol checkout is required.
+- **Testing uncommitted framework changes:** install the framework from a local
+  Sol checkout, which replaces the pinned package in your opam switch:
 
   ```bash
   bash /path/to/sol/platform/local/scripts/prepare-framework-deps.sh
   ```
 
-  That is Sol's own bootstrap — the same one the Sol repository's CI runs — so
-  there is one definition of the development switch rather than a list of pins
-  copied into every workspace.
+  That is Sol's own bootstrap. It changes your switch, not the workspace pin;
+  commit and regenerate the workspace when the framework revision changes.
 
 ## Build
 
@@ -52,9 +55,10 @@ sol local run        # run all workspace services locally (dune exec, dev env va
 ## Deploy to cluster
 
 ```bash
-sol local deploy          # build images and deploy to cluster
-sol migrate     # apply database migrations
-sol rollback    # roll back all services to previous image
+sol local deploy                    # build images and deploy to cluster
+sol local migrate                   # apply database migrations
+sol local releases                  # list recorded releases
+sol local rollback <release-id>     # restore a recorded release
 ```
 
 ## Container images

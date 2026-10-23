@@ -21,8 +21,32 @@ let copy ~kind ~dest ~vars ~rule =
   Tree.copy ~root ~kind ~dest ~vars ~rule
 ;;
 
-let workspace_vars ~name rel =
-  let v = [ "name", name; "Name", cap name; "basename", Filename.basename name ] in
+let framework_revision () =
+  let* assets =
+    Assets.resolve () |> Result.map_error (fun error -> Assets.error_to_string error)
+  in
+  match Assets.revision assets with
+  | Ok revision -> Ok revision
+  | Error message ->
+    (match Sol_cli_build_info.revision with
+     | Some revision when Assets.is_revision revision -> Ok revision
+     | Some _ | None ->
+       Error
+         (message
+          ^ "\n\
+             Refusing to generate a workspace that pins a moving or missing ref. \
+             Generate the workspace from a release bundle, or build sol from a git \
+             checkout."))
+;;
+
+let workspace_vars ~revision ~name rel =
+  let v =
+    [ "name", name
+    ; "Name", cap name
+    ; "basename", Filename.basename name
+    ; "revision", revision
+    ]
+  in
   match rel with
   | "app/payments/charge_svc/Dockerfile" ->
     ("repo_dir", "app/payments/charge_svc") :: ("binary", name ^ "-charge-svc") :: v
@@ -39,6 +63,7 @@ let new_workspace name =
     then Error (Printf.sprintf "%S already exists" name)
     else Ok ()
   in
+  let* revision = framework_revision () in
   Sol_cli_report.app "\nScaffolding workspace %S ...\n" name;
   if name <> raw_name
   then (
@@ -51,7 +76,11 @@ let new_workspace name =
       name
       k8s_name);
   let* written =
-    copy ~kind:"workspace" ~dest:name ~vars:(workspace_vars ~name) ~rule:always_write
+    copy
+      ~kind:"workspace"
+      ~dest:name
+      ~vars:(workspace_vars ~revision ~name)
+      ~rule:always_write
   in
   Sol_cli_report.app
     {|
@@ -65,13 +94,16 @@ Done. %d files generated.
   The workspace README.md documents the layout, the framework dependency and
   what the generated Dockerfiles do.
 
-  Framework dependency: this workspace declares the Sol framework packages in
-  %s.opam and resolves them from your opam switch. Nothing is vendored here.
-  In development, install the framework from your Sol checkout with:
+  Framework dependency: this workspace pins the Sol framework packages in
+  %s.opam to revision %s, the revision this sol was built from. `opam install
+  . --deps-only` fetches that exact commit, so the build is reproducible and no
+  Sol checkout is required. To test uncommitted framework changes, install the
+  framework from a Sol checkout with:
 
     bash platform/local/scripts/prepare-framework-deps.sh
 
-  (released users instead declare a version in %s.opam and let opam resolve it).
+  That replaces the package in your local switch; it does not change the
+  workspace pin.
 
   CI/CD: set REGISTRY + REGISTRY_USER + REGISTRY_PASSWORD secrets in GitHub, then
          push to main — .github/workflows/sol-ci.yml handles build/test/deploy.
@@ -81,7 +113,7 @@ Done. %d files generated.
     (List.length written)
     name
     name
-    name;
+    revision;
   Ok ()
 ;;
 

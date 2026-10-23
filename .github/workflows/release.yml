@@ -131,7 +131,7 @@ jobs:
 
       - name: Release build
         run: |
-          SOL_RELEASE_VERSION="$VERSION" opam exec -- dune build cli/bin/main.exe cli/bin/database_contract_projection.exe
+          SOL_RELEASE_VERSION="$VERSION" SOL_RELEASE_REVISION="${{ steps.revision.outputs.revision }}" opam exec -- dune build cli/bin/main.exe cli/bin/database_contract_projection.exe
           mkdir -p "$RUNNER_TEMP/runner"
           cp _build/default/cli/bin/main.exe "$RUNNER_TEMP/runner/sol"
           cp _build/default/cli/bin/database_contract_projection.exe "$RUNNER_TEMP/sol-database-contract"
