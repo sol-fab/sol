@@ -1593,6 +1593,31 @@ target:
            (List.assoc_opt "sql_deletion_protection" vars)))
 ;;
 
+let test_gcp_target_endpoint_cidr_reaches_the_cluster_root () =
+  with_temp_dir (fun () ->
+    write_base ();
+    mkdir_p "sol/prod/gcp";
+    Targets_fixture.write
+      ~target:"prod/gcp/us-central1"
+      {|
+target:
+  profile: production-single-region
+  cluster_endpoint_cidr: 203.0.113.0/24
+  gcp:
+    project_id: sol-qualification
+|};
+    match Sol_cli_config.load_for_target ~target:"prod/gcp/us-central1" with
+    | Error e -> Windtrap.fail (Sol_cli_config.error_to_string e)
+    | Ok cfg ->
+      (match Sol_cli_terraform_vars.of_config ~workspace:"pluto" cfg with
+       | Error msg -> Windtrap.fail msg
+       | Ok vars ->
+         check_str_opt
+           "the GCP control-plane endpoint CIDR reaches the cluster root"
+           (Some "203.0.113.0/24")
+           (List.assoc_opt "cluster_endpoint_cidr" vars)))
+;;
+
 let test_production_profile_enables_rds_deletion_protection () =
   with_temp_dir (fun () ->
     write_base ();
@@ -2321,6 +2346,10 @@ let%test "sol.yml: production profile enables RDS Multi-AZ" =
 
 let%test "sol.yml: production profile enables Cloud SQL Regional HA" =
   test_production_profile_enables_gcp_sql_ha ()
+;;
+
+let%test "sol.yml: a GCP endpoint CIDR reaches the cluster root" =
+  test_gcp_target_endpoint_cidr_reaches_the_cluster_root ()
 ;;
 
 let%test "sol.yml: production profile enables RDS deletion protection" =

@@ -1097,6 +1097,7 @@ let gcp_own_vars
   =
   fun target ~workspace:_ shared ->
   shared
+  |> add_opt "cluster_endpoint_cidr" target.cluster_endpoint_cidr
   |> add_opt
        "provisioner_impersonators"
        (Sol_cli_config.provider_field target "provisioner_impersonator"
