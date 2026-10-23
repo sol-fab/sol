@@ -1190,9 +1190,11 @@ let gcp : t =
       (* GCP used to ignore this flag and declare Cloud SQL unconditionally, so omitting a
          postgres resource stopped provisioning on AWS and not on GCP. Both providers now
          derive provisioning from the same resolved ownership decision. *)
-      (fun ~has_postgres ~kafka_connection ~production_postgres:_ ~ecr_repositories:_ ->
+      (fun ~has_postgres ~kafka_connection ~production_postgres ~ecr_repositories:_ ->
         Ok
           [ "create_database", string_of_bool has_postgres
+          ; "sql_high_availability", string_of_bool production_postgres
+          ; "sql_deletion_protection", string_of_bool production_postgres
           ; ( "kafka_connection"
             , Yojson.Safe.to_string (Option.value kafka_connection ~default:`Null) )
           ])
