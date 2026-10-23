@@ -908,22 +908,6 @@ app_push_images() {
 # refuses a mutable tag, and on a cold target the digests cannot exist before the deploy creates
 # the repositories; `cloud` publishes them once the environment is reconciled, and every later
 # deploy names them (the cold-target ordering, issue #1413).
-app_image_ref_args() {
-  local ref args="" file="$LOG_DIR/app-image-refs.txt"
-  # A cold deploy has no published digest yet, so the file legitimately does not exist and the
-  # argument list is empty; testing for it keeps an intended empty result from printing a shell
-  # error into the run log and reading like a failure.
-  [ -f "$file" ] || {
-    printf '%s' ""
-    return 0
-  }
-  while IFS= read -r ref; do
-    [ -n "$ref" ] || continue
-    args="$args --image-ref $(printf '%q' "$ref")"
-  done <"$file"
-  printf '%s' "$args"
-}
-
 # `app` reuses the digests `cloud` published into Sol's repositories; it never publishes its own.
 app_require_published_images() {
   if [ -s "$LOG_DIR/app-image-refs.txt" ]; then

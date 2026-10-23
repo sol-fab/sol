@@ -136,3 +136,21 @@ app_namespaces() {
     printf '%s-%s\n' "$prefix" "$(app_k8s_name "${address%%/*}")"
   done | sort -u
 }
+
+# The deploy's immutable image arguments: one --image-ref per published digest. A cold
+# deploy has no published digest, so the file legitimately does not exist and the list is
+# empty; testing for it keeps an intended empty result from printing a shell error that
+# reads like a failure.
+app_image_ref_args() {
+  local ref args="" file="$LOG_DIR/app-image-refs.txt"
+  [ -f "$file" ] || {
+    printf '%s' ""
+    return 0
+  }
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    args="$args --image-ref $(printf '%q' "$ref")"
+  done <"$file"
+  printf '%s' "$args"
+}
+

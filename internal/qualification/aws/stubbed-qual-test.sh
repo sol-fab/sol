@@ -144,6 +144,14 @@ if [ "${1:-}" = "deploy" ]; then
   # that sequence, so the phase's own ordering is exercised rather than assumed.
   if [ "${STUB_APP_REFUSALS:-0}" = "1" ]; then
     if [ ! -f "${STUB_APP_MARKER_DIR:-/nonexistent}/migrated" ]; then
+      # The bootstrap deploy declares where it will write before the migration gate
+      # refuses; give it a distinct declaration so the row is shown to prefer the final
+      # deploy's line, not merely to read one.
+      printf 'sol-database-identity: target=%s resource=app_db namespace=sol-db-bootstrap ddl-creds=%s-bootstrap authority=%s ca-configmap=%s\n' \
+        "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}" \
+        "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}" \
+        "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-db-credentials" \
+        "${STUB_CLASS_PREFIX:-qualreg-aws-us-east-1}-db-ca"
       printf 'error: the required migration set is not applied. Missing: 001_notifications\n'
       printf '  Migrations are workspace-wide, so this is the same set for every deploy. Run `sol migrate apply %s`, then deploy again.\n' "${2:-}"
       exit 1
@@ -908,6 +916,7 @@ exit 0
 STUB
 chmod +x "$TMP/bin/terraform"
 
+
 # `cloud` publishes what `prepare` built into the repositories Sol's deploy creates. These
 # scenarios are about the phases, not the publishing, so the cloud scenarios seed the *built tags*
 # and let the publish step (and the fake docker push) produce the digests; an `app`-only scenario
@@ -1030,8 +1039,10 @@ PY
   # The app phase reuses the digests `cloud` published into Sol's repositories; a scenario that
   # runs `app` alone seeds them exactly as a publish would have.
   stub_published_refs
-  # The app phase derives its namespaces from the candidate-bound build context prepare
-  # materializes; a scenario that runs app alone seeds it exactly as prepare would.
+  # The app phase derives its namespaces and image refs from the candidate-bound build
+  # context prepare materializes; a scenario that runs app alone seeds it exactly as
+  # prepare would. This depends on candidate-binding.sh keeping the materialization
+  # contract: a change to where it writes $APP_BUILD_CONTEXT must change this seed too.
   mkdir -p "$LOG_DIR/app-build-context"
   cp -R "$WORKSPACE/app" "$LOG_DIR/app-build-context/app"
   # The app phase runs against the real refusal sequence: the first deploy refuses at the
@@ -1107,8 +1118,10 @@ run_phase() {
   # them (the app phase reuses the cloud phase's and never publishes its own).
   if [ "$phase" = app ]; then
     stub_published_refs
-    # The app phase derives its namespaces from the candidate-bound build context prepare
-    # materializes; a scenario that runs app alone seeds it exactly as prepare would.
+    # The app phase derives its namespaces and image refs from the candidate-bound build
+    # context prepare materializes; a scenario that runs app alone seeds it exactly as
+    # prepare would. This depends on candidate-binding.sh keeping the materialization
+    # contract: a change to where it writes $APP_BUILD_CONTEXT must change this seed too.
     mkdir -p "$LOG_DIR/app-build-context"
     cp -R "$WORKSPACE/app" "$LOG_DIR/app-build-context/app"
     # The app phase reuses the database-contract pins `prepare` recorded.
@@ -1285,6 +1298,9 @@ lacks "no undeclared unit secret is invented and supplied" \
 lacks "Kafka delivery never uses the application secret CLI" "secret set" "$TMP/ok.sol"
 has "the delivery check is value-free" '"credential_values": "never read"' "$TMP/ok.logs/kafka-delivery.json"
 has "and the transaction is its behavioral evidence" '"consumers"' "$TMP/ok.logs/kafka-delivery.json"
+has "the delivery check reads the final deploy's declaration" \
+  "-ddl-creds@pluto-comms" "$TMP/ok.logs/prerequisites.txt"
+lacks "not the bootstrap deploy's declaration" "sol-db-bootstrap" "$TMP/ok.logs/prerequisites.txt"
 has "a real operator application-secret refusal is retained" "application_secret_refusal: declared SOL_API_KEY was absent" "$TMP/ok.logs/prerequisites.txt"
 lacks "no removed --target/--domain surface is used" \
   "--domain" "$TMP/ok.sol"
