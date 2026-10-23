@@ -64,6 +64,7 @@ versa. The deploy identity holds no IAM-mutating permission at all; a structural
 | `SOL_REGISTRY` | both | image registry prefix, e.g. `123456789.dkr.ecr.us-east-1.amazonaws.com` |
 | `SOL_DEPLOY_ROLE_ARN` | AWS | the target's `deploy_role_arn`, assumed through OIDC |
 | `SOL_DEPLOY_SERVICE_ACCOUNT` | GCP | the deploy service account, impersonated through Workload Identity |
+| `SOL_PUBLISHER_SERVICE_ACCOUNT` | GCP | optional image-push identity; Artifact Registry writer only. Preferred for `build-images`; when unset the workflow falls back to `SOL_DEPLOY_SERVICE_ACCOUNT` |
 | `SOL_AUTHORIZATION_ROLE_ARN` | AWS | the target's `reconciler_role_arn` |
 | `SOL_AUTHORIZATION_SERVICE_ACCOUNT` | GCP | the target's `reconciler_service_account` |
 | `SOL_WORKLOAD_IDENTITY_PROVIDER` | GCP | the Workload Identity provider pool |
@@ -87,10 +88,10 @@ target's `deploy_role_arn` and holds only read-only IAM visibility plus cluster
 description, so it can observe effective access but never widen it.
 
 **GCP.** Create a Workload Identity Federation pool and provider bound to the repository,
-then two service accounts: the deploy service account (the target's
-`deploy_sa`) and the reconciler service account (the target's
-`reconciler_service_account`). Set `SOL_WORKLOAD_IDENTITY_PROVIDER` to the provider
-resource name.
+then the deploy service account, the reconciler service account (the target's
+`reconciler_service_account`) and, when configured, the publisher service
+account (`publisher_service_account`) for image pushes. Set
+`SOL_WORKLOAD_IDENTITY_PROVIDER` to the provider resource name.
 
 ## Environments
 

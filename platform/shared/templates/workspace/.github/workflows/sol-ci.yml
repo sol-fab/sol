@@ -30,6 +30,9 @@
 #                                    `deploy_role_arn`); assumed through OIDC.
 #   SOL_DEPLOY_SERVICE_ACCOUNT       GCP: the deploy service account;
 #                                    impersonated through Workload Identity.
+#   SOL_PUBLISHER_SERVICE_ACCOUNT    GCP: the image-push identity; it holds
+#                                    Artifact Registry writer only. Preferred
+#                                    over the deploy account for build-images.
 #   SOL_AUTHORIZATION_ROLE_ARN       AWS: the target's fenced authorization
 #                                    reconciler (`reconciler_role_arn`), a
 #                                    different identity from the deploy one.
@@ -104,8 +107,15 @@ jobs:
           role-to-assume: ${{ vars.SOL_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.SOL_AWS_REGION }}
 
-      - name: Authenticate (GCP Workload Identity)
-        if: vars.SOL_DEPLOY_SERVICE_ACCOUNT != ''
+      - name: Authenticate (GCP publisher)
+        if: vars.SOL_PUBLISHER_SERVICE_ACCOUNT != ''
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.SOL_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.SOL_PUBLISHER_SERVICE_ACCOUNT }}
+
+      - name: Authenticate (GCP deploy, fallback)
+        if: vars.SOL_PUBLISHER_SERVICE_ACCOUNT == '' && vars.SOL_DEPLOY_SERVICE_ACCOUNT != ''
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.SOL_WORKLOAD_IDENTITY_PROVIDER }}
@@ -123,7 +133,7 @@ jobs:
             | docker login --username AWS --password-stdin "${SOL_REGISTRY%%/*}"
 
       - name: Log in to GCP Artifact Registry
-        if: vars.SOL_DEPLOY_SERVICE_ACCOUNT != ''
+        if: vars.SOL_PUBLISHER_SERVICE_ACCOUNT != '' || vars.SOL_DEPLOY_SERVICE_ACCOUNT != ''
         run: |
           set -euo pipefail
           : "${SOL_REGISTRY:?set the SOL_REGISTRY repository variable}"
@@ -133,8 +143,8 @@ jobs:
         run: |
           set -euo pipefail
           : "${SOL_REGISTRY:?set the SOL_REGISTRY repository variable}"
-          if [ -z "${{ vars.SOL_DEPLOY_ROLE_ARN }}" ] && [ -z "${{ vars.SOL_DEPLOY_SERVICE_ACCOUNT }}" ]; then
-            echo "::error::set SOL_DEPLOY_ROLE_ARN (AWS) or SOL_DEPLOY_SERVICE_ACCOUNT (GCP)"
+          if [ -z "${{ vars.SOL_DEPLOY_ROLE_ARN }}" ] && [ -z "${{ vars.SOL_PUBLISHER_SERVICE_ACCOUNT }}" ] && [ -z "${{ vars.SOL_DEPLOY_SERVICE_ACCOUNT }}" ]; then
+            echo "::error::set SOL_DEPLOY_ROLE_ARN (AWS), SOL_PUBLISHER_SERVICE_ACCOUNT (GCP), or SOL_DEPLOY_SERVICE_ACCOUNT (GCP fallback)"
             exit 1
           fi
 
