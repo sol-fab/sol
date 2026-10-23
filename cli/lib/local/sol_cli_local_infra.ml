@@ -3,6 +3,7 @@ let max_in_flight_default = 3
 type install =
   { label : string
   ; run : unit -> (unit, string) result
+  ; failure_diagnosis : unit -> string
   }
 
 type child =
@@ -10,6 +11,7 @@ type child =
   ; child_index : int
   ; child_pid : int
   ; child_log : string
+  ; child_install : install
   }
 
 let spawn ~index install =
@@ -36,7 +38,12 @@ let spawn ~index install =
     Unix._exit code
   | pid ->
     Unix.close fd;
-    { child_label = install.label; child_index = index; child_pid = pid; child_log = log }
+    { child_label = install.label
+    ; child_index = index
+    ; child_pid = pid
+    ; child_log = log
+    ; child_install = install
+    }
 ;;
 
 let describe_failures failed_labels not_started =
@@ -93,32 +100,44 @@ let run_bounded ?(max_in_flight = max_in_flight_default) installs =
          | Unix.WEXITED n ->
            Sol_cli_report.app "  %-14s FAILED (exit %d)" child.child_label n;
            failures
-           := (child.child_label, child.child_log, child.child_index) :: !failures
+           := ( child.child_label
+              , child.child_log
+              , child.child_index
+              , child.child_install.failure_diagnosis () )
+              :: !failures
          | Unix.WSIGNALED n | Unix.WSTOPPED n ->
            Sol_cli_report.app "  %-14s FAILED (signal %d)" child.child_label n;
            failures
-           := (child.child_label, child.child_log, child.child_index) :: !failures);
+           := ( child.child_label
+              , child.child_log
+              , child.child_index
+              , child.child_install.failure_diagnosis () )
+              :: !failures);
         pump ())
   in
   pump ();
   let not_started = List.map (fun (_, install) -> install.label) !queue in
-  let failures = List.sort (fun (_, _, a) (_, _, b) -> compare a b) !failures in
+  let failures = List.sort (fun (_, _, a, _) (_, _, b, _) -> compare a b) !failures in
   failures
-  |> List.iter (fun (label, log, _) ->
-    match In_channel.with_open_bin log In_channel.input_all with
-    | exception Sys_error message ->
-      Sol_cli_report.err
-        "\n--- %s failed; its log could not be read: %s ---"
-        label
-        message
-    | "" -> Sol_cli_report.err "\n--- %s failed with no output ---" label
-    | output ->
-      Sol_cli_report.err_block (Printf.sprintf "\n--- %s output ---\n%s" label output));
+  |> List.iter (fun (label, log, _, diagnosis) ->
+    (match In_channel.with_open_bin log In_channel.input_all with
+     | exception Sys_error message ->
+       Sol_cli_report.err
+         "\n--- %s failed; its log could not be read: %s ---"
+         label
+         message
+     | "" -> Sol_cli_report.err "\n--- %s failed with no output ---" label
+     | output ->
+       Sol_cli_report.err_block (Printf.sprintf "\n--- %s output ---\n%s" label output));
+    if diagnosis <> ""
+    then
+      Sol_cli_report.err_block
+        (Printf.sprintf "\n--- %s diagnosis ---\n%s" label diagnosis));
   !logs
   |> List.iter (fun log ->
     Sol_cli_fs.remove_if_present log
     |> Result.iter_error (Sol_cli_report.warn "warning: could not remove %s"));
-  let failed_labels = List.map (fun (label, _, _) -> label) failures in
+  let failed_labels = List.map (fun (label, _, _, _) -> label) failures in
   if failed_labels = [] && not_started = []
   then Ok ()
   else Error (describe_failures failed_labels not_started)

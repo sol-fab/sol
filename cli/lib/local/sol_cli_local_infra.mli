@@ -1,6 +1,7 @@
 type install =
   { label : string
   ; run : unit -> (unit, string) result
+  ; failure_diagnosis : unit -> string
   }
 
 val max_in_flight_default : int
