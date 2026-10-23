@@ -9,6 +9,10 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~> 2.27"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
 }
 
@@ -314,6 +318,27 @@ locals {
     jsonencode(local.platform_components.grafana.common),
     jsonencode(local.platform_components.grafana[local.observability_profile]),
   ]
+
+  grafana_oauth_auth_url = (
+    var.grafana_oidc_auth_url != ""
+    ? var.grafana_oidc_auth_url
+    : var.grafana_oidc_provider == "google" ? "https://accounts.google.com/o/oauth2/v2/auth" : ""
+  )
+  grafana_oauth_token_url = (
+    var.grafana_oidc_token_url != ""
+    ? var.grafana_oidc_token_url
+    : var.grafana_oidc_provider == "google" ? "https://oauth2.googleapis.com/token" : ""
+  )
+  grafana_oauth_api_url = (
+    var.grafana_oidc_api_url != ""
+    ? var.grafana_oidc_api_url
+    : var.grafana_oidc_provider == "google" ? "https://openidconnect.googleapis.com/v1/userinfo" : ""
+  )
+  grafana_admin_password = (
+    var.grafana_admin_password != null
+    ? var.grafana_admin_password
+    : try(random_password.grafana_admin[0].result, "")
+  )
   tempo_component_values = [
     jsonencode(local.platform_components.tempo.common),
     jsonencode(local.platform_components.tempo[local.observability_profile]),
@@ -414,6 +439,61 @@ resource "helm_release" "loki" {
   ]
 }
 
+resource "terraform_data" "grafana_sso_validation" {
+  count = local.loki_install_local ? 1 : 0
+
+  lifecycle {
+    precondition {
+      condition = (
+        var.grafana_oidc_client_id != ""
+        && var.grafana_oidc_client_secret != ""
+        && local.grafana_oauth_auth_url != ""
+        && local.grafana_oauth_token_url != ""
+        && local.grafana_oauth_api_url != ""
+      )
+      error_message = "Grafana SSO is required. Set TF_VAR_grafana_oidc_client_id and TF_VAR_grafana_oidc_client_secret (and, for a custom provider, the issuer/auth/token/userinfo URLs). Google endpoints are defaulted when grafana_oidc_provider=google. The client secret must come from TF_VAR_*, never the command line."
+    }
+  }
+}
+
+resource "random_password" "grafana_admin" {
+  count   = local.loki_install_local ? 1 : 0
+  length  = 32
+  special = false
+}
+
+resource "random_password" "grafana_secret_key" {
+  count   = local.loki_install_local ? 1 : 0
+  length  = 32
+  special = false
+}
+
+resource "kubernetes_secret_v1" "grafana_oidc" {
+  count = local.loki_install_local ? 1 : 0
+
+  metadata {
+    name      = "grafana-oidc"
+    namespace = kubernetes_namespace.monitoring.metadata[0].name
+    labels    = { "app.kubernetes.io/managed-by" = "sol" }
+  }
+
+  type = "Opaque"
+  data = { "client-secret" = var.grafana_oidc_client_secret }
+}
+
+resource "kubernetes_secret_v1" "grafana_security" {
+  count = local.loki_install_local ? 1 : 0
+
+  metadata {
+    name      = "grafana-security"
+    namespace = kubernetes_namespace.monitoring.metadata[0].name
+    labels    = { "app.kubernetes.io/managed-by" = "sol" }
+  }
+
+  type = "Opaque"
+  data = { "secret-key" = try(random_password.grafana_secret_key[0].result, "") }
+}
+
 resource "helm_release" "grafana" {
   count = local.loki_install_local ? 1 : 0
 
@@ -425,11 +505,51 @@ resource "helm_release" "grafana" {
 
   set {
     name  = "adminPassword"
-    value = var.grafana_admin_password
+    value = local.grafana_admin_password
   }
 
   values = concat(
     local.grafana_component_values,
+    [yamlencode({
+      "grafana.ini" = {
+        server = {
+          root_url = "https://grafana.${var.base_domain}"
+        }
+        auth = {
+          anonymous = {
+            enabled = false
+          }
+          generic_oauth = {
+            enabled              = true
+            name                 = var.grafana_oidc_name
+            client_id            = var.grafana_oidc_client_id
+            scopes               = var.grafana_oidc_scopes
+            auth_url             = local.grafana_oauth_auth_url
+            token_url            = local.grafana_oauth_token_url
+            api_url              = local.grafana_oauth_api_url
+            allowed_groups       = join(" ", var.grafana_oidc_allowed_groups)
+            role_attribute_path  = var.grafana_oidc_role_attribute_path
+            allow_sign_up        = false
+            auto_assign_org      = true
+            auto_assign_org_role = "Viewer"
+          }
+        }
+      }
+      envValueFrom = {
+        GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET = {
+          secretKeyRef = {
+            name = "grafana-oidc"
+            key  = "client-secret"
+          }
+        }
+        GF_SECURITY_SECRET_KEY = {
+          secretKeyRef = {
+            name = "grafana-security"
+            key  = "secret-key"
+          }
+        }
+      }
+    })],
     local.managed_resource_dashboards_enabled ? [yamlencode({
       serviceAccount = {
         annotations = {
@@ -442,6 +562,9 @@ resource "helm_release" "grafana" {
   depends_on = [
     terraform_data.observability_backend_validation,
     terraform_data.managed_resource_dashboards_validation,
+    terraform_data.grafana_sso_validation,
+    kubernetes_secret_v1.grafana_oidc,
+    kubernetes_secret_v1.grafana_security,
   ]
 }
 
