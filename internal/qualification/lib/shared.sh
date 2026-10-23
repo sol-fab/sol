@@ -154,3 +154,98 @@ app_image_ref_args() {
   printf '%s' "$args"
 }
 
+# The attempt owns the kubeconfig path (#1633). Probe the endpoint through it before the
+# delivery reads, so a path that no longer answers is a classified refusal here rather than
+# a misleading absence later.
+probe_attempt_kubeconfig() {
+  if [ -z "${ATTEMPT_KUBECONFIG:-}" ]; then
+    say "no attempt-owned kubeconfig is recorded; the delivery assertion cannot read through it"
+    return 1
+  fi
+  if ! kubectl --kubeconfig "$ATTEMPT_KUBECONFIG" get namespace kube-system -o name >/dev/null 2>&1; then
+    say "the attempt's kubeconfig ($ATTEMPT_KUBECONFIG) does not answer at its endpoint; the delivery assertion cannot read through it"
+    return 1
+  fi
+}
+
+# The deploy's own declaration and the candidate's consumer set are read, neither is
+# reconstructed. The reads go through the attempt-owned kubeconfig (#1633), probed at its
+# endpoint first, so a path that no longer answers is a refusal here rather than a
+# misleading absence later. The CA family report is the app phase's next step, not this
+# function's.
+app_verify_database_delivery() {
+  probe_attempt_kubeconfig || return 1
+  local declared_ns ddl_name specimen consumers delivery
+  local namespace workload cred_ns cred_name containers container ref found
+  declared_ns="$(app_database_field namespace)"
+  ddl_name="$(app_database_field ddl-creds)"
+  if [ -z "$declared_ns" ] || [ -z "$ddl_name" ]; then
+    say "the deploy declared no database identity, so where it wrote is not known; the assertion cannot read a location it cannot name"
+    return 1
+  fi
+  # Reporting is not verification: read the Secret at the declared location.
+  if ! kubectl --kubeconfig "$ATTEMPT_KUBECONFIG" get secret "$ddl_name" -n "$declared_ns" \
+    >/dev/null 2>&1; then
+    say "the deploy declared its migration Job's $ddl_name in $declared_ns, and it is absent there"
+    return 1
+  fi
+  specimen="$LOG_DIR/database-contract-specimen.json"
+  if [ ! -s "$specimen" ]; then
+    say "the candidate's specimen is not recorded, so the delivery assertion cannot name its consumers"
+    return 1
+  fi
+  if ! consumers="$(jq -r '.declaration.workloads[]
+      | select(.database != null)
+      | [.namespace, .name, (.credential.namespace // ""), (.credential.name // ""),
+         ((.consuming_containers // []) | join(","))] | @tsv' "$specimen")"; then
+    say "the candidate's specimen could not be read; the consumer set is unknown"
+    return 1
+  fi
+  if [ -z "$consumers" ]; then
+    say "the candidate's specimen declares no database consumer, so the delivery assertion has no subject"
+    return 1
+  fi
+  # The migration Job's address is the deploy's own declaration; the consumers are the
+  # candidate's. Both are read, neither is reconstructed.
+  delivery="$ddl_name@$declared_ns (migration Job, as the deploy declared it)"
+  while IFS=$'\t' read -r namespace workload cred_ns cred_name containers; do
+    [ -n "$namespace" ] || continue
+    if [ -z "$cred_name" ] || [ -z "$cred_ns" ]; then
+      say "the candidate declared $namespace/$workload as a database consumer without a credential address"
+      return 1
+    fi
+    if ! kubectl --kubeconfig "$ATTEMPT_KUBECONFIG" get secret "$cred_name" -n "$cred_ns" \
+      >/dev/null 2>&1; then
+      say "the candidate declared $namespace/$workload as a database consumer, and $cred_name is absent from $cred_ns"
+      return 1
+    fi
+    found=""
+    for container in ${containers//,/ }; do
+      [ -n "$container" ] || continue
+      ref="$(kubectl --kubeconfig "$ATTEMPT_KUBECONFIG" get deployment "$workload" -n "$namespace" -o json 2>/dev/null \
+        | jq -r --arg c "$container" '
+            [.spec.template.spec.containers[]? | select(.name == $c)
+             | .env[]? | select(.name == "POSTGRES_URL")
+             | .valueFrom.secretKeyRef.name // empty] | first // ""' 2>/dev/null)"
+      if [ "$ref" != "$cred_name" ]; then
+        say "$namespace/$workload container $container reads POSTGRES_URL from '${ref:-nothing}', not the declared class Secret $cred_name"
+        return 1
+      fi
+      found=1
+    done
+    if [ -z "$found" ]; then
+      say "the candidate declared no consuming container for $namespace/$workload, so where it reads POSTGRES_URL is not established"
+      return 1
+    fi
+    delivery="$delivery, $cred_name@$cred_ns (unit consumer $workload)"
+  done <<<"$consumers"
+  # The database CA family is owned by the shared candidate-bound observer. The
+  # migration phase already ran at the row's migration step; the application
+  # phase ran after the final deploy. This report re-reads their durable evidence
+  # and refuses an incomplete or non-passing family.
+    {
+    printf 'database_delivery: %s\n' "$delivery"
+    printf 'database_delivery_assertion: every declared consumer reads POSTGRES_URL from its class Secret\n'
+  } >>"$LOG_DIR/prerequisites.txt"
+  say "the deploy delivered the database; every declared consumer reads POSTGRES_URL from its class Secret"
+}
