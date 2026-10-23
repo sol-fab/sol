@@ -924,11 +924,18 @@ app_database_field() {
 # presence of a master copy in some other Secret. Refusal does not assert that no
 # unreferenced Secret anywhere still holds POSTGRES_URL; that is a different claim.
 
-# A diagnostic continuation of a spent attempt. The evidence store records one CA
-# verdict per instance per attempt, so a spent attempt cannot be re-observed; the
-# new attempt carries only the provisioning inputs and is marked non-promotable.
-phase_resume() {
-  local from="${RESUME_FROM:-}" field value
+# The source attempt is the provenance of everything the diagnostic resume carries.
+# A resumed attempt must describe the same specimen, candidate and row; otherwise
+# app-image-refs.txt and database-contract-pins.json would describe a different
+# qualification. Missing or malformed source metadata refuses rather than matching
+# by absence.
+resume_source_field() {
+  local key="$1" file="$2"
+  sed -n "s/^$key=//p" "$file" | head -1
+}
+
+resume_validate_source() {
+  local from="${RESUME_FROM:-}" field value expected
   if [ -z "$from" ]; then
     say "resume requires RESUME_FROM=<the spent attempt directory>"
     return 2
@@ -938,7 +945,7 @@ phase_resume() {
     return 2
   fi
   for field in target cluster state_key; do
-    value="$(sed -n "s/^$field=//p" "$from/attempt.txt" | head -1)"
+    value="$(resume_source_field "$field" "$from/attempt.txt")"
     case "$field" in
       target)
         [ "$value" = "${TARGET:-}" ] || {
@@ -960,6 +967,49 @@ phase_resume() {
         ;;
     esac
   done
+  expected="${SOL_CANDIDATE_REVISION:-}"
+  if [ -z "$expected" ]; then
+    say "resume: this run records no candidate revision; refusing to carry inputs without provenance"
+    return 2
+  fi
+  value="$(resume_source_field candidate_revision "$from/attempt.txt")"
+  case "$value" in
+    "" | *[!0-9a-f]*)
+      say "resume: $from records no valid candidate revision; refusing to carry inputs without provenance"
+      return 2
+      ;;
+  esac
+  if [ "${#value}" -ne 40 ]; then
+    say "resume: $from records malformed candidate revision '$value'; refusing to carry inputs without provenance"
+    return 2
+  fi
+  [ "$value" = "$expected" ] || {
+    say "resume: $from was recorded for candidate revision $value, not $expected"
+    return 2
+  }
+  expected="${ROW:-}"
+  if [ -z "$expected" ]; then
+    say "resume: this run records no qualification row; refusing to carry inputs without provenance"
+    return 2
+  fi
+  value="$(resume_source_field row "$from/attempt.txt")"
+  if [ -z "$value" ]; then
+    say "resume: $from records no qualification row; refusing to carry inputs without provenance"
+    return 2
+  fi
+  [ "$value" = "$expected" ] || {
+    say "resume: $from row is '$value', not '$expected'"
+    return 2
+  }
+  return 0
+}
+
+# A diagnostic continuation of a spent attempt. The evidence store records one CA
+# verdict per instance per attempt, so a spent attempt cannot be re-observed; the
+# new attempt carries only the provisioning inputs and is marked non-promotable.
+phase_resume() {
+  local from="${RESUME_FROM:-}"
+  resume_validate_source || return 2
   # Carry only the provisioning inputs a later phase needs. The dispatch already
   # required a fresh evidence directory; CA evidence, kubeconfigs and
   # transaction transcripts stay in the spent attempt.
@@ -1030,6 +1080,7 @@ case "${1:-}" in
       say "resume: $LOG_DIR is not empty; a resumed attempt starts a fresh evidence directory"
       exit 2
     fi
+    resume_validate_source || exit $?
     export ATTEMPT_RESUMED_FROM="$RESUME_FROM"
     attempt_begin 0
     mkdir -p "$LOG_DIR/state"

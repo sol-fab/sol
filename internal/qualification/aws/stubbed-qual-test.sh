@@ -2181,8 +2181,8 @@ has "and the promotion-eligible path" "restart the whole row" "$TMP/spent.out"
 
 printf '\nscenario: resume carries provisioning inputs into a diagnostic attempt\n'
 mkdir -p "$TMP/resume-src/ca-evidence/members"
-printf 'attempt=spent\nrow=qualreg\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\ncluster=test-cluster\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' \
-  >"$TMP/resume-src/attempt.txt"
+printf 'attempt=spent\nrow=qualreg\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\ncluster=test-cluster\ncandidate_revision=%s\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' \
+  "$CANDIDATE_REVISION" >"$TMP/resume-src/attempt.txt"
 printf 'checkout_svc=example/checkout@sha256:%064d\n' 0 >"$TMP/resume-src/app-image-refs.txt"
 printf '{}\n' >"$TMP/resume-src/database-contract-pins.json"
 : >"$TMP/resume-src/ca-evidence/members/spent-verdict"
@@ -2226,13 +2226,67 @@ has "and records the resumed continuity" \
 
 printf '\nscenario: resume refuses a different specimen\n'
 mkdir -p "$TMP/resume-foreign"
-printf 'attempt=spent\nrow=qualreg\ntarget=other/aws/us-east-1\nstate_key=sol/other/aws/us-east-1/cloud.tfstate\ncluster=test-cluster\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' \
-  >"$TMP/resume-foreign/attempt.txt"
+printf 'attempt=spent\nrow=qualreg\ntarget=other/aws/us-east-1\nstate_key=sol/other/aws/us-east-1/cloud.tfstate\ncluster=test-cluster\ncandidate_revision=%s\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' \
+  "$CANDIDATE_REVISION" >"$TMP/resume-foreign/attempt.txt"
 printf 'x\n' >"$TMP/resume-foreign/app-image-refs.txt"
 printf '{}\n' >"$TMP/resume-foreign/database-contract-pins.json"
 run_phase resumed-foreign resume "RESUME_FROM=$TMP/resume-foreign" ATTEMPT=resumed-foreign
 is "a different target is refused" "$(cat "$TMP/resumed-foreign.rc")" "2"
 has "and names the mismatch" "resume:" "$TMP/resumed-foreign.out"
+
+printf '\nscenario: resume refuses a different candidate\n'
+mkdir -p "$TMP/resume-candidate"
+printf 'attempt=spent\nrow=qualreg\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\ncluster=test-cluster\ncandidate_revision=%040d\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' \
+  1 >"$TMP/resume-candidate/attempt.txt"
+printf 'x\n' >"$TMP/resume-candidate/app-image-refs.txt"
+printf '{}\n' >"$TMP/resume-candidate/database-contract-pins.json"
+run_phase resumed-candidate resume "RESUME_FROM=$TMP/resume-candidate" ATTEMPT=resumed-candidate
+is "a different candidate is refused" "$(cat "$TMP/resumed-candidate.rc")" "2"
+has "and names the candidate mismatch" "candidate revision" "$TMP/resumed-candidate.out"
+not_exists "and creates no attempt" "$TMP/resumed-candidate.logs/attempt.txt"
+not_exists "and copies no images" "$TMP/resumed-candidate.logs/app-image-refs.txt"
+
+printf '\nscenario: resume refuses a different row\n'
+mkdir -p "$TMP/resume-row"
+printf 'attempt=spent\nrow=otherrow\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\ncluster=test-cluster\ncandidate_revision=%s\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' \
+  "$CANDIDATE_REVISION" >"$TMP/resume-row/attempt.txt"
+printf 'x\n' >"$TMP/resume-row/app-image-refs.txt"
+printf '{}\n' >"$TMP/resume-row/database-contract-pins.json"
+run_phase resumed-row resume "RESUME_FROM=$TMP/resume-row" ATTEMPT=resumed-row
+is "a different row is refused" "$(cat "$TMP/resumed-row.rc")" "2"
+has "and names the row mismatch" "row is" "$TMP/resumed-row.out"
+not_exists "and creates no attempt" "$TMP/resumed-row.logs/attempt.txt"
+
+printf '\nscenario: resume refuses missing provenance\n'
+mkdir -p "$TMP/resume-no-revision"
+printf 'attempt=spent\nrow=qualreg\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\ncluster=test-cluster\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' \
+  >"$TMP/resume-no-revision/attempt.txt"
+printf 'x\n' >"$TMP/resume-no-revision/app-image-refs.txt"
+printf '{}\n' >"$TMP/resume-no-revision/database-contract-pins.json"
+run_phase resumed-no-revision resume "RESUME_FROM=$TMP/resume-no-revision" ATTEMPT=resumed-no-revision
+is "a source without a candidate revision is refused" "$(cat "$TMP/resumed-no-revision.rc")" "2"
+has "and names the missing provenance" "candidate revision" "$TMP/resumed-no-revision.out"
+not_exists "and creates no attempt" "$TMP/resumed-no-revision.logs/attempt.txt"
+
+mkdir -p "$TMP/resume-no-row"
+printf 'attempt=spent\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\ncluster=test-cluster\ncandidate_revision=%s\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' \
+  "$CANDIDATE_REVISION" >"$TMP/resume-no-row/attempt.txt"
+printf 'x\n' >"$TMP/resume-no-row/app-image-refs.txt"
+printf '{}\n' >"$TMP/resume-no-row/database-contract-pins.json"
+run_phase resumed-no-row resume "RESUME_FROM=$TMP/resume-no-row" ATTEMPT=resumed-no-row
+is "a source without a row is refused" "$(cat "$TMP/resumed-no-row.rc")" "2"
+has "and names the missing row" "qualification row" "$TMP/resumed-no-row.out"
+not_exists "and creates no attempt" "$TMP/resumed-no-row.logs/attempt.txt"
+
+mkdir -p "$TMP/resume-bad-revision"
+printf 'attempt=spent\nrow=qualreg\ntarget=qualreg/aws/us-east-1\nstate_key=sol/qualreg/aws/us-east-1/cloud.tfstate\ncluster=test-cluster\ncandidate_revision=not-a-revision\nissuer=letsencrypt-staging\nclaim=mechanism-only\npromotion_eligible=no\n' \
+  >"$TMP/resume-bad-revision/attempt.txt"
+printf 'x\n' >"$TMP/resume-bad-revision/app-image-refs.txt"
+printf '{}\n' >"$TMP/resume-bad-revision/database-contract-pins.json"
+run_phase resumed-bad-revision resume "RESUME_FROM=$TMP/resume-bad-revision" ATTEMPT=resumed-bad-revision
+is "a source with a malformed candidate revision is refused" "$(cat "$TMP/resumed-bad-revision.rc")" "2"
+has "and names the malformed provenance" "valid candidate revision" "$TMP/resumed-bad-revision.out"
+not_exists "and creates no attempt" "$TMP/resumed-bad-revision.logs/attempt.txt"
 
 printf '\nscenario: independent Kafka credential observations fail closed\n'
 for mode in denied missing; do

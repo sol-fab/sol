@@ -276,7 +276,11 @@ and `destroy` all exited 0 in this attempt; otherwise it records `promotion_elig
 `required_phases_ok=no`. A clean destroy after a failed app is therefore not a qualified
 sequence.
 
-The resume target, cluster and state key must match the source attempt, or it refuses.
+The resume target, cluster, state key, candidate revision and qualification row must match the
+source attempt, or it refuses. Missing or malformed source provenance refuses too; the source is
+validated before the resumed evidence directory is created, so a rejected resume leaves no attempt
+behind. A diagnostic continuation is never promotion-eligible; a promotion verdict still requires
+one continuous attempt.
 
 ### VERIF-021 — managed secret projection and the fenced grant (alpha E4, E6)
 
