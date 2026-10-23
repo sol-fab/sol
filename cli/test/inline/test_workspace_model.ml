@@ -27,11 +27,13 @@ let write dir rel content =
   close_out oc
 ;;
 
-let load rel =
-  match Sol_cli_workspace_model.load ~root:(fixture rel) with
+let load_root root =
+  match Sol_cli_workspace_model.load ~root with
   | Ok facts -> facts
-  | Error e -> Windtrap.fail (rel ^ " failed to load: " ^ e)
+  | Error e -> Windtrap.fail (root ^ " failed to load: " ^ e)
 ;;
+
+let load rel = load_root (fixture rel)
 
 let service_names facts =
   Sol_cli_workspace_model.services facts
@@ -170,16 +172,24 @@ let test_pluto_events_migrations_and_targets () =
     (List.map
        (fun ((dir : string), (event : Sol_cli_toml.event_decl)) -> dir ^ "/" ^ event.name)
        facts.Sol_cli_workspace_model.events);
-  Windtrap.equal
-    (Windtrap.list Windtrap.string)
-    ~msg:"declared targets"
+  (* environments.local.yml is the operator's gitignored extension file. A
+     live qualification worktree legitimately adds targets there, so assert the
+     tracked targets are present rather than asserting the merged set equals
+     exactly five. The exact tracked declaration and the overlay merge are
+     covered separately. *)
+  List.iter
+    (fun target ->
+       Windtrap.equal
+         Windtrap.bool
+         ~msg:("tracked target " ^ target ^ " is present")
+         true
+         (List.mem target facts.Sol_cli_workspace_model.targets))
     [ "customer_cloud/aws/us-east-1"
     ; "customer_cloud/byo/onprem"
     ; "dev/aws/us-east-1"
     ; "pilot/aws/us-east-1"
     ; "prod/aws/us-east-1"
-    ]
-    facts.Sol_cli_workspace_model.targets;
+    ];
   (match facts.Sol_cli_workspace_model.migrations with
    | [ notifications
      ; sol_jobs
@@ -465,8 +475,47 @@ let%test "fixtures: pluto: services carry primitive and language" =
   test_pluto_services_carry_their_primitive_and_language ()
 ;;
 
+let test_operator_local_target_is_merged () =
+  with_tmp (fun dir ->
+    write dir "sol.yml" "project: overlay\n";
+    write
+      dir
+      "sol/environments.yml"
+      {|
+prod:
+  targets:
+    aws/us-east-1:
+      cluster_name: tracked
+|};
+    write
+      dir
+      "sol/environments.local.yml"
+      {|
+pilot:
+  targets:
+    aws/us-east-1:
+      cluster_name: local
+|};
+    let facts = load_root dir in
+    let targets = facts.Sol_cli_workspace_model.targets in
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the tracked target is present"
+      true
+      (List.mem "prod/aws/us-east-1" targets);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the gitignored local target is still merged"
+      true
+      (List.mem "pilot/aws/us-east-1" targets))
+;;
+
 let%test "fixtures: pluto: events, migrations and targets" =
   test_pluto_events_migrations_and_targets ()
+;;
+
+let%test "fixtures: an operator's local target is merged" =
+  test_operator_local_target_is_merged ()
 ;;
 
 let%test "fixtures: pluto: a declared change is reported against the record" =
