@@ -199,7 +199,31 @@ def main() -> None:
         if f"charge_svc={REGISTRY}/testapp/charge-svc@{DIGEST}" not in deploy_lines[deploy]:
             fail(f"deploy did not pass the recorded digest: {deploy_lines[deploy]!r}")
 
-    print("test_ci_workflow: generated workflow shell steps execute in order")
+    # GCP image pushes use the publisher identity, not the deploy identity.
+    document = yaml.safe_load(TEMPLATE.read_text())
+    steps = {step.get("name"): step for step in document["jobs"]["build-images"]["steps"]}
+    publisher = steps.get("Authenticate (GCP publisher)")
+    if publisher is None:
+        fail("build-images has no GCP publisher authentication step")
+    if publisher.get("if") != "vars.SOL_PUBLISHER_SERVICE_ACCOUNT != ''":
+        fail("the GCP publisher step is not conditioned on SOL_PUBLISHER_SERVICE_ACCOUNT")
+    with_values = publisher.get("with", {})
+    if with_values.get("service_account") != "${{ vars.SOL_PUBLISHER_SERVICE_ACCOUNT }}":
+        fail("the GCP publisher step does not authenticate the publisher account")
+    fallback = steps.get("Authenticate (GCP deploy, fallback)")
+    if fallback is None or "SOL_PUBLISHER_SERVICE_ACCOUNT == ''" not in fallback.get("if", ""):
+        fail("the deploy-account fallback is not scoped behind an absent publisher")
+    registry_login = steps.get("Log in to GCP Artifact Registry")
+    if registry_login is None or "SOL_PUBLISHER_SERVICE_ACCOUNT" not in registry_login.get("if", ""):
+        fail("the Artifact Registry login does not accept the publisher identity")
+
+    example = yaml.safe_load((ROOT / "examples/pluto/.github/workflows/sol-ci.yml").read_text())
+    example_names = {step.get("name") for step in example["jobs"]["build-images"]["steps"]}
+    if "Authenticate (GCP publisher)" not in example_names:
+        fail("the checked-in example workflow did not receive the publisher step")
+
+    print("test_ci_workflow: generated workflow shell steps execute in order, "
+          "and GCP image pushes use the publisher identity")
 
 
 main()
