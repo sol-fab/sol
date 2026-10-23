@@ -46,6 +46,8 @@ REQUIRED_HOOKS=(
   destroy_substrate
   destroy_verdict
   destroy_evidence
+  # The CA request's scenario name; the candidate declaration does not carry one.
+  ca_scenario
   # Attempt lifecycle, called from attempt.sh rather than a phase body.
   disposable_state_present
 )

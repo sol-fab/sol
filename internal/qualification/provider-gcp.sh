@@ -92,6 +92,10 @@ hook_gcp_app_deploy() {
 
 hook_gcp_app_post_deploy() { return 0; }
 
+# The CA driver's scenario for this row. The candidate declaration does not carry a
+# scenario, so the row's provider is the declaration of which scenario it exercises.
+hook_gcp_ca_scenario() { printf '%s' "$PROVIDER"; }
+
 # The report re-reads the durable phase captures, candidate binding and recorded
 # verdicts. A successful phase exit is not a family pass.
 hook_gcp_app_ca_report() {
@@ -100,7 +104,7 @@ hook_gcp_app_ca_report() {
     printf 'database_ca: the shared candidate-bound observer established the GCP application and migration CA family\n'
     printf 'database_ca_report: %s\n' "$LOG_DIR/ca-report.json"
     printf 'database_ca_observation_identity: %s\n' "$(authority_field "$LOG_DIR/ca-authority.json" principal)"
-    printf 'database_ca_submission_identity: %s\n' "$(authority_field "$LOG_DIR/ca-deploy-authority.json" principal)"
+    printf 'database_ca_submission_identity: %s\n' "$(authority_field "$LOG_DIR/ca-submission-authority.json" principal)"
   } >>"$LOG_DIR/prerequisites.txt"
 }
 

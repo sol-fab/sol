@@ -21,6 +21,20 @@ assert_app_migration_ca_before_deploy     move the final deploy before the migra
     MEASURED: swapping the ca_qualify migration block and the app_deploy step fails
     exactly one assertion, 'the final deploy never ran' (GCP 651 OK / 1 FAIL); restored
     from a checksummed copy and re-ran green (652 OK / 0 FAIL).
+assert_ca_scenario_from_hook              hardcode the request's scenario
+    MEASURED: replacing the provider hook with a literal 'aws' fails one GCP assertion,
+    'the migration request names the gcp scenario' (651 OK / 1 FAIL); restored and
+    re-ran green.
+assert_ca_submission_authority_one_name   point the request at a missing submission-authority file
+    MEASURED: renaming the shared submission-authority path fails one GCP assertion,
+    'and the deploy identity as the submission authority' (651 OK / 1 FAIL); restored
+    and re-ran green. The two names recorded the same concept (the deploy identity that
+    submitted the migration Job) with the same schema.
+assert_ca_identity_scope_derived          force identity_scope to deploy
+    MEASURED: replacing the derivation with a constant fails one GCP assertion, 'and
+    derives the observed identity's scope' (652 OK / 1 FAIL). The assertion was added in
+    this batch because the suite did not previously name the field; restored and re-ran
+    green.
 assert_cloud_verdict_is_reconciliation    remove the environment_reconciled check
 assert_cloud_verdict_is_artifact_gate     remove the pending_artifacts_refused check
 assert_cloud_freeze_before_diagnose       call cloud_diagnose before cloud_freeze

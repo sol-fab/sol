@@ -82,6 +82,55 @@ phase_app_run() {
   "${hook}_app_evidence"
 }
 
+# Build the CA driver request for one phase from inputs the row recorded earlier. Nothing
+# here is read from the product's own report. The scenario comes from the provider hook,
+# because the candidate declaration carries none; the identity scope is derived from
+# whether the observation kubeconfig is the independent qualifier's, not asserted; and
+# the submission authority is the deploy identity that submitted the migration Job,
+# recorded under one file name by both providers.
+ca_request() {
+  local phase="$1" capture="${2:-}" report="${3:-}" binding="${4:-}"
+  local hook="hook_${PROVIDER}" scenario identity_scope
+  local submission_authority="$LOG_DIR/ca-submission-authority.json"
+  scenario="$("${hook}_ca_scenario")" || return 1
+  if [ "$CA_KUBECONFIG" = "$QUALIFIER_KUBECONFIG" ]; then
+    identity_scope=qualifier
+  else
+    identity_scope=deploy
+  fi
+  python3 - "$ROOT" "$SOL_CANDIDATE" "$SOL_INSTALL" "$WORKSPACE" "$LOG_DIR" \
+    "$CA_KUBECONFIG" "$CA_CONTEXT" "$ATTEMPT" "$phase" "$capture" "$report" "$binding" \
+    "$identity_scope" "$scenario" "$submission_authority" <<'PY'
+import json, os, sys
+(root, candidate, install, workspace, log, kubeconfig, context, attempt,
+ phase, capture, report, binding, identity_scope, scenario, submission_authority) = sys.argv[1:16]
+request = {
+    "repository": root,
+    "candidate": candidate,
+    "install": install,
+    "workspace": workspace,
+    "pins": json.load(open(os.path.join(log, "database-contract-pins.json"))),
+    "authority": json.load(open(os.path.join(log, "ca-authority.json"))),
+    "kubeconfig": kubeconfig,
+    "context": context,
+    "identity_scope": identity_scope,
+    "attempt": attempt,
+    "assessment": "database-ca",
+    "scenario": scenario,
+    "evidence": os.path.join(log, "ca-evidence"),
+    "phase": phase,
+    "capture": capture,
+    "report": report,
+    "binding": binding,
+    "migration_capture": os.path.join(log, "ca-migration-capture.json"),
+    "application_capture": os.path.join(log, "ca-application-capture.json"),
+}
+if os.path.exists(submission_authority):
+    request["submission_authority"] = json.load(open(submission_authority))
+json.dump(request, open(os.path.join(log, "ca-request-" + phase + ".json"), "w"))
+PY
+}
+
 # The cloud phase. The order is the contract:
 #   precondition -> (plan-only shortcut) -> prestate -> apply -> post_apply
 #   -> reconciled? -> artifact gate refused? -> pre_verify -> cold-start boundary

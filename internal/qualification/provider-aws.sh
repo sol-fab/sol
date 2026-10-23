@@ -126,6 +126,10 @@ hook_aws_app_post_deploy() {
 # captures; the app phase records the migration and application verdicts only.
 hook_aws_app_ca_report() { return 0; }
 
+# The CA driver's scenario for this row. The candidate declaration does not carry a
+# scenario, so the row's provider is the declaration of which scenario it exercises.
+hook_aws_ca_scenario() { printf '%s' "$PROVIDER"; }
+
 hook_aws_app_transaction_primary() {
   local ns
   # ADR 0004: destruction removes what the lifecycle created, and the images this run
