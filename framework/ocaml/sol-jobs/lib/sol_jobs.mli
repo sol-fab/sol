@@ -52,10 +52,27 @@ module Make (J : JOB) : sig
     -> (unit, run_error) result
 end
 
+type backlog_row =
+  { kind : string
+  ; due : int64
+  ; leased : int64
+  ; scheduled : int64
+  ; failed : int64
+  ; oldest_due_s : float
+  }
+
 module For_testing : sig
   val backoff_s : rng:Random.State.t -> retry_policy -> attempt:int -> float
   val validate_retry_policy : retry_policy -> (unit, run_error) result
   val validate_timing : poll_interval_s:float -> lease_s:float -> (unit, run_error) result
   val validate_kinds : string list -> (unit, run_error) result
   val validate_workspace : string -> (unit, run_error) result
+end
+
+module Backlog_for_testing : sig
+  val snapshot
+    :  Pg_db.pool
+    -> workspace:string
+    -> kinds:string list
+    -> (backlog_row list, Pg_error.t) result
 end

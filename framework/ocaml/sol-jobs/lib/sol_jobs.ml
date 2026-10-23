@@ -113,6 +113,15 @@ let validate_workspace workspace =
   else Ok ()
 ;;
 
+type backlog_row =
+  { kind : string
+  ; due : int64
+  ; leased : int64
+  ; scheduled : int64
+  ; failed : int64
+  ; oldest_due_s : float
+  }
+
 module For_testing = struct
   let backoff_s = Sol_retry.backoff_s
   let validate_retry_policy = validate_retry_policy
@@ -221,10 +230,55 @@ let table_check_q =
     (Printf.sprintf "SELECT 1 FROM %s LIMIT 1" table)
 ;;
 
+let backlog_q =
+  Caqti_request.Infix.(
+    Caqti_type.(t2 string string) ->* Caqti_type.(t6 string int64 int64 int64 int64 float))
+    (Printf.sprintf
+       {|SELECT kind,
+                count(*) FILTER (
+                  WHERE status = 'pending'
+                    AND run_at <= now()
+                    AND (locked_until IS NULL OR locked_until <= now())
+                ) AS due,
+                count(*) FILTER (
+                  WHERE status = 'pending'
+                    AND run_at <= now()
+                    AND locked_until > now()
+                ) AS leased,
+                count(*) FILTER (WHERE status = 'pending' AND run_at > now()) AS scheduled,
+                count(*) FILTER (WHERE status = 'failed') AS failed,
+                COALESCE(
+                  EXTRACT(EPOCH FROM now() - min(run_at) FILTER (
+                    WHERE status = 'pending'
+                      AND run_at <= now()
+                      AND (locked_until IS NULL OR locked_until <= now())
+                  )),
+                  0
+                )::float8 AS oldest_due_s
+         FROM %s
+         WHERE workspace = ?
+           AND kind = ANY(string_to_array(?, ','))
+         GROUP BY kind
+         ORDER BY kind|}
+       table)
+;;
+
+let backlog_snapshot pool ~workspace ~kinds =
+  Pg_db.collect pool backlog_q (workspace, String.concat "," kinds)
+  |> Result.map
+       (List.map (fun (kind, due, leased, scheduled, failed, oldest_due_s) ->
+          { kind; due; leased; scheduled; failed; oldest_due_s }))
+;;
+
+module Backlog_for_testing = struct
+  let snapshot = backlog_snapshot
+end
+
 let default_max_claim_failures = 30
 let default_metrics_port = 9090
 let default_poll_interval_s = 1.0
 let default_lease_s = 300.0
+let backlog_sample_interval_s = 30.0
 
 let with_runtime_unflushed
       ~(env : (_, _, _, _) Sol_env.timed)
@@ -236,9 +290,17 @@ let with_runtime_unflushed
   =
   let metrics_renderer = Option.map Sol_obs.metrics_renderer ot in
   let obs_eio_t = Option.map Sol_obs.obs_eio ot in
-  let job_count, job_duration, handler_count, queue_errors =
+  let ( job_count
+      , job_duration
+      , handler_count
+      , queue_errors
+      , backlog_depth
+      , backlog_oldest
+      , backlog_last_sample
+      , backlog_errors )
+    =
     match obs_eio_t with
-    | None -> None, None, None, None
+    | None -> None, None, None, None, None, None, None, None
     | Some o ->
       let c, h =
         Obs_eio.register_counter_and_histogram
@@ -264,7 +326,46 @@ let with_runtime_unflushed
           ~help:"Queue operation failures and confirmed claim losses"
           ~label_names:[ "kind"; "action"; "reason" ]
       in
-      Some c, Some h, Some handler_count, Some queue_errors
+      let backlog_depth =
+        Obs_eio.register_gauge
+          o
+          ~name:"sol_jobs_backlog_depth"
+          ~help:
+            "Cached queue depth by kind and eligibility state. Across replicas, take \
+             max, not sum."
+          ~label_names:[ "kind"; "state" ]
+      in
+      let backlog_oldest =
+        Obs_eio.register_gauge
+          o
+          ~name:"sol_jobs_backlog_oldest_due_seconds"
+          ~help:"Age of the oldest due-unleased job by kind, from the cached sample"
+          ~label_names:[ "kind" ]
+      in
+      let backlog_last_sample =
+        Obs_eio.register_gauge
+          o
+          ~name:"sol_jobs_backlog_last_sample_timestamp_seconds"
+          ~help:
+            "Unix timestamp of the last successful backlog sample. A stale timestamp \
+             means the gauges are retained, not that the queue is empty."
+          ~label_names:[]
+      in
+      let backlog_errors =
+        Obs_eio.register_counter
+          o
+          ~name:"sol_jobs_backlog_sample_errors_total"
+          ~help:"Backlog sample failures; the previous gauges are retained"
+          ~label_names:[ "reason" ]
+      in
+      ( Some c
+      , Some h
+      , Some handler_count
+      , Some queue_errors
+      , Some backlog_depth
+      , Some backlog_oldest
+      , Some backlog_last_sample
+      , Some backlog_errors )
   in
   let signal_stop, signal_stop_r = Eio.Promise.create () in
   let remaining =
@@ -300,6 +401,10 @@ let with_runtime_unflushed
       ~job_duration
       ~handler_count
       ~queue_errors
+      ~backlog_depth
+      ~backlog_oldest
+      ~backlog_last_sample
+      ~backlog_errors
       ~should_stop
       ~record_terminal)
 ;;
@@ -409,12 +514,16 @@ module Make (J : JOB) = struct
       ~max_jobs
       ~body:
         (fun
-          ~sw:_
+          ~sw
           ~ot
           ~job_count
           ~job_duration
           ~handler_count
           ~queue_errors
+          ~backlog_depth
+          ~backlog_oldest
+          ~backlog_last_sample
+          ~backlog_errors
           ~should_stop
           ~record_terminal
         ->
@@ -428,6 +537,54 @@ module Make (J : JOB) = struct
               msg
               (String.concat " " (List.map (fun (k, v) -> k ^ "=" ^ v) fields))
         in
+        let sample_backlog () =
+          match backlog_depth, backlog_oldest, backlog_last_sample, backlog_errors with
+          | Some depth, Some oldest, Some last, Some errors ->
+            (match backlog_snapshot pool ~workspace:J.workspace ~kinds:J.kinds with
+             | Error e ->
+               errors ~labels:[ "reason", "database_error" ] 1;
+               log_warn
+                 [ "error", Pg_error.to_string e ]
+                 "sol-jobs: backlog sample failed; previous gauges retained"
+             | Ok rows ->
+               let states = [ "due"; "leased"; "scheduled"; "failed" ] in
+               List.iter
+                 (fun kind ->
+                    List.iter
+                      (fun state -> depth ~labels:[ "kind", kind; "state", state ] 0.)
+                      states;
+                    oldest ~labels:[ "kind", kind ] 0.)
+                 J.kinds;
+               List.iter
+                 (fun (row : backlog_row) ->
+                    depth
+                      ~labels:[ "kind", row.kind; "state", "due" ]
+                      (Int64.to_float row.due);
+                    depth
+                      ~labels:[ "kind", row.kind; "state", "leased" ]
+                      (Int64.to_float row.leased);
+                    depth
+                      ~labels:[ "kind", row.kind; "state", "scheduled" ]
+                      (Int64.to_float row.scheduled);
+                    depth
+                      ~labels:[ "kind", row.kind; "state", "failed" ]
+                      (Int64.to_float row.failed);
+                    oldest ~labels:[ "kind", row.kind ] row.oldest_due_s)
+                 rows;
+               last ~labels:[] (Eio.Time.now env#clock))
+          | _ -> ()
+        in
+        sample_backlog ();
+        (match backlog_depth, backlog_oldest, backlog_last_sample, backlog_errors with
+         | Some _, Some _, Some _, Some _ ->
+           Eio.Fiber.fork_daemon ~sw (fun () ->
+             let rec loop () : [ `Stop_daemon ] =
+               Eio.Time.sleep env#clock backlog_sample_interval_s;
+               sample_backlog ();
+               loop ()
+             in
+             loop ())
+         | _ -> ());
         let count status ~kind =
           match job_count with
           | Some c -> c ~labels:[ "status", status; "kind", kind ] 1
