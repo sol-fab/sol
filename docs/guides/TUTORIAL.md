@@ -44,7 +44,7 @@ export PATH="$PWD/sol-vX.Y.Z/bin:$PATH"   # add to ~/.bashrc or ~/.zshrc
 sol assets                                # where this sol's assets come from, and that each is there
 ```
 
-The archive's top directory is an installation prefix: `bin/sol`, and `share/sol/vX.Y.Z/` with the platform assets that version uses (Terraform roots, Helm values, Grafana dashboards) and the digest of its migration-runner image. The binary uses those and nothing else, so no `SOL_HOME` or clone is needed to run it. It needs glibc 2.35+ (Ubuntu 22.04 or newer) and `libpq5`/`libgmp10`. The install can be read-only: Sol copies the Terraform roots into a working directory per target under `~/.local/share/sol/terraform/` and runs there. The one remaining checkout dependency: generated OCaml workspaces still require source framework packages until RELEASE-005 publishes them (see the note under Part 2).
+The archive's top directory is an installation prefix: `bin/sol`, and `share/sol/vX.Y.Z/` with the platform assets that version uses (Terraform roots, Helm values, Grafana dashboards) and the digest of its migration-runner image. The binary uses those and nothing else, so no `SOL_HOME` or clone is needed to run it. It needs glibc 2.35+ (Ubuntu 22.04 or newer) and `libpq5`/`libgmp10`. The install can be read-only: Sol copies the Terraform roots into a working directory per target under `~/.local/share/sol/terraform/` and runs there. Generated OCaml workspaces also need no checkout: they pin the framework to the release revision and `opam install . --deps-only` fetches that commit (see the note under Part 2).
 
 > **Build from source:** See the repository README for the pinned support-package setup and current build commands.
 
@@ -143,7 +143,7 @@ sol new workspace pluto
 cd pluto
 ```
 
-> **Framework packages:** the generated workspace declares its framework dependency (`sol-svc`, `sol-worker`, …) in its own `.opam` file, and your opam switch provides it (DEC-025). Until those packages are published to opam (RELEASE-005), install them from a Sol checkout with `bash platform/local/scripts/prepare-framework-deps.sh`; otherwise `dune build` fails with "Library not found: sol_svc".
+> **Framework packages:** the generated workspace declares its framework dependency (`sol-svc`, `sol-worker`, …) in its own `.opam` file and pins it to the exact Sol revision the release was built from (DEC-025). `opam install . --deps-only` fetches that commit, so `dune build` works without a Sol checkout. To test uncommitted framework changes, install the framework from a checkout with `bash platform/local/scripts/prepare-framework-deps.sh`; that changes your switch, not the workspace pin.
 
 This generates 35 files. Here is what was created and why:
 

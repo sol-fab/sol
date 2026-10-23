@@ -1234,6 +1234,36 @@ let test_new_fn_typescript_rejected () =
   check_bool "no fn directory was created" false (Sys.file_exists "app/billing/report_fn")
 ;;
 
+let test_workspace_pins_framework_revision () =
+  in_temp_dir
+  @@ fun () ->
+  let revision =
+    match Sol_cli_platform_assets.resolve () with
+    | Error error ->
+      Windtrap.fail
+        ("no assets for the scaffold test: "
+         ^ Sol_cli_platform_assets.error_to_string error)
+    | Ok assets ->
+      (match Sol_cli_platform_assets.revision assets with
+       | Ok revision -> revision
+       | Error message -> Windtrap.fail message)
+  in
+  Sol_cli_cmd_new.new_workspace "testapp" |> Result.get_ok;
+  let content = read_file "testapp/testapp.opam" in
+  assert_contains
+    "workspace opam pins the exact framework revision"
+    content
+    ("git+https://github.com/sol-fab/sol.git#" ^ revision);
+  check_bool
+    "workspace opam contains no moving framework ref"
+    false
+    (Sol_cli_string.contains ~needle:"github.com/sol-fab/sol.git#main" content)
+;;
+
+let%test "workspace: framework pin is the build revision" =
+  test_workspace_pins_framework_revision ()
+;;
+
 let%test "golden: sol-ci.yml" = test_golden_ci_workflow ()
 let%test "golden: charge_svc Dockerfile" = test_golden_dockerfile ()
 let%test "golden: charge_svc bin/main.ml" = test_golden_svc_bin_ml ()

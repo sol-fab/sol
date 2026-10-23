@@ -18,18 +18,20 @@ depends: [
   "kafka-eio-service"
 ]
 
-# Track main for development; use published versions for reproducible builds.
+# The framework packages are pinned to the exact Sol revision this workspace was
+# generated from. Do not replace the revision with a moving branch; regenerate the
+# workspace or update the pin deliberately.
 pin-depends: [
-  [ "sol-runtime.dev"       "git+https://github.com/sol-fab/sol.git#main" ]
-  [ "sol-env.dev"           "git+https://github.com/sol-fab/sol.git#main" ]
-  [ "sol-obs.dev"           "git+https://github.com/sol-fab/sol.git#main" ]
-  [ "kafka-eio-service.dev" "git+https://github.com/sol-fab/sol.git#main" ]
-  [ "sol-svc.dev"           "git+https://github.com/sol-fab/sol.git#main" ]
-  [ "sol-svc-core.dev"      "git+https://github.com/sol-fab/sol.git#main" ]
-  [ "sol-worker.dev"        "git+https://github.com/sol-fab/sol.git#main" ]
-  [ "sol-fn.dev"            "git+https://github.com/sol-fab/sol.git#main" ]
-  [ "sol-jobs.dev"          "git+https://github.com/sol-fab/sol.git#main" ]
-  [ "sol-retry.dev"         "git+https://github.com/sol-fab/sol.git#main" ]
+  [ "sol-runtime.dev"       "git+https://github.com/sol-fab/sol.git#{{revision}}" ]
+  [ "sol-env.dev"           "git+https://github.com/sol-fab/sol.git#{{revision}}" ]
+  [ "sol-obs.dev"           "git+https://github.com/sol-fab/sol.git#{{revision}}" ]
+  [ "kafka-eio-service.dev" "git+https://github.com/sol-fab/sol.git#{{revision}}" ]
+  [ "sol-svc.dev"           "git+https://github.com/sol-fab/sol.git#{{revision}}" ]
+  [ "sol-svc-core.dev"      "git+https://github.com/sol-fab/sol.git#{{revision}}" ]
+  [ "sol-worker.dev"        "git+https://github.com/sol-fab/sol.git#{{revision}}" ]
+  [ "sol-fn.dev"            "git+https://github.com/sol-fab/sol.git#{{revision}}" ]
+  [ "sol-jobs.dev"          "git+https://github.com/sol-fab/sol.git#{{revision}}" ]
+  [ "sol-retry.dev"         "git+https://github.com/sol-fab/sol.git#{{revision}}" ]
 
   # opam does not apply dependency pins transitively. Keep source pins for
   # dependencies not yet published at the versions required by this workspace.

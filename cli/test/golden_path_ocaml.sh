@@ -41,13 +41,15 @@ sol new fn ops/heartbeat
 sed -i '/^schedule = /a scheduled_concurrency = "forbid"\nbackoff_limit = 5' \
   app/ops/heartbeat_fn/sol.toml
 
-# The scaffolded workspace pins the framework to sol.git#main, so its
-# images would build this PR's scaffold against main's framework: any
-# A change to an API used by the scaffold, such as `Fn.trigger`,
-# could never pass. Build against the commit under test instead.
-internal_ci_pin_ref="${SOL_FRAMEWORK_REF:-$(git rev-parse HEAD)}"
-grep -rl 'sol-fab/sol.git#main' --include='*.opam' . \
-  | xargs -r sed -i "s|sol-fab/sol.git#main|sol-fab/sol.git#${internal_ci_pin_ref}|g"
+# The scaffold must pin the framework to the revision this binary was built
+# from, not a moving branch. The images then build this PR's scaffold against
+# this PR's framework, and the artifact under test is the artifact a user gets.
+expected_pin="$(git rev-parse HEAD)"
+if ! grep -rq "sol-fab/sol.git#${expected_pin}" --include='*.opam' .; then
+  echo "::error::scaffolded workspace does not pin the framework to the build revision ${expected_pin}"
+  grep -rn 'sol-fab/sol.git#' --include='*.opam' . || true
+  exit 1
+fi
 if grep -rq 'sol-fab/sol.git#main' --include='*.opam' .; then
   echo "::error::scaffolded workspace still pins sol.git#main"; exit 1
 fi

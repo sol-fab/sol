@@ -7,7 +7,8 @@
  (targets sol_cli_build_info.ml)
  (deps
   gen_release_version.sh
-  (env_var SOL_RELEASE_VERSION))
+  (env_var SOL_RELEASE_VERSION)
+  (env_var SOL_RELEASE_REVISION))
  (action
   (with-stdout-to
    sol_cli_build_info.ml

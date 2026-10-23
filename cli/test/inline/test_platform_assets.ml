@@ -184,6 +184,34 @@ let test_installed_beats_discovery () =
       (A.resolve_from ~sol_home:None ~exe_dir:bin ~release_version:(Some "v1.2.3")))
 ;;
 
+let test_installed_bundle_names_its_revision () =
+  with_layout (fun ~root:_ ~bin ~bundle ->
+    let revision = String.make 40 'a' in
+    write (Filename.concat bundle "REVISION") (revision ^ "\n");
+    match A.resolve_from ~sol_home:None ~exe_dir:bin ~release_version:(Some "v1.2.3") with
+    | Error error -> Windtrap.fail (A.error_to_string error)
+    | Ok t ->
+      (match A.revision t with
+       | Ok got ->
+         Windtrap.equal Windtrap.string ~msg:"the bundle's revision" revision got
+       | Error message -> Windtrap.fail message))
+;;
+
+let test_installed_bundle_without_revision_refuses () =
+  with_layout (fun ~root:_ ~bin ~bundle:_ ->
+    match A.resolve_from ~sol_home:None ~exe_dir:bin ~release_version:(Some "v1.2.3") with
+    | Error error -> Windtrap.fail (A.error_to_string error)
+    | Ok t ->
+      (match A.revision t with
+       | Ok revision -> Windtrap.fail ("accepted a missing REVISION as " ^ revision)
+       | Error message ->
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"the refusal names the missing REVISION file"
+           true
+           (Sol_cli_string.contains ~needle:"REVISION" message)))
+;;
+
 let test_release_never_discovers_a_checkout () =
   with_layout (fun ~root:_ ~bin ~bundle:_ ->
     check_form
@@ -438,6 +466,14 @@ let%test "resolution: a build tree is not a checkout" =
 let%test "resolution: asset paths" = test_asset_paths ()
 let%test "precedence: SOL_HOME beats installed" = test_sol_home_beats_installed ()
 let%test "precedence: installed beats discovery" = test_installed_beats_discovery ()
+
+let%test "assets: an installed bundle names its revision" =
+  test_installed_bundle_names_its_revision ()
+;;
+
+let%test "assets: an installed bundle without REVISION refuses" =
+  test_installed_bundle_without_revision_refuses ()
+;;
 
 let%test "precedence: a release never discovers a checkout" =
   test_release_never_discovers_a_checkout ()

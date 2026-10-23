@@ -7,6 +7,15 @@ not a full commit log — see `git log` for that.
 
 ## Unreleased
 
+- **Behavior change:** `sol new workspace` pins the Sol framework packages in the
+  generated `*.opam` to the exact revision the CLI was built from, instead of
+  `github.com/sol-fab/sol.git#main`. A generated workspace is now reproducible
+  and builds without a Sol checkout; the release build refuses a dirty tree, so
+  the pin names the revision the release actually contains. To test uncommitted
+  framework changes, install the framework from a checkout with
+  `platform/local/scripts/prepare-framework-deps.sh`; that changes the local
+  switch, not the workspace pin.
+
 - **Breaking (FEAT-119):** the contract projection entry point is now a
   language-neutral executable, `contract/run`, invoked by Sol as
   `sh ./contract/run <--json|--check|--apply> --scope <scope>`. A workspace whose

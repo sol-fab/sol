@@ -96,10 +96,12 @@ migration-runner image published with that version, pinned by digest
 read-only: `sol plan` and `sol deploy` run Terraform in a working directory of its own per target,
 under `~/.local/share/sol/terraform/`.
 
-The CLI and its platform assets need no Sol checkout. One thing still does:
-generated OCaml workspaces still require source framework packages until
-RELEASE-005 publishes them (`bash platform/local/scripts/prepare-framework-deps.sh`
-from a checkout).
+The CLI and its platform assets need no Sol checkout, and neither does a
+generated OCaml workspace: it pins the framework packages to the exact revision
+the release was built from, and `opam install . --deps-only` fetches that commit.
+To test uncommitted framework changes, install the framework from a checkout with
+`bash platform/local/scripts/prepare-framework-deps.sh`; that changes your switch,
+not the workspace pin.
 
 ### Building from source (contributors)
 
