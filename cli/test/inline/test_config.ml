@@ -1543,6 +1543,34 @@ let test_production_profile_enables_rds_multi_az () =
          check_str_opt "RDS Multi-AZ" (Some "true") (List.assoc_opt "rds_multi_az" vars)))
 ;;
 
+let test_production_profile_enables_gcp_sql_ha () =
+  with_temp_dir (fun () ->
+    write_base ();
+    mkdir_p "sol/prod/gcp";
+    Targets_fixture.write
+      ~target:"prod/gcp/us-central1"
+      {|
+target:
+  profile: production-single-region
+  gcp:
+    project_id: sol-qualification
+|};
+    match Sol_cli_config.load_for_target ~target:"prod/gcp/us-central1" with
+    | Error e -> Windtrap.fail (Sol_cli_config.error_to_string e)
+    | Ok cfg ->
+      (match Sol_cli_terraform_vars.of_config ~workspace:"pluto" cfg with
+       | Error msg -> Windtrap.fail msg
+       | Ok vars ->
+         check_str_opt
+           "Cloud SQL Regional HA"
+           (Some "true")
+           (List.assoc_opt "sql_high_availability" vars);
+         check_str_opt
+           "Cloud SQL deletion protection"
+           (Some "true")
+           (List.assoc_opt "sql_deletion_protection" vars)))
+;;
+
 let test_production_profile_enables_rds_deletion_protection () =
   with_temp_dir (fun () ->
     write_base ();
@@ -2267,6 +2295,10 @@ let%test "sol.yml: terraform vars: workspace_name + ecr_repositories" =
 
 let%test "sol.yml: production profile enables RDS Multi-AZ" =
   test_production_profile_enables_rds_multi_az ()
+;;
+
+let%test "sol.yml: production profile enables Cloud SQL Regional HA" =
+  test_production_profile_enables_gcp_sql_ha ()
 ;;
 
 let%test "sol.yml: production profile enables RDS deletion protection" =
