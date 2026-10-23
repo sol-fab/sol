@@ -385,6 +385,29 @@ let test_read_secret_key_decodes_the_projection () =
            (Sol_cli_string.contains ~needle:"has no key ABSENT" message)))
 ;;
 
+let test_delivery_refusal_names_the_transition_remedy () =
+  with_fake_kubectl ~mode:"eso-target-collision" (fun ~calls:_ ~manifests:_ ->
+    match
+      Sol_cli_secret.assert_destination_is_sol
+        ~ctx
+        ~resource:"secret"
+        ~namespace:"notifications"
+        ~name:"prod-kafka-creds"
+    with
+    | Ok () -> Windtrap.fail "a delivered Secret must not overwrite an ESO target"
+    | Error message ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the transition names the ExternalSecret to remove"
+        true
+        (Sol_cli_string.contains ~needle:"Remove the ExternalSecret" message);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"and the alternative to removal"
+        true
+        (Sol_cli_string.contains ~needle:"keep the database bound externally" message))
+;;
+
 let test_target_projection_refuses_an_eso_writer () =
   with_fake_kubectl ~mode:"eso-target-collision" (fun ~calls ~manifests ->
     match
@@ -402,6 +425,11 @@ let test_target_projection_refuses_an_eso_writer () =
         (Sol_cli_string.contains
            ~needle:"ExternalSecret already targets this object"
            message);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the refusal says to write the external store instead"
+        true
+        (Sol_cli_string.contains ~needle:"Set the value in the external" message);
       Windtrap.equal
         Windtrap.bool
         ~msg:"no destination write"
@@ -746,6 +774,10 @@ let%test "scope: a target write touches only the named Secret" =
 
 let%test "verify: a delivered Secret key is decoded, and an absent key is named" =
   test_read_secret_key_decodes_the_projection ()
+;;
+
+let%test "secret reads: a delivered Secret refusal names the transition remedy" =
+  test_delivery_refusal_names_the_transition_remedy ()
 ;;
 
 let%test "scope: target credential projection refuses a competing ESO writer" =
