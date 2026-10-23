@@ -389,15 +389,17 @@ let external_secret_targets ~ctx namespace =
            message)
 ;;
 
-let refuse_external_secret_target ~ctx ~namespace ~secret_name =
+let refuse_external_secret_target ~ctx ~namespace ~secret_name ~remedy =
   let* targets = external_secret_targets ~ctx namespace in
   if List.mem secret_name targets
   then
     Error
       (Printf.sprintf
-         "refusing to write Secret %s/%s: an ExternalSecret already targets this object"
+         "refusing to write Secret %s/%s: an ExternalSecret already targets this object.\n\
+         \  %s"
          namespace
-         secret_name)
+         secret_name
+         remedy)
   else Ok ()
 ;;
 
@@ -438,7 +440,14 @@ let assert_destination_is_sol ~ctx ~resource ~namespace ~name =
   let open Result.Syntax in
   let* () =
     if String.equal resource "secret"
-    then refuse_external_secret_target ~ctx ~namespace ~secret_name:name
+    then
+      refuse_external_secret_target
+        ~ctx
+        ~namespace
+        ~secret_name:name
+        ~remedy:
+          "This Secret name is held by a previous external binding. Remove the \
+           ExternalSecret and its output Secret, or keep the database bound externally."
     else Ok ()
   in
   let* existing = get_named_object_json ~ctx ~resource ~namespace ~name in
@@ -455,7 +464,16 @@ let set_named_keys ~ctx ~namespace ~secret_name ~values () =
       values
   in
   let* () = ensure_namespace ~ctx namespace in
-  let* () = refuse_external_secret_target ~ctx ~namespace ~secret_name in
+  let* () =
+    refuse_external_secret_target
+      ~ctx
+      ~namespace
+      ~secret_name
+      ~remedy:
+        "This Secret is delivered by External Secrets Operator. Set the value in the \
+         external store or manifest that the ExternalSecret reads; `sol secret` does not \
+         write an ESO-owned Secret."
+  in
   let* existing = get_named_secret_json ~ctx ~name:secret_name namespace in
   let* () = verify_sol_managed_secret existing in
   (* "Changed" compares only the selected keys against what is about to be written — not a
@@ -517,7 +535,16 @@ let set_target_keys ~ctx ~namespaces ~secret_name ~values =
 
 let delete_unit_key ~ctx ~namespace ~secret_name ~key =
   let* () = validate_key_format key in
-  let* () = refuse_external_secret_target ~ctx ~namespace ~secret_name in
+  let* () =
+    refuse_external_secret_target
+      ~ctx
+      ~namespace
+      ~secret_name
+      ~remedy:
+        "This Secret is delivered by External Secrets Operator. Set the value in the \
+         external store or manifest that the ExternalSecret reads; `sol secret` does not \
+         write an ESO-owned Secret."
+  in
   let* existing = get_named_secret_json ~ctx ~name:secret_name namespace in
   let* () = verify_sol_managed_secret existing in
   match existing with
