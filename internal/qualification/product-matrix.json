@@ -30,13 +30,13 @@
     {
       "id": "ocaml-fn",
       "label": "OCaml `-fn`",
-      "local": "partial",
+      "local": "local",
       "aws": "none",
       "gcp": "none",
       "evidence": {
         "local": "cli/test/golden_path_ocaml.sh"
       },
-      "gap": "The local golden path adds an fn ad hoc; no fn is in the reference app and no cloud CronJob scenario exists."
+      "gap": "The local golden path invokes the deployed CronJob manually; no cloud CronJob scenario exists and the reference app still does not include an fn."
     },
     {
       "id": "typescript-svc",
