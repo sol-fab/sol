@@ -258,12 +258,11 @@ let deploy_access ~region (outputs : gcp_outputs) () =
         ; "--duration=1h"
         ]
     in
-    let* cluster =
-      run [ "kubectl"; "config"; "view"; "-o"; "jsonpath={.clusters[0].name}" ]
+    let cluster =
+      Printf.sprintf "gke_%s_%s_%s" outputs.project_id region outputs.cluster_name
     in
-    let cluster = String.trim cluster in
-    if cluster = ""
-    then Error "the GCP provisioner kubeconfig names no cluster for the deploy context"
+    if String.equal cluster "gke__"
+    then Error "the GCP cluster identity is incomplete for the deploy context"
     else (
       let provisioner_kubeconfig =
         match List.assoc_opt "KUBECONFIG" env with

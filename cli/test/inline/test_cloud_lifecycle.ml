@@ -501,7 +501,8 @@ let test_gcp_cluster_deploy_access () =
                 (Sol_cli_string.contains ~needle calls))
            [ "create token sol-deploy -n monitoring --duration=1h"
            ; "config set-credentials sol-deploy --token token-test"
-           ; "config set-context sol-deploy --cluster gke_test --user sol-deploy"
+           ; "config set-context sol-deploy --cluster \
+              gke_sol-qualification_us-central1_sol-qual --user sol-deploy"
            ; "--impersonate-service-account \
               sol-qual-provisioner@sol-qualification.iam.gserviceaccount.com"
            ]
