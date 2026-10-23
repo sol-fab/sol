@@ -147,6 +147,46 @@ app_database_declaration() {
   done
 }
 
+# The Kafka delivery observation. The consumer map is harness-owned and NOT
+# candidate-derived: the candidate's specimen declares database consumers, not the Kafka
+# resource identity, so there is nothing in it to match these units against (criterion 5,
+# a named defect; the observation fix remains deferred). The map and the ordering are
+# shared; the observer invocation is the provider hook kafka_observe.
+app_verify_kafka_delivery() {
+  local hook="hook_${PROVIDER}" public credential unit
+  local consumers=() behavioral=()
+  for unit in $(app_services); do
+    case "$unit" in
+      charge_svc | orders_svc) consumers+=(--consumer "$APP_NS/$(app_k8s_name "$unit")") ;;
+      notify_worker | fulfilment_worker) consumers+=(--consumer "$WORKER_NS/$(app_k8s_name "$unit")") ;;
+      checkout_svc | order_svc | fulfillment_worker) ;;
+      *)
+        say "no Kafka qualification requirement defined for selected unit $unit"
+        return 1
+        ;;
+    esac
+  done
+  for unit in ${KAFKA_BEHAVIORAL_UNITS:-}; do
+    case "$unit" in
+      charge_svc | orders_svc) behavioral+=(--behavioral-consumer "$APP_NS/$(app_k8s_name "$unit")") ;;
+      notify_worker | fulfilment_worker) behavioral+=(--behavioral-consumer "$WORKER_NS/$(app_k8s_name "$unit")") ;;
+    esac
+  done
+  if [ "${#behavioral[@]}" = 0 ]; then
+    say "the selected units do not include the transaction's Kafka publisher and consumer"
+    return 1
+  fi
+  credential="$(app_kafka_credential_name)"
+  if [ -z "$credential" ]; then
+    say "the deploy declared no delivered Kafka credential; the projection cannot be read"
+    return 1
+  fi
+  public="$(jq -ce '.outputs.kafka_authority.value | select(type == "object")' \
+    "$LOG_DIR/state/cloud.tfstate")" || return 1
+  "${hook}_kafka_observe" "$public" "$credential" "${consumers[@]}" "${behavioral[@]}" \
+    >"$LOG_DIR/kafka-delivery.json"
+}
+
 # The cloud phase. The order is the contract:
 #   precondition -> (plan-only shortcut) -> prestate -> apply -> post_apply
 #   -> reconciled? -> artifact gate refused? -> pre_verify -> cold-start boundary

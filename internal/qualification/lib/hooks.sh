@@ -27,6 +27,7 @@ REQUIRED_HOOKS=(
   app_transaction_primary
   app_transaction_secondary
   app_evidence
+  kafka_observe
   app_success
   app_failed
   cloud_precondition

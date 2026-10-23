@@ -60,6 +60,7 @@ case "$CLUSTER_ISSUER" in
 esac
 export CLUSTER_ISSUER ATTEMPT_CLAIM
 APP_TAG="${APP_TAG:-qual-$(date -u +%Y%m%d-%H%M%S)}"
+KAFKA_BEHAVIORAL_UNITS="fulfilment_worker"
 export APP_TAG
 # The database setup Job's image, pinned by digest. It is public, so there is nothing to
 # publish -- only a digest to name. Without it the deploy cannot run the database setup step,
@@ -1663,31 +1664,6 @@ app_database_field() {
 app_kafka_credential_name() {
   grep -h 'Kafka: delivered the managed credential to ' "$LOG_DIR"/app-deploy.log 2>/dev/null \
     | tail -1 | sed -n 's/.*credential to \([^ ]*\) in .*/\1/p'
-}
-
-app_verify_kafka_delivery() {
-  local state="$LOG_DIR/state/cloud.tfstate" public credential
-  credential="$(app_kafka_credential_name)"
-  if [ -z "$credential" ]; then
-    say "app: the deploy declared no delivered Kafka credential; the projection cannot be read"
-    return 1
-  fi
-  public="$(jq -ce '.outputs.kafka_authority.value | select(type == "object")' "$state")" || return 1
-  # Value-free: projections through the run kubeconfig, Secret metadata only, and the
-  # OCaml order transaction as the behavioral authentication/consumption evidence.
-  # The Kafka consumer set is still harness-owned and NOT candidate-derived: the
-  # candidate's specimen declares database consumers, not the Kafka resource
-  # identity, so there is nothing in it to match these units against. This is a
-  # known gap, not an intentional design; it is tracked separately from the
-  # database delivery assertion above.
-  printf '%s' "$public" | python3 "$ROOT/internal/qualification/kafka-delivery.py" \
-    --provider gcp --cluster "$CLUSTER" --region "$REGION" --project "$PROJECT" \
-    --secret-kubeconfig "$RUN_KUBECONFIG" \
-    --credential-secret "$credential" \
-    --transaction "$LOG_DIR/app-transaction-ocaml.txt" \
-    --behavioral-consumer pluto-comms/fulfilment-worker \
-    --consumer pluto-payments/orders-svc --consumer pluto-comms/fulfilment-worker \
-    $(app_namespaces) >"$LOG_DIR/kafka-delivery.json"
 }
 
 # The candidate's specimen is the consumer authority: it declares every workload that

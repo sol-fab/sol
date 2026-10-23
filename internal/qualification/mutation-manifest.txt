@@ -47,6 +47,11 @@ assert_app_namespaces_candidate_derived   make the namespace derivation return n
     evidence', and 'the Kafka observer reads the transport transcript'. The derivation
     reads the candidate-bound build context, and the app-only suite rows now seed that
     artifact exactly as prepare does. Restored and re-ran green.
+assert_kafka_consumer_map_namespace       send a Kafka consumer to the wrong namespace
+    MEASURED: changing the shared consumer map's namespace fails 12 AWS assertions
+    (354 OK / 12 FAIL), including 'both consumers delivered from the class Secret', 'the
+    delivery check is value-free', and the two transport-transcript assertions. Restored
+    and re-ran green.
 assert_app_image_ref_args_cold_empty      drop the missing-file guard from the shared image-ref args
     MEASURED: removing the guard fails one AWS assertion, 'and an unpublished artifact set
     prints no missing-file diagnostic' (365 OK / 1 FAIL): the cold deploy's intended empty

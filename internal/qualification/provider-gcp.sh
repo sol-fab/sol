@@ -102,6 +102,18 @@ hook_gcp_ca_scenario() { printf '%s' "$PROVIDER"; }
 
 # The report re-reads the durable phase captures, candidate binding and recorded
 # verdicts. A successful phase exit is not a family pass.
+# The Kafka observer's provider invocation: the run kubeconfig reads Secret metadata, and
+# the OCaml application transaction is the behavioral evidence.
+hook_gcp_kafka_observe() {
+  local public="$1" credential="$2"
+  shift 2
+  printf '%s' "$public" | python3 "$ROOT/internal/qualification/kafka-delivery.py" \
+    --provider gcp --cluster "$CLUSTER" --region "$REGION" --project "$PROJECT" \
+    --secret-kubeconfig "$RUN_KUBECONFIG" --credential-secret "$credential" \
+    --transaction "$LOG_DIR/app-transaction-ocaml.txt" \
+    "$@" $(app_namespaces)
+}
+
 hook_gcp_app_ca_report() {
   ca_qualify report "" "$LOG_DIR/ca-report.json" || return 1
   {

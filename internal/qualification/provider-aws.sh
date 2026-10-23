@@ -132,6 +132,22 @@ hook_aws_app_ca_report() {
   ca_qualify report "" "$LOG_DIR/ca-report.json" || return 1
 }
 
+# The Kafka observer's provider invocation. The observation is value-free: projections
+# through the namespace-scoped qualification transport, Secret metadata through the deploy
+# identity that wrote it, and the transaction as the behavioral evidence.
+hook_aws_kafka_observe() {
+  local public="$1" credential="$2" transaction
+  shift 2
+  transaction="$LOG_DIR/app-transaction.txt"
+  [ "${TRANSPORT:-1}" = 1 ] && transaction="$LOG_DIR/transport-transaction.txt"
+  printf '%s' "$public" | python3 "$ROOT/internal/qualification/kafka-delivery.py" \
+    --provider aws --cluster "$CLUSTER" --region "$AWS_REGION" --account "$ACCOUNT" \
+    --kubeconfig "$CA_KUBECONFIG" --secret-kubeconfig "$DEPLOY_KUBECONFIG" \
+    --credential-secret "$credential" --transaction "$transaction" \
+    "$@" $(app_namespaces)
+}
+
+
 # The CA driver's scenario for this row. The candidate declaration does not carry a
 # scenario, so the row's provider is the declaration of which scenario it exercises.
 hook_aws_ca_scenario() { printf '%s' "$PROVIDER"; }

@@ -36,6 +36,7 @@ WORKER_UNIT="${WORKER_UNIT:-notify_worker}"
 # production-single-region profile refuses a mutable tag. The profile qualifies
 # OCaml workloads only, and the example target omits the two TypeScript units.
 APP_UNITS="${APP_UNITS:-checkout_svc charge_svc notify_worker orders_svc fulfilment_worker}"
+KAFKA_BEHAVIORAL_UNITS="charge_svc notify_worker"
 # The namespaces this row is configured to exercise; the cold-start boundary derives the
 # per-unit namespaces from the candidate and requires this declared set to be covered.
 COLD_START_REQUIRED_NAMESPACES="${COLD_START_REQUIRED_NAMESPACES:-$APP_NS $WORKER_NS}"
@@ -931,59 +932,6 @@ app_kafka_credential_name() {
 # product test `database identity report is the interface the rows read` fails if they drift.
 app_database_field() {
   app_database_declaration | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1
-}
-
-app_verify_kafka_delivery() {
-  local state="$LOG_DIR/state/cloud.tfstate" public unit credential
-  local consumers=() behavioral=()
-  local transaction="$LOG_DIR/app-transaction.txt"
-  if [ "$TRANSPORT" = 1 ]; then transaction="$LOG_DIR/transport-transaction.txt"; fi
-  # Independent requirements for this row's selected reference applications.
-  # Do not derive them from observed env refs: a missing projection must fail.
-  #
-  # The unit-to-namespace map below is still harness-owned and NOT candidate-derived:
-  # the candidate's specimen declares database consumers, not the Kafka resource
-  # identity, so there is nothing in it to match these units against. This is a known
-  # gap, not an intentional design; it is tracked separately from the database
-  # delivery assertion.
-  for unit in $APP_UNITS; do
-    case "$unit" in
-      charge_svc | orders_svc) consumers+=(--consumer "$APP_NS/$(k8s_name "$unit")") ;;
-      notify_worker | fulfilment_worker) consumers+=(--consumer "$WORKER_NS/$(k8s_name "$unit")") ;;
-      checkout_svc) ;; # This scenario's checkout is not a Kafka consumer.
-      *) say "no Kafka qualification requirement defined for selected unit $unit"; return 1 ;;
-    esac
-  done
-  # The transaction is the behavioral half: it publishes through the service and
-  # consumes through the worker, so those two prove authentication and use.
-  for unit in $APP_UNITS; do
-    case "$unit" in
-      charge_svc) behavioral+=(--behavioral-consumer "$APP_NS/$(k8s_name "$unit")") ;;
-      notify_worker) behavioral+=(--behavioral-consumer "$WORKER_NS/$(k8s_name "$unit")") ;;
-    esac
-  done
-  if [ "${#behavioral[@]}" = 0 ]; then
-    say "the selected units do not include the transaction's Kafka publisher and consumer"
-    return 1
-  fi
-  credential="$(app_kafka_credential_name)"
-  if [ -z "$credential" ]; then
-    say "the deploy declared no delivered Kafka credential; the projection cannot be read"
-    return 1
-  fi
-  public="$(jq -ce '.outputs.kafka_authority.value | select(type == "object")' "$state")" || return 1
-  # The projection and Secret metadata are observed without reading credential values:
-  # Deployments through the namespace-scoped qualification transport, and the Secret's
-  # name through the deploy identity that wrote it. Credential data is never parsed.
-  printf '%s' "$public" | python3 "$ROOT/internal/qualification/kafka-delivery.py" \
-    --provider aws --cluster "$CLUSTER" --region "$AWS_REGION" --account "$ACCOUNT" \
-    --kubeconfig "$CA_KUBECONFIG" \
-    --secret-kubeconfig "$DEPLOY_KUBECONFIG" \
-    --credential-secret "$credential" \
-    --transaction "$transaction" \
-    "${behavioral[@]}" \
-    "${consumers[@]}" \
-    $(app_namespaces) >"$LOG_DIR/kafka-delivery.json"
 }
 
 # The candidate's specimen is the consumer authority: it declares every workload that
