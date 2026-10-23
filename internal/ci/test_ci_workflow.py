@@ -118,7 +118,11 @@ def main() -> None:
 
         # Registry login must use the registry host, not the full repository path.
         write_stub(stub / "aws", 'echo "password"')
-        write_stub(stub / "docker", 'printf "docker %s\\n" "$*" >> "$STUB_LOG"')
+        write_stub(
+            stub / "docker",
+            'if [ "$1" = "login" ]; then cat >/dev/null; fi\n'
+            'echo "docker $*" >> "$STUB_LOG"',
+        )
         aws_login_env = {
             **base_env,
             "SOL_REGISTRY": f"{REGISTRY}/team",
