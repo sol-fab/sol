@@ -63,13 +63,14 @@ possible.
 
 1. `sol new workspace <name>` — scaffold
 2. `cd <name> && dune build` — build generated workspace
-3. `sol local infra up` — provision or reconcile local substrate (k3d cluster)
-4. `sol up` — build Docker images, push, deploy
-5. `sol migrate` — apply DB migrations
-6. `sol local status` — check pods
+3. `sol local deploy` — create/reuse the k3d cluster, install local infrastructure, build, push and deploy; this is the only local entry point, and the first run stops at the pending-migration gate
+4. `sol local migrate` — apply DB migrations
+5. `sol local deploy` — deploy against the migrated schema
+6. `kubectl get pods -A` — check workload health (Sol does not expose a status command)
 7. `curl http://localhost:8080/health`
 8. `curl -X POST http://localhost:8080/charges -H 'Content-Type: application/json' -d '{"customer_id":"cus_dogfood","amount_cents":999,"currency":"usd"}'`
 9. Wait up to 10s for worker to consume, then `curl http://localhost:8080/notifications`
+10. Open `http://localhost:3000` and verify the workspace/service dashboards show the request and worker logs and metrics; open Explore and query Loki for the service
 
 For step 9: verify the notification row was written by `notify_worker` consuming
 a Kafka event, not directly inserted by the HTTP service. If the row is present,
@@ -77,15 +78,17 @@ the Kafka path is proven.
 
 ### 5. Evaluate the two-minute claim
 
-After step 4 (`sol up`), measure the wall-clock time from `sol new workspace`
-through first successful `curl /health`. Does it stay under two minutes on an
-existing substrate **with the image build cache warm**?
+After the first successful `sol local deploy` that reaches `curl /health`,
+measure the wall-clock time from `sol new workspace` through the first
+successful health request. Does it stay under two minutes on an existing
+substrate **with the image build cache warm**?
 
 Two costs do not count against the claim, and both must be stated when measuring:
 
-- `sol local infra up` on a fresh cluster takes ~5 min and is substrate
-  bootstrap.
-- the **first-ever image build**. `sol up`'s Docker build pulls
+- the first `sol local deploy` on a fresh cluster creates the k3d cluster and
+  installs the local infrastructure (~5 min); that is substrate bootstrap, not
+  application deployment.
+- the **first-ever image build**. The Docker build pulls
   `ocaml/opam:ubuntu-24.04-ocaml-5.4` and runs apt + `opam pin`/`opam install`
   inside the image. Measured 2026-09-13 (FRIC-024): **5m34s** for the first
   workspace versus **26s** end-to-end for the next fresh workspace once those

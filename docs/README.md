@@ -88,9 +88,10 @@ never needs a source checkout to complete the ordinary path.
 ### 4. Operations
 
 The published page is [`guides/operations.md`](guides/operations.md): the day-two command
-set, health, logs, rollback, diagnostics, the operational UIs, destroy, and uninstall.
+set, rollback, diagnostics, the operational UIs, destroy, and uninstall.
 
-- **Everyday operations** — `status`, `logs`, `open`, `check`.
+- **Everyday operations** — `check`, `releases`, `rollback`, `destroy`, `uninstall`;
+  logs, metrics and traces through the target's Grafana.
 - **Releases and rollback** — the release contract and `sol rollback`.
 - **Destroy and uninstall** — the environment/installation distinction, and the
   explicit teardown of each (`sol destroy`, `sol uninstall`).

@@ -172,8 +172,7 @@ environment.
 ### 4.2 It is triggered inline, not by a separate ritual
 
 **UX requirement:** a user should not have to learn or manually invoke a
-separate bootstrap command to get started. An explicit `sol init`-style
-administrative workflow may exist, but the ordinary path is that `sol deploy`
+separate bootstrap command to get started. An explicit administrative workflow may exist, but the ordinary path is that `sol deploy`
 detects an uninitialised account and guides the user through initialisation in
 place. The user experiences one command.
 
@@ -491,9 +490,11 @@ Requirements:
 - Keep CI output and artifacts as diagnosable as local output, preserving the
   same lifecycle and safety invariants.
 
-**Today:** `sol new workspace` scaffolds a GitHub Actions workflow with build,
-test, image push, plan export and GitOps emit steps; short-lived identity and an
-existing-repo generator are **Target** (FEAT-109).
+**Today:** `sol new workspace` scaffolds the GitHub Actions workflow, and
+`sol ci init github` writes it into an existing workspace. The workflow installs
+the release, uses GitHub OIDC, builds and pushes images, applies migrations,
+deploys by digest and runs workload authorization through a separate gated
+identity. See [CI and continuous deployment](deployment/ci.md).
 
 ---
 
@@ -513,9 +514,9 @@ The acceptance test for this section: **an operator who stops using Sol can
 still describe, inspect, and continue operating what was built**, without a Sol
 binary in the loop.
 
-**Today:** largely true for the customer-cloud path; the fresh-machine
-authentication story is constrained by the deploy-identity question still open in
-`DEC-030`.
+**Today:** largely true for the customer-cloud path. The deploy-identity
+mechanism is implemented for AWS (DEC-058); GCP still names its operator
+kubeconfig step, and that gap is tracked in the support table.
 
 ---
 

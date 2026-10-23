@@ -141,7 +141,7 @@ The following substrate inputs must exist before running `sol deploy`.
 
 - **Loki**: HTTP push URL, e.g. `http://loki.monitoring.svc:3100`.
   The generated ConfigMap defaults `LOKI_URL` to Sol's in-cluster Loki service.
-- **Prometheus Pushgateway**: HTTP URL for `sol fn` metrics push, e.g.
+- **Prometheus Pushgateway**: HTTP URL for the function primitive (`-fn`) metrics push, e.g.
   `http://pushgateway.monitoring.svc:9091`.
   The generated ConfigMap defaults `PUSHGATEWAY_URL` to Sol's in-cluster
   Pushgateway service.
@@ -307,7 +307,7 @@ production substrate:
 |---|---|
 | `platform/cloud/modules/platform/` | Generic Kubernetes substrate: namespaces, RBAC, cert-manager, ingress-nginx |
 | `platform/cloud/aws/cluster/` | AWS: VPC, EKS cluster, ECR registry, RDS PostgreSQL, IAM OIDC |
-| `platform/cloud/gcp/cluster/` | GCP: GKE Autopilot, Artifact Registry, Cloud SQL, Workload Identity |
+| `platform/cloud/gcp/cluster/` | GCP: GKE (REGULAR release channel), Artifact Registry, Cloud SQL, Workload Identity |
 | `platform/cloud/delivery/argocd/` | Argo CD `Application` manifest for GitOps mode |
 
 These modules are **starting points**. They express Sol's opinion about a
@@ -460,7 +460,9 @@ and an unqualified provider still deploys the declared shape, so the posture a
 preflight refuses is exactly the posture the plan previewed: qualification
 decides *whether* a deploy may proceed, never *what* the target deploys. Deriving
 the transport from the shape therefore does not imply the substrate is qualified,
-and GCP stays unshippable until it has its own production qualification claim.
+and GCP is part of the same contract: it is admitted once its own
+production evidence exists, and the README support table records the current
+gap rather than a permanent exclusion.
 
 Every guarantee now has a real establishment branch — none is staged
 (`not_yet_established` no longer exists). Preflight establishes only what is
@@ -470,7 +472,7 @@ recovery behaviour behind the numeric DEC-026 bounds is HARDEN-002's evidence.
 
 | Guarantee | Required when |
 |---|---|
-| Qualified provider/substrate (AWS) | always |
+| Qualified provider/substrate (AWS or GCP; the support table records which is admitted) | always |
 | Qualified version set | always |
 | Direct apply reconciliation authority | always — `--emit-to` is refused |
 | Recoverable remote infrastructure state | always |

@@ -40,7 +40,7 @@ the complete generated YAML to a directory; a GitOps tool (Argo CD, Flux) or
 Kustomize overlay can then patch it before application.
 
 Sol owns the base manifests. Your overlays own the delta. Changes made via
-overlays are not visible to `sol inspect` or `sol plan` — treat them as a
+overlays are not visible to `sol plan` — treat them as a
 seam, not a primary workflow.
 
 ### Level 4 — Raw Kubernetes / Terraform (self-managed)

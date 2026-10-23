@@ -36,14 +36,14 @@ Note which findings were already open — verify whether they are now resolved b
 - Check whether the generated README explains the project layout clearly enough without prior Sol knowledge
 
 **Stage 3 — Local Development:**
-- Check `README.md` or a linked guide for `sol local infra up` and `sol local run` instructions
-- Check whether `sol local run` exists as a command
+- Check `README.md` or a linked guide for `sol local deploy` and `sol local run` instructions
+- Check whether `sol local deploy` creates the local cluster and infrastructure, and `sol local run` exists
 - Verify the guide explains how to observe the message flow end-to-end (Grafana URL, what to query)
 
 **Stage 4 — Cloud Setup:**
-- Check `README.md` or a linked guide for `sol cloud init` instructions
-- Check whether `sol cloud init` exists as a command
-- Check `platform/cloud/` — verify Terraform modules exist for at least one cloud provider
+- Check `README.md` or a linked guide for the first-run `sol deploy` flow, the target declaration and the installation/identity steps
+- Check whether `sol deploy <target>` detects an absent installation and guides the operator in place
+- Check `platform/cloud/` — verify Terraform modules exist for both supported providers
 
 **Stage 5 — First Deploy:**
 - Check `README.md` or a linked guide for `sol deploy` instructions with the required target positional (`<env>/<provider>/<region>`) and all required flags
@@ -55,8 +55,8 @@ Note which findings were already open — verify whether they are now resolved b
 - Check whether `sol rollback` exists
 
 **Stage 7 — Day-2 Operations:**
-- Check `README.md` for `sol logs`, `sol migrate`, `sol status` instructions
-- Check whether `sol logs <service>` exists as a command
+- Check the docs for `sol releases`, `sol rollback`, `sol migrate`, `sol destroy` and `sol uninstall`
+- Check that routine logs, metrics and traces are documented through the per-target Grafana URL, with a login path that does not require Kubernetes access
 - Verify `sol new svc` / `sol new worker` / `sol new fn` are documented
 
 **Stage 8 — Adding a Domain Event Flow:**
