@@ -27,6 +27,11 @@ output "artifact_registry" {
   value       = "${var.region}-docker.pkg.dev/${var.project_id}/${var.cluster_name}"
 }
 
+output "publisher_service_account" {
+  description = "The CI publisher identity, when declared; it can write this cluster's Artifact Registry repository and has no Kubernetes API authority. Null when the target uses another CI identity."
+  value       = var.publisher_service_account == "" ? null : var.publisher_service_account
+}
+
 output "docker_auth_command" {
   description = "Command to authenticate Docker with Artifact Registry"
   value       = "gcloud auth configure-docker ${var.region}-docker.pkg.dev"

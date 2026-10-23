@@ -151,6 +151,13 @@ prod:
 - The four role ARNs are declared in the target's `aws:` block, because they are
   provider-native. You do not have to invent their permissions (§4.2).
 
+**GCP publisher.** A GCP target may declare
+`gcp.publisher_service_account`. Sol grants that account
+`roles/artifactregistry.writer` on the cluster's repository only; it receives no
+Kubernetes API authority, so it is safe to use as the CI image-push identity.
+The operator creates the account and authenticates it (for example through
+Workload Identity Federation); Sol does not create the identity.
+
 Values you would rather not commit — an account id, a registry, the ARNs — belong
 in `sol/environments.local.yml`, which the scaffolded `.gitignore` excludes.
 

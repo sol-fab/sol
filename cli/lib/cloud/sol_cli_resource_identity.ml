@@ -355,6 +355,13 @@ let gcp ~cluster_name ~project_id =
       ~identity:"the registry pull grant"
       ~import_identity:""
   ; entry
+      "google_artifact_registry_repository_iam_member.publisher"
+      (not_recoverable composite_identity)
+      ~resource_class:""
+      ~observed_as:""
+      ~identity:"the CI publisher's repository write grant"
+      ~import_identity:""
+  ; entry
       "google_project_iam_member.provisioner_cluster_access"
       (not_recoverable composite_identity)
       ~resource_class:""

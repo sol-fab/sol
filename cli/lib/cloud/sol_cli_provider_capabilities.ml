@@ -1102,6 +1102,9 @@ let gcp_own_vars
        (Sol_cli_config.provider_field target "provisioner_impersonator"
         |> Option.map (fun member -> Printf.sprintf "[%S]" member))
   |> add_opt
+       "publisher_service_account"
+       (Sol_cli_config.provider_field target "publisher_service_account")
+  |> add_opt
        "create_dns_zone"
        (* The durable root owns and ensures the delegated zone for every declared
           dns_zone_ownership, so the cluster root reuses it. It must never create
