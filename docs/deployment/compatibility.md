@@ -102,10 +102,12 @@ These are gaps in the evidence table, not exclusions from the contract:
 - GCP now has a namespace-scoped `sol-deploy` ServiceAccount token identity;
   live evidence of its use is still required.
 - GCP managed Kafka and partial-state teardown are unverified (#1603, #1605).
-- TypeScript has no function runtime, and `@sol-fab/worker` has no consumer-join
-  readiness/`on_ready` yet.
+- TypeScript function and worker-readiness source is complete in
+  `sol-typescript#19/#20` but the packages are unpublished, so `main` cannot
+  install them yet.
 - AWS's independent Kafka delivery observation is blocked (#1593).
-- Per-target Grafana TLS + OIDC access is not implemented for either cloud.
+- Per-target Grafana TLS+OIDC configuration is implemented and guarded; live
+  login and dashboard visibility remain the qualification evidence.
 - Full production-profile evidence (Postgres failover/restore, availability,
   alerts) is incomplete on both providers.
 
@@ -119,11 +121,11 @@ The contract is the guarantee; the implementation is provider-native:
 | Guarantee | AWS | GCP |
 |---|---|---|
 | Compute | EKS managed node group | GKE (REGULAR release channel) |
-| Database | RDS PostgreSQL, Multi-AZ in the production profile | Cloud SQL PostgreSQL, HA in the production profile once qualified |
+| Database | RDS PostgreSQL, Multi-AZ in the production profile | Cloud SQL PostgreSQL, Regional HA and deletion protection in the production profile; failover/restore evidence pending |
 | Registry | ECR, one repository per workspace/unit | Artifact Registry, one repository per cluster |
 | DNS | Route 53 delegated zone | Cloud DNS delegated zone |
 | State | S3 + DynamoDB lock | GCS + native state locking |
-| Identities | provisioner, cluster-access, deploy, operator, publisher roles (OIDC) | provisioner impersonation, deploy/cluster identities and Workload Identity; the deploy identity and publisher are current gaps |
+| Identities | provisioner, cluster-access, deploy, operator, publisher roles (OIDC) | provisioner impersonation, `sol-deploy` KSA token identity, repository-scoped publisher; live evidence pending |
 | Secrets | Secrets Manager / Kubernetes Secrets | Secret Manager / Kubernetes Secrets |
 
 These are implementation differences. A difference becomes user-visible only

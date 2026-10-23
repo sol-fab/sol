@@ -234,7 +234,7 @@ TypeScript; `-svc`, `-worker` and `-fn`. Every AWS and GCP combination is
 contracted at the production profile; local is development by design. The table
 below is the evidence currently established for each cell, not a support tier
 and not a roadmap. The contract and provider realizations are in
-[compatibility](docs/reference/compatibility.md); the guarantee is
+[compatibility](docs/deployment/compatibility.md); the guarantee is
 [ADR 0009](docs/architecture/adr/0009-one-product-contract.md). Work state is
 GitHub Issues, and detailed evidence is under `internal/qualification/`.
 
@@ -258,16 +258,16 @@ GitHub Issues, and detailed evidence is under `internal/qualification/`.
 | Rollback | partial | none | none | Unit-tested; no live rollback evidence on either cloud. |
 | Destroy and verified absence | local | prod | partial | GCP partial-state recovery is open (#1605); local teardown is documented k3d cleanup. |
 | Uninstall | partial | none | none | No live installation-removal evidence. |
-| Logs, metrics and traces in Grafana | partial | none | none | Dashboards are not verified against a live Grafana; cloud access has no TLS+OIDC path (one Grafana is installed per target). |
-| CI and shipped artifact | partial | partial | partial | The generated workflow was not executable before the artifact/CI change; a cold-start CI path is still missing. |
+| Logs, metrics and traces in Grafana | partial | none | none | Grafana OIDC/dashboards are configured and guarded; live login and target telemetry visibility are not yet verified. |
+| CI and shipped artifact | partial | partial | partial | The generated workflow is executable in the offline harness; a real cold-start CI run is still missing. |
 
 ### Production profile
 
 | Requirement | AWS | GCP | Gap |
 |---|---|---|---|
-| State, identities and permissions | partial | partial | GCP now has a namespace-scoped sol-deploy KSA token identity; live evidence is still required. The repository-scoped publisher is tracked separately. |
+| State, identities and permissions | partial | partial | GCP `sol-deploy` KSA token and repository-scoped publisher grants are merged; live evidence is still required. |
 | Immutable artifacts | live | partial | GCP digests have not been exercised on the current head. |
-| Postgres HA, backup and restore | partial | none | Failover/PITR/restore bounds are not measured on either provider; GCP Cloud SQL recovery is open (#1605). |
+| Postgres HA, backup and restore | partial | partial | GCP Regional HA/deletion protection are configured; failover, backup/PITR and restore bounds are not measured on either provider (#1605). |
 | Kafka durability and recovery | partial | partial | RF/acked-loss/consumer-resume evidence is not complete; #1593 blocks AWS delivery observation. |
 | Availability and node-loss recovery | none | none | No measured node-loss/recovery evidence. |
 | Alert delivery and acknowledgement | none | none | No named receiver/owner has acknowledged a delivered alert. |
