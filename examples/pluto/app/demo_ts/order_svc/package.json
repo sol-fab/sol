@@ -19,7 +19,7 @@
     "@sol-fab/kafka": "^0.5.2",
     "@sol-fab/obs": "^0.4.0",
     "@sol-fab/outbox": "^0.1.0",
-    "@sol-fab/svc": "^0.2.0",
+    "@sol-fab/svc": "^0.3.0",
     "fastify": "^5.1.0",
     "kafkajs": "^2.2.4",
     "pg": "^8.23.1"

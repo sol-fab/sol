@@ -5,7 +5,10 @@ type rule =
   | Skip_if_exists
   | Patch_modules of string
 
-let kinds = [ "workspace"; "svc"; "worker"; "fn"; "event" ]
+let kinds =
+  [ "workspace"; "svc"; "worker"; "fn"; "event"; "svc-ts"; "worker-ts"; "fn-ts" ]
+;;
+
 let dir_of ~root ~kind = Filename.concat root kind
 
 let plan ~root ~kind =

@@ -12,3 +12,8 @@
 [infra.rollout]
 # strategy = "canary"       # or "blue-green"
 # steps    = [10, 40, 100]  # canary only
+
+# Declare the topic this worker consumes when you wire it to an event. The
+# topic makes the deploy render the worker's /readyz and /livez probes:
+# [service]
+# topics = ["<team>-<event>s"]

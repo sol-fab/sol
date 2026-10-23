@@ -228,16 +228,15 @@ let new_worker ?language arg =
 ;;
 
 let new_fn ?language arg =
-  match Option.value ~default:Sol_cli_compat.Ocaml language with
-  | Sol_cli_compat.Typescript ->
-    Error
-      "TypeScript -fn is not supported yet: Sol has no TypeScript function runtime \
-       contract. Use --language ocaml, or track the -fn capability in \
-       internal/specs/framework-conventions.md."
-  | Sol_cli_compat.Ocaml ->
-    let* dir = new_component Function ~label:"fn" arg in
-    Sol_cli_report.app "\nDone.  Build: dune build %s/bin/main.exe" dir;
-    Ok ()
+  let* dir = new_component Function ?language ~label:"fn" arg in
+  (match Option.value ~default:Sol_cli_compat.Ocaml language with
+   | Sol_cli_compat.Ocaml ->
+     Sol_cli_report.app "\nDone.  Build: dune build %s/bin/main.exe" dir
+   | Sol_cli_compat.Typescript ->
+     Sol_cli_report.app
+       "\nDone.  Install and build:\n  cd %s && npm install && npm run build"
+       dir);
+  Ok ()
 ;;
 
 let event_vars ~ws ~team ~name =
