@@ -131,6 +131,22 @@ json.dump(request, open(os.path.join(log, "ca-request-" + phase + ".json"), "w")
 PY
 }
 
+# The deploy's own database declaration: the product prints `sol-database-identity:` when
+# it reconciles the database. The final deploy's line is authoritative; the bootstrap
+# deploy's log is the fallback, and its name is the provider's. Nothing here reconstructs
+# the declaration.
+app_database_declaration() {
+  local hook="hook_${PROVIDER}" bootstrap log
+  bootstrap="$("${hook}_app_bootstrap_deploy_log")" || return 1
+  for log in "$LOG_DIR/app-deploy.log" "$bootstrap"; do
+    [ -f "$log" ] || continue
+    if grep -q 'sol-database-identity:' "$log"; then
+      grep -h 'sol-database-identity:' "$log" | tail -1
+      return 0
+    fi
+  done
+}
+
 # The cloud phase. The order is the contract:
 #   precondition -> (plan-only shortcut) -> prestate -> apply -> post_apply
 #   -> reconciled? -> artifact gate refused? -> pre_verify -> cold-start boundary

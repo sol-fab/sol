@@ -15,6 +15,9 @@ REQUIRED_HOOKS=(
   app_images
   app_database_source
   app_bootstrap_deploy
+  # The bootstrap deploy's log name is provider-specific; the database-declaration
+  # reader prefers the final deploy and falls back to this path.
+  app_bootstrap_deploy_log
   app_secret_refusal
   app_transport
   app_authorities

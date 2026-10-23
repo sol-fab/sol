@@ -35,6 +35,16 @@ assert_ca_identity_scope_derived          force identity_scope to deploy
     derives the observed identity's scope' (652 OK / 1 FAIL). The assertion was added in
     this batch because the suite did not previously name the field; restored and re-ran
     green.
+assert_app_namespaces_candidate_derived   make the namespace derivation return nothing
+    MEASURED: returning no namespaces fails 12 AWS assertions (352 OK / 12 FAIL),
+    including 'the delivery check is value-free', 'and the transaction is its behavioral
+    evidence', and 'the Kafka observer reads the transport transcript'. The derivation
+    reads the candidate-bound build context, and the app-only suite rows now seed that
+    artifact exactly as prepare does. Restored and re-ran green.
+assert_app_database_declaration_prefers_final   (named gap)
+    The reader prefers the final deploy's `sol-database-identity:` line over the
+    bootstrap deploy's. Both stub deploys print the same line, so the suite exercises
+    the collapse but would not detect a preference regression. No mutation is claimed.
 assert_cloud_verdict_is_reconciliation    remove the environment_reconciled check
 assert_cloud_verdict_is_artifact_gate     remove the pending_artifacts_refused check
 assert_cloud_freeze_before_diagnose       call cloud_diagnose before cloud_freeze

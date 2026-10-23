@@ -57,6 +57,10 @@ hook_gcp_app_images() {
 
 hook_gcp_app_database_source() { app_capture_database_source; }
 
+# The bootstrap deploy's log name, which the database-declaration reader falls back to
+# after the final deploy.
+hook_gcp_app_bootstrap_deploy_log() { printf '%s' "$LOG_DIR/app-deploy-bootstrap.log"; }
+
 hook_gcp_app_bootstrap_deploy() {
   local image_ref_args="$1"
   # Establish namespaces/database setup; a first deployment may stop at its migration

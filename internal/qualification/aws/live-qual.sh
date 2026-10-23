@@ -946,15 +946,6 @@ app_migration_gate_failure() {
   grep -qF 'the required migration set is not applied' "$1" 2>/dev/null
 }
 
-app_unit_addresses() {
-  local unit dir
-  for unit in $APP_UNITS; do
-    if dir="$(unit_dir "$unit")"; then
-      printf '%s\n' "${dir#app/}"
-    fi
-  done | sort -u
-}
-
 
 app_class_credential_name() { printf '%s' "$TARGET" | tr '[:upper:]/' '[:lower:]-'; }
 
@@ -969,31 +960,10 @@ app_kafka_credential_name() {
 # <target>-dml-creds, both written by the deploy's database setup step. This asserts the
 # delivered form exists and that the consumer did not also receive an operator's master
 # copy — the "value nothing reads" failure this arc removes.
-app_namespaces() {
-  local prefix="${APP_NS%-*}" address
-  for address in $(app_unit_addresses); do
-    printf '%s-%s\n' "$prefix" "${address%%/*}"
-  done | sort -u
-}
-
 # **Read where the deploy says it wrote** (sol-database-identity: ...), rather than reproducing
 # the naming rule here. The row asserts Sol's decision, not its own copy of it (#1424). The
 # field names are the interface; the deploy's line is a stable, documented output, and the
 # product test `database identity report is the interface the rows read` fails if they drift.
-app_database_declaration() {
-  local log
-  # The app phase reads the final deploy's declaration; the transport, established
-  # after the first deploy, reads the gate deploy's. Prefer the final deploy when
-  # both exist, and never reproduce the namespace naming rule here.
-  for log in "$LOG_DIR"/app-deploy.log "$LOG_DIR"/app-deploy-gate.log; do
-    [ -f "$log" ] || continue
-    if grep -q 'sol-database-identity:' "$log"; then
-      grep -h 'sol-database-identity:' "$log" | tail -1
-      return 0
-    fi
-  done
-}
-
 app_database_field() {
   app_database_declaration | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1
 }

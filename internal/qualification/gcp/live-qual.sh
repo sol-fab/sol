@@ -1576,19 +1576,6 @@ app_registry() { printf '%s-docker.pkg.dev/%s/%s' "$REGION" "$PROJECT" "$CLUSTER
 app_kube_context() { printf 'gke_%s_%s_%s' "$PROJECT" "$REGION" "$CLUSTER"; }
 
 # The namespaces this row's units deploy into, for the per-namespace observations below.
-app_namespaces() {
-  local service path
-  for service in $(app_services); do
-    if path="$(app_context_path "$service")"; then
-      printf 'pluto-%s\n' "$(printf '%s' "${path#app/}" | cut -d/ -f1)"
-    fi
-  done | sort -u
-}
-
-app_services() {
-  printf '%s\n' ${APP_SERVICES-orders_svc fulfilment_worker order_svc fulfillment_worker}
-}
-
 # The namespaces the target's selected units declare, taken from the candidate-bound
 # application contract -- the build context candidate-binding.sh materialized from the
 # candidate revision -- and never from the working tree, app_namespaces, or the
@@ -1686,11 +1673,6 @@ app_class_credential_name() { printf '%s' "$TARGET" | tr '[:upper:]/' '[:lower:]
 # reproducing the naming rule here (#1424). The bootstrap deploy declares the same
 # identity before the migration step, so the migration namespace is known then too;
 # the final deploy's declaration wins when both exist.
-app_database_declaration() {
-  grep -h 'sol-database-identity:' \
-    "$LOG_DIR"/app-deploy-bootstrap.log "$LOG_DIR"/app-deploy.log 2>/dev/null | tail -1
-}
-
 app_database_field() {
   app_database_declaration | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1
 }

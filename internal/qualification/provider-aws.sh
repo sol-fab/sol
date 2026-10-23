@@ -46,6 +46,10 @@ hook_aws_app_database_source() {
   } >"$LOG_DIR/app-runtime-secrets.txt" 2>&1
 }
 
+# The bootstrap deploy's log name, which the database-declaration reader falls back to
+# after the final deploy.
+hook_aws_app_bootstrap_deploy_log() { printf '%s' "$LOG_DIR/app-deploy-gate.log"; }
+
 hook_aws_app_bootstrap_deploy() {
   local image_ref_args="$1" ns
   # Deliberately not local: the transaction hook re-reads the namespaces the deploy

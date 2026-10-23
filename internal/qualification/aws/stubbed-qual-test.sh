@@ -1030,6 +1030,10 @@ PY
   # The app phase reuses the digests `cloud` published into Sol's repositories; a scenario that
   # runs `app` alone seeds them exactly as a publish would have.
   stub_published_refs
+  # The app phase derives its namespaces from the candidate-bound build context prepare
+  # materializes; a scenario that runs app alone seeds it exactly as prepare would.
+  mkdir -p "$LOG_DIR/app-build-context"
+  cp -R "$WORKSPACE/app" "$LOG_DIR/app-build-context/app"
   # The app phase runs against the real refusal sequence: the first deploy refuses at the
   # migration gate, `sol migrate apply` clears it, the second refuses the absent operator
   # secrets, and `sol secret set` clears that. Fresh markers per scenario keep one row's
@@ -1103,6 +1107,10 @@ run_phase() {
   # them (the app phase reuses the cloud phase's and never publishes its own).
   if [ "$phase" = app ]; then
     stub_published_refs
+    # The app phase derives its namespaces from the candidate-bound build context prepare
+    # materializes; a scenario that runs app alone seeds it exactly as prepare would.
+    mkdir -p "$LOG_DIR/app-build-context"
+    cp -R "$WORKSPACE/app" "$LOG_DIR/app-build-context/app"
     # The app phase reuses the database-contract pins `prepare` recorded.
     mkdir -p "$LOG_DIR"
     python3 - "$LOG_DIR/database-contract-pins.json" "qualreg/aws/us-east-1" <<'PY'
