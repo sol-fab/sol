@@ -316,7 +316,8 @@ cat >"$TMP/bin/aws" <<'STUB'
 printf 'aws %s\n' "$*" >>"$AWS_LOG"
 class_read() {
   case "$1 $2" in
-    "eks list-clusters" | "rds describe-db-instances" | "rds describe-db-subnet-groups" | \
+    "eks list-clusters" | "eks list-access-entries" | "eks list-associated-access-policies" | \
+      "rds describe-db-instances" | "rds describe-db-subnet-groups" | \
       "rds describe-db-snapshots" | "ec2 describe-instances" | "ec2 describe-vpcs" | \
       "ec2 describe-nat-gateways" | "ec2 describe-addresses" | "ec2 describe-volumes" | \
       "elbv2 describe-load-balancers" | "elbv2 describe-tags" | "ecr describe-repositories" | \
@@ -405,6 +406,20 @@ case "$1 $2" in
     ;;
   "eks list-clusters")
     if [ "${STUB_LIVE_EKS:-0}" = "1" ]; then printf '{"clusters":["test-cluster"]}\n'; else printf '{"clusters":[]}\n'; fi
+    ;;
+  "eks list-access-entries")
+    if [ "${STUB_LIVE_ACCESS_ENTRY:-0}" = "1" ]; then
+      printf '{"accessEntries":["arn:aws:iam::123456789012:role/qualifier"]}\n'
+    else
+      printf '{"accessEntries":[]}\n'
+    fi
+    ;;
+  "eks list-associated-access-policies")
+    if [ "${STUB_LIVE_ACCESS_ENTRY:-0}" = "1" ]; then
+      printf '{"associatedAccessPolicies":[{"policyArn":"arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"}]}\n'
+    else
+      printf '{"associatedAccessPolicies":[]}\n'
+    fi
     ;;
   "rds describe-db-instances")
     if [ "${STUB_MALFORMED_RDS:-0}" = "1" ]; then
@@ -2092,6 +2107,12 @@ run_phase live-residue verify STUB_LIVE_INSTANCE=1
 refused live-residue "a live instance fails the verification"
 has "a live instance reads PRESENT" "ec2-instance: PRESENT" \
   "$TMP/live-residue.logs/aws-inventory-verdict.txt"
+run_phase live-access-entry verify STUB_LIVE_EKS=1 STUB_LIVE_ACCESS_ENTRY=1
+refused live-access-entry "a qualifier access entry fails the verification"
+has "the qualifier access entry reads PRESENT" "eks-access-entry-policy: PRESENT" \
+  "$TMP/live-access-entry.logs/aws-inventory-verdict.txt"
+has "and names the cluster-admin association" "AmazonEKSClusterAdminPolicy" \
+  "$TMP/live-access-entry.logs/aws-inventory-verdict.txt"
 run_phase live-nat verify STUB_LIVE_NAT=1
 refused live-nat "a live NAT gateway fails the verification"
 has "a live NAT gateway reads PRESENT" "nat-gateway: PRESENT" \

@@ -26,6 +26,7 @@ import absence
 CLUSTER = "qual-cluster"
 REGION = "us-east-1"
 ACCOUNT = "123456789012"
+QUALIFIER_ARN = f"arn:aws:iam::{ACCOUNT}:role/qualifier"
 
 CANDIDATE = {
     "version": "v0.1.0-alpha.9",
@@ -44,6 +45,7 @@ RUNTIME = absence.Runtime(
     target="qualreg/aws/us-east-1",
     state_key="sol/qualreg/aws/us-east-1/cloud.tfstate",
     candidate=CANDIDATE,
+    qualifier_arn=QUALIFIER_ARN,
     prior={"resources": {"ebs-volume": [], "security-group": [], "elastic-ip": [], "load-balancer": [], "oidc-provider": [f"arn:aws:iam::{ACCOUNT}:oidc-provider/oidc.eks.{REGION}.amazonaws.com/id/TEST"]}},
 )
 
@@ -55,6 +57,10 @@ CLUSTER_TAG = {"Key": f"kubernetes.io/cluster/{CLUSTER}", "Value": "owned"}
 PRESENT_FIXTURES: dict[str, tuple[tuple[str, str], object]] = {
     "kafka-secret": (("secretsmanager", "describe-secret"), {"Name": "sol-kafka-" + CLUSTER}),
     "eks-cluster": (("eks", "list-clusters"), {"clusters": [CLUSTER]}),
+    "eks-access-entry-policy": (
+        ("eks", "list-access-entries"),
+        {"accessEntries": [QUALIFIER_ARN]},
+    ),
     "rds-instance": (
         ("rds", "describe-db-instances"),
         {"DBInstances": [{"DBInstanceIdentifier": f"{CLUSTER}-postgres"}]},
@@ -117,6 +123,8 @@ PRESENT_FIXTURES: dict[str, tuple[tuple[str, str], object]] = {
 
 EMPTY_RESPONSES: dict[tuple[str, str], object] = {
     ("eks", "list-clusters"): {"clusters": []},
+    ("eks", "list-access-entries"): {"accessEntries": []},
+    ("eks", "list-associated-access-policies"): {"associatedAccessPolicies": []},
     ("rds", "describe-db-instances"): {"DBInstances": []},
     ("rds", "describe-db-subnet-groups"): {"DBSubnetGroups": []},
     ("rds", "describe-db-snapshots"): {"DBSnapshots": []},
@@ -331,11 +339,87 @@ def main() -> int:  # noqa: C901 - one linear suite reads better than nested fix
                 ("elbv2", "describe-tags"),
                 {"TagDescriptions": [{"ResourceArn": "arn:aws:elbv2:::loadbalancer/app/k8s-residue", "Tags": [CLUSTER_TAG]}]},
             )
+        if resource_class == "eks-access-entry-policy":
+            runner.set(("eks", "list-clusters"), {"clusters": [CLUSTER]})
+            runner.set(
+                ("eks", "list-associated-access-policies"),
+                {"associatedAccessPolicies": [
+                    {"policyArn": "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"}
+                ]},
+            )
         report = absence.evaluate(RUNTIME, runner)
         result = states(report)
         check(f"{resource_class}: a target resource reads PRESENT", result[resource_class] == absence.PRESENT)
-        check(f"{resource_class}: only that class fails", report.failed and all(o.resource_class == resource_class for o in report.failed))
-        check(f"{resource_class}: the failure is reported as residue", report.failed[0].state == absence.PRESENT and bool(report.failed[0].detail))
+        if resource_class == "eks-access-entry-policy":
+            # The access entry lives on a cluster that is itself present, so the
+            # parent class fails too. The access entry adds the qualifier's
+            # cluster-admin association, not a replacement for the cluster class.
+            check(
+                f"{resource_class}: the parent and the entry fail",
+                {o.resource_class for o in report.failed}
+                == {"eks-cluster", "eks-access-entry-policy"},
+            )
+        else:
+            check(
+                f"{resource_class}: only that class fails",
+                report.failed and all(o.resource_class == resource_class for o in report.failed),
+            )
+        check(f"{resource_class}: the failure is reported as residue", report.failed and report.failed[0].state == absence.PRESENT and bool(report.failed[0].detail))
+
+    print("absence: a qualifier access entry policy association is residue")
+    runner = FakeAws()
+    runner.set(("eks", "list-clusters"), {"clusters": [CLUSTER]})
+    runner.set(("eks", "list-access-entries"), {"accessEntries": [QUALIFIER_ARN]})
+    admin_policy = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+    runner.set(
+        ("eks", "list-associated-access-policies"),
+        {"associatedAccessPolicies": [{"policyArn": admin_policy}]},
+    )
+    report = absence.evaluate(RUNTIME, runner)
+    entry = next(o for o in report.observations if o.resource_class == "eks-access-entry-policy")
+    check("the qualifier entry policy association reads PRESENT", entry.state == absence.PRESENT)
+    check("its detail names the cluster-admin policy", admin_policy in entry.detail)
+
+    runner = FakeAws()
+    runner.set(("eks", "list-clusters"), {"clusters": [CLUSTER]})
+    runner.set(("eks", "list-access-entries"), {"accessEntries": [QUALIFIER_ARN]})
+    report = absence.evaluate(RUNTIME, runner)
+    entry = next(o for o in report.observations if o.resource_class == "eks-access-entry-policy")
+    check("a narrow entry with no associated policy is not residue", entry.state == absence.ABSENT)
+    check("and the detail says the entry is present but narrow", "no associated cluster-access policy" in entry.detail)
+
+    runner = FakeAws()
+    runner.set(("eks", "list-clusters"), {"clusters": [CLUSTER]})
+    runner.set(("eks", "list-access-entries"), {"accessEntries": [QUALIFIER_ARN]})
+    runner.fail(("eks", "list-associated-access-policies"))
+    report = absence.evaluate(RUNTIME, runner)
+    entry = next(o for o in report.observations if o.resource_class == "eks-access-entry-policy")
+    check("an unreadable policy association is UNKNOWN, never absent", entry.state == absence.UNKNOWN)
+
+    runner = FakeAws()
+    runner.set(("eks", "list-clusters"), {"clusters": [CLUSTER]})
+    runner.set(("eks", "list-access-entries"), {"accessEntries": [f"arn:aws:iam::{ACCOUNT}:role/another-qualifier"]})
+    report = absence.evaluate(RUNTIME, runner)
+    entry = next(o for o in report.observations if o.resource_class == "eks-access-entry-policy")
+    check("another principal's entry is not this target's policy association", entry.state == absence.ABSENT)
+
+    runner = FakeAws()
+    runner.set(("eks", "list-clusters"), {"clusters": [CLUSTER]})
+    runner.fail(("eks", "list-access-entries"))
+    report = absence.evaluate(RUNTIME, runner)
+    entry = next(o for o in report.observations if o.resource_class == "eks-access-entry-policy")
+    check("an unreadable entry list is UNKNOWN, never absent", entry.state == absence.UNKNOWN)
+
+    runner = FakeAws()
+    runner.set(("eks", "list-clusters"), {"clusters": [CLUSTER]})
+    report = absence.evaluate(replace(RUNTIME, qualifier_arn=""), runner)
+    entry = next(o for o in report.observations if o.resource_class == "eks-access-entry-policy")
+    check("an uncaptured qualifier principal is UNKNOWN", entry.state == absence.UNKNOWN)
+    check("and says the principal was not captured", "not captured" in entry.detail)
+
+    report = absence.evaluate(replace(RUNTIME, qualifier_arn=""), FakeAws())
+    entry = next(o for o in report.observations if o.resource_class == "eks-access-entry-policy")
+    check("an absent cluster implies its access entries absent without a principal", entry.state == absence.ABSENT)
 
     print("absence: unrelated account resources are not the target's residue")
     runner = FakeAws()

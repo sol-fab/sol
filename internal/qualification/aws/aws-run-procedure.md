@@ -252,7 +252,11 @@ a fresh session's shell never decides, and a stale same-named context can never 
 release at another cluster. Then capture both roots' state with `terraform state pull` into
 the bundle, run `sol destroy <target> --apply`, then the independent inventory. Evidence:
 `destroy-kubeconfig.txt` (the classification), `cloud-destroy.log`, the inventory files.
-**`verify`** runs the inventory alone. Rows: I3, I5, I7–I9, H6.
+**`verify`** runs the inventory alone. The inventory also reads the qualifier principal's EKS
+access-entry policy associations: the transport's normal narrow entry is expected, while any
+associated cluster-access policy is residue and an unreadable association is UNKNOWN. A
+transport window left broad by a killed run is therefore visible in the verdict rather than
+inferred from the cluster's presence. Rows: I3, I5, I7–I9, H6.
 
 ### Attempt identity, retries, and promotion eligibility
 

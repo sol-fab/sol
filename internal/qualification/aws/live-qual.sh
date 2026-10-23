@@ -501,9 +501,14 @@ capture_kube_evidence() {
 # excluded. Nothing here calls terraform or helm, and absence is never inferred
 # from Sol's exit code or Terraform state.
 aws_observe() {
+  local qualifier_arn=""
+  if [ -n "$QUALIFIER_ROLE" ] && [ -n "$ACCOUNT" ]; then
+    qualifier_arn="arn:aws:iam::${ACCOUNT}:role/${QUALIFIER_ROLE}"
+  fi
   python3 "$ABSENCE" "$@" \
     --prior "$LOG_DIR/aws-pre-teardown-identities.json" \
     --cluster "$CLUSTER" --region "$AWS_REGION" --account "$ACCOUNT" \
+    --qualifier-arn "$qualifier_arn" \
     --registry-prefix "$WORKSPACE_NAME" --base-domain "$BASE_DOMAIN" \
     --retention "$RETENTION" --attempt "$ATTEMPT" --target "$TARGET" \
     --state-key "$STATE_KEY" --candidate "$SOL_CANDIDATE"

@@ -6,6 +6,7 @@
       "scope_fields": ["account", "region"],
       "classes": [
         {"class": "eks-cluster", "expectation": "absent"},
+        {"class": "eks-access-entry-policy", "expectation": "absent"},
         {"class": "rds-instance", "expectation": "absent"},
         {"class": "rds-subnet-group", "expectation": "absent"},
         {"class": "rds-snapshot", "expectation": "absent"},

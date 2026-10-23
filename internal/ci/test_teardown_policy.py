@@ -81,8 +81,8 @@ def main() -> int:
         aws_policy == aws_expected,
     )
     check(
-        "the AWS policy has 19 disposable classes and one durable class",
-        sum(1 for expected in aws_policy.values() if expected == "absent") == 19
+        "the AWS policy has 20 disposable classes and one durable class",
+        sum(1 for expected in aws_policy.values() if expected == "absent") == 20
         and sum(1 for expected in aws_policy.values() if expected == "present") == 1,
     )
 
