@@ -323,25 +323,6 @@ record_ca_submission_authority() {
 # repositories it is about to create are where phase_app later pushes the digests this run
 # pins. Its exit status is returned rather than inspected here, because the deploy is
 # expected to stop at the workloads those digests belong to.
-bootstrap_deploy() {
-  local name="$1"
-  say "$name"
-  # A profiled target's preflight refuses a mutable tag, so every deploy that moves workloads
-  # names the digests published into Sol's repositories. The *cold* deploy has none: it is the
-  # run that provisions the target, creates those repositories and then refuses at the artifact
-  # gate with "Deployment incomplete" (issue #1413). So an empty argument list is expected here
-  # and the phase reads the deploy's refusal, not its exit code.
-  local image_ref_args
-  image_ref_args="$(app_image_ref_args)"
-  local command="cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args"
-  if command -v script >/dev/null 2>&1; then
-    printf 'y\n' | timeout "$PHASE_TIMEOUT" script -qec "$command" /dev/null \
-      >"$LOG_DIR/$name.log" 2>&1
-  else
-    timeout "$PHASE_TIMEOUT" bash -c "$command" >"$LOG_DIR/$name.log" 2>&1
-  fi
-}
-
 # The cold deploy's refusal. `sol deploy` provisioned the target, created the repositories its
 # release names, and stopped before any workload moved because the immutable image it requires is
 # not published yet (#1473). This is the phase's contract on a fresh profiled target: infrastructure

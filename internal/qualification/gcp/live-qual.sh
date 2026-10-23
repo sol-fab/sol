@@ -198,25 +198,6 @@ run() {
 # Registry repositories it is about to create are where the app phase later pushes the
 # digests this run pins. Its exit status is returned rather than fatal, because the deploy
 # is expected to stop at the workloads those digests belong to.
-bootstrap_deploy() {
-  local name="$1"
-  say "phase: $name"
-  local command="exec '$SOL' deploy '$TARGET' --registry '$(app_registry)' --image-tag '$APP_TAG'"
-  local rc=0
-  if command -v script >/dev/null 2>&1; then
-    ( cd "$WORKSPACE" && printf 'y\n' | timeout "$PHASE_TIMEOUT" script -qec "$command" /dev/null ) \
-      >"$LOG_DIR/$name.log" 2>&1 || rc=$?
-  else
-    ( cd "$WORKSPACE" && timeout "$PHASE_TIMEOUT" bash -c "$command" ) \
-      >"$LOG_DIR/$name.log" 2>&1 || rc=$?
-  fi
-  if [ "$rc" != 0 ]; then
-    say "note: $name exited $rc (expected once the substrate is reconciled; last 40 lines; full log $LOG_DIR/$name.log)"
-    tail -n 40 "$LOG_DIR/$name.log" || true
-  fi
-  return "$rc"
-}
-
 # `sol deploy` prints this once the durable installation and the environment are
 # reconciled, before it moves on to the workloads. It is the signal that the bootstrap
 # deploy reached the substrate even when the workload stage later stops on images that do

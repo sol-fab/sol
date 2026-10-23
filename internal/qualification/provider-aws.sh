@@ -267,6 +267,22 @@ hook_aws_cloud_precondition() {
 hook_aws_cloud_plan_only() { return 1; }
 hook_aws_cloud_plan() { :; }
 
+# The cloud cold deploy. AWS builds in prepare and publishes in cloud before this deploy,
+# so it names the published digests when they exist and nothing for a cold account whose
+# artifact gate has not run yet. The app's workload-moving deploy pins digests separately.
+hook_aws_cloud_cold_deploy() {
+  local name="$1" image_ref_args
+  say "$name"
+  image_ref_args="$(app_image_ref_args)"
+  local command="cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args"
+  if command -v script >/dev/null 2>&1; then
+    printf 'y\n' | timeout "$PHASE_TIMEOUT" script -qec "$command" /dev/null \
+      >"$LOG_DIR/$name.log" 2>&1
+  else
+    timeout "$PHASE_TIMEOUT" bash -c "$command" >"$LOG_DIR/$name.log" 2>&1
+  fi
+}
+
 hook_aws_cloud_prestate() {
   capture_independent_identities --initial || return 1
   # A fixed repository name is not made fresh by a fresh target name, so record it on the way in.

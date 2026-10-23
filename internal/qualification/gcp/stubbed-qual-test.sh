@@ -1205,6 +1205,8 @@ has "records the staging issuer in the attempt identity" \
   "issuer=letsencrypt-staging" "$TMP/cloud-ok.logs/attempt.txt"
 has "labels the attempt mechanism-only" "claim=mechanism-only" "$TMP/cloud-ok.logs/attempt.txt"
 has "and marks it not promotion-eligible" "promotion_eligible=no" "$TMP/cloud-ok.logs/attempt.txt"
+has "the cloud cold deploy names its tag, because it publishes nothing yet" \
+  "--image-tag qual-" "$TMP/cloud-ok.argv"
 lacks "no destroy on the success path (the delegation boundary keeps the substrate)" "sol destroy" "$TMP/cloud-ok.argv"
 lacks "the cloud phase never runs an application deploy" "migrate apply" "$TMP/cloud-ok.argv"
 has "the target is written for the run" "cluster_name" "$TARGET_FILE"

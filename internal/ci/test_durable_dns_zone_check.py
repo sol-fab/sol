@@ -20,8 +20,10 @@ GUARD = ROOT / "internal/ci/check_durable_dns_zone.py"
 COPIED_FILES = [
     "internal/ci/lib/tfconfig.py",
     "internal/qualification/aws/live-qual.sh",
+    "internal/qualification/provider-aws.sh",
     "internal/qualification/aws/qual.tfvars",
     "internal/qualification/gcp/live-qual.sh",
+    "internal/qualification/provider-gcp.sh",
     "internal/qualification/gcp/qual.tfvars",
     "cli/lib/cloud/sol_cli_aws_absence.ml",
     "cli/lib/cloud/sol_cli_gcp_absence.ml",
@@ -139,8 +141,12 @@ def main():
     tmp = scratch()
     # A harness that never reconciles the target leaves the durable installation unowned;
     # remove every whole-target deploy, not just the first, since any of them reconciles it.
-    harness = tmp / "internal/qualification/aws/live-qual.sh"
-    harness.write_text(harness.read_text().replace("deploy '$TARGET'", "plan '$TARGET'"))
+    for relative in (
+        "internal/qualification/aws/live-qual.sh",
+        "internal/qualification/provider-aws.sh",
+    ):
+        harness = tmp / relative
+        harness.write_text(harness.read_text().replace("deploy '$TARGET'", "plan '$TARGET'"))
     cases.append(
         (
             "aws-harness-delegates-to-whole-target-deploy",
