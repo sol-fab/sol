@@ -159,6 +159,14 @@ resource "google_artifact_registry_repository_iam_member" "gke_pull" {
   member     = "serviceAccount:${local.gke_node_service_account}"
 }
 
+resource "google_artifact_registry_repository_iam_member" "publisher" {
+  count      = var.publisher_service_account == "" ? 0 : 1
+  location   = google_artifact_registry_repository.images.location
+  repository = google_artifact_registry_repository.images.name
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${var.publisher_service_account}"
+}
+
 resource "google_sql_database_instance" "postgres" {
   count               = var.create_database ? 1 : 0
   name                = "${var.cluster_name}-postgres"

@@ -52,7 +52,10 @@ let owned_keys : t -> owned_key list = function
     ; { key = "deploy_role_arn"; disposition = Sol_consumes }
     ; { key = "operator_role_arn"; disposition = Sol_consumes }
     ]
-  | Gcp -> [ { key = "provisioner_impersonator"; disposition = Sol_consumes } ]
+  | Gcp ->
+    [ { key = "provisioner_impersonator"; disposition = Sol_consumes }
+    ; { key = "publisher_service_account"; disposition = Sol_consumes }
+    ]
   | Byo -> []
 ;;
 

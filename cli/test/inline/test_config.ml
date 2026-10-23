@@ -1160,6 +1160,28 @@ target:
            (List.assoc_opt "provisioner_impersonators" vars)))
 ;;
 
+let test_publisher_service_account_reaches_the_gcp_root () =
+  with_temp_dir (fun () ->
+    write
+      "sol.yml"
+      {|
+target:
+  gcp:
+    project_id: sol-qualification
+    publisher_service_account: publisher@sol-qualification.iam.gserviceaccount.com
+|};
+    match Sol_cli_config.load_for_target ~target:"prod/gcp/us-central1" with
+    | Error e -> Windtrap.fail (Sol_cli_config.error_to_string e)
+    | Ok cfg ->
+      (match Sol_cli_terraform_vars.of_config ~workspace:"pluto" cfg with
+       | Error msg -> Windtrap.fail msg
+       | Ok vars ->
+         check_str_opt
+           "the declared publisher reaches the GCP cluster root"
+           (Some "publisher@sol-qualification.iam.gserviceaccount.com")
+           (List.assoc_opt "publisher_service_account" vars)))
+;;
+
 let test_absent_provisioner_impersonator_grants_nobody () =
   with_temp_dir (fun () ->
     write
@@ -2377,7 +2399,7 @@ let test_owned_keys_are_declared_once () =
     (owned_key_names Sol_cli_provider.Aws);
   check_strs
     "gcp owns its declared key"
-    [ "provisioner_impersonator" ]
+    [ "provisioner_impersonator"; "publisher_service_account" ]
     (owned_key_names Sol_cli_provider.Gcp);
   check_strs "byo owns no key" [] (owned_key_names Sol_cli_provider.Byo)
 ;;
@@ -2409,7 +2431,7 @@ let test_sol_keys_derive_from_the_declaration () =
     (Sol_cli_provider.sol_keys Sol_cli_provider.Aws);
   check_strs
     "gcp consumed key"
-    [ "provisioner_impersonator" ]
+    [ "provisioner_impersonator"; "publisher_service_account" ]
     (Sol_cli_provider.sol_keys Sol_cli_provider.Gcp);
   check_strs "byo consumes nothing" [] (Sol_cli_provider.sol_keys Sol_cli_provider.Byo)
 ;;

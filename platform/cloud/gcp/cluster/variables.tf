@@ -69,6 +69,12 @@ variable "sql_deletion_protection" {
   default     = true
 }
 
+variable "publisher_service_account" {
+  description = "Optional Google service account email used by CI to push images. Sol grants it roles/artifactregistry.writer on this cluster's repository only; it gets no Kubernetes API authority."
+  type        = string
+  default     = ""
+}
+
 variable "provisioner_impersonators" {
   description = "IAM members (for example `user:ops@example.com`, or a service account) allowed to impersonate the platform provisioner and enter the install window. Each receives roles/iam.serviceAccountTokenCreator on that one identity."
   type        = list(string)
