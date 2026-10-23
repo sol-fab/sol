@@ -8,7 +8,7 @@
   DEC-028 (worker readiness), DEC-057 (installation/environment and the OSS
   boundary), DEC-058 (deploy identity), DEC-062 (workload authorization),
   DEC-063 (Sol-to-Sol identity), `docs/DEVELOPER_EXPERIENCE.md`,
-  `docs/reference/compatibility.md`
+  `docs/deployment/compatibility.md`
 
 ## Context
 
@@ -135,7 +135,7 @@ silently reinterpreted.
 
 ## Consequences
 
-- `docs/reference/compatibility.md` describes the contract's combinations,
+- `docs/deployment/compatibility.md` describes the contract's combinations,
   versions and provider realizations; the README's support table records current
   evidence.
 - The production matrix becomes provider-neutral with per-provider evidence.

@@ -125,7 +125,7 @@
       "aws": "none",
       "gcp": "none",
       "evidence": {},
-      "gap": "Dashboards are not verified against a live Grafana; cloud access has no TLS+OIDC path (one Grafana is installed per target)."
+      "gap": "Grafana OIDC/dashboards are configured and guarded; live login and target telemetry visibility are not yet verified."
     },
     {
       "id": "ci",
@@ -134,7 +134,7 @@
       "aws": "partial",
       "gcp": "partial",
       "evidence": {},
-      "gap": "The generated workflow was not executable before the artifact/CI change; a cold-start CI path is still missing."
+      "gap": "The generated workflow is executable in the offline harness; a real cold-start CI run is still missing."
     }
   ],
   "production": [
@@ -143,7 +143,7 @@
       "label": "State, identities and permissions",
       "aws": "partial",
       "gcp": "partial",
-      "gap": "GCP now has a namespace-scoped sol-deploy KSA token identity; live evidence is still required. The repository-scoped publisher is tracked separately."
+      "gap": "GCP `sol-deploy` KSA token and repository-scoped publisher grants are merged; live evidence is still required."
     },
     {
       "id": "artifacts",
@@ -156,8 +156,8 @@
       "id": "postgres",
       "label": "Postgres HA, backup and restore",
       "aws": "partial",
-      "gcp": "none",
-      "gap": "Failover/PITR/restore bounds are not measured on either provider; GCP Cloud SQL recovery is open (#1605)."
+      "gcp": "partial",
+      "gap": "GCP Regional HA/deletion protection are configured; failover, backup/PITR and restore bounds are not measured on either provider (#1605)."
     },
     {
       "id": "kafka",
