@@ -77,10 +77,12 @@ own, `svc` and `worker` together in
   lifecycle contract (bounded drain, idempotent signals).
 - [`@sol-fab/worker`](https://github.com/sol-fab/sol-typescript) — the
   worker lifecycle contract.
+- [`@sol-fab/fn`](https://github.com/sol-fab/sol-typescript) — the run-once
+  function contract.
 
-All four are **Apache-2.0**, as is everything they *ship* (their compiled
-`dist/`) and everything consumers install at runtime. `svc` and `worker` are
-dependency-free (Node ≥ 20 only), so they add no runtime tree of their own:
+All five are **Apache-2.0**, as is everything they *ship* (their compiled
+`dist/`) and everything consumers install at runtime. `svc` and `worker` are dependency-free (Node ≥ 20 only); `fn` depends on
+`prom-client` for the invocation metrics:
 
 | Package | Kind | Licence |
 | --- | --- | --- |
@@ -88,6 +90,8 @@ dependency-free (Node ≥ 20 only), so they add no runtime tree of their own:
 | `@sol-fab/kafka` | shipped source | Apache-2.0 |
 | `@sol-fab/svc` | shipped source | Apache-2.0 |
 | `@sol-fab/worker` | shipped source | Apache-2.0 |
+| `@sol-fab/fn` | shipped source | Apache-2.0 |
+| `prom-client` (dependency of `@sol-fab/fn`) | runtime | Apache-2.0 |
 | `@opentelemetry/api` (peer of both) | runtime | Apache-2.0 |
 | `kafkajs` (peer of `@sol-fab/kafka`) | runtime | MIT |
 | `@sol-fab/obs` (dependency of `@sol-fab/kafka`) | runtime | Apache-2.0 |

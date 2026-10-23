@@ -8,3 +8,8 @@
 [infra.env]
 # secrets = []
 # config  = {}
+
+# Declare the topic this worker consumes when you wire it to an event. The
+# topic makes the deploy render the worker's /readyz and /livez probes:
+# [service]
+# topics = ["<team>-<event>s"]

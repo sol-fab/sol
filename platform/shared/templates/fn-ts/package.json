@@ -1,0 +1,17 @@
+{
+  "name": "{{domain}}-{{name}}-fn",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@sol-fab/fn": "^0.1.0",
+    "@sol-fab/obs": "^0.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "typescript": "^5.6.3"
+  }
+}
