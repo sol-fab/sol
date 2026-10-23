@@ -1899,15 +1899,6 @@ push_app_images() {
   done
 }
 
-app_image_ref_args() {
-  local ref out=""
-  while IFS= read -r ref; do
-    [ -n "$ref" ] || continue
-    out="$out --image-ref $(printf '%q' "$ref")"
-  done <"$LOG_DIR/app-image-refs.txt"
-  printf '%s' "$out"
-}
-
 app_ingress_summary() {
   kubectl get ingress --all-namespaces -o wide >"$LOG_DIR/app-ingresses.txt" 2>&1 || true
   kubectl get certificates --all-namespaces >"$LOG_DIR/app-certificates.txt" 2>&1 || true
