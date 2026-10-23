@@ -240,6 +240,95 @@ let test_format_service_diagnosis_includes_events_and_reason () =
       (Sol_cli_string.contains ~needle:"FailedPull" diagnosis)
 ;;
 
+let test_format_release_diagnosis_includes_events_and_reason () =
+  let pods = confirmed_of image_pull_backoff_json in
+  let events = events_of events_json in
+  match
+    D.format_release_diagnosis
+      ~release:"loki"
+      ~namespace:"monitoring"
+      pods
+      (D.Events events)
+  with
+  | D.Healthy -> Windtrap.fail "expected a diagnosis"
+  | D.Undetermined why ->
+    Windtrap.fail ("the pod list was readable, so a verdict is expected: " ^ why)
+  | D.Unhealthy diagnosis ->
+    check_bool
+      "names the release and namespace"
+      true
+      (Sol_cli_string.contains
+         ~needle:"helm release loki in namespace monitoring did not become ready"
+         diagnosis);
+    check_bool
+      "mentions ImagePullBackOff"
+      true
+      (Sol_cli_string.contains ~needle:"ImagePullBackOff" diagnosis);
+    check_bool
+      "mentions FailedPull event"
+      true
+      (Sol_cli_string.contains ~needle:"FailedPull" diagnosis)
+;;
+
+let test_format_release_diagnosis_includes_scheduling_events () =
+  let pods = confirmed_of pending_no_containers_json in
+  let events = events_of events_json in
+  match
+    D.format_release_diagnosis
+      ~release:"loki"
+      ~namespace:"monitoring"
+      pods
+      (D.Events events)
+  with
+  | D.Healthy -> Windtrap.fail "expected a diagnosis for an unscheduled pod"
+  | D.Undetermined why ->
+    Windtrap.fail ("the pod list was readable, so a verdict is expected: " ^ why)
+  | D.Unhealthy diagnosis ->
+    check_bool
+      "reports the pod phase"
+      true
+      (Sol_cli_string.contains ~needle:"Pod charge-svc-pending: Pending" diagnosis);
+    check_bool
+      "reports the scheduler's event"
+      true
+      (Sol_cli_string.contains ~needle:"FailedScheduling" diagnosis);
+    check_bool
+      "keeps the scheduler's message"
+      true
+      (Sol_cli_string.contains ~needle:"0/2 nodes available" diagnosis)
+;;
+
+let test_format_release_diagnosis_reports_a_missing_pod_list () =
+  match
+    D.format_release_diagnosis
+      ~release:"loki"
+      ~namespace:"monitoring"
+      (confirmed_of {|{"items": []}|})
+      (D.Events [])
+  with
+  | D.Healthy -> Windtrap.fail "expected a diagnosis for zero pods, not a healthy verdict"
+  | D.Undetermined why ->
+    Windtrap.fail ("the pod list was readable, so a verdict is expected: " ^ why)
+  | D.Unhealthy diagnosis ->
+    check_bool
+      "says no pods were found for the release"
+      true
+      (Sol_cli_string.contains ~needle:"No pods found for this release." diagnosis)
+;;
+
+let test_format_release_diagnosis_ignores_succeeded_hook_pods () =
+  let pods = confirmed_of succeeded_pod_json in
+  check_bool
+    "a completed hook pod is not an install failure"
+    true
+    (reports_healthy
+       (D.format_release_diagnosis
+          ~release:"loki"
+          ~namespace:"monitoring"
+          pods
+          (D.Events [])))
+;;
+
 let test_format_service_diagnosis_reports_empty_pod_list () =
   match
     D.format_service_diagnosis
@@ -597,11 +686,31 @@ let test_zero_events_are_reported_as_zero () =
       (Sol_cli_string.contains ~needle:"Events unavailable:" text)
 ;;
 
-let with_fake_kubectl ?(deny = "events") f =
+let with_fake_kubectl_script script f =
   let dir = Filename.temp_file "sol-fake-kubectl-" "" in
   Sys.remove dir;
   Unix.mkdir dir 0o755;
   let bin = Filename.concat dir "kubectl" in
+  let oc = open_out bin in
+  output_string oc script;
+  close_out oc;
+  Unix.chmod bin 0o755;
+  let old_path =
+    try Sys.getenv "PATH" with
+    | Not_found -> ""
+  in
+  Unix.putenv "PATH" (dir ^ ":" ^ old_path);
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" old_path;
+      (try Sys.remove bin with
+       | _ -> ());
+      try Unix.rmdir dir with
+      | _ -> ())
+    f
+;;
+
+let with_fake_kubectl ?(deny = "events") f =
   let script =
     Printf.sprintf
       {|#!/bin/sh
@@ -635,23 +744,35 @@ exit 0
       deny
       crash_loop_json
   in
-  let oc = open_out bin in
-  output_string oc script;
-  close_out oc;
-  Unix.chmod bin 0o755;
-  let old_path =
-    try Sys.getenv "PATH" with
-    | Not_found -> ""
+  with_fake_kubectl_script script f
+;;
+
+let with_fake_release_kubectl f =
+  let script =
+    Printf.sprintf
+      {|#!/bin/sh
+case "$*" in
+  *"app.kubernetes.io/instance=loki"*)
+    case "$*" in
+      *pods*)
+        cat <<'JSON'
+%s
+JSON
+        exit 0 ;;
+      *events*)
+        cat <<'JSON'
+%s
+JSON
+        exit 0 ;;
+    esac ;;
+esac
+echo '{"items":[]}'
+exit 0
+|}
+      image_pull_backoff_json
+      events_json
   in
-  Unix.putenv "PATH" (dir ^ ":" ^ old_path);
-  Fun.protect
-    ~finally:(fun () ->
-      Unix.putenv "PATH" old_path;
-      (try Sys.remove bin with
-       | _ -> ());
-      try Unix.rmdir dir with
-      | _ -> ())
-    f
+  with_fake_kubectl_script script f
 ;;
 
 let test_the_fetch_distinguishes_a_denied_read () =
@@ -705,6 +826,34 @@ let test_an_unreadable_workload_is_undetermined_not_healthy () =
       Windtrap.fail "a read that did not happen is not a rollout failure either")
 ;;
 
+let test_release_fetch_uses_the_release_selector () =
+  with_fake_release_kubectl (fun () ->
+    match
+      D.diagnose_release_live
+        ~ctx:Sol_cli_kube_destination.local_context
+        ~ns:"monitoring"
+        ~release:"loki"
+        ()
+    with
+    | D.Healthy ->
+      Windtrap.fail "the release has an unhealthy pod, so a diagnosis is expected"
+    | D.Undetermined why ->
+      Windtrap.fail ("the pod list was readable, so a verdict is expected: " ^ why)
+    | D.Unhealthy text ->
+      check_bool
+        "queries the release's pods by its Helm instance label"
+        true
+        (Sol_cli_string.contains ~needle:"charge-svc-xyz" text);
+      check_bool
+        "reports the pod's own reason"
+        true
+        (Sol_cli_string.contains ~needle:"ImagePullBackOff" text))
+;;
+
+let%test "diagnose_release_live: queries the release's pods" =
+  test_release_fetch_uses_the_release_selector ()
+;;
+
 let%test "parse_pods_json: healthy pod" = test_parse_healthy_pod ()
 let%test "parse_pods_json: image pull backoff" = test_parse_image_pull_backoff ()
 
@@ -737,6 +886,22 @@ let%test "format_service_diagnosis: reports empty pod list, not healthy" =
 
 let%test "format_service_diagnosis: succeeded pod still flagged when Continuous" =
   test_format_service_diagnosis_succeeded_pod_still_flagged_when_continuous ()
+;;
+
+let%test "format_release_diagnosis: includes events and reason" =
+  test_format_release_diagnosis_includes_events_and_reason ()
+;;
+
+let%test "format_release_diagnosis: reports scheduling events" =
+  test_format_release_diagnosis_includes_scheduling_events ()
+;;
+
+let%test "format_release_diagnosis: reports a missing pod list" =
+  test_format_release_diagnosis_reports_a_missing_pod_list ()
+;;
+
+let%test "format_release_diagnosis: ignores succeeded hook pods" =
+  test_format_release_diagnosis_ignores_succeeded_hook_pods ()
 ;;
 
 let%test "format_cronjob_diagnosis: never scheduled -> OK" =

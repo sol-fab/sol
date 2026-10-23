@@ -42,6 +42,18 @@ let helm_install_job (release : Sol_cli_local_platform.release)
         |> Result.map_error (function
           | Sol_cli_process.Non_zero r -> Sol_cli_process.failure_message r
           | e -> Sol_cli_process.error_to_string e))
+  ; failure_diagnosis =
+      (fun () ->
+        match
+          Sol_cli_rollout_diagnosis.diagnose_release_live
+            ~ctx:Sol_cli_kube_destination.local_context
+            ~ns:release.namespace
+            ~release:release.name
+            ()
+        with
+        | Sol_cli_rollout_diagnosis.Healthy -> ""
+        | Sol_cli_rollout_diagnosis.Unhealthy diagnosis
+        | Sol_cli_rollout_diagnosis.Undetermined diagnosis -> diagnosis)
   }
 ;;
 

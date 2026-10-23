@@ -30,7 +30,7 @@ let peak_concurrency lines =
   go 0 0 lines
 ;;
 
-let install ~path ~delay ?(fail = false) label =
+let install ~path ~delay ?(fail = false) ?(failure_diagnosis = fun () -> "") label =
   { Sol_cli_local_infra.label
   ; run =
       (fun () ->
@@ -38,6 +38,7 @@ let install ~path ~delay ?(fail = false) label =
         Unix.sleepf delay;
         record path ("end " ^ label);
         if fail then Error ("installed nothing: " ^ label) else Ok ())
+  ; failure_diagnosis
   }
 ;;
 
@@ -127,11 +128,74 @@ let test_a_failure_stops_new_installs () =
         (List.mem "start c" lines))
 ;;
 
+let test_a_failure_prints_its_diagnosis () =
+  with_events (fun path ->
+    let installs =
+      [ install
+          ~path
+          ~delay:0.05
+          ~fail:true
+          ~failure_diagnosis:(fun () ->
+            "Pod loki-0: Pending\nReason: ImagePullBackOff — back-off pulling image")
+          "Loki"
+      ]
+    in
+    let result, reported =
+      Sol_cli_report.collect (fun () ->
+        Sol_cli_local_infra.run_bounded ~max_in_flight:1 installs)
+    in
+    match result with
+    | Ok () -> Windtrap.fail "a failing install must fail the run"
+    | Error _ ->
+      let output = reported |> List.map snd |> String.concat "\n" in
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the failure output labels the component's diagnosis"
+        true
+        (Sol_cli_string.contains ~needle:"--- Loki diagnosis ---" output);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"and carries the pod reason"
+        true
+        (Sol_cli_string.contains ~needle:"ImagePullBackOff" output))
+;;
+
+let test_a_success_does_not_ask_for_a_diagnosis () =
+  with_events (fun path ->
+    let asked = ref false in
+    let installs =
+      [ install
+          ~path
+          ~delay:0.05
+          ~failure_diagnosis:(fun () ->
+            asked := true;
+            "this must not be printed")
+          "Loki"
+      ]
+    in
+    match Sol_cli_local_infra.run_bounded ~max_in_flight:1 installs with
+    | Error message -> Windtrap.failf "the install should have succeeded: %s" message
+    | Ok () ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"a successful install does not run its failure diagnosis"
+        false
+        !asked)
+;;
+
 let%test "bounded installs: overlap, bounded" = test_installs_overlap_within_the_bound ()
 let%test "bounded installs: serial keeps order" = test_serial_mode_keeps_plan_order ()
 
 let%test "bounded installs: a failure stops the queue" =
   test_a_failure_stops_new_installs ()
+;;
+
+let%test "bounded installs: a failure prints its diagnosis" =
+  test_a_failure_prints_its_diagnosis ()
+;;
+
+let%test "bounded installs: success does not diagnose" =
+  test_a_success_does_not_ask_for_a_diagnosis ()
 ;;
 
 let endpoint ?(required = true) ?(start = fun () -> Ok ()) ?(stop = fun () -> ()) label =

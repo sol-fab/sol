@@ -173,14 +173,9 @@ let events_for_pod_result ~pod_name (result : events_fetch_result) : events_fetc
   | Events_unavailable _ as unavailable -> unavailable
 ;;
 
-let render_unhealthy_pods
-      ~service_name
-      (pods : pod_status list)
-      (events : events_fetch_result)
-  : string
-  =
+let render_pods ~heading (pods : pod_status list) (events : events_fetch_result) : string =
   let buf = Buffer.create 512 in
-  Buffer.add_string buf (Printf.sprintf "%s rollout failed\n\n" service_name);
+  Buffer.add_string buf (heading ^ "\n\n");
   pods
   |> List.iter (fun p ->
     Buffer.add_string
@@ -212,7 +207,50 @@ let format_service_diagnosis
     let unhealthy = List.filter (fun p -> not (is_healthy p)) pods in
     if unhealthy = []
     then Healthy
-    else Unhealthy (render_unhealthy_pods ~service_name unhealthy events))
+    else
+      Unhealthy
+        (render_pods
+           ~heading:(Printf.sprintf "%s rollout failed" service_name)
+           unhealthy
+           events))
+;;
+
+let release_selector release = "app.kubernetes.io/instance=" ^ release
+
+let format_release_diagnosis
+      ~release
+      ~namespace
+      (pods : confirmed_pods)
+      (events : events_fetch_result)
+  : diagnosis
+  =
+  let pods = pod_list pods in
+  if pods = []
+  then
+    Unhealthy
+      (Printf.sprintf
+         "helm release %s in namespace %s did not become ready\n\n\
+          No pods found for this release.\n"
+         release
+         namespace)
+  else (
+    let unhealthy =
+      pods
+      |> List.filter (fun p -> p.phase <> "Succeeded")
+      |> List.filter (fun p -> not (is_healthy p))
+    in
+    if unhealthy = []
+    then Healthy
+    else
+      Unhealthy
+        (render_pods
+           ~heading:
+             (Printf.sprintf
+                "helm release %s in namespace %s did not become ready"
+                release
+                namespace)
+           unhealthy
+           events))
 ;;
 
 let is_active_run_pod_ok ~(events : events_fetch_result) (p : pod_status) : bool =
@@ -244,7 +282,12 @@ let format_active_run_diagnosis
   let unhealthy = List.filter (fun p -> not (is_active_run_pod_ok ~events p)) pods in
   if unhealthy = []
   then Healthy
-  else Unhealthy (render_unhealthy_pods ~service_name unhealthy events)
+  else
+    Unhealthy
+      (render_pods
+         ~heading:(Printf.sprintf "%s rollout failed" service_name)
+         unhealthy
+         events)
 ;;
 
 type cronjob_status =
@@ -349,21 +392,25 @@ let kubectl_read_failure ~what ~exit_code ~stdout ~stderr =
   Printf.sprintf "%s could not be read%s" what suffix
 ;;
 
-let fetch_pod_statuses ~ctx ~ns ~k8s_name : (confirmed_pods, string) result =
+let fetch_pods_by_selector ~what ~ctx ~ns ~selector : (confirmed_pods, string) result =
   match
     Sol_cli_kubectl.get_raw
       ~ctx
-      ~args:[ "get"; "pods"; "-n"; ns; "-l"; "app=" ^ k8s_name; "-o"; "json" ]
+      ~args:[ "get"; "pods"; "-n"; ns; "-l"; selector; "-o"; "json" ]
   with
   | Ok r -> parse_pods_json r.stdout
   | Error (Sol_cli_process.Non_zero r) ->
     Error
       (kubectl_read_failure
-         ~what:"pods"
+         ~what
          ~exit_code:r.exit_code
          ~stdout:r.stdout
          ~stderr:r.stderr)
   | Error e -> Error (Sol_cli_process.error_to_string e)
+;;
+
+let fetch_pod_statuses ~ctx ~ns ~k8s_name : (confirmed_pods, string) result =
+  fetch_pods_by_selector ~what:"pods" ~ctx ~ns ~selector:("app=" ^ k8s_name)
 ;;
 
 let fetch_job_pod_statuses ~ctx ~ns ~job_name : (confirmed_pods, string) result =
@@ -452,4 +499,18 @@ let diagnose_service_live ~ctx ~pod_expectation ~ns ~service_name ~k8s_name () :
         | Error why ->
           Undetermined (Printf.sprintf "the active run's pods could not be read: %s" why))
      | _ -> format_cronjob_diagnosis ~service_name cronjob)
+;;
+
+let diagnose_release_live ~ctx ~ns ~release () : diagnosis =
+  match
+    fetch_pods_by_selector
+      ~what:(Printf.sprintf "pods for Helm release %s" release)
+      ~ctx
+      ~ns
+      ~selector:(release_selector release)
+  with
+  | Error why -> Undetermined why
+  | Ok pods ->
+    let events = fetch_namespace_events ~ctx ~ns in
+    format_release_diagnosis ~release ~namespace:ns pods events
 ;;

@@ -59,6 +59,13 @@ val format_service_diagnosis
   -> events_fetch_result
   -> diagnosis
 
+val format_release_diagnosis
+  :  release:string
+  -> namespace:string
+  -> confirmed_pods
+  -> events_fetch_result
+  -> diagnosis
+
 type cronjob_status =
   { last_schedule_time : string option
   ; last_successful_time : string option
@@ -86,5 +93,12 @@ val diagnose_service_live
   -> ns:string
   -> service_name:string
   -> k8s_name:string
+  -> unit
+  -> diagnosis
+
+val diagnose_release_live
+  :  ctx:Sol_cli_kube_destination.context
+  -> ns:string
+  -> release:string
   -> unit
   -> diagnosis
