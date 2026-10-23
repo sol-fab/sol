@@ -126,9 +126,11 @@ hook_aws_app_post_deploy() {
   fi
 }
 
-# This provider's CA family report runs in the verify phase, which re-reads the durable
-# captures; the app phase records the migration and application verdicts only.
-hook_aws_app_ca_report() { return 0; }
+# The AWS row's CA family report re-reads the durable captures after the delivery check;
+# the app phase records the migration and application verdicts only.
+hook_aws_app_ca_report() {
+  ca_qualify report "" "$LOG_DIR/ca-report.json" || return 1
+}
 
 # The CA driver's scenario for this row. The candidate declaration does not carry a
 # scenario, so the row's provider is the declaration of which scenario it exercises.

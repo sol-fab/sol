@@ -763,7 +763,7 @@ case "$*" in
     exit 0 ;;
   # 2b: the deploy delivers the database as class Secrets; the row lists them across
   # namespaces and checks the consumer's own Secret for the master copy it no longer holds.
-  "get secret "*"-ddl-creds -n "*)
+  *"get secret "*"-ddl-creds -n "*)
     if [ "${STUB_DDL_CREDS_ABSENT:-0}" = "1" ]; then
       printf 'Error from server (NotFound): secrets not found\n' >&2
       exit 1
@@ -785,7 +785,7 @@ case "$*" in
       "${STUB_POSTGRES_SECRET:-${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-dml-creds}"
     exit 0
     ;;
-  "get secret "*"-dml-creds -n "*)
+  *"get secret "*"-dml-creds -n "*)
     ns=""
     prev=""
     for a in $*; do
@@ -796,7 +796,7 @@ case "$*" in
     printf 'Error from server (NotFound): secrets not found\n' >&2
     exit 1
     ;;
-  "get secret -A"*)
+  *"get secret -A "*)
     printf '%s\n' \
       "${STUB_DML_NAMESPACE:-pluto-payments} ${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-dml-creds" \
       "${STUB_DDL_NAMESPACE-pluto-comms} ${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-ddl-creds"

@@ -35,6 +35,12 @@ assert_ca_identity_scope_derived          force identity_scope to deploy
     derives the observed identity's scope' (652 OK / 1 FAIL). The assertion was added in
     this batch because the suite did not previously name the field; restored and re-ran
     green.
+assert_database_delivery_attempt_kubeconfig   skip the attempt-kubeconfig probe
+    MEASURED: returning from the probe before its endpoint check fails 22 AWS assertions
+    (342 OK / 22 FAIL), including 'the delivery check is value-free', 'and the transaction
+    is its behavioral evidence', 'the deploy's class-Secret delivery is asserted, not the
+    operator's copy', and the consumer/namespace message assertions. Restored and re-ran
+    green.
 assert_app_namespaces_candidate_derived   make the namespace derivation return nothing
     MEASURED: returning no namespaces fails 12 AWS assertions (352 OK / 12 FAIL),
     including 'the delivery check is value-free', 'and the transaction is its behavioral
