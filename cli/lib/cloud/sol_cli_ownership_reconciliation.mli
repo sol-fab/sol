@@ -40,3 +40,10 @@ val unreconciled : disposition list -> disposition list
 val outcome : ?dry_run:bool -> disposition list -> string
 val report : disposition list -> string
 val summary : disposition list -> string
+
+val to_json
+  :  target:string
+  -> dry_run:bool
+  -> restored:candidate list
+  -> disposition list
+  -> Yojson.Safe.t

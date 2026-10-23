@@ -826,3 +826,179 @@ let test_unnamed_state_cluster_never_forgets_state () =
 let%test "destroy: an unnamed state cluster never authorizes state rm" =
   test_unnamed_state_cluster_never_forgets_state ()
 ;;
+
+let string_field key = function
+  | `Assoc fields ->
+    (match List.assoc_opt key fields with
+     | Some (`String value) -> value
+     | _ -> Windtrap.failf "the JSON outcome has no string %S" key)
+  | _ -> Windtrap.fail "the JSON outcome is not an object"
+;;
+
+let int_field key = function
+  | `Assoc fields ->
+    (match List.assoc_opt key fields with
+     | Some (`Int value) -> value
+     | _ -> Windtrap.failf "the JSON summary has no integer %S" key)
+  | _ -> Windtrap.fail "the JSON summary is not an object"
+;;
+
+let nested key json =
+  match json with
+  | `Assoc fields ->
+    (match List.assoc_opt key fields with
+     | Some value -> value
+     | None -> Windtrap.failf "the JSON outcome has no %S" key)
+  | _ -> Windtrap.fail "the JSON outcome is not an object"
+;;
+
+let json_examples =
+  [ Sol_cli_ownership_reconciliation.Unmapped
+      { resource_class = "VPC"; found = "vpc-unmapped" }
+  ; Sol_cli_ownership_reconciliation.Cannot_recover
+      { resource_class = "GKE cluster"
+      ; found = "cluster-ambiguous"
+      ; reason = "two entries"
+      }
+  ; Sol_cli_ownership_reconciliation.Unresolved
+      { resource_class = "load balancer"; reason = "provider read failed" }
+  ; Sol_cli_ownership_reconciliation.Recover
+      { address = "aws_vpc.main"
+      ; resource_class = "VPC"
+      ; found = "vpc-recoverable"
+      ; import_identity = "vpc-123"
+      }
+  ; Sol_cli_ownership_reconciliation.Already_owned
+      { address = "aws_s3_bucket.logs"; found = "bucket-owned" }
+  ; Sol_cli_ownership_reconciliation.By_contract
+      { resource_class = "hosted zone"; found = "zone-retained" }
+  ]
+;;
+
+let test_json_names_unrecoverable_and_unknown_separately () =
+  let json =
+    Sol_cli_ownership_reconciliation.to_json
+      ~target:"prod/aws/us-east-1"
+      ~dry_run:false
+      ~restored:[]
+      json_examples
+  in
+  Windtrap.equal Windtrap.string ~msg:"state" "unrecoverable" (string_field "state" json);
+  let summary = nested "summary" json in
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"unrecoverable count"
+    2
+    (int_field "unrecoverable" summary);
+  Windtrap.equal Windtrap.int ~msg:"unknown count" 1 (int_field "unknown" summary);
+  Windtrap.equal Windtrap.int ~msg:"recoverable count" 1 (int_field "recoverable" summary);
+  Windtrap.equal Windtrap.int ~msg:"already owned" 1 (int_field "already_owned" summary);
+  Windtrap.equal Windtrap.int ~msg:"by contract" 1 (int_field "by_contract" summary);
+  match nested "resources" json with
+  | `List resources ->
+    Windtrap.equal Windtrap.int ~msg:"every resource is listed" 6 (List.length resources);
+    let unmapped =
+      List.find (fun resource -> string_field "found" resource = "vpc-unmapped") resources
+    in
+    Windtrap.equal
+      Windtrap.string
+      ~msg:"unmapped disposition"
+      "unrecoverable"
+      (string_field "disposition" unmapped);
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"the reason is carried"
+      true
+      (string_field "reason" unmapped <> "")
+  | _ -> Windtrap.fail "resources is not a list"
+;;
+
+let test_json_unknown_only_stays_unknown () =
+  let json =
+    Sol_cli_ownership_reconciliation.to_json
+      ~target:"prod/aws/us-east-1"
+      ~dry_run:false
+      ~restored:[]
+      [ Sol_cli_ownership_reconciliation.Unresolved
+          { resource_class = "load balancer"; reason = "provider read failed" }
+      ]
+  in
+  Windtrap.equal Windtrap.string ~msg:"state" "unknown" (string_field "state" json);
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"unknown count"
+    1
+    (int_field "unknown" (nested "summary" json))
+;;
+
+let test_json_adopted_is_reconciled () =
+  let candidate : Sol_cli_ownership_reconciliation.candidate =
+    { address = "aws_vpc.main"
+    ; resource_class = "VPC"
+    ; found = "vpc-recoverable"
+    ; import_identity = "vpc-123"
+    }
+  in
+  let json =
+    Sol_cli_ownership_reconciliation.to_json
+      ~target:"prod/aws/us-east-1"
+      ~dry_run:false
+      ~restored:[ candidate ]
+      [ Sol_cli_ownership_reconciliation.Recover candidate ]
+  in
+  Windtrap.equal Windtrap.string ~msg:"state" "reconciled" (string_field "state" json);
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"adopted count"
+    1
+    (int_field "adopted" (nested "summary" json));
+  match nested "resources" json with
+  | `List [ resource ] ->
+    Windtrap.equal
+      Windtrap.string
+      ~msg:"adopted disposition"
+      "adopted"
+      (string_field "disposition" resource)
+  | _ -> Windtrap.fail "expected one resource"
+;;
+
+let test_json_dry_run_says_would_recover () =
+  let candidate : Sol_cli_ownership_reconciliation.candidate =
+    { address = "aws_vpc.main"
+    ; resource_class = "VPC"
+    ; found = "vpc-recoverable"
+    ; import_identity = "vpc-123"
+    }
+  in
+  let json =
+    Sol_cli_ownership_reconciliation.to_json
+      ~target:"prod/aws/us-east-1"
+      ~dry_run:true
+      ~restored:[]
+      [ Sol_cli_ownership_reconciliation.Recover candidate ]
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"dry run"
+    true
+    (match nested "dry_run" json with
+     | `Bool value -> value
+     | _ -> false);
+  Windtrap.equal Windtrap.string ~msg:"state" "recoverable" (string_field "state" json);
+  match nested "resources" json with
+  | `List [ resource ] ->
+    Windtrap.equal
+      Windtrap.string
+      ~msg:"would_recover disposition"
+      "would_recover"
+      (string_field "disposition" resource)
+  | _ -> Windtrap.fail "expected one resource"
+;;
+
+let%test "json: unrecoverable and unknown are separate" =
+  test_json_names_unrecoverable_and_unknown_separately ()
+;;
+
+let%test "json: unknown-only state" = test_json_unknown_only_stays_unknown ()
+let%test "json: adopted state" = test_json_adopted_is_reconciled ()
+let%test "json: dry-run state" = test_json_dry_run_says_would_recover ()
