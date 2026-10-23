@@ -907,6 +907,15 @@ let metric_sum text name labels =
        0.0
 ;;
 
+let metric_value text name =
+  String.split_on_char '\n' text
+  |> List.find_map (fun line ->
+    if String.starts_with ~prefix:(name ^ " ") line
+    then Some (float_of_string (List.hd (List.rev (String.split_on_char ' ' line))))
+    else None)
+  |> Option.value ~default:0.0
+;;
+
 let test_metrics_distinguish_handler_and_queue_outcomes () =
   List.iter
     (fun (action, handler_result, attempts) ->
@@ -983,7 +992,18 @@ let test_metrics_distinguish_handler_and_queue_outcomes () =
                 Windtrap.equal
                   (Windtrap.float 0.0)
                   1.0
-                  (value "sol_jobs_job_duration_seconds_count" []))))
+                  (value "sol_jobs_job_duration_seconds_count" []);
+                Windtrap.equal
+                  (Windtrap.float 0.0)
+                  ~msg:"the cached backlog depth is sampled before the first claim"
+                  1.0
+                  (value "sol_jobs_backlog_depth" [ "state", "due" ]);
+                Windtrap.equal
+                  Windtrap.bool
+                  ~msg:"a successful sample records its timestamp"
+                  true
+                  (metric_value metrics "sol_jobs_backlog_last_sample_timestamp_seconds"
+                   > 0.0))))
          [ None; Some false; Some true ])
     [ "complete", Ok (), 2; "retry", Error "transient", 2; "fail", Error "terminal", 1 ]
 ;;
@@ -1710,11 +1730,60 @@ let test_stop_drains_active_handler_with_deadline () =
       (rows pool))
 ;;
 
+let test_backlog_snapshot_counts_states () =
+  with_pool (fun _env pool ->
+    List.iter (exec_sql pool) ddl;
+    let now = Unix.gettimeofday () in
+    let enqueue run_at payload =
+      match Pg_db.transaction pool (fun tx -> Emails.enqueue tx ~run_at payload) with
+      | Ok () -> ()
+      | Error e -> Windtrap.failf "enqueue %s: %s" payload (Pg_error.to_string e)
+    in
+    enqueue (now -. 10.0) "due-old";
+    enqueue (now -. 5.0) "due-new";
+    enqueue (now +. 3600.0) "scheduled";
+    enqueue (now -. 20.0) "leased";
+    enqueue (now -. 30.0) "failed";
+    exec_sql
+      pool
+      "UPDATE sol_jobs SET locked_until = now() + interval '60 seconds' WHERE payload = \
+       'send_email:leased'";
+    exec_sql
+      pool
+      "UPDATE sol_jobs SET status = 'failed', finished_at = now() WHERE payload = \
+       'send_email:failed'";
+    match
+      Sol_jobs.Backlog_for_testing.snapshot
+        pool
+        ~workspace:"alpha"
+        ~kinds:[ "send_email" ]
+    with
+    | Error e -> Windtrap.failf "backlog snapshot: %s" (Pg_error.to_string e)
+    | Ok [ row ] ->
+      Windtrap.equal Windtrap.string ~msg:"kind" "send_email" row.kind;
+      Windtrap.equal Windtrap.int64 ~msg:"due" 2L row.due;
+      Windtrap.equal Windtrap.int64 ~msg:"leased" 1L row.leased;
+      Windtrap.equal Windtrap.int64 ~msg:"scheduled" 1L row.scheduled;
+      Windtrap.equal Windtrap.int64 ~msg:"failed" 1L row.failed;
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the oldest due age is the oldest eligible run_at"
+        true
+        (row.oldest_due_s > 4.0 && row.oldest_due_s < 30.0)
+    | Ok rows -> Windtrap.failf "expected one backlog row, got %d" (List.length rows))
+;;
+
 let () =
   Windtrap.run
     ~argv:[||]
     "sol_jobs_pg"
     [ Windtrap.group
+        "cached backlog snapshot"
+        [ Windtrap.test
+            "counts due, leased, scheduled and failed rows"
+            test_backlog_snapshot_counts_states
+        ]
+    ; Windtrap.group
         "cooperative execution deadlines"
         [ Windtrap.test
             "parent cancellation during timeout cleanup propagates"
