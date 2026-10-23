@@ -249,3 +249,24 @@ app_verify_database_delivery() {
   } >>"$LOG_DIR/prerequisites.txt"
   say "the deploy delivered the database; every declared consumer reads POSTGRES_URL from its class Secret"
 }
+
+# Run one external step with a bounded deadline. Runs from the attempt's workspace, in a
+# subshell, so a step's `cd` cannot change the harness's own directory, and captures the
+# status so exit 124 is named as the harness deadline rather than Sol's failure.
+run() {
+  local name="$1" rc=0
+  shift
+  say "phase: $name"
+  ( cd "$WORKSPACE" && timeout "$PHASE_TIMEOUT" "$@" ) >"$LOG_DIR/$name.log" 2>&1 || rc=$?
+  if [ "$rc" != 0 ]; then
+    if [ "$rc" = 124 ]; then
+      say "FAILED: $name  (THE HARNESS ENDED IT after ${PHASE_TIMEOUT}s, not Sol: this deadline killed a phase that was still working, so the log above ends mid-step. Raise PHASE_TIMEOUT for a cold run.)"
+    else
+      say "FAILED: $name  (exit $rc; last 40 lines; full log $LOG_DIR/$name.log)"
+    fi
+    tail -n 40 "$LOG_DIR/$name.log" || true
+    return 1
+  fi
+  say "ok: $name"
+}
+

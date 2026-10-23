@@ -1802,7 +1802,7 @@ lacks "and no declared namespace is read through it" \
 printf '\nscenario: the run owns no registry of its own, so the cleanup phase is gone\n'
 run_phase cleanuprun cleanup
 refused cleanuprun "cleanup is no longer a phase"
-lacks "and the usage no longer offers it" "cleanup" "$TMP/cleanuprun.out"
+lacks "and the usage no longer offers it" "| cleanup" "$TMP/cleanuprun.out"
 
 printf '\nscenario: a cloud phase with nothing to publish still refuses at the artifact gate\n'
 SKIP_PREPARE=1 run_phase noprep cloud
