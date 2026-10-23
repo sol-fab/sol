@@ -1312,6 +1312,50 @@ let test_new_fn_typescript () =
   assert_contains "sol.yml declares typescript" yml "language: typescript"
 ;;
 
+let test_every_scaffold_combination () =
+  in_workspace
+  @@ fun () ->
+  let generate label f =
+    match f () with
+    | Ok () -> ()
+    | Error message -> Windtrap.fail (label ^ ": " ^ message)
+  in
+  generate "ocaml svc" (fun () ->
+    Sol_cli_cmd_new.new_svc "payments/ocaml_charge" |> Result.map ignore);
+  generate "ocaml worker" (fun () ->
+    Sol_cli_cmd_new.new_worker "payments/ocaml_notify" |> Result.map ignore);
+  generate "ocaml fn" (fun () ->
+    Sol_cli_cmd_new.new_fn "payments/ocaml_report" |> Result.map ignore);
+  generate "typescript svc" (fun () ->
+    Sol_cli_cmd_new.new_svc ~language:Sol_cli_compat.Typescript "payments/ts_charge"
+    |> Result.map ignore);
+  generate "typescript worker" (fun () ->
+    Sol_cli_cmd_new.new_worker ~language:Sol_cli_compat.Typescript "payments/ts_notify"
+    |> Result.map ignore);
+  generate "typescript fn" (fun () ->
+    Sol_cli_cmd_new.new_fn ~language:Sol_cli_compat.Typescript "payments/ts_report"
+    |> Result.map ignore);
+  List.iter
+    (fun path ->
+       check_bool
+         (Printf.sprintf "all-combination scaffold has %s" path)
+         true
+         (Sys.file_exists path))
+    [ "app/payments/ocaml_charge_svc/bin/main.ml"
+    ; "app/payments/ocaml_notify_worker/bin/main.ml"
+    ; "app/payments/ocaml_report_fn/bin/main.ml"
+    ; "app/payments/ts_charge_svc/package.json"
+    ; "app/payments/ts_charge_svc/src/index.ts"
+    ; "app/payments/ts_notify_worker/package.json"
+    ; "app/payments/ts_notify_worker/src/index.ts"
+    ; "app/payments/ts_report_fn/package.json"
+    ; "app/payments/ts_report_fn/src/index.ts"
+    ];
+  let yml = read_file "sol.yml" in
+  assert_contains "the matrix declares OCaml units" yml "language: ocaml";
+  assert_contains "the matrix declares TypeScript units" yml "language: typescript"
+;;
+
 let test_workspace_pins_framework_revision () =
   in_temp_dir
   @@ fun () ->
@@ -1353,6 +1397,11 @@ let%test "golden: new fn files" = test_golden_new_fn_files ()
 let%test "new svc --language typescript" = test_new_svc_typescript ()
 let%test "new worker --language typescript" = test_new_worker_typescript ()
 let%test "new fn --language typescript" = test_new_fn_typescript ()
+
+let%test "scaffold: every language/primitive combination is generated" =
+  test_every_scaffold_combination ()
+;;
+
 let%test "mkdir_p: creates nested directories" = test_mkdir_p_creates_nested_dirs ()
 
 let%test "mkdir_p: tolerates an existing directory" =
