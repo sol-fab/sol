@@ -41,6 +41,7 @@ COLD_START_REQUIRED_NAMESPACES="${COLD_START_REQUIRED_NAMESPACES:-$APP_NS $WORKE
 
 PROJECT="${PROJECT:-sol-qualification}"
 REGION="${REGION:-us-central1}"
+PUBLISHER_SERVICE_ACCOUNT="${PUBLISHER_SERVICE_ACCOUNT:-}"
 export PROJECT REGION
 BASE_DOMAIN="${BASE_DOMAIN:-qual-gcp.sol-fab.dev}"
 PHASE_TIMEOUT="${PHASE_TIMEOUT:-2700}"
@@ -75,6 +76,7 @@ case "${1:-}" in
     CLUSTER="${CLUSTER:?Set CLUSTER to a unique cluster name for this run, e.g. sol-qual-gcp-5}"
     IMPERSONATOR="${IMPERSONATOR:?Set IMPERSONATOR to the calling identity, e.g. user:you@example.com}"
     LE_EMAIL="${LE_EMAIL:?Set LE_EMAIL to an ACME contact address}"
+    PUBLISHER_SERVICE_ACCOUNT="${PUBLISHER_SERVICE_ACCOUNT:?Set PUBLISHER_SERVICE_ACCOUNT to the publisher service account email for this target}"
     ;;
   destroy | verify | "")
     if [ -n "${1:-}" ]; then
@@ -252,6 +254,7 @@ $TARGET_ENV:
       gcp:
         project_id: $PROJECT
         provisioner_impersonator: $IMPERSONATOR
+        publisher_service_account: $PUBLISHER_SERVICE_ACCOUNT
 
       destroy_retention: none
 
@@ -1674,6 +1677,7 @@ $TARGET_ENV:
       gcp:
         project_id: $PROJECT
         provisioner_impersonator: $IMPERSONATOR
+        publisher_service_account: $PUBLISHER_SERVICE_ACCOUNT
 
       kube_context: $(app_kube_context)
 
@@ -1724,7 +1728,20 @@ build_app_images() {
 }
 
 push_app_images() {
-  gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet || return 1
+  local token
+  token="$(gcloud auth print-access-token --impersonate-service-account "$PUBLISHER_SERVICE_ACCOUNT" --quiet)" || {
+    say "could not mint a registry token as publisher $PUBLISHER_SERVICE_ACCOUNT"
+    return 1
+  }
+  [ -n "$token" ] || {
+    say "publisher $PUBLISHER_SERVICE_ACCOUNT produced no registry token"
+    return 1
+  }
+  printf '%s' "$token" | docker login -u oauth2accesstoken --password-stdin "${REGION}-docker.pkg.dev" >/dev/null || {
+    say "docker login as publisher $PUBLISHER_SERVICE_ACCOUNT failed"
+    return 1
+  }
+  unset token
   local service ref digest
   : >"$LOG_DIR/app-image-refs.txt"
   for service in $(app_services); do
@@ -2358,6 +2375,10 @@ required
                  the cloud and app phases. destroy does not need one: without it the
                  teardown target declares a non-deliverable contact, because
                  destruction issues no certificate
+  PUBLISHER_SERVICE_ACCOUNT
+                 the publisher service account email for this target; the app phase pushes
+                 images only through this identity, never the operator's ambient
+                 gcloud login. Required by cloud, platform and app.
   SOL_INSTALL    the extracted release prefix holding bin/sol and share/sol/<version>
   SOL_CANDIDATE  the candidate document this run qualifies (the draft's candidate.json); the
                  run verifies the prefix is that candidate before it provisions anything

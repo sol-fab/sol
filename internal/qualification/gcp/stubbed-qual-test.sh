@@ -280,6 +280,7 @@ cat >"$TMP/bin/gcloud" <<'STUB'
 printf 'gcloud %s\n' "$*" >>"$ARGV_LOG"
 case "${1:-} ${2:-}" in
   "auth configure-docker") exit 0 ;;
+  "auth print-access-token") printf 'stub-publisher-token\n'; exit 0 ;;
 esac
 # A teardown destination probe runs *before* the cluster is destroyed, so it must be
 # able to observe a live cluster in a fixture whose post-teardown inventory observes
@@ -1109,7 +1110,7 @@ run_case() {
   local -a le_env=(LE_EMAIL=test@example.com)
   if [ "${OMIT_LE_EMAIL:-0}" = "1" ]; then le_env=(); fi
   env ALLOW_CANONICAL=1 SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" CLUSTER=test-cluster \
-    IMPERSONATOR=user:test@example.com "${le_env[@]}" \
+    IMPERSONATOR=user:test@example.com PUBLISHER_SERVICE_ACCOUNT=publisher@sol-qualification.iam.gserviceaccount.com "${le_env[@]}" \
     PROJECT=sol-qualification REGION=us-central1 \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" \
     GCP_CA_OBSERVER_PRINCIPAL=gcp:qualifier@sol-qualification.iam.gserviceaccount.com \
@@ -1171,6 +1172,7 @@ run_case_without_a_phase() {
   fi
   env ALLOW_CANONICAL=1 SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" CLUSTER=test-cluster \
     IMPERSONATOR=user:test@example.com LE_EMAIL=test@example.com \
+    PUBLISHER_SERVICE_ACCOUNT=publisher@sol-qualification.iam.gserviceaccount.com \
     PROJECT=sol-qualification REGION=us-central1 \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" \
     GCP_CA_OBSERVER_PRINCIPAL=gcp:qualifier@sol-qualification.iam.gserviceaccount.com \
@@ -2595,6 +2597,7 @@ run_case_closed_stdout() {
   rm -rf "$LOG_DIR"
   env ALLOW_CANONICAL=1 SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" CLUSTER=test-cluster \
     IMPERSONATOR=user:test@example.com LE_EMAIL=test@example.com \
+    PUBLISHER_SERVICE_ACCOUNT=publisher@sol-qualification.iam.gserviceaccount.com \
     PROJECT=sol-qualification REGION=us-central1 \
     PATH="$TMP/bin:$PATH" "$@" \
     "$HARNESS" "$sub" 2>"$TMP/$name.err" | true
@@ -2622,6 +2625,7 @@ run_case_sigterm() {
   rm -rf "$LOG_DIR"
   env ALLOW_CANONICAL=1 SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" CLUSTER=test-cluster \
     IMPERSONATOR=user:test@example.com LE_EMAIL=test@example.com \
+    PUBLISHER_SERVICE_ACCOUNT=publisher@sol-qualification.iam.gserviceaccount.com \
     PROJECT=sol-qualification REGION=us-central1 \
     PATH="$TMP/bin:$PATH" "$@" \
     "$HARNESS" cloud >"$TMP/$name.out" 2>&1 &
