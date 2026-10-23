@@ -30,6 +30,7 @@ PROVIDERS = {
     "aws": {
         "roots": ("platform/cloud/aws/bootstrap", "platform/cloud/aws/cluster"),
         "harness": "internal/qualification/aws/live-qual.sh",
+        "provider": "internal/qualification/provider-aws.sh",
         "absence": "cli/lib/cloud/sol_cli_aws_absence.ml",
         "target": "internal/qualification/aws/qual.tfvars",
         "zone_type": "aws_route53_zone",
@@ -42,6 +43,7 @@ PROVIDERS = {
     "gcp": {
         "roots": ("platform/cloud/gcp/bootstrap", "platform/cloud/gcp/cluster"),
         "harness": "internal/qualification/gcp/live-qual.sh",
+        "provider": "internal/qualification/provider-gcp.sh",
         "absence": "cli/lib/cloud/sol_cli_gcp_absence.ml",
         "target": "internal/qualification/gcp/qual.tfvars",
         "zone_type": "google_dns_managed_zone",
@@ -150,13 +152,14 @@ def check_provider(root: pathlib.Path, provider: str, spec: dict) -> list[str]:
             "would create its own zone instead of using the durable one"
         )
 
-    harness = (root / spec["harness"]).read_text()
     # The durable installation is reconciled inline by the whole-target deploy (DEC-057 §2);
-    # the harness must delegate that to Sol rather than driving the root itself.
-    if "deploy '$TARGET'" not in harness:
+    # the harness must delegate that to Sol rather than driving the root itself. The call may
+    # live in the suite or in the provider hook it delegates to (cloud_cold_deploy).
+    delegated = (root / spec["harness"]).read_text() + (root / spec["provider"]).read_text()
+    if "deploy '$TARGET'" not in delegated:
         problems.append(
-            f"{provider}: {spec['harness']} does not reconcile the durable installation "
-            "through the whole-target `sol deploy <target>`"
+            f"{provider}: the harness and its provider hook do not reconcile the durable "
+            "installation through the whole-target `sol deploy <target>`"
         )
 
     absence = (root / spec["absence"]).read_text()

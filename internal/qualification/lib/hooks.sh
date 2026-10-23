@@ -33,6 +33,9 @@ REQUIRED_HOOKS=(
   cloud_plan_only
   cloud_plan
   cloud_prestate
+  # The cloud cold deploy differs by publication lifecycle: AWS can name published
+  # digests; GCP publishes in app, after cloud, so the cold deploy names its tag.
+  cloud_cold_deploy
   cloud_post_apply
   cloud_not_reconciled
   cloud_not_refused

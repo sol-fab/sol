@@ -152,9 +152,11 @@ app_database_declaration() {
 #   -> reconciled? -> artifact gate refused? -> pre_verify -> cold-start boundary
 #   -> reconciled tail, with provider-specific failure capture on every failing path.
 #
-# `bootstrap_deploy` is the same call on both providers, and the deploy's exit code
-# is deliberately not the verdict: a cold deploy is expected to stop at the artifact
-# gate, so what decides the phase is that the environment reconciled and that the
+# The cold deploy is the provider hook `cloud_cold_deploy`: its artifact shape follows the
+# publication lifecycle. AWS can name the digests prepare built and cloud published; GCP
+# publishes in app, after cloud, so its cold deploy names the tag it built. The deploy's
+# exit code is deliberately not the verdict: a cold deploy is expected to stop at the
+# artifact gate, so what decides the phase is that the environment reconciled and that the
 # gate refused.
 phase_cloud_run() {
   local hook="hook_${PROVIDER}"
@@ -165,7 +167,7 @@ phase_cloud_run() {
   fi
   "${hook}_cloud_prestate" || return 1
   local deploy_rc=0
-  bootstrap_deploy cloud-apply || deploy_rc=$?
+  "${hook}_cloud_cold_deploy" cloud-apply || deploy_rc=$?
   if cloud_mutated; then CLOUD_APPLIED=1; fi
   "${hook}_cloud_post_apply" || { "${hook}_cloud_failed"; return 1; }
   if ! environment_reconciled; then

@@ -251,6 +251,28 @@ hook_gcp_cloud_plan() {
   say "PLAN_ONLY=1: no infrastructure mutation requested; durable setup skipped"
 }
 
+# The cloud cold deploy. GCP builds and publishes in app, after cloud, so the cloud cold
+# deploy has no digests to name and names the tag it built; the app's workload-moving
+# deploy pins the published digests. The cold deploy is expected to stop at the artifact
+# gate, so its non-zero exit is reported and returned rather than treated as the verdict.
+hook_gcp_cloud_cold_deploy() {
+  local name="$1"
+  say "phase: $name"
+  local command="exec '$SOL' deploy '$TARGET' --registry '$(app_registry)' --image-tag '$APP_TAG'"
+  local rc=0
+  if command -v script >/dev/null 2>&1; then
+    ( cd "$WORKSPACE" && printf 'y\n' | timeout "$PHASE_TIMEOUT" script -qec "$command" /dev/null ) \
+      >"$LOG_DIR/$name.log" 2>&1 || rc=$?
+  else
+    ( cd "$WORKSPACE" && timeout "$PHASE_TIMEOUT" bash -c "$command" ) >"$LOG_DIR/$name.log" 2>&1 || rc=$?
+  fi
+  if [ "$rc" != 0 ]; then
+    say "note: $name exited $rc (expected once the substrate is reconciled; last 40 lines; full log $LOG_DIR/$name.log)"
+    tail -n 40 "$LOG_DIR/$name.log" || true
+  fi
+  return "$rc"
+}
+
 hook_gcp_cloud_prestate() { start_cluster_kubeconfig_waiter; }
 
 hook_gcp_cloud_post_apply() { :; }
