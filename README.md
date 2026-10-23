@@ -253,10 +253,10 @@ GitHub Issues, and detailed evidence is under `internal/qualification/`.
 |---|---|---|---|---|---|
 | OCaml `-svc` | local | live | live | [local](cli/test/golden_path_ocaml.sh), [AWS](internal/qualification/records/2026-10-24-alpha44-aws-production.md), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | AWS production sequence is alpha.44; GCP is mechanism-only on alpha.52. No GCP production-profile evidence. |
 | OCaml `-worker` | local | live | live | [local](cli/test/golden_path_ocaml.sh), [AWS](internal/qualification/records/2026-10-24-alpha44-aws-production.md), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | AWS production sequence is alpha.44; GCP is mechanism-only on alpha.52. No GCP production-profile evidence. |
-| OCaml `-fn` | partial | none | none | [local](cli/test/golden_path_ocaml.sh) | The local golden path adds an fn ad hoc; no fn is in the reference app and no cloud CronJob scenario exists. |
+| OCaml `-fn` | local | none | none | [local](cli/test/golden_path_ocaml.sh) | The local golden path invokes the deployed CronJob manually; no cloud CronJob scenario exists and the reference app still does not include an fn. |
 | TypeScript `-svc` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | No live AWS scenario; GCP is mechanism-only on alpha.52. The demo pins @sol-fab/svc@0.2.0 while the scaffold pins 0.3.0. |
 | TypeScript `-worker` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | No live AWS scenario; GCP is mechanism-only on alpha.52. The demo pins @sol-fab/svc@0.2.0 while the scaffold pins 0.3.0. |
-| TypeScript `-fn` | none | none | none | — | `@sol-fab/fn@0.1.0` and the `fn-ts` scaffold are source-complete; publish then verify a generated workspace and CronJob. |
+| TypeScript `-fn` | none | none | none | — | `@sol-fab/fn@0.1.0` and the `fn-ts` scaffold are source-complete; the package is not published, so no generated-workspace build or CronJob deployment evidence yet. |
 
 ### Lifecycle and observability
 
