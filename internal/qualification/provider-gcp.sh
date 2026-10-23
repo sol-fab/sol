@@ -415,3 +415,27 @@ hook_gcp_disposable_state_present() {
   gcloud storage objects describe "gs://$STATE_BUCKET/$STATE_KEY" --project "$PROJECT" \
     >/dev/null 2>&1
 }
+
+# The cloud phase starts a kubeconfig waiter; cleanup stops it before deciding.
+hook_gcp_cleanup_stop_background() { stop_cluster_kubeconfig_waiter; }
+
+# GCP writes and owns the target file, supports plan-only, and composes the run status from
+# the teardown and bundle verdicts. AWS leaves the workspace's own file in place and has no
+# bundle. The target is removed only when the teardown was verified, or nothing mutated.
+hook_gcp_cleanup_finish() {
+  local rc="$1" mutated="$2"
+  if plan_only; then
+    remove_target
+    return "$rc"
+  fi
+  if [ "$TEARDOWN_OK" = "1" ]; then
+    remove_target
+  elif [ "$mutated" = "0" ]; then
+    remove_target
+  else
+    say "KEEPING $TARGET_FILE — teardown was not verified, and destroy requires this file."
+  fi
+  if [ "$TEARDOWN_ATTEMPTED" = "1" ] && [ "$TEARDOWN_OK" != "1" ]; then rc=1; fi
+  if [ "$BUNDLE_ATTEMPTED" = "1" ] && [ "$BUNDLE_OK" != "1" ]; then rc=1; fi
+  return "$rc"
+}

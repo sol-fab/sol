@@ -112,17 +112,7 @@ on_exit() {
   return "$status"
 }
 
-cleanup() {
-  local rc=$?
-  # A signal can arrive while the deploy is still running, before its exit status is seen:
-  # decide from the log whether it already mutated the provider, so a target this run never
-  # touched is never torn down.
-  if [ -n "$TERMINATION_SIGNAL" ] && { [ "$CLOUD_APPLIED" = 1 ] || cloud_mutated; }; then
-    say "SIG$TERMINATION_SIGNAL ended the run: tearing down $TARGET and verifying absence"
-    phase_destroy || true
-  fi
-  return "$rc"
-}
+cleanup() { cleanup_run; }
 
 on_terminate() {
   if [ -n "$TERMINATION_SIGNAL" ]; then return 0; fi
@@ -246,16 +236,6 @@ its digest-pinned migration runner from that bundle. The harness publishes the a
 and nothing else. Sol's deploy identity has no registry-write authority (ADR 0002, SEC-011), and it
 refuses to run a migrate or deploy step without a digest-pinned runner.
 USAGE
-}
-
-run() {
-  local name="$1"; shift
-  say "$name"
-  if ! timeout "$PHASE_TIMEOUT" "$@" >"$LOG_DIR/$name.log" 2>&1; then
-    say "FAILED: $name (last 40 lines; full log $LOG_DIR/$name.log)"
-    tail -n 40 "$LOG_DIR/$name.log"
-    return 1
-  fi
 }
 
 # The shared database-CA family owner (#1510). It is a harness executable,

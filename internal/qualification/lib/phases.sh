@@ -299,3 +299,32 @@ destroy_teardown_run() {
   "${hook}_destroy_evidence"
   return "$destroy_rc"
 }
+
+# The cleanup every exit path uses. The provider hooks own the background waiter and the
+# provider's finish (target ownership, plan-only, and bundle/teardown verdict composition);
+# the shared body owns the decisions that are the same for every row: KEEP, and the
+# emergency teardown through the one destroy sequence when the run ends with mutated state
+# and no teardown attempt.
+cleanup_run() {
+  local rc=$?
+  local hook="hook_${PROVIDER}"
+  "${hook}_cleanup_stop_background"
+  if [ "${KEEP:-0}" = "1" ]; then
+    say "not tearing down: ${KEEP_REASON:-the delegation boundary is deliberate, not a leak}"
+    say "logs: $LOG_DIR"
+    return "$rc"
+  fi
+  local mutated=0
+  if [ "${CLOUD_APPLIED:-0}" = "1" ] || cloud_mutated; then mutated=1; fi
+  if [ "${TEARDOWN_ATTEMPTED:-0}" = "0" ] && [ "$mutated" = "1" ]; then
+    if [ -n "${TERMINATION_SIGNAL:-}" ]; then
+      say "SIG$TERMINATION_SIGNAL ended the run: tearing down $TARGET and verifying absence"
+    else
+      say "the run ended before a verified teardown: tearing down $TARGET and verifying absence"
+    fi
+    destroy_teardown_run || true
+  fi
+  say "logs: $LOG_DIR"
+  "${hook}_cleanup_finish" "$rc" "$mutated"
+  return $?
+}

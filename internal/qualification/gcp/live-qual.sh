@@ -173,22 +173,6 @@ CLOUD_APPLIED=0
 TEARDOWN_ATTEMPTED=0
 TERMINATION_SIGNAL=""
 
-run() {
-  local name="$1"; local rc=0; shift
-  say "phase: $name"
-  ( cd "$WORKSPACE" && timeout "$PHASE_TIMEOUT" "$@" ) >"$LOG_DIR/$name.log" 2>&1 || rc=$?
-  if [ "$rc" != 0 ]; then
-    if [ "$rc" = 124 ]; then
-      say "FAILED: $name  (THE HARNESS ENDED IT after ${PHASE_TIMEOUT}s, not Sol: this deadline killed a phase that was still working, so the log above ends mid-step. Raise PHASE_TIMEOUT for a cold run.)"
-    else
-      say "FAILED: $name  (exit $rc; last 40 lines; full log $LOG_DIR/$name.log)"
-    fi
-    tail -n 40 "$LOG_DIR/$name.log" || true
-    return 1
-  fi
-  say "ok: $name"
-}
-
 # The whole-target deploy reconciles the durable installation inline (DEC-057 §2), and on an
 # account whose installation is not established it offers to set it up through one
 # interactive confirmation. The run drives that confirmation through a pty with a single
@@ -1307,38 +1291,7 @@ capture_pre_teardown_inventory() {
 #
 # Every branch still runs the destroy and the independent inventory: the release is a
 # precondition of destruction, not the absence verdict, which stays the inventory's.
-cleanup() {
-  local rc=$?
-  stop_cluster_kubeconfig_waiter
-  if [ "$KEEP" = "1" ]; then
-    say "not tearing down: ${KEEP_REASON:-the delegation boundary is deliberate, not a leak}"
-    say "logs: $LOG_DIR"
-    return "$rc"
-  fi
-  # A signal can arrive while the deploy is still running, before its exit status is seen:
-  # decide from the log whether it already mutated the provider, so a target this run never
-  # touched is never torn down.
-  local mutated=0
-  if [ "$CLOUD_APPLIED" = "1" ] || cloud_mutated; then mutated=1; fi
-  if [ "$TEARDOWN_ATTEMPTED" = "0" ] && [ "$mutated" = "1" ]; then
-    destroy_teardown_run || true
-  fi
-  say "logs: $LOG_DIR"
-  if plan_only; then
-    remove_target
-    return "$rc"
-  fi
-  if [ "$TEARDOWN_OK" = "1" ]; then
-    remove_target
-  elif [ "$mutated" = "0" ]; then
-    remove_target
-  else
-    say "KEEPING $TARGET_FILE — teardown was not verified, and destroy requires this file."
-  fi
-  if [ "$TEARDOWN_ATTEMPTED" = "1" ] && [ "$TEARDOWN_OK" != "1" ]; then rc=1; fi
-  if [ "$BUNDLE_ATTEMPTED" = "1" ] && [ "$BUNDLE_OK" != "1" ]; then rc=1; fi
-  return "$rc"
-}
+cleanup() { cleanup_run; }
 TEARDOWN_OK=0
 
 on_terminate() {

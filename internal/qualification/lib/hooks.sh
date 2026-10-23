@@ -54,6 +54,9 @@ REQUIRED_HOOKS=(
   destroy_evidence
   # The CA request's scenario name; the candidate declaration does not carry one.
   ca_scenario
+  # Exit-path lifecycle, called from lib/phases.sh cleanup_run.
+  cleanup_stop_background
+  cleanup_finish
   # Attempt lifecycle, called from attempt.sh rather than a phase body.
   disposable_state_present
 )

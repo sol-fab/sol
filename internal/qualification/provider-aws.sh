@@ -424,3 +424,8 @@ EOF
 hook_aws_disposable_state_present() {
   aws s3api head-object --bucket "$(target_state_bucket)" --key "$STATE_KEY" >/dev/null 2>&1
 }
+
+# AWS starts no background waiter, and its target file is the workspace's own environment
+# file rather than a harness-owned one, so the finish only returns the run's status.
+hook_aws_cleanup_stop_background() { :; }
+hook_aws_cleanup_finish() { return "$1"; }

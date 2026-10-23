@@ -80,6 +80,14 @@ assert_cold_start_declared_coverage       skip the required-namespace coverage l
     MEASURED: replacing the loop with an empty selection fails 2 GCP assertions
     (650 OK / 2 FAIL): 'an uncovered configured namespace fails the cloud phase' and
     'and names the namespace the derived set does not cover'. Restored and re-ran green.
+assert_cleanup_emergency_teardown         skip the emergency teardown on an exit with mutated state
+    MEASURED: making the condition false fails 2 AWS assertions (362 OK / 2 FAIL):
+    'the teardown runs' and 'the independent inventory is captured'. Restored and re-ran
+    green.
+assert_cleanup_target_removal             keep the GCP harness-owned target after a verified teardown
+    MEASURED: replacing the verified-teardown remove_target with a no-op fails one GCP
+    assertion, 'the target is removed after verified teardown' (651 OK / 1 FAIL).
+    Restored and re-ran green.
 assert_destroy_absence_verdict            skip destroy_verdict after the substrate destroy
     MEASURED: replacing the verdict call with a no-op fails 6 AWS assertions
     (358 OK / 6 FAIL): 'whose verdict the independent inventory still decides',
