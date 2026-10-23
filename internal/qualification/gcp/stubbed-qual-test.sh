@@ -736,7 +736,7 @@ case "$*" in
         ;;
     esac
     exit 0 ;;
-  "create secret generic"*)
+  *"create secret generic"*)
     if [ "${STUB_SECRET_CREATE_FAILS:-0}" = "1" ]; then
       printf 'Error from server (Forbidden): secrets "redpanda-users" is forbidden\n' >&2
       exit 1
@@ -744,7 +744,7 @@ case "$*" in
     : >"${TMP:-/tmp}/credential-supplied"
     printf 'secret/redpanda-users created\n'
     exit 0 ;;
-  "get secret redpanda-users"*)
+  *"get secret redpanda-users"*)
     # A durable target requires the broker credential Secret. `STUB_NO_BROKER_CRED` models an
     # observed absence (NotFound); `STUB_UNREADABLE_BROKER_CRED` models a check that fails
     # without saying not-found (Forbidden), which the harness must not read as absence.
@@ -758,7 +758,7 @@ case "$*" in
     fi
     printf '%s' 'sol-workloads:testpass:SCRAM-SHA-256' | base64
     exit 0 ;;
-  "get secret redpanda-default-cert"*)
+  *"get secret redpanda-default-cert"*)
     printf '%s' 'ca-certificate-for-tests' | base64
     exit 0 ;;
   # 2b: the deploy delivers the database as class Secrets; the row lists them across
@@ -801,16 +801,16 @@ case "$*" in
       "${STUB_DML_NAMESPACE:-pluto-payments} ${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-dml-creds" \
       "${STUB_DDL_NAMESPACE-pluto-comms} ${STUB_CLASS_PREFIX:-qual-gcp-us-central1}-ddl-creds"
     exit 0 ;;
-  "get secret orders-svc-secrets"*)
+  *"get secret orders-svc-secrets"*)
     exit 0 ;;
-  "get pods --all-namespaces -o json")
+  *"get pods --all-namespaces -o json")
     if [ "${STUB_PROJECTED_TOKENS:-0}" = "1" ]; then
       printf '{"items":[{"metadata":{"namespace":"pluto-payments","name":"charge-svc-abc123"},"spec":{"volumes":[{"name":"api-token","projected":{"sources":[{"serviceAccountToken":{"audience":"order-svc","expirationSeconds":3600}}]}}]}}]}\n'
     else
       printf '{"items":[]}\n'
     fi
     exit 0 ;;
-  "get pods -A -o wide"*)
+  *"get pods -A -o wide"*)
     printf 'NAMESPACE   NAME          READY   STATUS    RESTARTS   AGE   IP   NODE\n'
     printf 'platform    redpanda-0    0/1     Pending   0          9m    <none>  <none>\n'
     printf 'monitoring  loki-0        0/1     Pending   0          9m    <none>  <none>\n'
@@ -823,18 +823,18 @@ case "$*" in
     printf 'platform/redpanda-0\tPending\t<none>\trequests=map[cpu:1 memory:2Gi]\tlimits=map[cpu:1 memory:2Gi]\tPodScheduled=False(Unschedulable) \n'
     printf 'monitoring/loki-0\tPending\t<none>\trequests=map[cpu:1 memory:1Gi]\tlimits=map[cpu:1 memory:1Gi]\tPodScheduled=False(Unschedulable) \n'
     exit 0 ;;
-  "get events -A"*)
+  *"get events -A"*)
     printf 'platform   Warning   FailedScheduling   pod/redpanda-0  0/3 nodes are available: 3 Insufficient cpu.\n'
     exit 0 ;;
-  "get pvc -A"*)
+  *"get pvc -A"*)
     printf 'NAMESPACE   NAME              STATUS   VOLUME                                     CAPACITY\n'
     printf 'platform    data-redpanda-0   Bound    pvc-2120bdaa-3cfd-4873-a04c-cf4fdfa4499d   10Gi\n'
     exit 0 ;;
-  "get pv"*)
+  *"get pv"*)
     printf 'NAME                                       CAPACITY   STATUS   CLAIM\n'
     printf 'pvc-2120bdaa-3cfd-4873-a04c-cf4fdfa4499d   10Gi       Bound    platform/data-redpanda-0\n'
     exit 0 ;;
-  "get nodes -o wide"*)
+  *"get nodes -o wide"*)
     printf 'NAME                            STATUS   ROLES    AGE   VERSION\n'
     printf 'gke-sol-qual-gcp-15f-nodes-abc  Ready    <none>   12m   v1.29\n'
     exit 0 ;;
