@@ -71,6 +71,7 @@ UNKNOWN = "UNKNOWN"
 # the harness test can pin it.
 RESIDUE_CLASSES = [
     "eks-cluster",
+    "eks-access-entry-policy",
     "rds-instance",
     "rds-subnet-group",
     "rds-snapshot",
@@ -105,6 +106,9 @@ LIMITATIONS = [
     "Terraform state.",
     "sub-resources whose lifecycle is owned by a checked parent (for example EKS node groups "
     "inside the checked cluster) are covered by the parent's absence.",
+    "EKS access-entry policy associations are read separately so a qualifier principal's "
+    "AmazonEKSClusterAdminPolicy association is named as residue; the normal narrow entry is "
+    "not residue. When the cluster itself is absent, its access entries are absent with it.",
 ]
 
 
@@ -132,6 +136,7 @@ class Runtime:
     target: str = ""
     state_key: str = ""
     candidate: dict[str, str] | None = None
+    qualifier_arn: str = ""
     prior: dict[str, Any] | None = None
     prior_error: str = ""
 
@@ -387,6 +392,112 @@ def check_eks_cluster(runner: Runner, runtime: Runtime) -> Observation:
         return unknown("eks-cluster", identity, attribution, str(error), reads)
     found = [name for name in clusters if name == runtime.cluster]
     return observation("eks-cluster", found, identity, attribution, reads)
+
+
+def check_eks_access_entry_policy(runner: Runner, runtime: Runtime) -> Observation:
+    reads = Reads(runner)
+    identity = (
+        f"cluster-access policies associated with the qualifier access entry on cluster "
+        f"{runtime.cluster} for {runtime.qualifier_arn or 'the uncaptured qualifier principal'}"
+    )
+    attribution = "the qualifier principal ARN captured for this target"
+    cluster_argv = ["eks", "list-clusters", "--region", runtime.region, "--output", "json"]
+    parsed, reason = reads.json(cluster_argv)
+    if parsed is None:
+        return unknown("eks-access-entry-policy", identity, attribution, reason, reads)
+    try:
+        clusters = as_list(parsed, "clusters")
+        require(all(isinstance(name, str) for name in clusters), 'a "clusters" entry is not a name')
+    except ShapeError as error:
+        return unknown("eks-access-entry-policy", identity, attribution, str(error), reads)
+    if runtime.cluster not in clusters:
+        # An access entry cannot outlive its cluster. The eks-cluster class has
+        # already established the parent's absence from the same provider read.
+        return observation("eks-access-entry-policy", [], identity, attribution, reads)
+    if runtime.qualifier_arn == "":
+        return unknown(
+            "eks-access-entry-policy",
+            identity,
+            attribution,
+            "the qualifier principal was not captured, so an access entry cannot be attributed",
+            reads,
+        )
+    argv = [
+        "eks",
+        "list-access-entries",
+        "--cluster-name",
+        runtime.cluster,
+        "--region",
+        runtime.region,
+        "--output",
+        "json",
+    ]
+    parsed, reason = reads.json(argv)
+    if parsed is None:
+        return unknown("eks-access-entry-policy", identity, attribution, reason, reads)
+    try:
+        entries = as_list(parsed, "accessEntries")
+        require(
+            all(isinstance(entry, str) and entry != "" for entry in entries),
+            'an "accessEntries" entry is not a principal ARN',
+        )
+        found = [entry for entry in entries if entry == runtime.qualifier_arn]
+    except ShapeError as error:
+        return unknown("eks-access-entry-policy", identity, attribution, str(error), reads)
+    if not found:
+        return observation("eks-access-entry-policy", [], identity, attribution, reads)
+    policy_argv = [
+        "eks",
+        "list-associated-access-policies",
+        "--cluster-name",
+        runtime.cluster,
+        "--principal-arn",
+        runtime.qualifier_arn,
+        "--region",
+        runtime.region,
+        "--output",
+        "json",
+    ]
+    policies_parsed, policy_reason = reads.json(policy_argv)
+    if policies_parsed is None:
+        return unknown(
+            "eks-access-entry-policy",
+            identity,
+            attribution,
+            f"the qualifier access entry is present, but its associated policies could not be read: {policy_reason}",
+            reads,
+        )
+    try:
+        policies = [
+            require_str(policy, "policyArn", "an associated access policy")
+            for policy in as_list(policies_parsed, "associatedAccessPolicies")
+        ]
+    except ShapeError as error:
+        return unknown("eks-access-entry-policy", identity, attribution, str(error), reads)
+    if not policies:
+        # The transport's normal close leaves a narrow entry with no associated
+        # cluster-access policy. That entry is the transport path, not residue;
+        # only an associated policy is the residue this class decides.
+        return Observation(
+            "eks-access-entry-policy",
+            ABSENT,
+            identity,
+            attribution,
+            "the qualifier access entry is present but carries no associated cluster-access policy",
+            reads.queries,
+            reads.raw,
+        )
+    return Observation(
+        "eks-access-entry-policy",
+        PRESENT,
+        identity,
+        attribution,
+        "the qualifier access entry carries associated cluster-access policies: "
+        + ", ".join(policies),
+        reads.queries,
+        reads.raw,
+        resources=found,
+    )
 
 
 def check_rds_instance(runner: Runner, runtime: Runtime) -> Observation:
@@ -924,6 +1035,7 @@ def check_cloudwatch_dashboard(runner: Runner, runtime: Runtime) -> Observation:
 
 RESIDUE_CHECKS: list[Callable[[Runner, Runtime], Observation]] = [
     check_eks_cluster,
+    check_eks_access_entry_policy,
     check_rds_instance,
     check_rds_subnet_group,
     check_rds_snapshot,
@@ -1185,6 +1297,11 @@ def add_runtime_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--target", default="")
     parser.add_argument("--state-key", default="")
     parser.add_argument(
+        "--qualifier-arn",
+        default="",
+        help="the qualification transport principal; required to attribute its EKS access entry",
+    )
+    parser.add_argument(
         "--candidate",
         default=None,
         help="the candidate document this run qualifies; without it the structured "
@@ -1207,6 +1324,7 @@ def runtime_of(arguments: argparse.Namespace) -> Runtime:
         target=arguments.target,
         state_key=arguments.state_key,
         candidate=candidate,
+        qualifier_arn=arguments.qualifier_arn,
     )
 
 
