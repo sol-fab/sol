@@ -70,7 +70,7 @@ restores the whole recorded release boundary.
 | `sol migrate apply` | TARGET | `--dir=DIR`, `--dry-run`, `--table=TABLE` | documented | Apply all pending migrations (default subcommand) |
 | `sol plan` | TARGET | `--image-ref=SERVICE=REPO@sha256:DIGEST`, `--var=KEY=VALUE`, `--var-file=PATH` | documented | Preview target infrastructure, authorization, workload |
 | `sol releases` | — | `--target=ENV/PROVIDER/REGION` | documented | List the release records the target's cluster holds for |
-| `sol target reconcile` | TARGET | `--dry-run`, `--explain`, `--var=KEY=VALUE`, `--var-file=PATH` | documented | Compare Terraform ownership with independently |
+| `sol target reconcile` | TARGET | `--dry-run`, `--explain`, `--json`, `--var=KEY=VALUE`, `--var-file=PATH` | documented | Compare Terraform ownership with independently |
 | `sol target show` | — | `--check`, `--json`, `--target=ENV/PROVIDER/REGION`, `-v` | documented | Show a deployment target |
 | `sol uninstall` | TARGET | `--confirm`, `--confirm-dns-zone=DOMAIN`, `--var=KEY=VALUE`, `--var-file=PATH` | documented | Remove a Sol installation: its Sol-owned durable |
 <!-- END GENERATED: target -->

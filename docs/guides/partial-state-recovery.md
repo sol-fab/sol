@@ -20,13 +20,20 @@ credentials; keep them private and out of public logs or CI artifacts.
 ```sh
 sol target reconcile <target> --dry-run --explain
 sol target reconcile <target> --explain
+sol target reconcile <target> --json
 ```
 
 The first command previews imports; the second performs imports and mutates state.
-Lifecycle apply and destroy also reconcile ownership automatically.
-Inspect the observed provider identity, target attribution, import identity and
-Terraform address before applying. An unattributed or unobservable resource is not
-permission to import or delete it. Resolve that uncertainty first.
+`--json` prints a machine-readable outcome for the same run: `state` is `reconciled`,
+`recoverable` (resources Sol would adopt), `unrecoverable` (confirmed resources Sol
+cannot attribute), or `unknown` (reads that did not establish absence). Its
+`resources` list carries each class, observed name, disposition and reason;
+confirmed unrecoverable entries and unknown reads remain separate, and every
+non-reconciled state uses exit status 1. Lifecycle apply and destroy also reconcile
+ownership automatically. Inspect the observed provider identity, target attribution,
+import identity and Terraform address before applying. An unattributed or
+unobservable resource is not permission to import or delete it. Resolve that
+uncertainty first.
 
 Rerun the preview after import to establish that the resource is already owned.
 Import restores Terraform ownership; it does not lower deletion protection or

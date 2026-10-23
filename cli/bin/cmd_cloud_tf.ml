@@ -433,7 +433,19 @@ let explain_flag =
            finding this target's, and the disposition of every resource found.")
 ;;
 
-let cloud_reconcile ~target ~var_file ~vars ~dry_run ~explain () =
+let json_flag =
+  Arg.(
+    value
+    & flag
+    & info
+        [ "json" ]
+        ~doc:
+          "Print the outcome as JSON: a reconciled, recoverable, unrecoverable, or \
+           unknown state plus the enumerated resources and reasons. Takes precedence \
+           over --explain.")
+;;
+
+let cloud_reconcile ~target ~var_file ~vars ~dry_run ~explain ~json () =
   let* provider = provider_of_target_path target in
   let* () = require_cloud_root ~driver:provider in
   let* () = check_terraform () in
@@ -499,18 +511,28 @@ let cloud_reconcile ~target ~var_file ~vars ~dry_run ~explain () =
       ~act:(not dry_run)
     |> Sol_cli_exit.of_msg
   in
-  if explain
-  then (
-    Printf.printf "%s%!" (Sol_cli_absence.report reconciliation.observations);
+  if json
+  then
+    print_endline
+      (Yojson.Safe.pretty_to_string
+         (Sol_cli_ownership_reconciliation.to_json
+            ~target
+            ~dry_run
+            ~restored:reconciliation.restored
+            reconciliation.dispositions))
+  else (
+    if explain
+    then (
+      Printf.printf "%s%!" (Sol_cli_absence.report reconciliation.observations);
+      Printf.printf
+        "%s%!"
+        (Sol_cli_ownership_reconciliation.report reconciliation.dispositions);
+      Printf.printf
+        "  %s\n\n%!"
+        (Sol_cli_ownership_reconciliation.summary reconciliation.dispositions));
     Printf.printf
       "%s%!"
-      (Sol_cli_ownership_reconciliation.report reconciliation.dispositions);
-    Printf.printf
-      "  %s\n\n%!"
-      (Sol_cli_ownership_reconciliation.summary reconciliation.dispositions));
-  Printf.printf
-    "%s%!"
-    (Sol_cli_ownership_reconciliation.outcome ~dry_run reconciliation.dispositions);
+      (Sol_cli_ownership_reconciliation.outcome ~dry_run reconciliation.dispositions));
   let outstanding =
     Sol_cli_ownership_reconciliation.unreconciled reconciliation.dispositions
     |> List.filter (function
@@ -529,12 +551,14 @@ let cloud_reconcile ~target ~var_file ~vars ~dry_run ~explain () =
   if outstanding = []
   then Ok ()
   else (
-    Printf.eprintf
-      "error: %d resource(s) attributable to this target remain outside Terraform \
-       ownership, and Sol will not guess at them:\n\
-       %!"
-      (List.length outstanding);
-    Printf.eprintf "%s%!" (Sol_cli_ownership_reconciliation.report outstanding);
+    if not json
+    then (
+      Printf.eprintf
+        "error: %d resource(s) attributable to this target remain outside Terraform \
+         ownership, and Sol will not guess at them:\n\
+         %!"
+        (List.length outstanding);
+      Printf.eprintf "%s%!" (Sol_cli_ownership_reconciliation.report outstanding));
     Error (Sol_cli_exit.reported ~code:1 ()))
 ;;
 
@@ -587,14 +611,15 @@ let reconcile_cmd =
   Cmd.v
     (Cmd.info "reconcile" ~doc ~man)
     Term.(
-      const (fun target var_file vars dry_run explain ->
+      const (fun target var_file vars dry_run explain json ->
         Sol_cli_exit.exit_on
-          (cloud_reconcile ~target ~var_file ~vars ~dry_run ~explain ()))
+          (cloud_reconcile ~target ~var_file ~vars ~dry_run ~explain ~json ()))
       $ target_arg
       $ var_file_arg
       $ var_arg
       $ dry_run_flag
-      $ explain_flag)
+      $ explain_flag
+      $ json_flag)
 ;;
 
 let installation_observation ~provider =

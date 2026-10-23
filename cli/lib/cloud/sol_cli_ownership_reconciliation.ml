@@ -255,3 +255,115 @@ let summary dispositions =
     (List.length refused)
     (List.length unresolved)
 ;;
+
+let to_json ~target ~dry_run ~restored dispositions =
+  let adopted (candidate : candidate) =
+    List.exists
+      (fun (restored : candidate) -> restored.address = candidate.address)
+      restored
+  in
+  let count predicate = List.length (List.filter predicate dispositions) in
+  let unrecoverable =
+    count (function
+      | Cannot_recover _ | Unmapped _ -> true
+      | _ -> false)
+  in
+  let unknown =
+    count (function
+      | Unresolved _ -> true
+      | _ -> false)
+  in
+  let recoverable =
+    count (function
+      | Recover candidate -> not (adopted candidate)
+      | _ -> false)
+  in
+  let state =
+    if unrecoverable > 0
+    then "unrecoverable"
+    else if unknown > 0
+    then "unknown"
+    else if recoverable > 0
+    then "recoverable"
+    else "reconciled"
+  in
+  let resources =
+    dispositions
+    |> List.map (function
+      | Recover candidate ->
+        let disposition =
+          if adopted candidate
+          then "adopted"
+          else if dry_run
+          then "would_recover"
+          else "recoverable"
+        in
+        `Assoc
+          [ "resource_class", `String candidate.resource_class
+          ; "found", `String candidate.found
+          ; "disposition", `String disposition
+          ; "address", `String candidate.address
+          ; "import_identity", `String candidate.import_identity
+          ]
+      | Already_owned { address; found } ->
+        `Assoc
+          [ "found", `String found
+          ; "disposition", `String "already_owned"
+          ; "address", `String address
+          ]
+      | By_contract { resource_class; found } ->
+        `Assoc
+          [ "resource_class", `String resource_class
+          ; "found", `String found
+          ; "disposition", `String "by_contract"
+          ]
+      | Cannot_recover { resource_class; found; reason } ->
+        `Assoc
+          [ "resource_class", `String resource_class
+          ; "found", `String found
+          ; "disposition", `String "unrecoverable"
+          ; "reason", `String reason
+          ]
+      | Unmapped { resource_class; found } ->
+        `Assoc
+          [ "resource_class", `String resource_class
+          ; "found", `String found
+          ; "disposition", `String "unrecoverable"
+          ; "reason", `String "no Terraform address Sol can attribute it to"
+          ]
+      | Unresolved { resource_class; reason } ->
+        `Assoc
+          [ "resource_class", `String resource_class
+          ; "disposition", `String "unknown"
+          ; "reason", `String reason
+          ])
+  in
+  `Assoc
+    [ "schema", `Int 1
+    ; "target", `String target
+    ; "dry_run", `Bool dry_run
+    ; "state", `String state
+    ; ( "summary"
+      , `Assoc
+          [ "recoverable", `Int recoverable
+          ; ( "adopted"
+            , `Int
+                (count (function
+                   | Recover candidate -> adopted candidate
+                   | _ -> false)) )
+          ; ( "already_owned"
+            , `Int
+                (count (function
+                   | Already_owned _ -> true
+                   | _ -> false)) )
+          ; ( "by_contract"
+            , `Int
+                (count (function
+                   | By_contract _ -> true
+                   | _ -> false)) )
+          ; "unrecoverable", `Int unrecoverable
+          ; "unknown", `Int unknown
+          ] )
+    ; "resources", `List resources
+    ]
+;;
