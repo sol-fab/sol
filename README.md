@@ -227,15 +227,69 @@ the [Tutorial](docs/guides/TUTORIAL.md), [Factory Pipeline](docs/architecture/de
 
 ---
 
-## Status
+## Support and conformance
 
-| Internal tooling | Status |
-|---|---|
-| [Qualification core](internal/tooling/sol_qualification/sol_qualification.md) | Implementation in progress; offline mechanism fixtures only |
+The contract is `production-single-region/v1`: local, AWS and GCP; OCaml and
+TypeScript; `-svc`, `-worker` and `-fn`. Every AWS and GCP combination is
+contracted at the production profile; local is development by design. The table
+below is the evidence currently established for each cell, not a support tier
+and not a roadmap. The contract and provider realizations are in
+[compatibility](docs/reference/compatibility.md); the guarantee is
+[ADR 0009](docs/architecture/adr/0009-one-product-contract.md). Work state is
+GitHub Issues, and detailed evidence is under `internal/qualification/`.
 
-Sol is under active development and not yet production-stable. HTTP services, Kafka workers, scheduled functions, PostgreSQL, observability, local development, and Kubernetes deployment are implemented and dogfooded end-to-end. Cloud infrastructure provisioning and the AWS integration layer are further along than most other pieces but still experimental.
+<!-- BEGIN GENERATED: product-status -->
+### Workloads
 
-Current product behavior and status are described in [The Sol developer experience](docs/DEVELOPER_EXPERIENCE.md); future work is tracked in GitHub Issues.
+| Workload | Local | AWS | GCP | Evidence | Gap |
+|---|---|---|---|---|---|
+| OCaml `-svc` | local | live | live | [local](cli/test/golden_path_ocaml.sh), [AWS](internal/qualification/records/2026-10-20-alpha40-aws.md), [GCP](internal/qualification/records/2026-10-16-alpha36-gcp.md) | AWS and GCP production-profile evidence is incomplete; GCP is proven at alpha.36, not on the current head. |
+| OCaml `-worker` | local | live | live | [local](cli/test/golden_path_ocaml.sh), [AWS](internal/qualification/records/2026-10-20-alpha40-aws.md), [GCP](internal/qualification/records/2026-10-16-alpha36-gcp.md) | AWS Kafka delivery observation is blocked (#1593); GCP managed Kafka is unverified (#1603); broker-loss/resume evidence is missing. |
+| OCaml `-fn` | partial | none | none | [local](cli/test/golden_path_ocaml.sh) | The local golden path adds an fn ad hoc; no fn is in the reference app and no cloud CronJob scenario exists. |
+| TypeScript `-svc` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-16-alpha36-gcp.md) | The demo pins `@sol-fab/svc@0.2.0`; the scaffold pins 0.3.0. No live AWS scenario; production-profile evidence is absent. |
+| TypeScript `-worker` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-16-alpha36-gcp.md) | `@sol-fab/worker@0.1.0` has no consumer-join readiness/`/readyz`; no live AWS scenario; production-profile evidence is absent. |
+| TypeScript `-fn` | none | none | none | — | No runtime package, scaffold, or CronJob entrypoint; `sol new fn --language typescript` refuses. |
+
+### Lifecycle and observability
+
+| Capability | Local | AWS | GCP | Gap |
+|---|---|---|---|---|
+| Deploy and update | local | live | live | GCP first-run still needs the operator kubeconfig step; CI cold-start is not implemented. |
+| Rollback | partial | none | none | Unit-tested; no live rollback evidence on either cloud. |
+| Destroy and verified absence | local | prod | partial | GCP partial-state recovery is open (#1605); local teardown is documented k3d cleanup. |
+| Uninstall | partial | none | none | No live installation-removal evidence. |
+| Logs, metrics and traces in Grafana | partial | none | none | Dashboards are not verified against a live Grafana; cloud access has no TLS+OIDC path (one Grafana is installed per target). |
+| CI and shipped artifact | partial | partial | partial | The generated workflow was not executable before the artifact/CI change; a cold-start CI path is still missing. |
+
+### Production profile
+
+| Requirement | AWS | GCP | Gap |
+|---|---|---|---|
+| State, identities and permissions | partial | partial | GCP deploy identity and publisher principal are not established (#1616, DEC-058). |
+| Immutable artifacts | live | partial | GCP digests have not been exercised on the current head. |
+| Postgres HA, backup and restore | partial | none | Failover/PITR/restore bounds are not measured on either provider; GCP Cloud SQL recovery is open (#1605). |
+| Kafka durability and recovery | partial | partial | RF/acked-loss/consumer-resume evidence is not complete; #1593 blocks AWS delivery observation. |
+| Availability and node-loss recovery | none | none | No measured node-loss/recovery evidence. |
+| Alert delivery and acknowledgement | none | none | No named receiver/owner has acknowledged a delivered alert. |
+| Observability SSO access | none | none | Per-target Grafana TLS+OIDC is not implemented. |
+
+Evidence: `local` = repeatable local test; `live` = deployed and behaviorally
+verified; `partial` = some evidence; `prod` = production-profile evidence;
+`none` = no qualifying evidence. The contract still applies to every cell;
+a status is a measurement, not a product tier.
+<!-- END GENERATED: product-status -->
+
+The table is generated from
+[product-matrix.json](internal/qualification/product-matrix.json) by
+`internal/ci/check_product_matrix.py`; CI fails when it drifts. There are no
+dates or history here: Git history is the history, and the qualification records
+are the evidence. "Implemented" is not a synonym for "qualified".
+
+Sol is pre-alpha and not yet production-stable for the full contract. The typed
+qualification core remains offline MECHANISM-only; the live rows and their
+evidence are under `internal/qualification/`. Cloud infrastructure provisioning
+and the AWS integration layer are further along than the other cells, which is a
+gap in the table rather than a second product tier.
 
 ---
 

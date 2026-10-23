@@ -30,7 +30,7 @@ For each checklist item in `internal/pipeline/audits/AUDIT.md`, read the relevan
 
 **Section 1 — Local Developer Loop (`cli/bin/`, `cli/lib/base/sol_cli_scaffold.ml`):**
 - Read `cmd_new.ml` to verify generated workspaces compile cleanly and library names are workspace-namespaced
-- Check `cmd_up.ml` and `cmd_deploy.ml` for failure-path behaviour and rollback
+- Check `cmd_local_deploy.ml` and `cmd_deploy.ml` for failure-path behaviour and rollback
 
 **Section 2 — Infrastructure Synthesis (`cli/lib/workspace/sol_cli_manifest.ml`):**
 - Read `sol_cli_manifest.ml` in full

@@ -33,7 +33,7 @@ escape hatches do not become public API.
 | Render all workloads, then apply/emit/print | `Sol_cli_factory.execute` → `Sol_cli_executor.run_plan` |
 | Shared deploy lifecycle: lease, contract read, gates, apply, release and group recording | `Sol_cli_deploy_run.run_lifecycle` |
 | Cloud substrate, migration/effective-access gates and provider apply | `Sol_cli_deploy_run.apply` and `cmd_deploy` |
-| Local build, push, port-forward and apply operations | `Sol_cli_up_execution` and `cmd_up` |
+| Local cluster, infrastructure, build, push, port-forward and apply operations | `Sol_cli_local_infra` and `cmd_local_deploy` |
 
 The modes are `Dry_run`, `Emit_to dir` and `Apply`. Live secret references are
 verified before application; emitted artifacts must use an artifact-safe backend.
@@ -94,25 +94,14 @@ without a lease because they do not mutate the boundary.
 
 ## Command map
 
-### `sol local infra up`
+### Local cluster and infrastructure
 
-**Module:** `cli/bin/cmd_local.ml` → `dev_up`
-
-Provisions a local k3d cluster and installs the local factory substrate via
-Helm. Does **not** run the Plan/Render/Execute pipeline. Steps:
-
-1. Check required tools (k3d, helm, kubectl).
-2. Create k3d cluster `sol-local` with a local registry on port 5000 (idempotent).
-3. Scan the workspace with `Sol_cli_workspace.scan` to discover which infra components
-   are needed (Kafka, PostgreSQL, Loki, Prometheus).
-4. Install required Helm charts: Redpanda, PostgreSQL (bitnami), Loki, Prometheus.
-5. Start background port-forwards via `Sol_cli_port_forward.start` so localhost
-   addresses match in-cluster addresses.
-
-**Key modules:** `Sol_cli_workspace`, `Sol_cli_helm`, `Sol_cli_port_forward`, `Sol_cli_state`
-
-**No deployment plan is constructed** — this command manages the local substrate
-the rest of the factory targets.
+Local infrastructure used to be a separate command. It was consolidated into
+`sol local deploy` (#1327), which is now the single local entry point: it
+creates or reuses the k3d cluster and registry, installs the declared
+infrastructure, builds and pushes images, applies manifests and starts
+port-forwards. There is no separate local-infrastructure command; use
+`sol local down` only to stop the port-forwards.
 
 ---
 
@@ -120,10 +109,11 @@ the rest of the factory targets.
 
 **Module:** `cli/bin/cmd_local.ml` → `dev_run`
 
-Builds all workspace services with `dune build` and runs each executable directly
-on the host (not inside k3d). Injects dev environment variables
+Builds the workspace's services with their declared language toolchain (OCaml
+`dune build`, TypeScript `npm run build`) and runs each executable directly on
+the host (not inside k3d). Injects dev environment variables
 (`KAFKA_BROKERS=localhost:9092`, `POSTGRES_URL=...`, etc.) that match the
-port-forwards started by `sol local infra up`. Prefixes each service's stdout/stderr with
+port-forwards started by `sol local deploy`. Prefixes each service's stdout/stderr with
 `[domain/name]`. Stops all children on Ctrl-C (SIGTERM → SIGKILL).
 
 **No Plan/Render/Execute pipeline** — services run as native processes.
@@ -132,14 +122,18 @@ port-forwards started by `sol local infra up`. Prefixes each service's stdout/st
 
 ### `sol local deploy`
 
-**Module:** `cli/bin/cmd_up.ml` → `run`
+**Module:** `cli/bin/cmd_local_deploy.ml` → `run`
 
-Full local deploy: builds Docker images, synthesizes manifests, applies to k3d.
-This is the self-contained factory path for local smoke tests.
+The one local entry point: creates or reuses the k3d cluster and registry,
+installs the declared local infrastructure with Helm, builds and pushes Docker
+images, synthesizes and applies manifests, and starts port-forwards. This is the
+self-contained factory path for local smoke tests.
 
 Pipeline:
 
-1. Discover services (`Sol_cli_manifest.discover_services`).
+1. Check tools, create or reuse k3d cluster `sol-local` and its registry, install
+   the declared infrastructure, then discover services
+   (`Sol_cli_manifest.discover_services`).
 2. Pre-flight: validate the workspace contract. Local delivery supplies the local
    cluster's `POSTGRES_URL` to a unit that declares it; the operator sets no value.
 3. Construct env_target with `Sol_cli_env_target.local_defaults`.
@@ -165,7 +159,10 @@ Pipeline:
 
 CI/CD deploy: skips image build. Images must already be in the registry. This is
 the customer-cloud factory path: Sol owns deployment intent and artifact
-synthesis; customer CI or a future `sol build` owns image production.
+synthesis; customer CI or a future build command owns image production. When the
+target's durable installation or environment is missing, `sol deploy` reconciles
+it in place first (see `docs/DEVELOPER_EXPERIENCE.md` §3–5), then continues into
+the application pipeline below.
 
 Pipeline:
 
@@ -631,7 +628,7 @@ Add it to `sol_cli_deployment_plan.ml` (plan phase) or `sol_cli_executor.ml`
 
 ## Generated Kubernetes Artifact Invariants
 
-Every resource emitted by `sol local deploy`, `sol deploy`, and `sol local infra up` must satisfy
+Every resource emitted by `sol local deploy` and `sol deploy` must satisfy
 these invariants. The security context invariants are enforced in
 `cli/test/test_manifest_render.ml` via the `assert_k8s_invariants` helper
 and the `artifact_invariants` test suite.

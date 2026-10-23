@@ -237,8 +237,9 @@ desired workload set must be singular for a later removal to be authorized
 against it. A profile that requires an immutable reference needs one
 `<service>=<ref>` for every workload the target deploys, and the deploy verifies
 each reference exists in its registry before it applies anything. For a narrow
-update, roll back the release a unit was last deployed in
-(`sol rollback --scope DOMAIN/UNIT`) rather than deploying a subset.
+update, roll back the release that contains the unit
+(`sol rollback <release-id> --target <target>`); rollback restores the whole
+recorded boundary rather than deploying a subset.
 
 The deploy runs the profile preflight before anything touches a cluster. It
 refuses until the target establishes every guarantee the profile requires — a

@@ -146,7 +146,7 @@ is not a qualified provider for it. The current verdicts, with their evidence, a
 ## 4. Deploy the application
 
 Images must already exist in a registry: Sol deploys images, it does not build them in the
-deploying command (a `sol build` is planned, not shipped). Choose how the manifests reach the
+deploying command (a build command is planned, not shipped). Choose how the manifests reach the
 cluster.
 
 **Direct mode** — the CLI renders and applies:

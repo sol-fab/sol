@@ -57,8 +57,8 @@ documented with that command rather than listed here.
 ## Target-addressed commands
 
 The target is the positional. `sol deploy` reconciles the whole target and takes no
-`--scope`; `sol local deploy` and `sol rollback` still narrow to a domain or unit with
-`--scope`.
+`--scope`; `sol local deploy` narrows to a domain or unit with `--scope`. `sol rollback`
+restores the whole recorded release boundary.
 
 <!-- BEGIN GENERATED: target -->
 | command | positional | flags | exit | purpose |
