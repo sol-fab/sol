@@ -402,15 +402,111 @@ let test_cluster_deploy_access () =
         | Ok (Some _) ->
           Windtrap.fail "a target that declares no deploy identity must not be given one"
         | Error message -> Windtrap.fail message);
+       ())
+;;
+
+let fake_gcloud_kubectl () =
+  let dir = Filename.temp_file "sol-gcp-deploy-test" "" in
+  Sol_cli_fs.remove_reporting dir;
+  Unix.mkdir dir 0o700;
+  let log = Filename.concat dir "calls.log" in
+  let write name body =
+    let path = Filename.concat dir name in
+    let out = open_out path in
+    output_string out body;
+    close_out out;
+    Unix.chmod path 0o755
+  in
+  write
+    "gcloud"
+    (Printf.sprintf
+       "#!/bin/sh\n\
+        printf 'gcloud %%s\\n' \"$*\" >>%s\n\
+        case \"$*\" in\n\
+       \  *get-credentials*)\n\
+       \    cat > \"$KUBECONFIG\" <<'EOF'\n\
+        apiVersion: v1\n\
+        kind: Config\n\
+        clusters:\n\
+        - name: gke_test\n\
+       \  cluster:\n\
+       \    server: https://example.invalid\n\
+        contexts:\n\
+        - name: gke_test\n\
+       \  context:\n\
+       \    cluster: gke_test\n\
+       \    user: provisioner\n\
+        current-context: gke_test\n\
+        users:\n\
+        - name: provisioner\n\
+       \  user: {}\n\
+        EOF\n\
+       \    ;;\n\
+        esac\n\
+        exit 0\n"
+       log);
+  write
+    "kubectl"
+    (Printf.sprintf
+       "#!/bin/sh\n\
+        printf 'kubectl %%s\\n' \"$*\" >>%s\n\
+        case \"$*\" in\n\
+       \  *'create token'*) echo token-test ;;\n\
+       \  *'config view'*) echo gke_test ;;\n\
+        esac\n\
+        exit 0\n"
+       log);
+  dir, log
+;;
+
+let test_gcp_cluster_deploy_access () =
+  let dir, log = fake_gcloud_kubectl () in
+  let previous = Sys.getenv_opt "PATH" in
+  Unix.putenv "PATH" (dir ^ ":" ^ Option.value previous ~default:"");
+  Fun.protect
+    ~finally:(fun () ->
+      (match previous with
+       | Some path -> Unix.putenv "PATH" path
+       | None -> ());
+      Sol_cli_fs.remove_reporting (Filename.concat dir "gcloud");
+      Sol_cli_fs.remove_reporting (Filename.concat dir "kubectl");
+      Sol_cli_fs.remove_reporting log;
+      try Unix.rmdir dir with
+      | Unix.Unix_error _ -> ())
+    (fun () ->
        let gcp =
          Sol_cli_gcp_cluster.cluster
            ~region:"us-central1"
            (Result.get_ok (parse_gcp (valid_gcp_outputs ())))
        in
        match gcp.Sol_cli_cluster.deploy_access () with
-       | Ok None -> ()
-       | Ok (Some _) ->
-         Windtrap.fail "a provider with no deploy identity must not fabricate one"
+       | Ok (Some destination) ->
+         Windtrap.equal
+           Windtrap.string
+           ~msg:"the GCP deploy destination is the service-account context"
+           "sol-deploy"
+           destination.Sol_cli_kube_destination.context;
+         Windtrap.equal
+           Windtrap.bool
+           ~msg:"and it carries a token-scoped kubeconfig"
+           true
+           (Option.is_some destination.Sol_cli_kube_destination.kubeconfig);
+         let calls = In_channel.with_open_text log In_channel.input_all in
+         List.iter
+           (fun needle ->
+              Windtrap.equal
+                Windtrap.bool
+                ~msg:("the GCP deploy access invokes: " ^ needle)
+                true
+                (Sol_cli_string.contains ~needle calls))
+           [ "create token sol-deploy -n monitoring --duration=1h"
+           ; "config set-credentials sol-deploy --token token-test"
+           ; "config set-context sol-deploy --cluster \
+              gke_sol-qualification_us-central1_sol-qual --user sol-deploy"
+           ; "--impersonate-service-account \
+              sol-qual-provisioner@sol-qualification.iam.gserviceaccount.com"
+           ]
+       | Ok None -> Windtrap.fail "GCP must establish its KSA deploy identity"
        | Error message -> Windtrap.fail message)
 ;;
 

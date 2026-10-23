@@ -277,12 +277,20 @@ target:
   kube_context: acme-prod-deploy
 ```
 
-**Providers without a deploy identity.** Where a provider declares no deploy
-identity — GCP today — the run reconciles the environment, stops, and prints
-exactly that command and context as your one remaining action rather than
-reaching the cluster as the provisioning identity. Promoting GCP to the AWS
-behaviour is `DEC-058`'s recorded trigger: it needs a deploy identity of its own,
-an access entry and namespace-scoped RBAC.
+**GCP deploy identity.** Sol creates a `sol-deploy` Kubernetes ServiceAccount in
+the `monitoring` namespace and binds it, per application namespace, to the
+`sol-deploy` ClusterRole. The cluster root's bootstrap role lets that identity
+create the namespace RoleBindings and bind only `sol-deploy`/`sol-operator`
+(the bind permission is restricted to those two ClusterRoles). For a deploy run,
+Sol mints a one-hour token for the ServiceAccount using the caller's cluster
+access and writes a token-scoped kubeconfig; the application apply therefore
+runs with namespace-scoped authority, not the caller's or the provisioner's
+identity.
+
+The caller must be able to run `container clusters get-credentials` and create
+`serviceaccounts/token` for `monitoring/sol-deploy`. The provisioner has both;
+a CI deploy identity needs the same two capabilities. Sol never grants GKE's
+project-wide `roles/container.developer`.
 
 ### 4.4 Unattended runs
 

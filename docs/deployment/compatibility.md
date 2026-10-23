@@ -99,8 +99,8 @@ in the module.
 
 These are gaps in the evidence table, not exclusions from the contract:
 
-- GCP has no deploy identity yet; the first run names an operator kubeconfig
-  step. DEC-058's GCP trigger is still open.
+- GCP now has a namespace-scoped `sol-deploy` ServiceAccount token identity;
+  live evidence of its use is still required.
 - GCP managed Kafka and partial-state teardown are unverified (#1603, #1605).
 - TypeScript has no function runtime, and `@sol-fab/worker` has no consumer-join
   readiness/`on_ready` yet.

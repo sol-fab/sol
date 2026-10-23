@@ -83,7 +83,7 @@
         "aws": "internal/qualification/records/2026-10-20-alpha40-aws.md",
         "gcp": "internal/qualification/records/2026-10-16-alpha36-gcp.md"
       },
-      "gap": "GCP first-run still needs the operator kubeconfig step; CI cold-start is not implemented."
+      "gap": "GCP now establishes a namespace-scoped sol-deploy token per run; live evidence is still required. CI cold-start remains unimplemented."
     },
     {
       "id": "rollback",
@@ -143,7 +143,7 @@
       "label": "State, identities and permissions",
       "aws": "partial",
       "gcp": "partial",
-      "gap": "GCP deploy identity and publisher principal are not established (#1616, DEC-058)."
+      "gap": "GCP now has a namespace-scoped sol-deploy KSA token identity; live evidence is still required. The repository-scoped publisher is tracked separately."
     },
     {
       "id": "artifacts",

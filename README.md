@@ -254,7 +254,7 @@ GitHub Issues, and detailed evidence is under `internal/qualification/`.
 
 | Capability | Local | AWS | GCP | Gap |
 |---|---|---|---|---|
-| Deploy and update | local | live | live | GCP first-run still needs the operator kubeconfig step; CI cold-start is not implemented. |
+| Deploy and update | local | live | live | GCP now establishes a namespace-scoped sol-deploy token per run; live evidence is still required. CI cold-start remains unimplemented. |
 | Rollback | partial | none | none | Unit-tested; no live rollback evidence on either cloud. |
 | Destroy and verified absence | local | prod | partial | GCP partial-state recovery is open (#1605); local teardown is documented k3d cleanup. |
 | Uninstall | partial | none | none | No live installation-removal evidence. |
@@ -265,7 +265,7 @@ GitHub Issues, and detailed evidence is under `internal/qualification/`.
 
 | Requirement | AWS | GCP | Gap |
 |---|---|---|---|
-| State, identities and permissions | partial | partial | GCP deploy identity and publisher principal are not established (#1616, DEC-058). |
+| State, identities and permissions | partial | partial | GCP now has a namespace-scoped sol-deploy KSA token identity; live evidence is still required. The repository-scoped publisher is tracked separately. |
 | Immutable artifacts | live | partial | GCP digests have not been exercised on the current head. |
 | Postgres HA, backup and restore | partial | none | Failover/PITR/restore bounds are not measured on either provider; GCP Cloud SQL recovery is open (#1605). |
 | Kafka durability and recovery | partial | partial | RF/acked-loss/consumer-resume evidence is not complete; #1593 blocks AWS delivery observation. |

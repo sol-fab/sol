@@ -1,3 +1,13 @@
+resource "kubernetes_service_account_v1" "sol_deploy" {
+  metadata {
+    name      = "sol-deploy"
+    namespace = kubernetes_namespace.monitoring.metadata[0].name
+    labels    = { "app.kubernetes.io/managed-by" = "sol" }
+  }
+
+  automount_service_account_token = false
+}
+
 resource "kubernetes_cluster_role" "sol_deploy" {
   metadata { name = "sol-deploy" }
 
@@ -79,6 +89,12 @@ resource "kubernetes_cluster_role_binding" "sol_deploy_bootstrap" {
     name      = "sol:deployers"
     api_group = "rbac.authorization.k8s.io"
   }
+  subject {
+    kind      = "ServiceAccount"
+    name      = kubernetes_service_account_v1.sol_deploy.metadata[0].name
+    namespace = kubernetes_service_account_v1.sol_deploy.metadata[0].namespace
+    api_group = "rbac.authorization.k8s.io"
+  }
 }
 
 # The Redpanda chart owns the broker CA (`redpanda-default-cert`); the deploy
@@ -112,6 +128,12 @@ resource "kubernetes_role_binding" "sol_kafka_ca_reader" {
   subject {
     kind      = "Group"
     name      = "sol:deployers"
+    api_group = "rbac.authorization.k8s.io"
+  }
+  subject {
+    kind      = "ServiceAccount"
+    name      = kubernetes_service_account_v1.sol_deploy.metadata[0].name
+    namespace = kubernetes_service_account_v1.sol_deploy.metadata[0].namespace
     api_group = "rbac.authorization.k8s.io"
   }
 }
@@ -148,6 +170,12 @@ resource "kubernetes_role_binding" "sol_boundary_lease" {
   subject {
     kind      = "Group"
     name      = "sol:deployers"
+    api_group = "rbac.authorization.k8s.io"
+  }
+  subject {
+    kind      = "ServiceAccount"
+    name      = kubernetes_service_account_v1.sol_deploy.metadata[0].name
+    namespace = kubernetes_service_account_v1.sol_deploy.metadata[0].namespace
     api_group = "rbac.authorization.k8s.io"
   }
 }

@@ -164,9 +164,9 @@ deploy identity's access for that run only — a temporary kubeconfig under
 `KUBECONFIG`, cleaned up at exit, never written into your home (DEC-058). The
 printed command and the `kube_context` line above remain what the *other*
 commands need: `sol migrate` uses the target's
-declared destination, and a provider that declares no deploy identity (GCP today)
-gets no ephemeral access at all — the deploy stops after provisioning and prints
-exactly this command and context for you to add.
+declared destination. GCP establishes its own ephemeral, namespace-scoped
+`sol-deploy` ServiceAccount token for the run; its `deploy_kubeconfig_command`
+and context are the operator-facing equivalent of the AWS deploy role.
 
 ### The first deploy against a cold target
 

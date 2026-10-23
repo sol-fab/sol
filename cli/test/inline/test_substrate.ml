@@ -21,7 +21,10 @@ let test_substrate_is_namespace_and_role_bindings_only () =
     (Sol_cli_string.contains ~needle:"kind: RoleBinding" (List.nth docs 1)
      && Sol_cli_string.contains ~needle:"namespace: pluto-payments" (List.nth docs 1)
      && Sol_cli_string.contains ~needle:"name: sol-deploy" (List.nth docs 1)
-     && Sol_cli_string.contains ~needle:"name: sol:deployers" (List.nth docs 1));
+     && Sol_cli_string.contains ~needle:"name: sol:deployers" (List.nth docs 1)
+     && Sol_cli_string.contains ~needle:"kind: ServiceAccount" (List.nth docs 1)
+     && Sol_cli_string.contains ~needle:"name: sol-deploy" (List.nth docs 1)
+     && Sol_cli_string.contains ~needle:"namespace: monitoring" (List.nth docs 1));
   check_bool
     "then the operator's read-only RoleBinding (DEC-038)"
     true
@@ -37,11 +40,11 @@ let test_substrate_is_namespace_and_role_bindings_only () =
            (Printf.sprintf "substrate carries no %s" kind)
            false
            (Sol_cli_string.contains ~needle:kind doc))
-      [ "kind: Deployment"
-      ; "kind: Service"
-      ; "kind: PodDisruptionBudget"
-      ; "kind: Ingress"
-      ; "kind: Secret"
+      [ "kind: Deployment\n"
+      ; "kind: Service\n"
+      ; "kind: PodDisruptionBudget\n"
+      ; "kind: Ingress\n"
+      ; "kind: Secret\n"
       ])
 ;;
 
