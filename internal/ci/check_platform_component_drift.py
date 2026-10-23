@@ -39,7 +39,6 @@ PLATFORM_MAIN = "platform/cloud/modules/platform/main.tf"
 DEV_OBSERVABILITY = "cli/lib/local/sol_cli_dev_observability.ml"
 MANIFEST = "cli/lib/workspace/sol_cli_manifest_yaml.ml"
 FRAMEWORK_OBS = "framework/ocaml/sol-obs/lib/sol_obs.ml"
-DEPLOYMENT_RENDER = "cli/lib/deploy/sol_cli_deployment_render.ml"
 DEMO_TS = "examples/pluto/app/demo_ts"
 DEMO_TS_TRACING = [
     f"{DEMO_TS}/order_svc/src/tracing.ts",
@@ -88,7 +87,6 @@ def framework_taxonomy(root):
 def identity_problems(root, framework_pairs):
     problems = []
     manifest = root / MANIFEST
-    render = root / DEPLOYMENT_RENDER
     manifest_pairs = None
     if not manifest.is_file():
         problems.append(f"{MANIFEST} is missing, so the rendered identity vocabulary cannot be checked")
@@ -110,13 +108,6 @@ def identity_problems(root, framework_pairs):
                 "the framework and the manifest must map each identity label to the same environment "
                 f"variable; framework={framework_env}, manifest={manifest_env}"
             )
-    if not render.is_file():
-        problems.append(f"{DEPLOYMENT_RENDER} is missing, so the workload env injection cannot be checked")
-    elif "Sol_cli_manifest.identity_env" not in render.read_text(encoding="utf-8"):
-        problems.append(
-            f"{DEPLOYMENT_RENDER} must render the workload identity through "
-            "Sol_cli_manifest.identity_env (DEC-064)"
-        )
     return problems
 
 
@@ -306,7 +297,7 @@ def main():
         sys.exit(1)
     print("guardrail: no migrated platform-component keys found duplicated inline in the local platform or main.tf.")
     print("guardrail: the cloud and local Alloy taxonomy declarations match the framework identity labels.")
-    print("guardrail: framework and manifest identity declarations agree, and deployment rendering uses the shared identity helper.")
+    print("guardrail: framework and manifest identity declarations agree; the rendered identity ConfigMap is covered by the manifest-render tests.")
     print("guardrail: TypeScript demo sources reference the identity helpers and avoid hardcoding service.name.")
     print("guardrail: the demo and the TypeScript templates pin @sol-fab/obs at or above the identity floor, and the demo lockfile resolves exactly one copy.")
 

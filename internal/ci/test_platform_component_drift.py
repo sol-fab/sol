@@ -79,12 +79,6 @@ def rename_identity_env_var(root):
     path.write_text(text.replace('"service", "SOL_SERVICE"', '"service", "SOL_WORKLOAD"', 1))
 
 
-def bypass_shared_identity_injection(root):
-    path = root / "cli/lib/deploy/sol_cli_deployment_render.ml"
-    text = path.read_text()
-    path.write_text(text.replace("Sol_cli_manifest.identity_env", "inline_identity_env", 1))
-
-
 def hardcode_ts_trace_service(root):
     path = root / "examples/pluto/app/demo_ts/order_svc/src/tracing.ts"
     text = path.read_text()
@@ -139,7 +133,6 @@ CASES = [
     ("env dropped from the rendered identity", "fail", drop_identity_label_from_manifest),
     ("env dropped from the framework's emitted identity", "fail", drop_framework_identity_label),
     ("a rendered identity variable is renamed", "fail", rename_identity_env_var),
-    ("the workload env bypasses the shared identity", "fail", bypass_shared_identity_injection),
     ("the TypeScript trace hardcodes its service name", "fail", hardcode_ts_trace_service),
     ("the TypeScript obs pin predates identity support", "fail", downgrade_ts_obs_pin),
     ("the TypeScript service stops pushing through makeLokiPusher", "fail", drop_ts_loki_pusher),

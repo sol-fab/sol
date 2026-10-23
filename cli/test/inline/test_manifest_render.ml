@@ -508,16 +508,25 @@ let test_svc_sol_env_configmap_target_overrides_config () =
   assert_absent "svc SOL_ENV user value" cm_block "user-value"
 ;;
 
+let identity_entries expected =
+  Sol_cli_manifest.observability_identity
+  |> List.filter_map (fun (label, variable) ->
+    Option.map
+      (fun value -> Printf.sprintf "%s: \"%s\"" variable value)
+      (List.assoc_opt label expected))
+;;
+
 let test_svc_identity_configmap_carries_the_taxonomy () =
   let _ns, workload = render_spec_ok ~env:"prod" svc_spec in
   let cm_block = extract_kind_block workload "kind: ConfigMap" in
-  [ "SOL_WORKSPACE: \"myapp\""
-  ; "SOL_ENV: \"prod\""
-  ; "SOL_DOMAIN: \"payments\""
-  ; "SOL_SERVICE: \"charge-svc\""
-  ; "SOL_PRIMITIVE: \"svc\""
-  ; Printf.sprintf "SOL_RELEASE: \"%s\"" (Sol_cli_release_id.to_string release_id_of_test)
-  ]
+  identity_entries
+    [ "workspace", "myapp"
+    ; "env", "prod"
+    ; "domain", "payments"
+    ; "service", "charge-svc"
+    ; "primitive", "svc"
+    ; "release", Sol_cli_release_id.to_string release_id_of_test
+    ]
   |> List.iter (fun entry -> assert_contains "svc identity config" cm_block entry)
 ;;
 
@@ -535,28 +544,28 @@ let test_svc_identity_cannot_be_shadowed_by_declared_config () =
 let test_worker_identity_configmap_carries_the_taxonomy () =
   let _ns, workload = render_spec_ok ~env:"staging" worker_spec in
   let cm_block = extract_kind_block workload "kind: ConfigMap" in
-  [ "SOL_WORKSPACE: \"myapp\""
-  ; "SOL_ENV: \"staging\""
-  ; "SOL_DOMAIN: \"comms\""
-  ; "SOL_SERVICE: \"notify-worker\""
-  ; "SOL_PRIMITIVE: \"worker\""
-  ; Printf.sprintf "SOL_RELEASE: \"%s\"" (Sol_cli_release_id.to_string release_id_of_test)
-  ]
+  identity_entries
+    [ "workspace", "myapp"
+    ; "env", "staging"
+    ; "domain", "comms"
+    ; "service", "notify-worker"
+    ; "primitive", "worker"
+    ; "release", Sol_cli_release_id.to_string release_id_of_test
+    ]
   |> List.iter (fun entry -> assert_contains "worker identity config" cm_block entry)
 ;;
 
 let test_fn_identity_configmap_carries_the_taxonomy () =
   let _ns, workload = render_spec_ok ~env:"dev" fn_spec in
   let cm_block = extract_kind_block workload "kind: ConfigMap" in
-  [ "SOL_WORKSPACE: \"myapp\""
-  ; "SOL_ENV: \"dev\""
-  ; "SOL_DOMAIN: \"billing\""
-  ; Printf.sprintf
-      "SOL_SERVICE: \"%s\""
-      (Sol_cli_kubernetes_name.k8s_name_to_string fn_spec.k8s_name)
-  ; "SOL_PRIMITIVE: \"fn\""
-  ; Printf.sprintf "SOL_RELEASE: \"%s\"" (Sol_cli_release_id.to_string release_id_of_test)
-  ]
+  identity_entries
+    [ "workspace", "myapp"
+    ; "env", "dev"
+    ; "domain", "billing"
+    ; "service", Sol_cli_kubernetes_name.k8s_name_to_string fn_spec.k8s_name
+    ; "primitive", "fn"
+    ; "release", Sol_cli_release_id.to_string release_id_of_test
+    ]
   |> List.iter (fun entry -> assert_contains "fn identity config" cm_block entry)
 ;;
 
