@@ -9,6 +9,12 @@ variable "region" {
   default     = "us-central1"
 }
 
+variable "cluster_endpoint_cidr" {
+  description = "The single CIDR allowed to reach the public GKE control-plane endpoint. Empty leaves the endpoint unrestricted; a production profile requires a value and refuses 0.0.0.0/0."
+  type        = string
+  default     = ""
+}
+
 variable "cluster_name" {
   description = "GKE cluster name and resource name prefix (e.g. acme-prod)"
   type        = string

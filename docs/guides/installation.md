@@ -144,7 +144,9 @@ prod:
   Terraform state the installation keeps; they are what makes a destroyed
   environment unrecoverable *and* a rebuilt one identical.
 - `cluster_endpoint_cidr` restricts the cluster's public API endpoint. `0.0.0.0/0`
-  is refused: Sol will not deploy to a cluster it cannot bound.
+  is refused: Sol will not deploy to a cluster it cannot bound. On GCP it
+  populates the GKE master-authorized-networks list; without it the public
+  control-plane endpoint is unrestricted and the production profile refuses.
 - `dns_zone_ownership: sol` means Sol creates and owns the delegated zone for
   `base_domain`; `user` means you created it and Sol never removes it; `external`
   means it is published elsewhere and Sol only asks you to delegate to it.

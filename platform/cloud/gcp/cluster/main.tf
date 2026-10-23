@@ -96,6 +96,15 @@ resource "google_container_cluster" "main" {
     master_ipv4_cidr_block  = var.master_cidr
   }
 
+  dynamic "master_authorized_networks_config" {
+    for_each = var.cluster_endpoint_cidr == "" ? [] : [var.cluster_endpoint_cidr]
+    content {
+      cidr_blocks {
+        cidr_block   = master_authorized_networks_config.value
+        display_name = "sol-deploy"
+      }
+    }
+  }
   release_channel {
     channel = "REGULAR"
   }
