@@ -257,3 +257,17 @@ case "$fn_spec" in
   *) echo "::error::FEAT-079: CronJob $fn_cronjob is missing backoffLimit: 5"; exit 1 ;;
 esac
 echo "scheduled_concurrency/backoff_limit rendered into the deployed CronJob OK"
+
+# Rendering the CronJob is not running the primitive. Invoke it once as a Job
+# created from the CronJob, wait for completion, and prove the generated
+# entrypoint actually ran and exited 0. This is the local behavioral evidence
+# for -fn; the cloud CronJob evidence is separate.
+fn_job="heartbeat-manual-$(date +%s)"
+kubectl -n "$fn_ns" create job --from=cronjob/"$fn_cronjob" "$fn_job" >/dev/null
+kubectl -n "$fn_ns" wait --for=condition=complete --timeout=120s "job/$fn_job" >/dev/null
+fn_logs=$(kubectl -n "$fn_ns" logs "job/$fn_job")
+case "$fn_logs" in
+  *"[heartbeat-fn] running"*) ;;
+  *) echo "::error::the manually invoked -fn did not run its entrypoint"; echo "$fn_logs"; exit 1 ;;
+esac
+echo "manual -fn invocation completed and ran its entrypoint OK"
