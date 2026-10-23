@@ -607,9 +607,9 @@ lives in it.
 | Job | Runs when | What it does |
 |---|---|---|
 | `build-and-test` | every push and pull request | `dune build`, `dune runtest` (the schema gate reads `SCHEMA_REGISTRY_URL`) |
-| `build-images` | push to `main` | assumes the deploy identity, builds and pushes each `app/**/Dockerfile` |
-| `authorize` | push to `main`, under the `sol-authorization` environment | assumes the target's fenced authorization reconciler and runs `sol grants plan` then `sol grants apply` (`DEC-062`) |
-| `deploy` | push to `main`, after `authorize`, under the `production` environment | assumes the deploy identity, runs `sol deploy <target>` then `sol migrate <target>` |
+| `build-images` | push to `main` | assumes the deploy identity, logs in to ECR or Artifact Registry, builds and pushes each `app/**/Dockerfile`, records each pushed digest |
+| `authorize` | push to `main`, under the `sol-authorization` environment | installs the release, assumes the target's fenced authorization reconciler and runs `sol grants plan` then `sol grants apply` (`DEC-062`) |
+| `deploy` | push to `main`, after `authorize`, under the `production` environment | installs the release, downloads the recorded digests, runs `sol migrate apply <target>` then `sol deploy <target>` with one `--image-ref` per service |
 
 Authentication is GitHub OIDC (`id-token: write`): no long-lived cloud credential and no
 `KUBECONFIG` is stored. The deploy identity holds no IAM-mutating permission, so it can

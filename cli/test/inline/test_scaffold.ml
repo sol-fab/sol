@@ -14,6 +14,19 @@ let read_file path =
   s
 ;;
 
+let find_substring haystack needle =
+  let haystack_length = String.length haystack in
+  let needle_length = String.length needle in
+  let rec search index =
+    if index + needle_length > haystack_length
+    then None
+    else if String.sub haystack index needle_length = needle
+    then Some index
+    else search (index + 1)
+  in
+  search 0
+;;
+
 let write_file path content =
   let oc = open_out path in
   output_string oc content;
@@ -122,7 +135,8 @@ let test_ci_contains_sol_deploy () =
   @@ fun () ->
   Sol_cli_cmd_new.new_workspace "testapp" |> Result.get_ok;
   let content = read_file "testapp/.github/workflows/sol-ci.yml" in
-  assert_contains "sol-ci.yml" content {|migrate "$SOL_TARGET"|}
+  assert_contains "sol-ci.yml" content {|sol migrate apply "$SOL_TARGET"|};
+  assert_contains "sol-ci.yml" content {|sol deploy "$SOL_TARGET"|}
 ;;
 
 let test_ci_deploy_steps_pass_target () =
@@ -131,7 +145,38 @@ let test_ci_deploy_steps_pass_target () =
   Sol_cli_cmd_new.new_workspace "testapp" |> Result.get_ok;
   let content = read_file "testapp/.github/workflows/sol-ci.yml" in
   assert_contains "sol-ci.yml" content "SOL_TARGET";
-  assert_contains "sol-ci.yml" content {|main.exe deploy "$SOL_TARGET"|}
+  assert_contains "sol-ci.yml" content "--image-ref";
+  check_bool
+    "the workflow does not build sol from the workspace"
+    false
+    (Sol_cli_string.contains ~needle:"cli/bin/main.exe" content);
+  check_bool
+    "the migration step precedes the deploy step"
+    true
+    (match
+       ( find_substring content "Apply migrations"
+       , find_substring content "Deploy immutable images" )
+     with
+     | Some migrations, Some deploy -> migrations < deploy
+     | _ -> false)
+;;
+
+let test_ci_installs_the_release () =
+  in_temp_dir
+  @@ fun () ->
+  Sol_cli_cmd_new.new_workspace "testapp" |> Result.get_ok;
+  let content = read_file "testapp/.github/workflows/sol-ci.yml" in
+  assert_contains "the workflow names the release variable" content "SOL_VERSION";
+  assert_contains
+    "the workflow downloads the release bundle"
+    content
+    "sol-${SOL_VERSION}-linux-x86_64.tar.gz";
+  assert_contains "the workflow verifies its assets" content "sol\" assets";
+  assert_contains "the workflow logs in to ECR" content "aws ecr get-login-password";
+  assert_contains
+    "the workflow configures the GCP docker credential"
+    content
+    "gcloud auth configure-docker"
 ;;
 
 let test_ci_has_gated_authorization_job () =
@@ -1042,6 +1087,11 @@ let%test "ci_workflow: the legacy deploy.yml is not written" =
 ;;
 
 let%test "ci_workflow: contains sol deploy" = test_ci_contains_sol_deploy ()
+
+let%test "ci_workflow: installs the release and logs in to the registry" =
+  test_ci_installs_the_release ()
+;;
+
 let%test "ci_workflow: deploy steps pass target" = test_ci_deploy_steps_pass_target ()
 
 let%test "ci_workflow: the authorization job is gated and runs grants" =

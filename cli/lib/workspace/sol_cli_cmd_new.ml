@@ -105,15 +105,21 @@ Done. %d files generated.
   That replaces the package in your local switch; it does not change the
   workspace pin.
 
-  CI/CD: set REGISTRY + REGISTRY_USER + REGISTRY_PASSWORD secrets in GitHub, then
-         push to main — .github/workflows/sol-ci.yml handles build/test/deploy.
-         sol/environments.yml declares a placeholder prod/aws/us-east-1 target —
-         rename it to your real <env> and <provider>/<region>, and set the
-         SOL_TARGET repository variable to match, before your first 'sol deploy'.|}
+  CI/CD: set the repository variables SOL_VERSION, SOL_TARGET, SOL_REGISTRY and
+         the provider identity variables, then push to main. The workflow
+         installs that Sol release, builds and pushes images, applies
+         migrations and deploys. It expects a target that already declares a
+         `kube_context` and whose registry repositories exist: run `sol deploy`
+         once first. See docs/deployment/ci.md.
+
+  SOL_VERSION: %s|}
     (List.length written)
     name
     name
-    revision;
+    revision
+    (match Sol_cli_build_info.release_version with
+     | Some version -> version
+     | None -> "set this to the release that generated this workspace");
   Ok ()
 ;;
 

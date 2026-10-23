@@ -7,25 +7,33 @@ through one generated workflow. There is exactly one canonical copy,
 workspace (refusing to overwrite an edited workflow unless `--force`). The checked-in
 example is [`examples/pluto/.github/workflows/sol-ci.yml`](../../examples/pluto/.github/workflows/sol-ci.yml).
 
-The workflow is a thin wrapper around the same lifecycle a human runs locally:
+The workflow installs the Sol release named by `SOL_VERSION`; it never builds Sol
+from the workspace. It then builds and pushes the application images, records
+their digests, applies migrations, and deploys them by digest:
 
 ```bash
-sol deploy <target> --registry "$SOL_REGISTRY" --image-tag "$SHA"
-sol migrate <target>
+sol migrate apply <target>
+sol deploy <target> --image-ref <service>=<repo>@sha256:<digest> ...
 ```
 
 There is no CI-only manifest path and no second deployment engine. Target selection is
 explicit: `SOL_TARGET` is a repository variable passed to `sol deploy` verbatim, and the
 workflow never infers a destination from the branch or the event (`DEC-016`).
 
+The target must already be bootstrapped: it declares `kube_context`, and its
+registry repositories exist. The first `sol deploy <target>` establishes both;
+run it once from a machine with the provisioning identity, add the printed
+`kube_context` to the target, then enable CI. The workflow does not yet implement
+the cold-start path.
+
 ## Jobs
 
 | Job | Runs when | What it does |
 |---|---|---|
 | `build-and-test` | every push and pull request | `dune build`, `dune runtest`; the schema gate needs the `SCHEMA_REGISTRY_URL` secret |
-| `build-images` | push to `main` | assumes the deploy identity, builds and pushes each `app/**/Dockerfile` |
-| `authorize` | push to `main`, under the `sol-authorization` environment | assumes the reconciler identity, runs `sol grants plan` then `sol grants apply` |
-| `deploy` | push to `main`, after `authorize`, under the `production` environment | assumes the deploy identity, runs `sol deploy` then `sol migrate` |
+| `build-images` | push to `main` | assumes the deploy identity, logs in to ECR or Artifact Registry, builds and pushes each `app/**/Dockerfile`, records each pushed digest |
+| `authorize` | push to `main`, under the `sol-authorization` environment | installs the release, assumes the reconciler identity, runs `sol grants plan` then `sol grants apply` |
+| `deploy` | push to `main`, after `authorize`, under the `production` environment | installs the release, downloads the recorded digests, runs `sol migrate apply`, then `sol deploy` with one `--image-ref` per service |
 
 The `deploy` job depends on `authorize`, so a workload cloud grant is established before
 the deploy that consumes it. If a grant is declared but not effective, `sol deploy` fails
@@ -51,6 +59,7 @@ versa. The deploy identity holds no IAM-mutating permission at all; a structural
 
 | Variable | Provider | Meaning |
 |---|---|---|
+| `SOL_VERSION` | both | the Sol release that generated the workspace, e.g. `v0.1.0-alpha.44`; the workflow downloads that exact bundle |
 | `SOL_TARGET` | both | `<env>/<provider>/<region>`, e.g. `prod/aws/us-east-1`; must be declared in `sol/environments.yml` |
 | `SOL_REGISTRY` | both | image registry prefix, e.g. `123456789.dkr.ecr.us-east-1.amazonaws.com` |
 | `SOL_DEPLOY_ROLE_ARN` | AWS | the target's `deploy_role_arn`, assumed through OIDC |
