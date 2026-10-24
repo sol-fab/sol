@@ -939,7 +939,8 @@ chmod +x "$TMP/bin/terraform"
 # its own. SKIP_PREPARE=1 leaves both absent for the refusal scenarios.
 stub_prepare() {
   local unit
-  mkdir -p "$LOG_DIR"
+  mkdir -p "$LOG_DIR/app-build-context"
+  cp -R "$WORKSPACE/app" "$LOG_DIR/app-build-context/app"
   # The attempt identity a real prepare writes; without it the cloud run refuses a log dir
   # that holds evidence for no attempt.
   {
@@ -1075,7 +1076,8 @@ PY
     PUBLISHER_ROLE_ARN="$PUBLISHER_ROLE_ARN" \
     STUB_APP_REFUSALS=1 STUB_APP_MARKER_DIR="$STUB_APP_MARKER_DIR" \
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
-    SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
+    SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 \
+    TF_VAR_db_password="${TF_VAR_db_password-test-password}" "$@" \
     "$ROOT/internal/qualification/aws/live-qual.sh" app >"$TMP/$name.out" 2>&1
   local harness_rc=$?
   printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
@@ -1169,7 +1171,8 @@ PY
     PUBLISHER_ROLE_ARN="$PUBLISHER_ROLE_ARN" \
     OPERATOR_ROLE_ARN=arn:aws:iam::1:role/operator QUALIFIER_ROLE=qualifier \
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
-    SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
+    SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 \
+    TF_VAR_db_password="${TF_VAR_db_password-test-password}" "$@" \
     "$ROOT/internal/qualification/aws/live-qual.sh" "$phase" >"$TMP/$name.out" 2>&1
   local harness_rc=$?
   printf '%s\n' "$harness_rc" >"$TMP/$name.rc"
@@ -1240,7 +1243,8 @@ run_phase_sigterm() {
     PUBLISHER_ROLE_ARN="$PUBLISHER_ROLE_ARN" \
     OPERATOR_ROLE_ARN=arn:aws:iam::1:role/operator QUALIFIER_ROLE=qualifier \
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
-    SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 "$@" \
+    SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 \
+    TF_VAR_db_password=test-password "$@" \
     "$ROOT/internal/qualification/aws/live-qual.sh" "$phase" >"$TMP/$name.out" 2>&1 &
   local harness_pid=$! waited=0
   while [ ! -e "$LOG_DIR/cloud-apply.log" ] && [ "$waited" -lt 100 ]; do
@@ -1823,13 +1827,21 @@ run_phase cleanuprun cleanup
 refused cleanuprun "cleanup is no longer a phase"
 lacks "and the usage no longer offers it" "| cleanup" "$TMP/cleanuprun.out"
 
-printf '\nscenario: a cloud phase with nothing to publish still refuses at the artifact gate\n'
+printf '\nscenario: a cloud phase with no prepared contract refuses before provider mutation\n'
 SKIP_PREPARE=1 run_phase noprep cloud
-refused noprep "a run with no built images cannot preview the target"
-has "the cold deploy still refuses at the artifact gate" \
-  "Deployment incomplete." "$TMP/noprep.logs/cloud-apply.log"
-has "and the phase says why it cannot go on: it has no candidate-bound contract to assert against" \
-  "no candidate-bound build context" "$TMP/noprep.out"
+refused noprep "a run with no prepared contract cannot start the cloud phase"
+has "and the phase names the missing candidate-bound contract" \
+  "requires the candidate-bound build context prepare writes" "$TMP/noprep.out"
+lacks "and no cold deploy runs" "deploy qualreg/aws/us-east-1" "$TMP/noprep.sol"
+not_exists "and no provider apply is attempted" "$TMP/noprep.logs/cloud-apply.log"
+
+printf '\nscenario: a missing RDS master password refuses before provider mutation\n'
+TF_VAR_db_password= KEEP_LOG_DIR=1 run_phase nopassword cloud
+refused nopassword "a cloud phase without an RDS master password is refused"
+has "and names the required variable" "TF_VAR_db_password is not set" "$TMP/nopassword.out"
+lacks "and no cold deploy runs" "deploy qualreg/aws/us-east-1" "$TMP/nopassword.sol"
+not_exists "and no provider apply is attempted" "$TMP/nopassword.logs/cloud-apply.log"
+unset TF_VAR_db_password
 
 printf '\nscenario: a run with a contract but nothing built still refuses before the preview\n'
 KEEP_LOG_DIR=1 run_phase nodigests prepare
@@ -1838,9 +1850,9 @@ KEEP_LOG_DIR=1 run_phase nodigests prepare
 export STUB_NO_BUILT_TAGS=1
 KEEP_LOG_DIR=1 run_phase nodigests cloud STUB_NO_BUILT_TAGS=1
 unset STUB_NO_BUILT_TAGS
-refused nodigests "a run with no built images cannot preview the target"
-has "and the phase says why it cannot go on" \
-  "the run published no image digests" "$TMP/nodigests.out"
+refused nodigests "a run with no built images cannot start the cloud phase"
+has "and the phase says the prepare images are missing" \
+  "requires the images prepare built" "$TMP/nodigests.out"
 
 printf '\nscenario: prepare builds the run images and touches no provider state\n'
 KEEP_LOG_DIR=1 run_phase prep prepare
@@ -1946,6 +1958,14 @@ has "the attempt's kubeconfig is re-established at the cluster's current endpoin
   "$TMP/destroyregen.aws"
 has "and the release is recorded as attempted" \
   "destroy_release_cleanup: attempted" "$TMP/destroyregen.logs/destroy-kubeconfig.txt"
+
+printf '\nscenario: a missing CA binary refuses before the app deploy\n'
+mv "$TMP/bin/qualification_database_ca" "$TMP/bin/qualification_database_ca.hidden"
+KEEP_LOG_DIR=1 run_phase noca app
+mv "$TMP/bin/qualification_database_ca.hidden" "$TMP/bin/qualification_database_ca"
+refused noca "an app phase without the CA driver is refused"
+has "and names the missing executable" "database-CA qualifier is not executable" "$TMP/noca.out"
+lacks "and no deploy runs" "deploy qualreg/aws/us-east-1" "$TMP/noca.sol"
 
 printf '\nscenario: the prepare and cloud phases publish exactly the selected units\n'
 KEEP_LOG_DIR=1 run_phase alphaunits prepare APP_UNITS="orders_svc fulfilment_worker"
