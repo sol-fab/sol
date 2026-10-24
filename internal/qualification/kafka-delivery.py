@@ -120,7 +120,15 @@ def consumer_projections(args):
     kube = ["kubectl"] + (["--kubeconfig", args.kubeconfig] if args.kubeconfig else [])
     findings = []
     consumers = []
-    for namespace in args.namespaces:
+    # The observation scope is the set of namespaces the expected consumers name.
+    # Other selected namespaces may not be readable through the qualification
+    # transport (for example a service-only namespace), and reading them cannot
+    # contribute a consumer.
+    expected_namespaces = sorted({consumer.split("/", 1)[0] for consumer in args.consumer})
+    missing = [namespace for namespace in expected_namespaces if namespace not in args.namespaces]
+    if missing:
+        raise ObservationError("a consumer namespace is outside the observation scope")
+    for namespace in expected_namespaces:
         deployments = read_json(
             kube + ["get", "deployments", "-n", namespace, "-o", "json"],
             "deployments",
