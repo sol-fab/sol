@@ -354,6 +354,17 @@ cleanup_run() {
     say "logs: $LOG_DIR"
     return "$rc"
   fi
+  # `verify`/`inventory` only read the provider. A prior cloud attempt in the same
+  # evidence directory arms `cloud_mutated`, but that does not make a read-only
+  # phase responsible for a teardown it did not run and cannot perform safely.
+  case "${PHASE:-}" in
+    verify | inventory)
+      say "not tearing down: $PHASE is a read-only evidence phase"
+      say "logs: $LOG_DIR"
+      "${hook}_cleanup_finish" "$rc" 0
+      return $?
+      ;;
+  esac
   local mutated=0
   if [ "${CLOUD_APPLIED:-0}" = "1" ] || cloud_mutated; then mutated=1; fi
   if [ "${TEARDOWN_ATTEMPTED:-0}" = "0" ] && [ "$mutated" = "1" ]; then

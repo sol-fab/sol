@@ -2218,6 +2218,13 @@ present "$TMP/resumed.logs/database-contract-pins.json" "carries the contract pi
 not_exists "never carries the spent CA evidence" "$TMP/resumed.logs/ca-evidence"
 has "and says it is diagnostic" "diagnostic only, not promotion-eligible" "$TMP/resumed.out"
 
+printf '\nscenario: verify does not tear down a target it did not create\n'
+mkdir -p "$TMP/verify-readonly.logs"
+printf 'lifecycle phase: CloudBootstrap\n' >"$TMP/verify-readonly.logs/cloud-apply.log"
+KEEP_LOG_DIR=1 run_phase verify-readonly verify
+is "the read-only verify succeeds" "$(cat "$TMP/verify-readonly.rc")" "0"
+lacks "and never invokes teardown" "sol destroy" "$TMP/verify-readonly.sol"
+
 printf '\nscenario: promotion eligibility needs every required phase in one attempt\n'
 run_phase ledger-missing verify
 has "a verify without a phase ledger is not promotable" \
