@@ -632,6 +632,25 @@ let%test
     | _ -> Windtrap.fail (Sol_cli_absence.report observations))
 ;;
 
+let%test "GCP regional addresses: a router user is not a forwarding rule" =
+  let addresses =
+    {|[{"name":"sol-nat-address","address":"1.2.3.4","users":["https://www.googleapis.com/compute/v1/projects/acme-project/regions/us-central1/routers/acme-prod-router"]}]|}
+  in
+  with_fake_regional_addresses
+    ~addresses
+    ~network:
+      "https://www.googleapis.com/compute/v1/projects/acme-project/global/networks/acme-prod"
+    (fun () ->
+       let observations =
+         Sol_cli_gcp_absence.observations target ~cluster_name:"acme-prod"
+       in
+       match regional_address observations with
+       | Sol_cli_absence.Absent _ -> ()
+       | _ ->
+         Windtrap.fail
+           "a router user must not be sent to the forwarding-rule API or become UNKNOWN")
+;;
+
 let%test "GCP regional addresses: a prior identity survives when the users are gone" =
   let addresses = {|[{"name":"k8s2-abc","address":"1.2.3.4","users":[]}]|} in
   with_fake_regional_addresses

@@ -590,7 +590,10 @@ let authorization_secret_bindings ~resource_class ~project ~environment () =
   | Error error ->
     Unobservable { resource_class; reason = gcloud_failure error; checked_with }
   | Ok { Sol_cli_process.stdout; stderr } ->
-    if String.trim stderr <> ""
+    (* An empty filtered listing emits the benign filter-key warning. It is
+       absence, not an unreadable binding; treating it as unknown blocked
+       teardown after a platform failure. *)
+    if not (benign_empty_list_warning stderr)
     then Unobservable { resource_class; reason = String.trim stderr; checked_with }
     else (
       let secrets = Sol_cli_absence.lines stdout in
@@ -783,8 +786,8 @@ let regional_address_checked_with ~project ~region =
 
 let forwarding_rule_name user =
   match List.rev (String.split_on_char '/' user) with
-  | name :: _ -> name
-  | [] -> user
+  | name :: "forwardingRules" :: _ -> Some name
+  | _ -> None
 ;;
 
 let regional_address_observation
@@ -898,10 +901,18 @@ let regional_address_observation
                      let rec attribute = function
                        | [] -> Ok None
                        | user :: rest ->
-                         let* network = network_of_rule (forwarding_rule_name user) in
-                         if String.ends_with ~suffix:("/" ^ cluster_name) network
-                         then Ok (Some name)
-                         else attribute rest
+                         (* Compute Engine's `users` field may name a router (the
+                            target's Cloud NAT address) as well as a forwarding
+                            rule. A router is not a forwarding rule, and asking
+                            the forwarding-rule API about it turns a normal
+                            teardown into UNKNOWN. *)
+                         (match forwarding_rule_name user with
+                          | None -> attribute rest
+                          | Some rule ->
+                            let* network = network_of_rule rule in
+                            if String.ends_with ~suffix:("/" ^ cluster_name) network
+                            then Ok (Some name)
+                            else attribute rest)
                      in
                      attribute users))
                 addresses

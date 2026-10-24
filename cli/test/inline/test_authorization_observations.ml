@@ -190,6 +190,7 @@ let%test
 let gcp_script
       ?(project_policy = "")
       ?(secrets = "")
+      ?(secrets_stderr = "")
       ?(secret_policy = "")
       ~service_accounts
       ~roles
@@ -201,7 +202,7 @@ case "$*" in
   *"iam service-accounts list "*) printf '%%s' %s; exit 0 ;;
   *"iam roles list "*) printf '%%s' %s; exit 0 ;;
   *"projects get-iam-policy "*) printf '%%s' %s; exit 0 ;;
-  *"secrets list "*) printf '%%s' %s; exit 0 ;;
+  *"secrets list "*) printf '%%s' %s >&2; printf '%%s' %s; exit 0 ;;
   *"secrets get-iam-policy "*) printf '%%s' %s; exit 0 ;;
 esac
 exit 0
@@ -209,6 +210,7 @@ exit 0
     (Filename.quote service_accounts)
     (Filename.quote roles)
     (Filename.quote project_policy)
+    (Filename.quote secrets_stderr)
     (Filename.quote secrets)
     (Filename.quote secret_policy)
 ;;
@@ -372,6 +374,30 @@ let%test "authorization: GCP secret IAM bindings are observed" =
       1
       (List.length present.found)
   | _ -> Windtrap.fail "the authorization secret IAM binding was not observed"
+;;
+
+let%test "authorization: an empty filtered secret list with the benign warning is absent" =
+  with_fake_command
+    "gcloud"
+    (gcp_script
+       ~secrets_stderr:
+         "WARNING: The following filter keys were not present in any resource : name\n"
+       ~service_accounts:gcp_auth_identity
+       ~roles:gcp_auth_role
+       ())
+  @@ fun () ->
+  let observations =
+    Sol_cli_gcp_absence.observations
+      ~authorization_identities:[ "authorization secret IAM binding", [] ]
+      gcp_target
+      ~cluster_name:"acme-prod"
+  in
+  match find_class "authorization secret IAM binding" observations with
+  | Some (Sol_cli_absence.Absent _) -> ()
+  | _ ->
+    Windtrap.fail
+      "an empty filtered secret listing with the documented warning is absence, not \
+       UNKNOWN"
 ;;
 
 let%test "authorization: AWS workload roles are target-scoped by the auth state" =
