@@ -113,3 +113,8 @@
    SOL_TEST_SOL
    %{dep:../../../../cli/bin/main.exe}
    (run %{test}))))
+
+(test
+ (name test_lifecycle)
+ (modules test_lifecycle)
+ (libraries sol_qualification alcotest yojson))

@@ -274,11 +274,13 @@ instead of surfacing a store-level conflict. Two paths remain:
   kubeconfigs and transcripts stay in the spent attempt. `verify` records the same eligibility
   in `promotion-eligibility.txt`; a resumed attempt is never promoted.
 
-Each phase appends `phase=<name> exit=<status>` to `phase-verdicts.txt`. `verify` writes
-`promotion_eligible=yes` only when the attempt is continuous **and** `prepare`, `cloud`, `app`
-and `destroy` all exited 0 in this attempt; otherwise it records `promotion_eligible=no` and
-`required_phases_ok=no`. A clean destroy after a failed app is therefore not a qualified
-sequence.
+Each phase appends `phase=<name> exit=<status>` to `phase-verdicts.txt`. `verify` delegates
+the transition decision to the typed `qualification_lifecycle` assessor (built from
+`internal/tooling/sol_qualification/lib/qual_lifecycle.ml`). It writes
+`promotion_eligible=yes` only when the attempt is continuous **and** there is exactly one
+verdict for each of `prepare`, `cloud`, `app` and `destroy`, all exited 0; otherwise it records
+`promotion_eligible=no`, `required_phases_ok=no` and the typed reason. A clean destroy after a
+failed app is therefore not a qualified sequence.
 
 The resume target, cluster, state key, candidate revision and qualification row must match the
 source attempt, or it refuses. Missing or malformed source provenance refuses too; the source is
