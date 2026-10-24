@@ -243,8 +243,8 @@ GitHub Issues, and detailed evidence is under `internal/qualification/`.
 
 | Workload | Local | AWS | GCP | Evidence | Gap |
 |---|---|---|---|---|---|
-| OCaml `-svc` | local | live | live | [local](cli/test/golden_path_ocaml.sh), [AWS](internal/qualification/records/2026-10-20-alpha40-aws.md), [GCP](internal/qualification/records/2026-10-16-alpha36-gcp.md) | AWS and GCP production-profile evidence is incomplete; GCP is proven at alpha.36, not on the current head. |
-| OCaml `-worker` | local | live | live | [local](cli/test/golden_path_ocaml.sh), [AWS](internal/qualification/records/2026-10-20-alpha40-aws.md), [GCP](internal/qualification/records/2026-10-16-alpha36-gcp.md) | AWS Kafka delivery observation is blocked (#1593); GCP managed Kafka is unverified (#1603); broker-loss/resume evidence is missing. |
+| OCaml `-svc` | local | live | live | [local](cli/test/golden_path_ocaml.sh), [AWS](internal/qualification/records/2026-10-24-alpha44-aws-production.md), [GCP](internal/qualification/records/2026-10-16-alpha36-gcp.md) | AWS production sequence observed on alpha.44; GCP production evidence is alpha.36, not the current head. |
+| OCaml `-worker` | local | live | live | [local](cli/test/golden_path_ocaml.sh), [AWS](internal/qualification/records/2026-10-24-alpha44-aws-production.md), [GCP](internal/qualification/records/2026-10-16-alpha36-gcp.md) | AWS Kafka delivery observed on alpha.44; GCP managed Kafka is unverified (#1603); broker-loss/resume evidence is missing. |
 | OCaml `-fn` | partial | none | none | [local](cli/test/golden_path_ocaml.sh) | The local golden path adds an fn ad hoc; no fn is in the reference app and no cloud CronJob scenario exists. |
 | TypeScript `-svc` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-16-alpha36-gcp.md) | The demo pins `@sol-fab/svc@0.2.0`; the scaffold pins 0.3.0. No live AWS scenario; production-profile evidence is absent. |
 | TypeScript `-worker` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-16-alpha36-gcp.md) | `@sol-fab/worker@0.1.0` has no consumer-join readiness/`/readyz`; no live AWS scenario; production-profile evidence is absent. |
@@ -268,7 +268,7 @@ GitHub Issues, and detailed evidence is under `internal/qualification/`.
 | State, identities and permissions | partial | partial | GCP `sol-deploy` KSA token and repository-scoped publisher grants are merged; live evidence is still required. |
 | Immutable artifacts | live | partial | GCP digests have not been exercised on the current head. |
 | Postgres HA, backup and restore | partial | partial | GCP Regional HA/deletion protection are configured; failover, backup/PITR and restore bounds are not measured on either provider (#1605). |
-| Kafka durability and recovery | partial | partial | RF/acked-loss/consumer-resume evidence is not complete; #1593 blocks AWS delivery observation. |
+| Kafka durability and recovery | partial | partial | AWS delivery observation passed on alpha.44; RF/acked-loss/consumer-resume evidence is not complete; GCP managed Kafka is unverified (#1603). |
 | Availability and node-loss recovery | none | none | No measured node-loss/recovery evidence. |
 | Alert delivery and acknowledgement | none | none | No named receiver/owner has acknowledged a delivered alert. |
 | Observability SSO access | partial | partial | TLS+OIDC configuration and guards are in place; live login and dashboard visibility are not yet verified. |
