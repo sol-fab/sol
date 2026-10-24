@@ -365,6 +365,17 @@ cleanup_run() {
       return $?
       ;;
   esac
+  # A successful mutating phase in the middle of the sequence hands the target to
+  # the next phase. `cloud` retains for `app`; `app` retains for the explicit
+  # `destroy`. Only a failed phase (or an explicit diagnostic KEEP) changes that.
+  case "${PHASE:-}:$rc" in
+    cloud:0 | app:0)
+      say "not tearing down: a successful $PHASE retains the target for the next phase"
+      say "logs: $LOG_DIR"
+      "${hook}_cleanup_finish" "$rc" 1
+      return $?
+      ;;
+  esac
   local mutated=0
   if [ "${CLOUD_APPLIED:-0}" = "1" ] || cloud_mutated; then mutated=1; fi
   if [ "${TEARDOWN_ATTEMPTED:-0}" = "0" ] && [ "$mutated" = "1" ]; then

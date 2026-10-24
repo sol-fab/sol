@@ -1494,6 +1494,8 @@ lacks "and no establishment is attempted" "establish " "$TMP/norole.establish"
 printf '\nscenario: the app phase drives its transaction through the qualification transport\n'
 run_phase apptransport app TRANSPORT=1 STUB_DDL_NAMESPACE=sol-db-qualreg-aws-us-east-1 STUB_REQUIRE_SUBMISSION_AUTHORITY=1
 is "exit 0" "$(cat "$TMP/apptransport.rc")" "0"
+lacks "a successful app retains the target for the explicit destroy" \
+  "sol destroy" "$TMP/apptransport.sol"
 has "the delivery observation cites the transport transcript" \
   "transport-transaction.txt" "$TMP/apptransport.logs/kafka-delivery.json"
 is "the transport is re-established after the final deploy" \
@@ -1599,6 +1601,8 @@ printf '\nscenario: the cloud phase runs the cold deploy, publishes into Sol'"'"
 KEEP_LOG_DIR=1 run_phase cloudrun prepare
 KEEP_LOG_DIR=1 run_phase cloudrun cloud
 is "exit 0" "$(cat "$TMP/cloudrun.rc")" "0"
+lacks "a successful cloud retains the target for app" \
+  "sol destroy" "$TMP/cloudrun.sol"
 has "the cold deploy runs with no image references" \
   "deploy qualreg/aws/us-east-1 --registry $ECR [runner=" "$TMP/cloudrun.sol"
 has "it reconciles the environment" \
