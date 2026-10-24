@@ -93,7 +93,7 @@ resource "kubernetes_cluster_role_binding" "sol_deploy_bootstrap" {
     kind      = "ServiceAccount"
     name      = kubernetes_service_account_v1.sol_deploy.metadata[0].name
     namespace = kubernetes_service_account_v1.sol_deploy.metadata[0].namespace
-    api_group = "rbac.authorization.k8s.io"
+    api_group = ""
   }
 }
 
@@ -134,7 +134,7 @@ resource "kubernetes_role_binding" "sol_kafka_ca_reader" {
     kind      = "ServiceAccount"
     name      = kubernetes_service_account_v1.sol_deploy.metadata[0].name
     namespace = kubernetes_service_account_v1.sol_deploy.metadata[0].namespace
-    api_group = "rbac.authorization.k8s.io"
+    api_group = ""
   }
 }
 
@@ -176,6 +176,6 @@ resource "kubernetes_role_binding" "sol_boundary_lease" {
     kind      = "ServiceAccount"
     name      = kubernetes_service_account_v1.sol_deploy.metadata[0].name
     namespace = kubernetes_service_account_v1.sol_deploy.metadata[0].namespace
-    api_group = "rbac.authorization.k8s.io"
+    api_group = ""
   }
 }

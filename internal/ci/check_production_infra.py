@@ -233,6 +233,23 @@ def check_deploy_rbac(root):
             "FAIL: the Kafka CA reader must grant exactly get on the",
             "      redpanda-default-cert Secret in the redpanda namespace",
         )
+    for binding in (
+        r for r in found if r.type in ("kubernetes_role_binding", "kubernetes_cluster_role_binding")
+    ):
+        for subject in tfconfig.blocks(binding.body, "subject"):
+            kind = literal(subject.get("kind"))
+            api_group = literal(subject.get("api_group"))
+            if kind == "ServiceAccount" and api_group not in ("", None):
+                fail(
+                    "FAIL: a ServiceAccount RBAC subject carries apiGroup",
+                    f"      {api_group!r}; Kubernetes requires an empty apiGroup for",
+                    "      ServiceAccount subjects.",
+                )
+            if kind in ("User", "Group") and api_group != "rbac.authorization.k8s.io":
+                fail(
+                    "FAIL: a User/Group RBAC subject does not carry the RBAC apiGroup:",
+                    f"      {binding.name}.{kind} has {api_group!r}.",
+                )
     ca_binding = find(found, "kubernetes_role_binding", "sol_kafka_ca_reader")
     ca_binding_ok = ca_binding is not None and (
         (tfconfig.blocks(ca_binding.body, "metadata") or [{}])[0].get("namespace")
