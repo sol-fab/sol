@@ -2239,6 +2239,14 @@ has "a complete continuous sequence is promotable" \
   "promotion_eligible=yes" "$TMP/ledger-ok.logs/promotion-eligibility.txt"
 has "and records the continuity" \
   "attempt_continuity=continuous" "$TMP/ledger-ok.logs/promotion-eligibility.txt"
+mkdir -p "$TMP/ledger-retry.logs"
+printf 'phase=prepare exit=0 at=x\nphase=cloud exit=0 at=x\nphase=app exit=1 at=x\nphase=app exit=0 at=x\nphase=destroy exit=0 at=x\n' \
+  >"$TMP/ledger-retry.logs/phase-verdicts.txt"
+KEEP_LOG_DIR=1 SEED_ISSUER=letsencrypt-production SEED_CLAIM=production run_phase ledger-retry verify
+has "a failed phase followed by a success is not promotable" \
+  "promotion_eligible=no" "$TMP/ledger-retry.logs/promotion-eligibility.txt"
+has "and the repeated phase fails the required sequence" \
+  "required_phases_ok=no" "$TMP/ledger-retry.logs/promotion-eligibility.txt"
 printf 'phase=prepare exit=0 at=x\nphase=cloud exit=0 at=x\nphase=app exit=0 at=x\nphase=destroy exit=0 at=x\n' \
   >>"$TMP/resumed.logs/phase-verdicts.txt"
 KEEP_LOG_DIR=1 run_phase resumed verify
@@ -2247,6 +2255,8 @@ has "a staging attempt with a complete ledger is not promotion-eligible" \
   "promotion_eligible=no" "$TMP/ledger-staging.logs/promotion-eligibility.txt"
 has "but its continuity is continuous, not resumed" \
   "attempt_continuity=continuous" "$TMP/ledger-staging.logs/promotion-eligibility.txt"
+lacks "and it is not described as a resumed attempt" \
+  "resumed attempt" "$TMP/ledger-staging.out"
 has "a resumed attempt is never promotable even with a complete ledger" \
   "promotion_eligible=no" "$TMP/resumed.logs/promotion-eligibility.txt"
 has "and records the resumed continuity" \
