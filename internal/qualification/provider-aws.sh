@@ -206,7 +206,7 @@ hook_aws_app_failed() { return 0; }
 
 # Checked before TEARDOWN_ATTEMPTED is set by the skeleton: a destroy that cannot
 # refresh its credentials must not record that a teardown was attempted.
-hook_aws_destroy_precondition() { require_credentials; }
+hook_aws_destroy_precondition() { require_credentials 20; }
 
 hook_aws_destroy_prestate() {
   if [ ! -f "$LOG_DIR/aws-pre-teardown-identities.json" ]; then
@@ -336,7 +336,7 @@ require_public_delegation() {
 }
 
 hook_aws_cloud_precondition() {
-  require_credentials || return 1
+  require_credentials 180 || return 1
   require_target_terraform_var_file || return 1
   require_target_issuer || return 1
   require_public_delegation || return 1
