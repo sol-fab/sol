@@ -6,6 +6,13 @@ REPO="$(cd "$HERE/../../.." && pwd)"
 TMP="$(mktemp -d)"
 export TMP
 export ATTEMPT="${ATTEMPT:-aws-self-test}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
+LIFECYCLE_BIN="$REPO_ROOT/_build/default/internal/tooling/sol_qualification/bin/qualification_lifecycle.exe"
+if [ ! -x "$LIFECYCLE_BIN" ]; then
+  echo "build $LIFECYCLE_BIN before running the AWS row suite" >&2
+  exit 1
+fi
 # A fixed image tag: `prepare` builds under it and `cloud` publishes under it, so the seeding
 # helpers and the harness name the same tag. The harness's own default is `row-<timestamp>`.
 export APP_TAG="${APP_TAG:-row-self-test}"
@@ -870,57 +877,7 @@ exit 0
 STUB
 chmod +x "$TMP/bin/qualification_database_ca"
 
-# The live row's typed lifecycle assessor is built from OCaml; the shell suite
-# uses this shim so the execution path is exercised. The OCaml module has its own
-# unit tests for the decision itself.
-cat >"$TMP/bin/qualification_lifecycle" <<'STUB'
-#!/usr/bin/env python3
-import json
-import pathlib
-import sys
 
-directory = pathlib.Path(sys.argv[sys.argv.index("--attempt-dir") + 1])
-meta = {}
-for line in (directory / "attempt.txt").read_text().splitlines():
-    if "=" in line:
-        key, value = line.split("=", 1)
-        meta.setdefault(key, value)
-
-required = ("prepare", "cloud", "app", "destroy")
-verdicts = {phase: [] for phase in required}
-for line in (directory / "phase-verdicts.txt").read_text().splitlines():
-    fields = dict(field.split("=", 1) for field in line.split() if "=" in field)
-    phase = fields.get("phase")
-    if phase in verdicts:
-        verdicts[phase].append(int(fields["exit"]))
-
-reasons = []
-for phase in required:
-    values = verdicts[phase]
-    if not values:
-        reasons.append("missing phase " + phase)
-    elif len(values) > 1:
-        reasons.append("phase " + phase + " has more than one verdict")
-    elif values[0] != 0:
-        reasons.append("phase " + phase + " failed")
-
-resumed_from = meta.get("resumed_from", "")
-claim_ok = meta.get("promotion_eligible") == "yes"
-if not claim_ok:
-    reasons.append("attempt is not promotion-eligible: claim=%s issuer=%s" % (meta.get("claim"), meta.get("issuer")))
-if resumed_from:
-    reasons.append("attempt is a diagnostic resume of " + resumed_from)
-
-required_ok = not any(reason.startswith(("missing phase", "phase ")) for reason in reasons)
-print(json.dumps({
-    "attempt": meta.get("attempt", ""),
-    "eligible": required_ok and claim_ok and not resumed_from,
-    "required_phases_ok": required_ok,
-    "continuity": "resumed" if resumed_from else "continuous",
-    "reasons": reasons,
-}))
-STUB
-chmod +x "$TMP/bin/qualification_lifecycle"
 
 
 cat >"$TMP/bin/curl" <<'STUB'
@@ -1129,7 +1086,7 @@ PY
     STUB_APP_REFUSALS=1 STUB_APP_MARKER_DIR="$STUB_APP_MARKER_DIR" \
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 \
-    SOL_QUALIFICATION_LIFECYCLE="$TMP/bin/qualification_lifecycle" \
+    SOL_QUALIFICATION_LIFECYCLE="${SOL_QUALIFICATION_LIFECYCLE:-${LIFECYCLE_BIN:-}}" \
     TF_VAR_db_password="${TF_VAR_db_password-test-password}" "$@" \
     "$ROOT/internal/qualification/aws/live-qual.sh" app >"$TMP/$name.out" 2>&1
   local harness_rc=$?
@@ -1233,7 +1190,7 @@ PY
     OPERATOR_ROLE_ARN=arn:aws:iam::1:role/operator QUALIFIER_ROLE=qualifier \
     SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" PHASE_TIMEOUT=60 \
-    SOL_QUALIFICATION_LIFECYCLE="$TMP/bin/qualification_lifecycle" \
+    SOL_QUALIFICATION_LIFECYCLE="${SOL_QUALIFICATION_LIFECYCLE:-${LIFECYCLE_BIN:-}}" \
     TF_VAR_db_password="${TF_VAR_db_password-test-password}" "$@" \
     "$ROOT/internal/qualification/aws/live-qual.sh" "$phase" >"$TMP/$name.out" 2>&1
   local harness_rc=$?

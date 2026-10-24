@@ -127,6 +127,71 @@ let test_of_dir_unknown_phase () =
     check "unknown phase is refused" (Result.is_error (L.of_dir dir)))
 ;;
 
+let test_duplicate_identity_field () =
+  with_temp_dir (fun dir ->
+    write
+      (Filename.concat dir "attempt.txt")
+      [ "attempt=a1"
+      ; "claim=production"
+      ; "claim=mechanism-only"
+      ; "issuer=letsencrypt-prod"
+      ; "promotion_eligible=yes"
+      ];
+    write (Filename.concat dir "phase-verdicts.txt") [];
+    check "duplicate identity field is refused" (Result.is_error (L.of_dir dir)))
+;;
+
+let test_duplicate_verdict_field () =
+  with_temp_dir (fun dir ->
+    write
+      (Filename.concat dir "attempt.txt")
+      [ "attempt=a1"
+      ; "claim=production"
+      ; "issuer=letsencrypt-prod"
+      ; "promotion_eligible=yes"
+      ];
+    write
+      (Filename.concat dir "phase-verdicts.txt")
+      [ "phase=prepare exit=0 exit=1 at=x" ];
+    check "duplicate verdict field is refused" (Result.is_error (L.of_dir dir)))
+;;
+
+let test_inconsistent_recorded_claim () =
+  with_temp_dir (fun dir ->
+    write
+      (Filename.concat dir "attempt.txt")
+      [ "attempt=a1"
+      ; "claim=production"
+      ; "issuer=letsencrypt-prod"
+      ; "promotion_eligible=no"
+      ];
+    write (Filename.concat dir "phase-verdicts.txt") [ "phase=prepare exit=0 at=x" ];
+    check "inconsistent recorded claim is refused" (Result.is_error (L.of_dir dir)))
+;;
+
+let test_resumed_production_is_valid_but_not_eligible () =
+  with_temp_dir (fun dir ->
+    write
+      (Filename.concat dir "attempt.txt")
+      [ "attempt=a1"
+      ; "claim=production"
+      ; "issuer=letsencrypt-prod"
+      ; "promotion_eligible=no"
+      ; "resumed_from=/tmp/source"
+      ];
+    write
+      (Filename.concat dir "phase-verdicts.txt")
+      [ "phase=prepare exit=0 at=x"
+      ; "phase=cloud exit=0 at=x"
+      ; "phase=app exit=0 at=x"
+      ; "phase=destroy exit=0 at=x"
+      ];
+    match L.of_dir dir with
+    | Error message -> Alcotest.fail message
+    | Ok parsed ->
+      check "resumed production remains ineligible" (not (L.assess parsed).eligible))
+;;
+
 let test_parse_unknown_phase () =
   check "unknown phase is refused" (Result.is_error (L.phase_of_string "deploy"))
 ;;
@@ -147,6 +212,19 @@ let () =
             "reject unknown parsed phase"
             `Quick
             test_of_dir_unknown_phase
+        ; Alcotest.test_case
+            "duplicate identity field"
+            `Quick
+            test_duplicate_identity_field
+        ; Alcotest.test_case "duplicate verdict field" `Quick test_duplicate_verdict_field
+        ; Alcotest.test_case
+            "inconsistent recorded claim"
+            `Quick
+            test_inconsistent_recorded_claim
+        ; Alcotest.test_case
+            "resumed production"
+            `Quick
+            test_resumed_production_is_valid_but_not_eligible
         ] )
     ]
 ;;

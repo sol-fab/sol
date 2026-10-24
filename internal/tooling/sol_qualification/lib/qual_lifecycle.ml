@@ -104,13 +104,28 @@ let fields line = String.split_on_char ' ' line |> List.filter (fun field -> fie
 
 let parse_verdict line =
   let parsed =
-    List.map
-      (fun field ->
-         match split_field field with
-         | Ok pair -> pair
-         | Error message -> failwith message)
+    List.fold_left
+      (fun state field ->
+         match state, split_field field with
+         | Error message, _ -> Error message
+         | Ok _, Error message -> Error message
+         | Ok parsed, Ok (key, value) ->
+           (match key with
+            | "phase" | "exit" | "at" ->
+              if List.mem_assoc key parsed
+              then Error (Printf.sprintf "verdict line %S repeats the %s field" line key)
+              else Ok ((key, value) :: parsed)
+            | _ ->
+              Error (Printf.sprintf "verdict line %S has an unknown field %s" line key)))
+      (Ok [])
       (fields line)
   in
+  let ( let* ) result next =
+    match result with
+    | Ok value -> next value
+    | Error _ as error -> error
+  in
+  let* parsed = parsed in
   let find key =
     match List.assoc_opt key parsed with
     | Some value -> Ok value
@@ -132,23 +147,41 @@ let parse_verdict line =
              Ok { phase; exit_code; at })))
 ;;
 
-let first_field key lines =
-  List.find_map
-    (fun line ->
-       match split_field line with
-       | Ok (candidate, value) when candidate = key -> Some value
-       | _ -> None)
-    lines
+let unique_field key lines =
+  let values =
+    List.filter_map
+      (fun line ->
+         match split_field line with
+         | Ok (candidate, value) when candidate = key -> Some value
+         | _ -> None)
+      lines
+  in
+  match values with
+  | [] -> Ok None
+  | [ value ] -> Ok (Some value)
+  | _ -> Error (Printf.sprintf "attempt identity repeats the %s field" key)
 ;;
 
 let require_field key lines =
-  match first_field key lines with
+  let ( let* ) result next =
+    match result with
+    | Ok value -> next value
+    | Error _ as error -> error
+  in
+  let* value = unique_field key lines in
+  match value with
   | Some value when value <> "" -> Ok value
   | _ -> Error (Printf.sprintf "attempt identity has no %s field" key)
 ;;
 
 let parse_promotion_eligible lines =
-  match first_field "promotion_eligible" lines with
+  let ( let* ) result next =
+    match result with
+    | Ok value -> next value
+    | Error _ as error -> error
+  in
+  let* value = unique_field "promotion_eligible" lines in
+  match value with
   | Some "yes" -> Ok true
   | Some "no" -> Ok false
   | Some value -> Error (Printf.sprintf "unexpected promotion_eligible value %S" value)
@@ -156,9 +189,15 @@ let parse_promotion_eligible lines =
 ;;
 
 let parse_resumed_from lines =
-  match first_field "resumed_from" lines with
-  | Some value when value <> "" -> Some value
-  | _ -> None
+  let ( let* ) result next =
+    match result with
+    | Ok value -> next value
+    | Error _ as error -> error
+  in
+  let* value = unique_field "resumed_from" lines in
+  match value with
+  | Some value when value <> "" -> Ok (Some value)
+  | _ -> Ok None
 ;;
 
 let of_dir directory =
@@ -176,25 +215,37 @@ let of_dir directory =
     let* claim = require_field "claim" identity in
     let* issuer = require_field "issuer" identity in
     let* promotion_eligible = parse_promotion_eligible identity in
-    let* verdicts =
-      List.fold_left
-        (fun state line ->
-           let* acc = state in
-           let* verdict = parse_verdict line in
-           Ok (verdict :: acc))
-        (Ok [])
-        ledger
+    let* resumed_from = parse_resumed_from identity in
+    let recorded_claim_consistent =
+      match claim, promotion_eligible, resumed_from with
+      | "production", true, None -> true
+      | "production", false, Some _ -> true
+      | "mechanism-only", false, _ -> true
+      | _ -> false
     in
-    Ok
-      { provenance =
-          { attempt
-          ; claim
-          ; issuer
-          ; resumed_from = parse_resumed_from identity
-          ; promotion_eligible
-          }
-      ; verdicts = List.rev verdicts
-      }
+    if not recorded_claim_consistent
+    then
+      Error
+        (Printf.sprintf
+           "recorded promotion_eligible=%b is inconsistent with claim=%s and \
+            resumed_from=%s"
+           promotion_eligible
+           claim
+           (Option.value ~default:"<none>" resumed_from))
+    else
+      let* verdicts =
+        List.fold_left
+          (fun state line ->
+             let* acc = state in
+             let* verdict = parse_verdict line in
+             Ok (verdict :: acc))
+          (Ok [])
+          ledger
+      in
+      Ok
+        { provenance = { attempt; claim; issuer; resumed_from; promotion_eligible }
+        ; verdicts = List.rev verdicts
+        }
   with
   | Sys_error message -> Error message
   | Failure message -> Error message
