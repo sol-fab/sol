@@ -24,7 +24,11 @@ let test_substrate_is_namespace_and_role_bindings_only () =
      && Sol_cli_string.contains ~needle:"name: sol:deployers" (List.nth docs 1)
      && Sol_cli_string.contains ~needle:"kind: ServiceAccount" (List.nth docs 1)
      && Sol_cli_string.contains ~needle:"name: sol-deploy" (List.nth docs 1)
-     && Sol_cli_string.contains ~needle:"namespace: monitoring" (List.nth docs 1));
+     && Sol_cli_string.contains ~needle:"namespace: monitoring" (List.nth docs 1)
+     && Sol_cli_string.contains ~needle:"apiGroup: \"\"" (List.nth docs 1)
+     && Sol_cli_string.contains
+          ~needle:"apiGroup: rbac.authorization.k8s.io"
+          (List.nth docs 1));
   check_bool
     "then the operator's read-only RoleBinding (DEC-038)"
     true

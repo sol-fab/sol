@@ -164,7 +164,7 @@ let role_binding_doc ~ns ~name ~cluster_role ~group ?service_account () =
           [ "kind", Y.string "ServiceAccount"
           ; "name", Y.string name
           ; "namespace", Y.string namespace
-          ; "apiGroup", Y.string "rbac.authorization.k8s.io"
+          ; "apiGroup", Y.string ""
           ]
       ]
   in
