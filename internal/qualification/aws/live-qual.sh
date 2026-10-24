@@ -242,6 +242,9 @@ USAGE
 # The shared database-CA family owner (#1510). It is a harness executable,
 # distinct from the installed candidate's own sol.
 SOL_QUALIFICATION_CA="${SOL_QUALIFICATION_CA:-$ROOT/_build/default/internal/tooling/sol_qualification/bin/qualification_database_ca.exe}"
+# The typed phase/attempt assessment. The shell executes the decision but does not
+# re-derive it from the ledger.
+SOL_QUALIFICATION_LIFECYCLE="${SOL_QUALIFICATION_LIFECYCLE:-$ROOT/_build/default/internal/tooling/sol_qualification/bin/qualification_lifecycle.exe}"
 
 # The database-contract pins are recorded by the shared `record_database_contract_pins`
 # in lib/shared.sh; the specimen it keeps carries the candidate's own declaration.
@@ -1103,39 +1106,20 @@ case "${1:-}" in
   destroy) phase_destroy ;;
   resume) phase_resume ;;
   verify | inventory)
-    phases_ok=yes
-    for ledger_phase in prepare cloud app destroy; do
-      verdicts="$(grep -c "^phase=$ledger_phase " "$LOG_DIR/phase-verdicts.txt" 2>/dev/null || true)"
-      successes="$(grep -c "^phase=$ledger_phase exit=0 " "$LOG_DIR/phase-verdicts.txt" 2>/dev/null || true)"
-      # One attempt is one required sequence. A failed invocation followed by a
-      # successful one is not the same sequence, even when the final phase passes.
-      if [ "$verdicts" != 1 ] || [ "$successes" != 1 ]; then phases_ok=no; fi
-    done
-    resumed_from="$(attempt_field resumed_from || true)"
+    if [ ! -x "$SOL_QUALIFICATION_LIFECYCLE" ]; then
+      refuse "REFUSING: the typed lifecycle assessor is not built at $SOL_QUALIFICATION_LIFECYCLE"
+      exit 1
+    fi
+    if ! assessment="$(timeout "$PHASE_TIMEOUT" "$SOL_QUALIFICATION_LIFECYCLE" --attempt-dir "$LOG_DIR")"; then
+      refuse "REFUSING: the typed lifecycle assessor could not read $LOG_DIR"
+      exit 1
+    fi
     {
-      if attempt_promotion_eligible && [ "$phases_ok" = yes ]; then
-        printf 'promotion_eligible=yes\n'
-      else
-        printf 'promotion_eligible=no\n'
-        if attempt_promotion_eligible; then
-          say "the attempt is continuous but its required phases are incomplete; not promotion-eligible"
-        elif [ -n "$resumed_from" ]; then
-          printf 'resumed_from=%s\n' "$resumed_from"
-          say "resumed attempt: this evidence is diagnostic, not promotion-eligible"
-        else
-          say "the attempt is continuous and not promotion-eligible: claim=$(attempt_field claim) issuer=$(attempt_field issuer)"
-        fi
-      fi
-      printf 'required_phases_ok=%s\n' "$phases_ok"
-      # Continuity is whether this attempt resumed another, not whether it is
-      # promotion-eligible. A staging (mechanism-only) attempt is continuous and
-      # ineligible; reading the promotion flag here conflated the two.
-      if [ -n "$(attempt_field resumed_from || true)" ]; then
-        printf 'attempt_continuity=resumed\n'
-      else
-        printf 'attempt_continuity=continuous\n'
-      fi
-      printf 'attempt=%s\n' "$ATTEMPT"
+      printf 'promotion_eligible=%s\n' "$(printf '%s' "$assessment" | jq -r 'if .eligible then "yes" else "no" end')"
+      printf 'required_phases_ok=%s\n' "$(printf '%s' "$assessment" | jq -r 'if .required_phases_ok then "yes" else "no" end')"
+      printf 'attempt_continuity=%s\n' "$(printf '%s' "$assessment" | jq -r '.continuity')"
+      printf 'attempt=%s\n' "$(printf '%s' "$assessment" | jq -r '.attempt')"
+      printf '%s' "$assessment" | jq -r '.reasons[]? | "reason=\(.)"'
     } >"$LOG_DIR/promotion-eligibility.txt"
     aws_inventory
     ;;

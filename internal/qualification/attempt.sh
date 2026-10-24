@@ -65,10 +65,6 @@ attempt_field() {
   sed -n "s/^$key=//p" "$file" | head -1
 }
 
-attempt_promotion_eligible() {
-  [ "$(attempt_field promotion_eligible || true)" != "no" ]
-}
-
 attempt_write_identity() {
   local file issuer claim
   file="$(attempt_identity_file)"

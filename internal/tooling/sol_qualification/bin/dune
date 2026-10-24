@@ -2,3 +2,8 @@
  (name qualification_database_ca)
  (modules qualification_database_ca)
  (libraries sol_qualification sol_cli_base yojson unix))
+
+(executable
+ (name qualification_lifecycle)
+ (modules qualification_lifecycle)
+ (libraries sol_qualification yojson))
