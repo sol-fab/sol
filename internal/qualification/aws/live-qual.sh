@@ -696,15 +696,31 @@ phase_transport() {
 # `aws configure export-credentials` resolves credentials through the profile's own path, so it
 # fails exactly when the plan/apply/destroy would, *before* anything is created or destroyed.
 require_credentials() {
-  local detail
-  if detail="$(aws configure export-credentials --profile "$AWS_PROFILE" --format env 2>&1 >/dev/null)"; then
-    return 0
+  local min_minutes="${1:-0}" output detail expiration expires now remaining
+  if ! output="$(aws configure export-credentials --profile "$AWS_PROFILE" --format env 2>&1)"; then
+    detail="$output"
+    say "the AWS credentials for profile '$AWS_PROFILE' cannot be refreshed:"
+    printf '%s\n' "$detail" | sed 's/^/  /' >&2
+    say "terraform uses the same credential path, so no plan, apply or destroy can run; nothing was attempted."
+    say "Re-authenticate (for an SSO profile: aws sso login --profile $AWS_PROFILE), then re-run."
+    return 1
   fi
-  say "the AWS credentials for profile '$AWS_PROFILE' cannot be refreshed:"
-  printf '%s\n' "$detail" | sed 's/^/  /' >&2
-  say "terraform uses the same credential path, so no plan, apply or destroy can run; nothing was attempted."
-  say "Re-authenticate (for an SSO profile: aws sso login --profile $AWS_PROFILE), then re-run."
-  return 1
+  expiration="$(printf '%s\n' "$output" | sed -n 's/^export AWS_CREDENTIAL_EXPIRATION=//p' | tail -1)"
+  # Non-SSO credential sources may not expose an expiry. Do not invent one; the
+  # refresh check above still established that the credential resolves.
+  [ -n "$expiration" ] || return 0
+  expires="$(date -d "$expiration" +%s 2>/dev/null || true)"
+  if [ -z "$expires" ]; then
+    say "REFUSING: the AWS credential expiry '$expiration' cannot be read, so the run window cannot be checked"
+    return 1
+  fi
+  now="$(date +%s)"
+  remaining=$(( (expires - now) / 60 ))
+  if [ "$remaining" -lt "$min_minutes" ]; then
+    say "REFUSING: the AWS credentials for profile '$AWS_PROFILE' expire at $expiration, only ${remaining}m remain; this phase needs at least ${min_minutes}m"
+    say "Re-authenticate (for an SSO profile: aws sso login --profile $AWS_PROFILE), then re-run."
+    return 1
+  fi
 }
 
 phase_cloud() { phase_cloud_run; }
