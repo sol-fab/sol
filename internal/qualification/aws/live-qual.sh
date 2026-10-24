@@ -67,7 +67,7 @@ RETENTION="${RETENTION:-none}"
 # records which claim the evidence supports.
 CLUSTER_ISSUER="${CLUSTER_ISSUER:-letsencrypt-staging}"
 case "$CLUSTER_ISSUER" in
-  *production) ATTEMPT_CLAIM=production ;;
+  *prod*) ATTEMPT_CLAIM=production ;;
   *) ATTEMPT_CLAIM=mechanism-only ;;
 esac
 export CLUSTER_ISSUER ATTEMPT_CLAIM
