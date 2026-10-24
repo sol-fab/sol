@@ -101,6 +101,7 @@ resource "kubernetes_cluster_role_binding" "everywhere" {
     ("lease-lists-configmaps", edit(DEPLOY, 'verbs      = ["get", "update", "delete"]', 'verbs      = ["get", "update", "delete", "list"]'), "must grant exactly get/create/update/delete"),
     ("lease-reaches-secrets", edit(DEPLOY, '    resources  = ["configmaps"]\n    verbs      = ["create"]', '    resources  = ["configmaps", "secrets"]\n    verbs      = ["create"]'), "must grant exactly get/create/update/delete"),
     ("lease-bound-to-another-group", edit(DEPLOY, '    name      = "sol:deployers"', '    name      = "sol:everyone"', after='resource "kubernetes_role_binding" "sol_boundary_lease"'), "is not bound to sol:deployers in default"),
+    ("service-account-subject-api-group", edit(DEPLOY, '    api_group = ""', '    api_group = "rbac.authorization.k8s.io"', after='kind      = "ServiceAccount"'), "ServiceAccount RBAC subject carries apiGroup"),
     ("kafka-ca-reader-missing", edit(DEPLOY, 'resource "kubernetes_role" "sol_kafka_ca_reader" {', 'resource "kubernetes_role" "sol_kafka_ca_reader_renamed" {'), "kubernetes_role.sol_kafka_ca_reader not found"),
     ("kafka-ca-reader-wrong-namespace", edit(DEPLOY, '    namespace = kubernetes_namespace.redpanda.metadata[0].name', '    namespace = "default"', after='resource "kubernetes_role" "sol_kafka_ca_reader"'), "must grant exactly get"),
     ("kafka-ca-reader-lists", edit(DEPLOY, '    verbs          = ["get"]', '    verbs          = ["get", "list"]', after='resource "kubernetes_role" "sol_kafka_ca_reader"'), "must grant exactly get"),
