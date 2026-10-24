@@ -315,10 +315,31 @@ require_rds_master_password() {
   fi
 }
 
+# The target's public delegation is read before any provider mutation. A stale
+# or broken `dig` on PATH must not surface as an UNKNOWN platform observation
+# after the cluster exists.
+require_public_delegation() {
+  local domain nameservers
+  domain="$(sed -n 's/^ *base_domain: *//p' "$TARGET_FILE" 2>/dev/null | head -1)"
+  if [ -z "$domain" ]; then
+    say "REFUSING: $TARGET_FILE declares no base_domain, so public delegation cannot be read"
+    return 1
+  fi
+  if ! command -v dig >/dev/null 2>&1; then
+    say "REFUSING: dig is not on PATH, so public delegation for $domain cannot be read"
+    return 1
+  fi
+  if ! nameservers="$(dig +short NS "$domain" 2>/dev/null)" || [ -z "$nameservers" ]; then
+    say "REFUSING: public delegation for $domain could not be read with dig; fix the DNS tool before provisioning"
+    return 1
+  fi
+}
+
 hook_aws_cloud_precondition() {
   require_credentials || return 1
   require_target_terraform_var_file || return 1
   require_target_issuer || return 1
+  require_public_delegation || return 1
   require_prepared_cloud_artifacts || return 1
   require_rds_master_password || return 1
 }

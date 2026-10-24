@@ -259,6 +259,7 @@ qualreg:
     aws/us-east-1:
       cluster_name: test-cluster
       cluster_issuer: letsencrypt-staging
+      base_domain: qual-aws.sol-fab.dev
       state_bucket: sol-qual-test-tfstate
       # `sol deploy` takes no --var-file; the row's roots read this file.
       terraform_var_file: /tmp/qual.tfvars
@@ -921,6 +922,16 @@ print(json.dumps({
 }))
 STUB
 chmod +x "$TMP/bin/qualification_lifecycle"
+
+cat >"$TMP/bin/dig" <<'STUB'
+#!/usr/bin/env bash
+if [ "${STUB_DIG_BROKEN:-0}" = 1 ]; then
+  printf 'dig: symbol lookup error: libc.so.6: undefined symbol\n' >&2
+  exit 127
+fi
+printf 'ns-1.awsdns-01.org.\n'
+STUB
+chmod +x "$TMP/bin/dig"
 
 
 cat >"$TMP/bin/curl" <<'STUB'
@@ -1888,6 +1899,13 @@ printf '\nscenario: the run owns no registry of its own, so the cleanup phase is
 run_phase cleanuprun cleanup
 refused cleanuprun "cleanup is no longer a phase"
 lacks "and the usage no longer offers it" "| cleanup" "$TMP/cleanuprun.out"
+
+printf '\nscenario: cloud refuses before mutation when public delegation cannot be read\n'
+KEEP_LOG_DIR=1 run_phase dnsbroken cloud STUB_DIG_BROKEN=1
+refused dnsbroken "a cloud phase with a broken DNS tool is refused"
+has "and names the unreadable delegation" "public delegation" "$TMP/dnsbroken.out"
+lacks "and no cold deploy runs" "deploy qualreg/aws/us-east-1" "$TMP/dnsbroken.sol"
+not_exists "and no provider apply is attempted" "$TMP/dnsbroken.logs/cloud-apply.log"
 
 printf '\nscenario: a cloud phase with no prepared contract refuses before provider mutation\n'
 SKIP_PREPARE=1 run_phase noprep cloud
