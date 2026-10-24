@@ -9,10 +9,10 @@
       "gcp": "live",
       "evidence": {
         "local": "cli/test/golden_path_ocaml.sh",
-        "aws": "internal/qualification/records/2026-10-20-alpha40-aws.md",
+        "aws": "internal/qualification/records/2026-10-24-alpha44-aws-production.md",
         "gcp": "internal/qualification/records/2026-10-16-alpha36-gcp.md"
       },
-      "gap": "AWS and GCP production-profile evidence is incomplete; GCP is proven at alpha.36, not on the current head."
+      "gap": "AWS production sequence observed on alpha.44; GCP production evidence is alpha.36, not the current head."
     },
     {
       "id": "ocaml-worker",
@@ -22,10 +22,10 @@
       "gcp": "live",
       "evidence": {
         "local": "cli/test/golden_path_ocaml.sh",
-        "aws": "internal/qualification/records/2026-10-20-alpha40-aws.md",
+        "aws": "internal/qualification/records/2026-10-24-alpha44-aws-production.md",
         "gcp": "internal/qualification/records/2026-10-16-alpha36-gcp.md"
       },
-      "gap": "AWS Kafka delivery observation is blocked (#1593); GCP managed Kafka is unverified (#1603); broker-loss/resume evidence is missing."
+      "gap": "AWS Kafka delivery observed on alpha.44; GCP managed Kafka is unverified (#1603); broker-loss/resume evidence is missing."
     },
     {
       "id": "ocaml-fn",
@@ -80,7 +80,7 @@
       "aws": "live",
       "gcp": "live",
       "evidence": {
-        "aws": "internal/qualification/records/2026-10-20-alpha40-aws.md",
+        "aws": "internal/qualification/records/2026-10-24-alpha44-aws-production.md",
         "gcp": "internal/qualification/records/2026-10-16-alpha36-gcp.md"
       },
       "gap": "GCP now establishes a namespace-scoped sol-deploy token per run; live evidence is still required. CI cold-start remains unimplemented."
@@ -103,7 +103,7 @@
       "aws": "prod",
       "gcp": "partial",
       "evidence": {
-        "aws": "internal/qualification/records/2026-10-21-alpha44-aws.md"
+        "aws": "internal/qualification/records/2026-10-24-alpha44-aws-production.md"
       },
       "gap": "GCP partial-state recovery is open (#1605); local teardown is documented k3d cleanup."
     },
@@ -164,7 +164,7 @@
       "label": "Kafka durability and recovery",
       "aws": "partial",
       "gcp": "partial",
-      "gap": "RF/acked-loss/consumer-resume evidence is not complete; #1593 blocks AWS delivery observation."
+      "gap": "AWS delivery observation passed on alpha.44; RF/acked-loss/consumer-resume evidence is not complete; GCP managed Kafka is unverified (#1603)."
     },
     {
       "id": "availability",
