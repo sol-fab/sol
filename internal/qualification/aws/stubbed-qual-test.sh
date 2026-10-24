@@ -1648,33 +1648,33 @@ has "and is not promotion-eligible" "promotion_eligible=no" "$TMP/issuerfresh.lo
 has "from a fresh identity, not a continuation" "started=" "$TMP/issuerfresh.logs/attempt.txt"
 
 printf '\nscenario: the promotion attempt declares production and is labelled accordingly\n'
-sed -i 's/cluster_issuer: letsencrypt-staging/cluster_issuer: letsencrypt-production/' "$WORKSPACE/sol/environments.local.yml"
-KEEP_LOG_DIR=1 CLUSTER_ISSUER=letsencrypt-production run_phase issuerprod prepare
-has "records the production issuer" "issuer=letsencrypt-production" "$TMP/issuerprod.logs/attempt.txt"
+sed -i 's/cluster_issuer: letsencrypt-staging/cluster_issuer: letsencrypt-prod/' "$WORKSPACE/sol/environments.local.yml"
+KEEP_LOG_DIR=1 CLUSTER_ISSUER=letsencrypt-prod run_phase issuerprod prepare
+has "records the production issuer" "issuer=letsencrypt-prod" "$TMP/issuerprod.logs/attempt.txt"
 has "labels the attempt production" "claim=production" "$TMP/issuerprod.logs/attempt.txt"
 has "and marks it promotion-eligible" "promotion_eligible=yes" "$TMP/issuerprod.logs/attempt.txt"
-sed -i 's/cluster_issuer: letsencrypt-production/cluster_issuer: letsencrypt-staging/' "$WORKSPACE/sol/environments.local.yml"
+sed -i 's/cluster_issuer: letsencrypt-prod/cluster_issuer: letsencrypt-staging/' "$WORKSPACE/sol/environments.local.yml"
 
 printf '\nscenario: a continuation preserves the original attempt labels\n'
-SEED_ISSUER=letsencrypt-production SEED_CLAIM=production seed_attempt issuercont
-sed -i 's/cluster_issuer: letsencrypt-staging/cluster_issuer: letsencrypt-production/' "$WORKSPACE/sol/environments.local.yml"
-KEEP_LOG_DIR=1 CLUSTER_ISSUER=letsencrypt-production run_phase issuercont prepare
+SEED_ISSUER=letsencrypt-prod SEED_CLAIM=production seed_attempt issuercont
+sed -i 's/cluster_issuer: letsencrypt-staging/cluster_issuer: letsencrypt-prod/' "$WORKSPACE/sol/environments.local.yml"
+KEEP_LOG_DIR=1 CLUSTER_ISSUER=letsencrypt-prod run_phase issuercont prepare
 has "the continuation keeps the recorded issuer" \
-  "issuer=letsencrypt-production" "$TMP/issuercont.logs/attempt.txt"
+  "issuer=letsencrypt-prod" "$TMP/issuercont.logs/attempt.txt"
 has "and the recorded claim" "claim=production" "$TMP/issuercont.logs/attempt.txt"
 has "and the recorded promotion eligibility" \
   "promotion_eligible=yes" "$TMP/issuercont.logs/attempt.txt"
 has "and records that it continued" "continued=" "$TMP/issuercont.logs/attempt.txt"
-sed -i 's/cluster_issuer: letsencrypt-production/cluster_issuer: letsencrypt-staging/' "$WORKSPACE/sol/environments.local.yml"
+sed -i 's/cluster_issuer: letsencrypt-prod/cluster_issuer: letsencrypt-staging/' "$WORKSPACE/sol/environments.local.yml"
 
 printf '\nscenario: a continuation cannot adopt a different issuer\n'
-SEED_ISSUER=letsencrypt-production SEED_CLAIM=production seed_attempt issuerdiff
+SEED_ISSUER=letsencrypt-prod SEED_CLAIM=production seed_attempt issuerdiff
 KEEP_LOG_DIR=1 run_phase issuerdiff prepare
 refused issuerdiff "a continuation that declares a different issuer is refused"
 has "and names the new-ATTEMPT requirement" \
   "different issuer requires a new ATTEMPT" "$TMP/issuerdiff.out"
 has "the continuation keeps the original production issuer, not the target staging issuer" \
-  "issuer=letsencrypt-production" "$TMP/issuerdiff.logs/attempt.txt"
+  "issuer=letsencrypt-prod" "$TMP/issuerdiff.logs/attempt.txt"
 has "and the original production claim" "claim=production" "$TMP/issuerdiff.logs/attempt.txt"
 lacks "it never re-derives the staging target's issuer" "issuer=letsencrypt-staging" \
   "$TMP/issuerdiff.logs/attempt.txt"
@@ -2258,7 +2258,7 @@ has "and says the required phases are incomplete" \
 mkdir -p "$TMP/ledger-ok.logs"
 printf 'phase=prepare exit=0 at=x\nphase=cloud exit=0 at=x\nphase=app exit=0 at=x\nphase=destroy exit=0 at=x\n' \
   >"$TMP/ledger-ok.logs/phase-verdicts.txt"
-KEEP_LOG_DIR=1 SEED_ISSUER=letsencrypt-production SEED_CLAIM=production run_phase ledger-ok verify
+KEEP_LOG_DIR=1 SEED_ISSUER=letsencrypt-prod SEED_CLAIM=production run_phase ledger-ok verify
 has "a complete continuous sequence is promotable" \
   "promotion_eligible=yes" "$TMP/ledger-ok.logs/promotion-eligibility.txt"
 has "and records the continuity" \
@@ -2266,7 +2266,7 @@ has "and records the continuity" \
 mkdir -p "$TMP/ledger-retry.logs"
 printf 'phase=prepare exit=0 at=x\nphase=cloud exit=0 at=x\nphase=app exit=1 at=x\nphase=app exit=0 at=x\nphase=destroy exit=0 at=x\n' \
   >"$TMP/ledger-retry.logs/phase-verdicts.txt"
-KEEP_LOG_DIR=1 SEED_ISSUER=letsencrypt-production SEED_CLAIM=production run_phase ledger-retry verify
+KEEP_LOG_DIR=1 SEED_ISSUER=letsencrypt-prod SEED_CLAIM=production run_phase ledger-retry verify
 has "a failed phase followed by a success is not promotable" \
   "promotion_eligible=no" "$TMP/ledger-retry.logs/promotion-eligibility.txt"
 has "and the repeated phase fails the required sequence" \

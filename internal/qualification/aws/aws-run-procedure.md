@@ -124,7 +124,7 @@ command's output.
    `aws-target.example.yml` with real values. It is untracked by design, so the record
    carries its contents or a hash plus its path. It declares `profile: production-single-region`,
    `cluster_issuer` (`letsencrypt-staging` by default; a promotion-eligible attempt
-   overrides it to `letsencrypt-production`), the five role ARNs, `kube_context`, the registry, `terraform_var_file` (the
+   overrides it to `letsencrypt-prod`), the five role ARNs, `kube_context`, the registry, `terraform_var_file` (the
    qualification tfvars the cluster and platform roots read; `sol deploy` takes no
    `--var-file`, and the harness refuses a target that names none rather than deploy the
    roots with their default variables). The attempt identity records `issuer=` and
