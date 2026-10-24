@@ -98,6 +98,14 @@ command's output.
    `script` (util-linux, used to confirm the inline installation offer on a fresh
    account); `docker` reachable from the
    shell that runs the app phase (`docker version` succeeds, or run under `sg docker -c`).
+   Build the two harness drivers from this checkout before the run:
+
+   ```sh
+   dune build \
+     internal/tooling/sol_qualification/bin/qualification_database_ca.exe \
+     internal/tooling/sol_qualification/bin/qualification_lifecycle.exe
+   ```
+
    `opam` + `dune` are needed only if the runner is built from source rather than taken from
    the release.
 3. The **released bundle** (`RELEASE-006`): `sol-<version>-linux-x86_64.tar.gz` extracted,
