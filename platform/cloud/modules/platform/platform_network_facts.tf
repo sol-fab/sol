@@ -48,6 +48,13 @@ resource "kubernetes_role_binding" "network_facts" {
     api_group = "rbac.authorization.k8s.io"
   }
 
+  subject {
+    kind      = "ServiceAccount"
+    name      = kubernetes_service_account_v1.sol_deploy.metadata[0].name
+    namespace = kubernetes_service_account_v1.sol_deploy.metadata[0].namespace
+    api_group = ""
+  }
+
   dynamic "subject" {
     for_each = var.gcp_provisioner_service_account == "" ? [] : [var.gcp_provisioner_service_account]
 
