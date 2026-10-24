@@ -1105,9 +1105,13 @@ case "${1:-}" in
   verify | inventory)
     phases_ok=yes
     for ledger_phase in prepare cloud app destroy; do
-      grep -q "^phase=$ledger_phase exit=0 " "$LOG_DIR/phase-verdicts.txt" 2>/dev/null ||
-        phases_ok=no
+      verdicts="$(grep -c "^phase=$ledger_phase " "$LOG_DIR/phase-verdicts.txt" 2>/dev/null || true)"
+      successes="$(grep -c "^phase=$ledger_phase exit=0 " "$LOG_DIR/phase-verdicts.txt" 2>/dev/null || true)"
+      # One attempt is one required sequence. A failed invocation followed by a
+      # successful one is not the same sequence, even when the final phase passes.
+      if [ "$verdicts" != 1 ] || [ "$successes" != 1 ]; then phases_ok=no; fi
     done
+    resumed_from="$(attempt_field resumed_from || true)"
     {
       if attempt_promotion_eligible && [ "$phases_ok" = yes ]; then
         printf 'promotion_eligible=yes\n'
@@ -1115,9 +1119,11 @@ case "${1:-}" in
         printf 'promotion_eligible=no\n'
         if attempt_promotion_eligible; then
           say "the attempt is continuous but its required phases are incomplete; not promotion-eligible"
-        else
-          printf 'resumed_from=%s\n' "$(attempt_field resumed_from || true)"
+        elif [ -n "$resumed_from" ]; then
+          printf 'resumed_from=%s\n' "$resumed_from"
           say "resumed attempt: this evidence is diagnostic, not promotion-eligible"
+        else
+          say "the attempt is continuous and not promotion-eligible: claim=$(attempt_field claim) issuer=$(attempt_field issuer)"
         fi
       fi
       printf 'required_phases_ok=%s\n' "$phases_ok"
