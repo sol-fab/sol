@@ -145,6 +145,16 @@ class Delivery(unittest.TestCase):
             self.assertNotIn(PASSWORD, json.dumps(self.calls))
             self.assertNotIn(CA, json.dumps(result))
 
+    def test_only_consumer_namespaces_are_read(self):
+        self.args.namespaces = ["app", "checkout"]
+        self.assertEqual(self.observe()["consumers"], ["app/consumer"])
+        self.assertFalse(any("checkout" in call for call in self.calls))
+
+    def test_a_consumer_namespace_outside_the_scope_is_refused(self):
+        self.args.namespaces = ["checkout"]
+        with self.assertRaises(delivery.ObservationError):
+            self.observe()
+
     def test_gcp_numeric_project_identity_requires_provider_confirmation(self):
         self.args.authority["reference"] = "projects/123/secrets/sol-kafka-test"
         self.assertEqual(
