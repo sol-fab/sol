@@ -15,8 +15,19 @@ hook_aws_prepare_build() {
   say "the run images are built; the cloud phase publishes them into the repositories Sol creates"
 }
 
+# The CA driver runs after the deploy, but its absence must not turn a successful
+# deploy into a late failure. Refuse before the phase touches the cluster.
+require_ca_binary() {
+  if [ ! -x "$SOL_QUALIFICATION_CA" ]; then
+    say "REFUSING: the database-CA qualifier is not executable at $SOL_QUALIFICATION_CA"
+    say "build internal/tooling/sol_qualification/bin/qualification_database_ca.exe before app"
+    return 1
+  fi
+}
+
 hook_aws_app_precondition() {
   require_target_terraform_var_file || return 1
+  require_ca_binary || return 1
   ensure_contexts || return 1
   verify_identity_boundary || return 1
   record_ca_submission_authority || return 1
@@ -275,10 +286,41 @@ hook_aws_destroy_verdict() {
 # The identity and state captures above are the evidence; there is no bundle to freeze.
 hook_aws_destroy_evidence() { return 0; }
 
+# `cloud` publishes the images `prepare` built and derives the cold-start
+# namespaces from the same build context. Both must exist before Terraform runs;
+# discovering either absence after the cluster is created wastes a full cycle.
+require_prepared_cloud_artifacts() {
+  if [ ! -d "$APP_BUILD_CONTEXT" ]; then
+    say "REFUSING: cloud requires the candidate-bound build context prepare writes at $APP_BUILD_CONTEXT"
+    return 1
+  fi
+  if [ ! -s "$LOG_DIR/app-built-tags.txt" ]; then
+    say "REFUSING: cloud requires the images prepare built; $LOG_DIR/app-built-tags.txt is empty"
+    return 1
+  fi
+}
+
+# The AWS cluster root creates RDS. Terraform reports a missing or non-compliant
+# master password only during plan; check it before the provider is touched. The
+# value is never recorded.
+require_rds_master_password() {
+  local password="${TF_VAR_db_password:-}"
+  if [ -z "$password" ]; then
+    say "REFUSING: TF_VAR_db_password is not set; the AWS cluster root creates RDS and needs a master password"
+    return 1
+  fi
+  if [ "${#password}" -lt 8 ] || printf '%s' "$password" | grep -q '[/@"]'; then
+    say "REFUSING: TF_VAR_db_password must be at least 8 characters and must not contain /, @ or a double quote"
+    return 1
+  fi
+}
+
 hook_aws_cloud_precondition() {
   require_credentials || return 1
   require_target_terraform_var_file || return 1
   require_target_issuer || return 1
+  require_prepared_cloud_artifacts || return 1
+  require_rds_master_password || return 1
 }
 
 # This provider has no plan-only mode: the cloud phase always reconciles.
