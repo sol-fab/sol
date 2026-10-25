@@ -167,6 +167,7 @@ let contract_json
     ; "revision", `String "2026-10-25"
     ; "providers", `List (List.map (fun value -> `String value) providers)
     ; "phases", `List (List.map (fun value -> `String value) phases)
+    ; "profile", `String "production-single-region/v1"
     ; ( "attempt_requirements"
       , `Assoc [ "claim", `String "production"; "issuer", `String "letsencrypt-prod" ] )
     ; ( "selection"
@@ -261,7 +262,11 @@ let record_json
   =
   let attempt, target, cluster, subject = write_attempt directory provider in
   let observations =
-    [ "transaction", "behavioral"; "boundary", "behavioral"; "permission", "behavioral" ]
+    [ "transaction", "behavioral"
+    ; "profile", "behavioral"
+    ; "boundary", "behavioral"
+    ; "permission", "behavioral"
+    ]
     |> List.map (fun (name, class_) ->
       `Assoc
         [ "id", `String name
@@ -348,6 +353,11 @@ let record_json
     ; "phases", `List phases
     ; "observations", `List observations
     ; "claims", `List claims
+    ; ( "profile"
+      , `Assoc
+          [ "kind", `String "production-single-region/v1"
+          ; "observations", `List [ `String "profile" ]
+          ] )
     ; "boundary", boundary
     ; "permission_binding", permission
     ]
@@ -1870,6 +1880,11 @@ let test_emit_record () =
               [ "languages", `List [ `String "ocaml"; `String "typescript" ]
               ; "primitives", `List [ `String "svc"; `String "worker" ]
               ] )
+        ; ( "profile"
+          , `Assoc
+              [ "kind", `String "production-single-region/v1"
+              ; "observations", `List [ `String "profile" ]
+              ] )
         ; ( "boundary"
           , `Assoc
               [ "kind", `String "artifact-gate"
@@ -1911,7 +1926,7 @@ let test_emit_record () =
                                 ]
                             ] )
                       ])
-                 [ "transaction"; "boundary"; "permission" ]) )
+                 [ "transaction"; "profile"; "boundary"; "permission" ]) )
         ; ( "claims"
           , `List
               [ `Assoc
@@ -1958,8 +1973,137 @@ let test_emit_record () =
       check ("the emitted record passes the v2 loader: " ^ error_text error) false)
 ;;
 
+let remove_top_level key json =
+  match json with
+  | `Assoc fields -> `Assoc (List.filter (fun (name, _) -> name <> key) fields)
+  | value -> value
+;;
+
+let test_contract_profile_required () =
+  let without = remove_top_level "profile" (contract_json ()) in
+  (match R.contract_of_json without with
+   | Error _ -> check "a contract without a deployment profile refuses" true
+   | Ok _ -> check "a contract without a deployment profile refuses" false);
+  let unknown =
+    match contract_json () with
+    | `Assoc fields ->
+      `Assoc
+        (List.map
+           (fun (key, value) ->
+              if key = "profile" then key, `String "durable" else key, value)
+           fields)
+    | value -> value
+  in
+  match R.contract_of_json unknown with
+  | Error _ -> check "an untyped/durable profile cannot be the contract profile" true
+  | Ok _ -> check "an untyped/durable profile cannot be the contract profile" false
+;;
+
+let test_record_profile_required () =
+  let contract = contract () in
+  with_temp_dir "profile-missing" (fun directory ->
+    let _, json = fixture contract "aws" directory in
+    let path = write_record directory contract "aws" (remove_top_level "profile" json) in
+    (match R.load_record ~contract ~directory ~path with
+     | Error _ -> check "a record without a typed profile refuses" true
+     | Ok _ -> check "a record without a typed profile refuses" false);
+    let durable =
+      match json with
+      | `Assoc fields ->
+        `Assoc
+          (List.map
+             (fun (key, value) ->
+                if key = "profile"
+                then
+                  ( key
+                  , `Assoc
+                      [ "kind", `String "durable"
+                      ; "observations", `List [ `String "profile" ]
+                      ] )
+                else key, value)
+             fields)
+      | value -> value
+    in
+    let path = write_record directory contract "aws" durable in
+    match R.load_record ~contract ~directory ~path with
+    | Error _ -> check "a durable-shape record cannot satisfy the production profile" true
+    | Ok _ -> check "a durable-shape record cannot satisfy the production profile" false)
+;;
+
+let test_profile_observations_required () =
+  let contract = contract () in
+  with_temp_dir "profile-observer-aws" (fun aws_dir ->
+    with_temp_dir "profile-observer-gcp" (fun gcp_dir ->
+      let aws, _ = fixture contract "aws" aws_dir in
+      let gcp_json = record_json ~directory:gcp_dir ~contract ~provider:"gcp" () in
+      let gcp_json =
+        match gcp_json with
+        | `Assoc fields ->
+          `Assoc
+            (List.map
+               (fun (key, value) ->
+                  if key = "profile"
+                  then
+                    ( key
+                    , `Assoc
+                        [ "kind", `String "production-single-region/v1"
+                        ; "observations", `List []
+                        ] )
+                  else key, value)
+               fields)
+        | value -> value
+      in
+      ignore (write_record gcp_dir contract "gcp" gcp_json);
+      let gcp = load gcp_dir contract in
+      has_reason
+        "a profile with no observation refuses"
+        (evaluate contract aws gcp)
+        "profile names no observations";
+      let mech_json = record_json ~directory:gcp_dir ~contract ~provider:"gcp" () in
+      let mech_json =
+        match mech_json with
+        | `Assoc fields ->
+          `Assoc
+            (List.map
+               (fun (key, value) ->
+                  match key, value with
+                  | "observations", `List observations ->
+                    ( "observations"
+                    , `List
+                        (`Assoc
+                           [ "id", `String "profile-mechanism"
+                           ; ( "evidence"
+                             , `List
+                                 [ evidence_ref
+                                     gcp_dir
+                                     "profile-mechanism.json"
+                                     "mechanism"
+                                 ] )
+                           ]
+                         :: observations) )
+                  | "profile", `Assoc _ ->
+                    ( "profile"
+                    , `Assoc
+                        [ "kind", `String "production-single-region/v1"
+                        ; "observations", `List [ `String "profile-mechanism" ]
+                        ] )
+                  | _ -> key, value)
+               fields)
+        | value -> value
+      in
+      ignore (write_record gcp_dir contract "gcp" mech_json);
+      let gcp = load gcp_dir contract in
+      has_reason
+        "mechanism evidence cannot establish the production profile"
+        (evaluate contract aws gcp)
+        "profile is not supported by behavioural evidence"))
+;;
+
 let tests () =
   [ "valid pair", test_valid_pair
+  ; "contract profile required", test_contract_profile_required
+  ; "record profile required", test_record_profile_required
+  ; "profile observations required", test_profile_observations_required
   ; "unloaded contract", test_unloaded_contract_cannot_pass
   ; "emit record", test_emit_record
   ; "contract substitution", test_contract_substitution

@@ -4,6 +4,7 @@
   "revision": "2026-10-25",
   "providers": ["aws", "gcp"],
   "phases": ["prepare", "cloud", "app", "destroy"],
+  "profile": "production-single-region/v1",
   "attempt_requirements": {
     "claim": "production",
     "issuer": "letsencrypt-prod"

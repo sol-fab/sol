@@ -275,6 +275,11 @@ let main () =
                  | _ -> []))
            claim_values)
     in
+    let profile =
+      match json_field "profile" manifest with
+      | Some (`Assoc fields) -> `Assoc fields
+      | _ -> die "manifest has no typed deployment profile"
+    in
     let boundary =
       match json_field "boundary" manifest with
       | Some (`Assoc fields) -> `Assoc fields
@@ -307,6 +312,7 @@ let main () =
         ; "phases", phases
         ; "observations", observations
         ; "claims", claims
+        ; "profile", profile
         ; "boundary", boundary
         ; "permission_binding", permission
         ]
