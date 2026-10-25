@@ -45,6 +45,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # The verified evaluator artifact links the same native libraries as the
+      # candidate binary; a fresh promotion runner does not have them by default.
+      - name: Install the evaluator runtime dependencies
+        run: sudo apt-get update && sudo apt-get install -y librdkafka1 libpq5
+
       # The v2 authorization path is implemented but has not been exercised with
       # a producer-generated, live-qualified candidate. Keep promotion closed
       # until that chain is verified; a draft attachment is never authority.
