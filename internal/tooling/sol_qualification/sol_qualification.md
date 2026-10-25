@@ -428,8 +428,11 @@ Separation of duties in the module:
   never the decision.
 - `evaluate` is pure. It binds the exact contract semantic digest and raw contract
   source digest, both provider record byte digests, candidate, harness revision,
-  selection, claim set, typed boundaries, permission bindings, visible exceptions and
-  the evaluator revision, source revision and binary digest. A record loaded without
+  the closed deployment profile (`production-single-region/v1`), selection, claim
+  set, typed boundaries, permission bindings, visible exceptions and the evaluator
+  revision, source revision and binary digest. A record must carry its own typed
+  profile fact with behavioural observation evidence; a durable-shape or
+  profile-less record cannot pass. A record loaded without
   verification, or a record produced by a different evaluator, cannot pass.
 - `verdict_to_yojson` emits `PASS` only from the typed constructor. Nothing in this
   module reads a producer's `verdict`/`promotion_eligible` field as authority.

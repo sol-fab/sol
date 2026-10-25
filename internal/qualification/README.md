@@ -204,8 +204,10 @@ the manifest, checks the exact lifecycle phase sequence and per-provider claim
 set, and validates the emitted record through `load_record` before writing it.
 
 The manifest names evidence; it does not name policy. It contains `provider`,
-`harness_revision`, `selection`, `boundary`, `permission_binding`, `phases`,
-`observations` and `claims`. Each evidence entry is
+`harness_revision`, a typed `profile` object (`production-single-region/v1` plus
+its observation IDs), `selection`, `boundary`, `permission_binding`, `phases`,
+`observations` and `claims`. The evaluator refuses a record whose profile is
+missing, not the contract's profile, or supported only by mechanism evidence. Each evidence entry is
 `{"path": "<inside attempt dir>", "class": "mechanism"|"behavioral"}`. A claim
 names observation IDs, never its own evidence. Provider-specific omissions must
 be contract exceptions; a record cannot invent one.

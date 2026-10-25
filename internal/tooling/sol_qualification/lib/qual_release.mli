@@ -45,6 +45,12 @@ type boundary =
 
 type phase = Qual_lifecycle.phase
 
+(** The approved release profile is a closed type, not a producer string. *)
+type profile = Production_single_region_v1
+
+val string_of_profile : profile -> string
+val profile_of_string : string -> (profile, error) result
+
 type candidate = private
   { version : string
   ; revision : string
@@ -107,6 +113,7 @@ type contract = private
   ; revision : string
   ; providers : provider list
   ; phases : phase list
+  ; profile : profile
   ; attempt_claim : string
   ; attempt_issuer : string
   ; selection : selection
@@ -152,6 +159,11 @@ type record_boundary = private
   ; observations : string list
   }
 
+type record_profile = private
+  { kind : profile
+  ; observations : string list
+  }
+
 type verification = private
   | Unverified
   | Verified
@@ -168,6 +180,7 @@ type record = private
   ; phases : (phase * evidence list) list
   ; observations : observation list
   ; claims : claim list
+  ; profile : record_profile
   ; boundary : record_boundary
   ; permission : permission
   ; verification : verification
@@ -204,6 +217,7 @@ type verdict =
       ; contract_digest : string
       ; contract_source : source option
       ; candidate : candidate
+      ; profile : profile
       ; harness_revision : string
       ; selection : selection
       ; evaluator : evaluator

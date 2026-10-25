@@ -24,6 +24,20 @@ type boundary =
   | Migration_gate
 
 type phase = Qual_lifecycle.phase
+type profile = Production_single_region_v1
+
+let string_of_profile = function
+  | Production_single_region_v1 -> "production-single-region/v1"
+;;
+
+let profile_of_string = function
+  | "production-single-region/v1" -> Ok Production_single_region_v1
+  | value ->
+    Error
+      { stage = "profile"
+      ; diagnostic = Printf.sprintf "unknown required deployment profile %S" value
+      }
+;;
 
 type candidate =
   { version : string
@@ -83,6 +97,7 @@ type contract =
   ; revision : string
   ; providers : provider list
   ; phases : phase list
+  ; profile : profile
   ; attempt_claim : string
   ; attempt_issuer : string
   ; selection : selection
@@ -128,6 +143,11 @@ type record_boundary =
   ; observations : string list
   }
 
+type record_profile =
+  { kind : profile
+  ; observations : string list
+  }
+
 type verification =
   | Unverified
   | Verified
@@ -144,6 +164,7 @@ type record =
   ; phases : (phase * evidence list) list
   ; observations : observation list
   ; claims : claim list
+  ; profile : record_profile
   ; boundary : record_boundary
   ; permission : permission
   ; verification : verification
@@ -180,6 +201,7 @@ type verdict =
       ; contract_digest : string
       ; contract_source : source option
       ; candidate : candidate
+      ; profile : profile
       ; harness_revision : string
       ; selection : selection
       ; evaluator : evaluator
@@ -196,7 +218,7 @@ let canonical_contract_path = "internal/qualification/qualification-contract.jso
    update this digest in the same reviewed change; promotion and the producer
    then use a binary whose pin matches the contract revision they name. *)
 let canonical_contract_sha256 =
-  "28565d85ed826d27a69c8da0f8254765eaffecd291bbfe7b53faa5b1dc7f098c"
+  "08eb18b9cf7b4e70c861168a4169bfb6ea2b003594a2ba9abc8736aeb97230f0"
 ;;
 
 let max_record_bytes = 8 * 1024 * 1024
@@ -620,6 +642,10 @@ let contract_of_json_internal ?source:contract_source json =
              (List.map Qual_lifecycle.string_of_phase Qual_lifecycle.required_phases))
     in
     let phases = Qual_lifecycle.required_phases in
+    let* profile =
+      let* value = required_string ~stage "profile" json in
+      profile_of_string value
+    in
     let* attempt_requirement_values =
       match field "attempt_requirements" json with
       | Some (`Assoc fields) -> Ok fields
@@ -752,6 +778,7 @@ let contract_of_json_internal ?source:contract_source json =
       ; revision
       ; providers
       ; phases
+      ; profile
       ; attempt_claim
       ; attempt_issuer
       ; selection
@@ -1018,6 +1045,29 @@ let record_of_json ~(contract : contract) json =
               loop [] [] values
             | _ -> fail stage "record has no claims"
           in
+          let* profile_json =
+            match field "profile" json with
+            | Some (`Assoc fields) -> Ok (`Assoc fields)
+            | _ -> fail stage "missing typed deployment profile"
+          in
+          let* profile_kind =
+            let* value = required_string ~stage "kind" profile_json in
+            profile_of_string value
+          in
+          let* profile_observations =
+            match field "observations" profile_json with
+            | Some (`List values) ->
+              let rec loop acc = function
+                | [] -> Ok (List.rev acc)
+                | `String value :: rest when nonempty value ->
+                  if List.mem value acc
+                  then fail stage "profile repeats observation %S" value
+                  else loop (value :: acc) rest
+                | _ -> fail stage "profile observations must be strings"
+              in
+              loop [] values
+            | _ -> fail stage "profile names no observations"
+          in
           let* boundary_json =
             match field "boundary" json with
             | Some value -> Ok value
@@ -1092,6 +1142,7 @@ let record_of_json ~(contract : contract) json =
               ; phases
               ; observations
               ; claims
+              ; profile = { kind = profile_kind; observations = profile_observations }
               ; boundary = { kind = boundary_kind; observations = boundary_observations }
               ; permission =
                   { deploy_identity
@@ -1137,6 +1188,12 @@ let record_to_yojson (record : record) =
              record.phases) )
     ; "observations", `List (List.map observation_json record.observations)
     ; "claims", `List (List.map claim_json record.claims)
+    ; ( "profile"
+      , `Assoc
+          [ "kind", `String (string_of_profile record.profile.kind)
+          ; ( "observations"
+            , `List (List.map (fun value -> `String value) record.profile.observations) )
+          ] )
     ; ( "boundary"
       , `Assoc
           [ "kind", `String (string_of_boundary record.boundary.kind)
@@ -1543,6 +1600,26 @@ let evaluator_reasons
                | Claim_blocked -> refuse "the %s claim %S is blocked" label claim.id
                | Claim_not_run -> refuse "the %s claim %S was not run" label claim.id))
          record.claims;
+       check
+         (record.profile.kind = contract.profile)
+         "the %s record profile %s is not the contract's %s"
+         label
+         (string_of_profile record.profile.kind)
+         (string_of_profile contract.profile);
+       check
+         (record.profile.observations <> [])
+         "the %s record profile names no observations"
+         label;
+       check
+         (observations_exist record record.profile.observations)
+         "the %s record profile references observations the record does not contain"
+         label;
+       check
+         (List.exists
+            (fun evidence -> satisfies ~required:Behavioral evidence.class_)
+            (evidence_in_observations record record.profile.observations))
+         "the %s record profile is not supported by behavioural evidence"
+         label;
        let boundary_evidence =
          evidence_in_observations record record.boundary.observations
        in
@@ -1642,6 +1719,7 @@ let evaluate ~(evaluator : evaluator) (contract : contract) aws gcp =
       ; contract_digest = contract.digest
       ; contract_source = contract.source
       ; candidate = aws.candidate
+      ; profile = contract.profile
       ; harness_revision = aws.harness_revision
       ; selection = aws.selection
       ; evaluator
@@ -1715,6 +1793,7 @@ let verdict_to_yojson = function
              | None -> []
              | Some source -> [ "source", source_json source ]) )
       ; "candidate", candidate_json pass.candidate
+      ; "profile", `String (string_of_profile pass.profile)
       ; "harness_revision", `String pass.harness_revision
       ; "selection", selection_json pass.selection
       ; "evaluator", evaluator_json pass.evaluator

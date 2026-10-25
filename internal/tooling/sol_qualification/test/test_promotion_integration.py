@@ -118,7 +118,7 @@ def manifest(directory: str, provider: str, revision: str) -> dict:
     ]
     observations = [
         {"id": name, "evidence": [evidence(directory, f"{name}.json")]}
-        for name in ("transaction", "boundary", "permission")
+        for name in ("transaction", "profile", "boundary", "permission")
     ]
     claims = [
         {"id": "B1", "status": "pass", "observations": ["transaction"]},
@@ -132,6 +132,10 @@ def manifest(directory: str, provider: str, revision: str) -> dict:
         "selection": {
             "languages": ["ocaml", "typescript"],
             "primitives": ["svc", "worker"],
+        },
+        "profile": {
+            "kind": "production-single-region/v1",
+            "observations": ["profile"],
         },
         "boundary": {
             "kind": "artifact-gate" if provider == "aws" else "migration-gate",
@@ -515,12 +519,46 @@ def main() -> int:
             )
 
             aws_inventory = os.path.join(candidate_dir, "aws-inventory-verdict.json")
+            with open(aws_inventory, "rb") as handle:
+                original_inventory = handle.read()
             with open(aws_inventory, "wb") as handle:
                 handle.write(b"{}\n")
             tampered_teardown = authorize_with()
             check_reason(
                 "tampered teardown evidence refuses", tampered_teardown, "sha256"
             )
+            with open(aws_inventory, "wb") as handle:
+                handle.write(original_inventory)
+            gcp_record_path = os.path.join(directory, "gcp-record.json")
+            with open(gcp_record_path, encoding="utf-8") as handle:
+                gcp_record = json.load(handle)
+            original_record = dict(gcp_record)
+            no_profile = {
+                key: value for key, value in gcp_record.items() if key != "profile"
+            }
+            with open(gcp_record_path, "w", encoding="utf-8") as handle:
+                json.dump(no_profile, handle, sort_keys=True)
+            missing_profile = authorize_with()
+            check_reason(
+                "a record without the production profile refuses promotion",
+                missing_profile,
+                "profile",
+            )
+            durable_profile = dict(original_record)
+            durable_profile["profile"] = {
+                "kind": "durable",
+                "observations": ["profile"],
+            }
+            with open(gcp_record_path, "w", encoding="utf-8") as handle:
+                json.dump(durable_profile, handle, sort_keys=True)
+            durable_reasons = authorize_with()
+            check_reason(
+                "durable-shape evidence cannot authorize the production profile",
+                durable_reasons,
+                "profile",
+            )
+            with open(gcp_record_path, "w", encoding="utf-8") as handle:
+                json.dump(original_record, handle, sort_keys=True)
 
     print(f"\n{checks - failures} passed, {failures} failed")
     return 1 if failures else 0
