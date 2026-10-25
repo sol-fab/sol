@@ -36,7 +36,7 @@
       "family": "destroy-preparation",
       "provider": "gcp",
       "reason": "GCP has no RDS final-snapshot preparation step; the equivalent teardown guarantee is INV-DESTROY-4's independently observed provider absence",
-      "test": "internal/tooling/sol_qualification/test/test_release.ml"
+      "test": "internal/qualification/gcp/test-verify-matrix.sh"
     }
   ]
 }
