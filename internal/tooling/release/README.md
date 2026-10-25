@@ -182,6 +182,35 @@ blocked or failed row keeps the candidate unpublished until a new candidate is
 qualified. `teardown.absence_verdict` is the independent post-destroy absence
 result — Sol's exit code and Terraform state are not absence evidence.
 
+### Cross-provider parity
+
+A passing AWS record and a passing GCP record are not, by themselves, a
+cross-provider production claim. `internal/tooling/release/qualification_parity.py`
+is the composition gate: it consumes the canonical qualification contract and
+the two provider records, and emits a parity verdict.
+
+The contract owns the required claims, phases and selection; the parity tool
+does not maintain a second requirement list. Every provider record names the
+contract **id and digest**, its candidate identity, its harness revision, its
+selection, its phase results and its claims. The parity verdict is bound to the
+contract digest and to a content hash of each provider record, so it cannot be
+detached from the evidence that justified it. A contract change invalidates
+records and verdicts created under the old digest.
+
+```sh
+python3 internal/tooling/release/qualification_parity.py \
+  --contract qualification-contract.json \
+  --aws aws-record.json --gcp gcp-record.json \
+  --out parity-verdict.json
+```
+
+The command exits 0 only for `verdict: PASS`; a refusal is written with reasons
+and exits 1. It never grants promotion authority, and it never treats a missing,
+blocked, unreadable or historical claim as parity. Provider-specific omissions
+are allowed only through a declared, reasoned and tested contract exception.
+Promotion remains a separate decision over the candidate, the parity verdict and
+the applicable release policy.
+
 ### Teardown evidence
 
 A `teardown` claim is promotion-eligible only when it names an attached evidence
