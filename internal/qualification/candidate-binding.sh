@@ -82,6 +82,10 @@ sol_candidate_bind_context() {
     sol_candidate_die "could not materialize revision $revision from $source"
     return 1
   fi
+  # The caller may run under a restrictive umask (the qualification harness does),
+  # and tar applies it to extracted entries. The build context is source, not a
+  # secret: restore read and traverse bits so non-root build stages can read it.
+  chmod -R a+rX "$out"
 
   local file
   while IFS= read -r -d '' file; do
