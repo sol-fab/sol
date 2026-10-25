@@ -91,6 +91,11 @@ async function main() {
   await consumer.subscribe({ topic: TOPIC_NAME, fromBeginning: false });
 
   const metricsServer = createServer((req, res) => {
+    if (req.url === "/readyz" || req.url === "/healthz") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok\n");
+      return;
+    }
     if (req.url === "/metrics") {
       metricsRegister.metrics().then((body) => {
         res.writeHead(200, { "content-type": metricsRegister.contentType });
