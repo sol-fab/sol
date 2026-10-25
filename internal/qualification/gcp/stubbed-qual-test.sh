@@ -713,6 +713,30 @@ case "$*" in
     printf 'Error from server (NotFound): namespaces "%s" not found\n' "$ns" >&2
     exit 1
     ;;
+  *" get deployments,statefulsets,daemonsets,jobs,cronjobs,pods "*)
+    ns=""
+    prev=""
+    for a in $*; do
+      [ "$prev" = "-n" ] && ns="$a"
+      prev="$a"
+    done
+    if [ "${STUB_COLD_NAMESPACE_WORKLOAD:-}" = "$ns" ]; then
+      printf 'deployment.apps/orders-svc\n'
+    fi
+    exit 0
+    ;;
+  *" get configmaps "*)
+    ns=""
+    prev=""
+    for a in $*; do
+      [ "$prev" = "-n" ] && ns="$a"
+      prev="$a"
+    done
+    if [ "${STUB_COLD_NAMESPACE_RELEASE:-}" = "$ns" ]; then
+      printf 'configmap/sol-release-current-pluto\n'
+    fi
+    exit 0
+    ;;
   *"config current-context"*)
     printf '%s\n' "${STUB_CA_CONTEXT-ca-observer-selected}"
     exit 0 ;;
@@ -1268,13 +1292,27 @@ has "the cold-start boundary covers every candidate-derived namespace" \
   "boundary_namespaces: pluto-comms pluto-demo-ts pluto-payments" \
   "$TMP/cloud-ok.logs/cold-start-namespaces.txt"
 
-printf '\nscenario: a namespace present before its artifacts is UNKNOWN, never a pass\n'
+printf '\nscenario: a present but empty substrate namespace is not a moved workload\n'
 run_cloud_case coldworkload STUB_COLD_NAMESPACE_PRESENT=pluto-demo-ts
-is "a present declared namespace fails the cloud phase" "$(cat "$TMP/coldworkload.rc")" "1"
-has "recording it as PRESENT" \
-  "cold-start-namespace: pluto-demo-ts PRESENT" "$TMP/coldworkload.logs/cold-start-namespaces.txt"
-has "and the boundary is UNKNOWN, never a pass" \
-  "UNKNOWN, never a pass" "$TMP/coldworkload.out"
+is "a present empty namespace passes the cold boundary" "$(cat "$TMP/coldworkload.rc")" "0"
+has "recording it as present-but-empty" \
+  "cold-start-namespace: pluto-demo-ts PRESENT_EMPTY" "$TMP/coldworkload.logs/cold-start-namespaces.txt"
+lacks "and never as a workload" \
+  "cold-start-namespace: pluto-demo-ts PRESENT_WORKLOAD" "$TMP/coldworkload.logs/cold-start-namespaces.txt"
+
+printf '\nscenario: a present namespace holding a workload fails the cold boundary\n'
+run_cloud_case coldworkload-present STUB_COLD_NAMESPACE_PRESENT=pluto-demo-ts STUB_COLD_NAMESPACE_WORKLOAD=pluto-demo-ts
+is "a workload in a present namespace fails the cloud phase" "$(cat "$TMP/coldworkload-present.rc")" "1"
+has "recording the workload" \
+  "cold-start-namespace: pluto-demo-ts PRESENT_WORKLOAD" "$TMP/coldworkload-present.logs/cold-start-namespaces.txt"
+has "and saying a workload moved" \
+  "moved a workload" "$TMP/coldworkload-present.out"
+
+printf '\nscenario: a present namespace holding a release record fails the cold boundary\n'
+run_cloud_case coldrelease STUB_COLD_NAMESPACE_PRESENT=pluto-payments STUB_COLD_NAMESPACE_RELEASE=pluto-payments
+is "a release record in a present namespace fails the cloud phase" "$(cat "$TMP/coldrelease.rc")" "1"
+has "recording the release" \
+  "cold-start-namespace: pluto-payments PRESENT_RELEASE" "$TMP/coldrelease.logs/cold-start-namespaces.txt"
 
 printf '\nscenario: a refused namespace read is UNKNOWN, never absence\n'
 run_cloud_case coldforbidden STUB_COLD_NAMESPACE_FORBIDDEN=pluto-comms

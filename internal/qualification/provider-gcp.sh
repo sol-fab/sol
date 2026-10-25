@@ -365,7 +365,7 @@ hook_gcp_cloud_reconciled() {
 hook_gcp_cloud_cold_start() {
   local names ns out err file="$LOG_DIR/cold-start-namespaces.txt"
   local probe="sol-nonexistent-namespace-probe-$ATTEMPT"
-  local present=0 unknown=0
+  local present_empty=0 workload=0 release=0 unknown=0
   names="$(cold_start_namespaces)" || return 1
   if ! timeout 60 kubectl --kubeconfig "$RUN_KUBECONFIG" get namespace kube-system -o name \
     >/dev/null 2>"$LOG_DIR/cold-start-namespaces-authority.err"; then
@@ -393,17 +393,50 @@ hook_gcp_cloud_cold_start() {
   while IFS= read -r ns; do
     [ -n "$ns" ] || continue
     err="$LOG_DIR/cold-start-namespace-$ns.err"
-    if out="$(timeout 60 kubectl --kubeconfig "$RUN_KUBECONFIG" get namespace "$ns" -o name 2>"$err")"; then
-      printf 'cold-start-namespace: %s PRESENT (it may hold a workload or a recorded release)\n' \
-        "$ns" >>"$file"
-      present=$((present + 1))
-    elif grep -q 'NotFound' "$err" 2>/dev/null; then
-      printf 'cold-start-namespace: %s ABSENT\n' "$ns" >>"$file"
-    else
-      printf 'cold-start-namespace: %s UNKNOWN (%s)\n' \
+    if ! timeout 60 kubectl --kubeconfig "$RUN_KUBECONFIG" get namespace "$ns" -o name \
+      >"$LOG_DIR/cold-start-namespace-$ns.name" 2>"$err"; then
+      if grep -q 'NotFound' "$err" 2>/dev/null; then
+        printf 'cold-start-namespace: %s ABSENT\n' "$ns" >>"$file"
+      else
+        printf 'cold-start-namespace: %s UNKNOWN (%s)\n' \
+          "$ns" "$(head -n 1 "$err" 2>/dev/null)" >>"$file"
+        unknown=$((unknown + 1))
+      fi
+      continue
+    fi
+    # A present namespace is not itself evidence that a workload moved: the deploy creates
+    # empty substrate namespaces for the database and broker before the migration gate. Read
+    # its contents with the same run identity and establish the actual claim instead.
+    local workloads configmaps
+    if ! workloads="$(timeout 60 kubectl --kubeconfig "$RUN_KUBECONFIG" -n "$ns" \
+      get deployments,statefulsets,daemonsets,jobs,cronjobs,pods -o name 2>"$err")"; then
+      printf 'cold-start-namespace: %s UNKNOWN (workload read: %s)\n' \
         "$ns" "$(head -n 1 "$err" 2>/dev/null)" >>"$file"
       unknown=$((unknown + 1))
+      continue
     fi
+    if [ -n "$workloads" ]; then
+      printf 'cold-start-namespace: %s PRESENT_WORKLOAD (%s)\n' \
+        "$ns" "$(printf '%s' "$workloads" | tr '\n' ' ')" >>"$file"
+      workload=$((workload + 1))
+      continue
+    fi
+    if ! configmaps="$(timeout 60 kubectl --kubeconfig "$RUN_KUBECONFIG" -n "$ns" \
+      get configmaps -o name 2>"$err")"; then
+      printf 'cold-start-namespace: %s UNKNOWN (release read: %s)\n' \
+        "$ns" "$(head -n 1 "$err" 2>/dev/null)" >>"$file"
+      unknown=$((unknown + 1))
+      continue
+    fi
+    if printf '%s\n' "$configmaps" | grep -q '^configmap/sol-release-'; then
+      printf 'cold-start-namespace: %s PRESENT_RELEASE (%s)\n' \
+        "$ns" "$(printf '%s\n' "$configmaps" | grep '^configmap/sol-release-' | tr '\n' ' ')" >>"$file"
+      release=$((release + 1))
+      continue
+    fi
+    printf 'cold-start-namespace: %s PRESENT_EMPTY (no workloads or release records)\n' \
+      "$ns" >>"$file"
+    present_empty=$((present_empty + 1))
   done <<EOF
 $names
 EOF
@@ -412,15 +445,17 @@ EOF
     say "  (see $file)"
     return 1
   fi
-  if [ "$present" != 0 ]; then
-    say "the cold deploy created a declared namespace before its immutable artifacts were published:"
-    say "  $(grep ' PRESENT' "$file" | sed 's/^cold-start-namespace: //' | tr '\n' ' ')"
-    say "whether it holds a workload or a recorded release cannot be established with the"
-    say "identities this row holds at this point, so the boundary is UNKNOWN, never a pass"
+  if [ "$workload" != 0 ] || [ "$release" != 0 ]; then
+    say "the cold deploy moved a workload or recorded a release before its immutable artifacts were published:"
+    say "  $(grep -E ' PRESENT_(WORKLOAD|RELEASE)' "$file" | sed 's/^cold-start-namespace: //' | tr '\n' ' ')"
     return 1
   fi
-  say "the cold deploy moved no workload and recorded no release: every declared namespace"
-  say "  ($(printf '%s' "$names" | tr '\n' ' ')) is positively absent"
+  say "the cold deploy moved no workload and recorded no release: every declared namespace is"
+  if [ "$present_empty" = 0 ]; then
+    say "  positively absent ($(printf '%s' "$names" | tr '\n' ' '))"
+  else
+    say "  absent or present-but-empty ($(printf '%s' "$names" | tr '\n' ' '))"
+  fi
 }
 
 hook_gcp_disposable_state_present() {
