@@ -695,7 +695,7 @@ def resolve_evaluator(
     candidate: dict,
     parity: object,
     version: str,
-    repository: str,
+    repository_slug: str,
     runs_document: object,
     workdir: str,
     gh: str = "gh",
@@ -704,7 +704,7 @@ def resolve_evaluator(
     recorded, reasons = recorded_evaluator(parity, candidate)
     if recorded is None:
         return None, reasons
-    runs, reasons = matching_release_runs(runs_document, candidate, version, repository)
+    runs, reasons = matching_release_runs(runs_document, candidate, version, repository_slug)
     if not runs:
         return None, reasons
     failures = []
@@ -815,6 +815,7 @@ def authorize_reasons(
     aws_evidence: str,
     gcp_evidence: str,
     repository: str,
+    repository_slug: str,
     version: str,
     runs_document: object,
     workdir: str,
@@ -831,7 +832,7 @@ def authorize_reasons(
     if not isinstance(parity, dict):
         return ["no recorded parity verdict was supplied"]
     evaluator, reasons = resolve_evaluator(
-        candidate, parity, version, repository, runs_document, workdir, gh
+        candidate, parity, version, repository_slug, runs_document, workdir, gh
     )
     if evaluator is None:
         return reasons
@@ -868,6 +869,7 @@ def main(argv: list[str]) -> int:
     authorize_parser.add_argument("--parity", required=True)
     authorize_parser.add_argument("--runs", required=True)
     authorize_parser.add_argument("--repository", required=True)
+    authorize_parser.add_argument("--repository-slug", required=True)
     authorize_parser.add_argument("--version", required=True)
     authorize_parser.add_argument("--policy")
     extract_parser = commands.add_parser("extract")
@@ -926,6 +928,7 @@ def main(argv: list[str]) -> int:
                 args.aws_evidence,
                 args.gcp_evidence,
                 args.repository,
+                args.repository_slug,
                 args.version,
                 runs_document,
                 workdir,

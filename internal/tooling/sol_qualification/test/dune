@@ -138,3 +138,20 @@
     SOL_TEST_REPOSITORY
     %{workspace_root}
     (run %{test})))))
+
+(rule
+ (alias runtest)
+ (deps
+  test_promotion_integration.py
+  ../bin/qualification_release.exe
+  ../../../release/promotion.py
+  ../../../release/teardown-policy.v1.json
+  ../../../qualification/qualification-contract.json)
+ (action
+  (setenv
+   SOL_TEST_RELEASE_BIN
+   %{dep:../bin/qualification_release.exe}
+   (setenv
+    SOL_TEST_REPOSITORY
+    %{workspace_root}
+    (run python3 %{dep:test_promotion_integration.py})))))

@@ -139,6 +139,7 @@ jobs:
             --parity "$RUNNER_TEMP/candidate/parity-verdict.json" \
             --runs "$RUNNER_TEMP/candidate/runs.json" \
             --repository "$GITHUB_WORKSPACE" \
+            --repository-slug "$GITHUB_REPOSITORY" \
             --version "$VERSION"
 
       # GitHub rejects a release body over 125000 characters, and the generated
