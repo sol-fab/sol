@@ -337,6 +337,10 @@ class_read() {
     *) return 1 ;;
   esac
 }
+if [ "${STUB_CREDENTIALS_EXPIRING:-0}" = "1" ] && [ "$1 $2" = "configure export-credentials" ]; then
+  printf 'export AWS_ACCESS_KEY_ID=stub\nexport AWS_SECRET_ACCESS_KEY=stub\nexport AWS_SESSION_TOKEN=stub\nexport AWS_CREDENTIAL_EXPIRATION=2020-01-01T00:00:00+00:00\n'
+  exit 0
+fi
 if [ "${STUB_CREDENTIALS_STALE:-0}" = "1" ] && [ "$1 $2" = "configure export-credentials" ]; then
   printf 'failed to refresh cached credentials, refresh cached SSO token failed, unable to refresh SSO token, operation error SSO OIDC: CreateToken, https response error StatusCode: 400, InvalidGrantException\n' >&2
   exit 255
@@ -1865,6 +1869,14 @@ lacks "and no cold deploy runs" "deploy qualreg/aws/us-east-1" "$TMP/dnsbroken.s
 not_exists "and no provider apply is attempted" "$TMP/dnsbroken.logs/cloud-apply.log"
 
 printf '\nscenario: a cloud phase with no prepared contract refuses before provider mutation\n'
+printf '\nscenario: cloud refuses credentials that expire inside the run window\n'
+KEEP_LOG_DIR=1 run_phase expiring cloud STUB_CREDENTIALS_EXPIRING=1
+refused expiring "a cloud phase whose credentials expire during the run is refused"
+has "and names the remaining window" "only" "$TMP/expiring.out"
+has "and the required window" "needs at least" "$TMP/expiring.out"
+lacks "and no cold deploy runs" "deploy qualreg/aws/us-east-1" "$TMP/expiring.sol"
+
+printf '\nscenario: a cloud phase with nothing to publish still refuses at the artifact gate\n'
 SKIP_PREPARE=1 run_phase noprep cloud
 refused noprep "a run with no prepared contract cannot start the cloud phase"
 has "and the phase names the missing candidate-bound contract" \
