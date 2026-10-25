@@ -1140,6 +1140,10 @@ run_case() {
   env ALLOW_CANONICAL=1 SOL_INSTALL="$INSTALL" SOL_CANDIDATE="${SOL_CANDIDATE-$INSTALL/candidate.json}" CLUSTER=test-cluster \
     IMPERSONATOR=user:test@example.com PUBLISHER_SERVICE_ACCOUNT=publisher@sol-qualification.iam.gserviceaccount.com "${le_env[@]}" \
     PROJECT=sol-qualification REGION=us-central1 \
+    CLUSTER_ENDPOINT_CIDR=203.0.113.0/24 \
+    ALERT_RECEIVER_TYPE=webhook ALERT_RECEIVER_URL=https://receiver.example.invalid/hook \
+    ALERT_OWNER="Qualification Test" ALERT_RUNBOOK_URL=https://example.invalid/runbook \
+    NODE_FAILURE_HEADROOM_NODES=1 \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" \
     GCP_CA_OBSERVER_PRINCIPAL=gcp:qualifier@sol-qualification.iam.gserviceaccount.com \
     GCP_CA_OBSERVER_SOURCE_KUBECONFIG="$REPO/internal/qualification/gcp/fixtures/kubeconfig-gcloud-real.yaml" \
@@ -1202,6 +1206,10 @@ run_case_without_a_phase() {
     IMPERSONATOR=user:test@example.com LE_EMAIL=test@example.com \
     PUBLISHER_SERVICE_ACCOUNT=publisher@sol-qualification.iam.gserviceaccount.com \
     PROJECT=sol-qualification REGION=us-central1 \
+    CLUSTER_ENDPOINT_CIDR=203.0.113.0/24 \
+    ALERT_RECEIVER_TYPE=webhook ALERT_RECEIVER_URL=https://receiver.example.invalid/hook \
+    ALERT_OWNER="Qualification Test" ALERT_RUNBOOK_URL=https://example.invalid/runbook \
+    NODE_FAILURE_HEADROOM_NODES=1 \
     SOL_QUALIFICATION_CA="$TMP/bin/qualification_database_ca" \
     GCP_CA_OBSERVER_PRINCIPAL=gcp:qualifier@sol-qualification.iam.gserviceaccount.com \
     GCP_CA_OBSERVER_SOURCE_KUBECONFIG="$REPO/internal/qualification/gcp/fixtures/kubeconfig-gcloud-real.yaml" \
@@ -1241,7 +1249,7 @@ lacks "no destroy on the success path (the delegation boundary keeps the substra
 lacks "the cloud phase never runs an application deploy" "migrate apply" "$TMP/cloud-ok.argv"
 has "the target is written for the run" "cluster_name" "$TARGET_FILE"
 has "the generated target asks for TLS, which DEC-055 made installable on GCP" "cluster_issuer: letsencrypt-staging" "$TARGET_FILE"
-lacks "the cloud target selects no profile, so this row makes no profile claim" "profile:" "$TARGET_FILE"
+has "the cloud target selects the production profile" "profile: production-single-region" "$TARGET_FILE"
 has "the cloud target declares the durable shape it does not derive from a profile" "shape: durable" "$TARGET_FILE"
 has "the cloud target declares the app database the enabled units use" "app_db:" "$TARGET_FILE"
 has "and the events resource" "events: {}" "$TARGET_FILE"
@@ -1690,7 +1698,7 @@ has "the run identity records the bundle version" \
   "sol_version: $VERSION" "$TMP/app-ok.logs/sol-identity.txt"
 has "and the bundle's digest-pinned migration runner" \
   "migration_runner_image: $RUNNER" "$TMP/app-ok.logs/sol-identity.txt"
-lacks "the app target selects no profile, so the row claims none of its guarantees" "profile:" "$TARGET_FILE"
+has "the app target selects the production profile" "profile: production-single-region" "$TARGET_FILE"
 has "the app target declares the durable shape it does not derive from a profile" \
   "shape: durable" "$TARGET_FILE"
 lacks "the target does not compete with the Kafka binding authority" \
@@ -2647,6 +2655,10 @@ run_case_closed_stdout() {
     IMPERSONATOR=user:test@example.com LE_EMAIL=test@example.com \
     PUBLISHER_SERVICE_ACCOUNT=publisher@sol-qualification.iam.gserviceaccount.com \
     PROJECT=sol-qualification REGION=us-central1 \
+    CLUSTER_ENDPOINT_CIDR=203.0.113.0/24 \
+    ALERT_RECEIVER_TYPE=webhook ALERT_RECEIVER_URL=https://receiver.example.invalid/hook \
+    ALERT_OWNER="Qualification Test" ALERT_RUNBOOK_URL=https://example.invalid/runbook \
+    NODE_FAILURE_HEADROOM_NODES=1 \
     PATH="$TMP/bin:$PATH" "$@" \
     "$HARNESS" "$sub" 2>"$TMP/$name.err" | true
   local -a codes=("${PIPESTATUS[@]}")
@@ -2675,6 +2687,10 @@ run_case_sigterm() {
     IMPERSONATOR=user:test@example.com LE_EMAIL=test@example.com \
     PUBLISHER_SERVICE_ACCOUNT=publisher@sol-qualification.iam.gserviceaccount.com \
     PROJECT=sol-qualification REGION=us-central1 \
+    CLUSTER_ENDPOINT_CIDR=203.0.113.0/24 \
+    ALERT_RECEIVER_TYPE=webhook ALERT_RECEIVER_URL=https://receiver.example.invalid/hook \
+    ALERT_OWNER="Qualification Test" ALERT_RUNBOOK_URL=https://example.invalid/runbook \
+    NODE_FAILURE_HEADROOM_NODES=1 \
     PATH="$TMP/bin:$PATH" "$@" \
     "$HARNESS" cloud >"$TMP/$name.out" 2>&1 &
   local run_pid=$! waited=0

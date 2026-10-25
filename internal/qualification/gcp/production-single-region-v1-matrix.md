@@ -94,10 +94,10 @@ reconciles the environment and the workloads and owns generated Kafka credential
 application images are built and pushed in the `app` phase into the Artifact Registry
 repository the `cloud` phase's `sol deploy` created (the cluster-named repository at
 `<region>-docker.pkg.dev/<project>/<cluster>/pluto/<unit>`) — not into a harness-owned
-registry. The GCP row deliberately selects no profile, so it does not depend on #1413's
-cold-start change: a profile-less durable target never required a pre-published digest. The
-cold-start cycle (#1413) applies to a target that selects `production-single-region`, which is
-AWS-only.
+registry. The GCP row now selects `production-single-region` explicitly (ADR 0009), so it carries
+the same profile guarantees as AWS and must satisfy the profile preflight, including the
+restricted API CIDR, alert contract, OIDC configuration, production TLS and current
+TypeScript/OCaml compatibility.
 
 ### GCP project prerequisites (verify read-only)
 

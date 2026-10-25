@@ -222,6 +222,18 @@ remove_target() {
   if owns_target_file; then rm -f "$TARGET_FILE"; fi
 }
 
+production_target_fields() {
+  cat <<YAML
+      profile: production-single-region
+      cluster_endpoint_cidr: ${CLUSTER_ENDPOINT_CIDR:?set CLUSTER_ENDPOINT_CIDR to the one CIDR allowed to reach the API}
+      alert_receiver_type: ${ALERT_RECEIVER_TYPE:-webhook}
+      alert_receiver_url: ${ALERT_RECEIVER_URL:?set ALERT_RECEIVER_URL to the qualified receiver}
+      alert_owner: ${ALERT_OWNER:?set ALERT_OWNER to the accountable owner}
+      alert_runbook_url: ${ALERT_RUNBOOK_URL:?set ALERT_RUNBOOK_URL to the first-response runbook}
+      node_failure_headroom_nodes: ${NODE_FAILURE_HEADROOM_NODES:-1}
+YAML
+}
+
 write_target() {
   local le_email="${LE_EMAIL:-$TEARDOWN_LE_EMAIL}"
   mkdir -p "$(dirname "$TARGET_FILE")"
@@ -240,11 +252,9 @@ $TARGET_ENV:
       cluster_name: $CLUSTER
       base_domain: $BASE_DOMAIN
       dns_zone_ownership: sol
-      # No profile is selected at any phase. This row qualifies the application path and
-      # claims nothing the production profile's guarantees would promise; the profile is
-      # AWS-qualified, so selecting it on GCP could only be refused by its preflight. The
-      # *shape* is still declared: the platform publishes the authenticated Kafka
-      # credential the row's units read, and write_app_target declares the same shape.
+      # This row claims the production profile explicitly. The shape remains durable:
+      # the platform publishes the authenticated Kafka credential the row's units read.
+      $(production_target_fields)
       shape: durable
       letsencrypt_email: $le_email
       cluster_issuer: $CLUSTER_ISSUER
@@ -1696,9 +1706,10 @@ $TARGET_ENV:
       # deploy re-establishes it before it deploys: without this the deploy refuses with
       # "the target declares no dns_zone_ownership" and never reaches the app path.
       dns_zone_ownership: sol
-      # The durable shape matches the installation the cloud phase created: its Kafka is
-      # authenticated, so the included units require the platform's Kafka credential and
-      # the target must map an authority for it.
+      # The production profile is re-declared for the app deploy, and the durable shape
+      # matches the installation the cloud phase created: its Kafka is authenticated, so
+      # the included units require the platform's Kafka credential.
+      $(production_target_fields)
       shape: durable
       letsencrypt_email: $LE_EMAIL
       cluster_issuer: $CLUSTER_ISSUER

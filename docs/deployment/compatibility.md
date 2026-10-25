@@ -108,8 +108,10 @@ These are gaps in the evidence table, not exclusions from the contract:
 - AWS's independent Kafka delivery observation is blocked (#1593).
 - Per-target Grafana TLS+OIDC configuration is implemented and guarded; live
   login and dashboard visibility remain the qualification evidence.
-- Full production-profile evidence (Postgres failover/restore, availability,
-  alerts) is incomplete on both providers.
+- Both providers are declared production-qualified under the redefined
+  profile (ADR 0009), including TypeScript; full production-profile live
+  evidence (Postgres failover/restore, availability, alerts, GCP profile) is
+  still tracked by #1725 and #1727.
 
 A target that needs an unproven cell is not yet conformant; the README table says
 which cell, and the linked issue says why. This is not a lower product tier.

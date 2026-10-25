@@ -91,7 +91,7 @@ nothing.
 | A1 | Profile selection is explicit and versioned (§1) | `sol deploy <target> --dry-run` on a target with `profile: production-single-region` | plan records the profile claim | plan JSON |
 | A2 | An environment named `prod` with no `profile` makes no claim (§1) | same command against a target without `profile:` | runs with no profile claim; no production guarantee asserted anywhere in plan/output | plan JSON, CLI output |
 | A3 | Unsupported Kubernetes version fails before mutation (§2) | point the target at a cluster whose version ≠ the matrix | `qualified_versions` unmet, refuses, names the mismatch; **no** cluster mutation | preflight report, `kubectl` event check |
-| A4 | TypeScript workload fails before mutation (§2) | target containing a `language: typescript` service | `qualified_versions` unmet naming the service + "OCaml-only (DEC-026 §2)" | preflight report |
+| A4 | TypeScript workloads are supported under the redefined profile (ADR 0009) | target containing a `language: typescript` service | preflight does not reject the language; the workload is qualified by the same profile guarantees as OCaml | preflight report, profile tests |
 | A5 | Unsupported substrate fails (§2) | target whose provider ≠ AWS EKS | `qualified_substrate` unmet, names the provider | preflight report |
 | A6 | Mutable tag rejected before mutation (§6) | deploy without `--image-ref` (tag path) | `immutable_artifacts` unmet, refuses before any mutation | preflight report |
 | A7 | Remote state + scoped identities required (§4, §6) | target missing `state_bucket`/`state_lock_table`/role ARNs/CIDR | `remote_state` + `scoped_operator_identities` unmet, each naming the declaration | preflight report |
@@ -239,7 +239,7 @@ rather than reasoned about:
 | Item | Reason |
 |---|---|
 | Zone-failure tolerance | DEC-026 does not select it |
-| TypeScript production qualification | Staged by §2 with three named triggers (OCaml-only `v1`) |
+| TypeScript production qualification | Included by ADR 0009; current-candidate live evidence is tracked by #1727. `-fn` remains unpublished. |
 | `-fn` availability tier | Not applicable: a `-fn` invocation is not a continuously-available process |
 | Kafka/Redpanda AZ tolerance and multi-broker/cluster loss recovery | Named exclusion (§5) |
 | Region-level failover, autoscaling, multi-team RBAC, admission policy, federation, signing/SBOM | Explicit exclusions (§2, §6, §7, §9) |
