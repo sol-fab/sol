@@ -16,7 +16,7 @@ was run.
 | Bundle | `sol-v0.1.0-alpha.44-linux-x86_64.tar.gz`, sha256 `8a7b0479ea43a28f58ac9fb2b818206b69af968900da7b9a442dba1eb6b7f17e` |
 | Migration runner | `ghcr.io/sol-fab/sol-migration-runner@sha256:d89423f0c5cb89c4173562ca23bdc614c5ff5c1d8a284bc31c0a32e0f0b0a500` |
 | Harness | `2678805794fddcd16556d16b60b1f880813b35aa` (PR #1694, a descendant of the candidate) |
-| Account / region | `876701109436` / `us-east-1` |
+| Account / region | AWS account (redacted) / `us-east-1` |
 | Evidence | `/home/logan/qual-a45/aws-a45h-1/` (outside the repository) |
 
 The application was materialized from the candidate revision; the harness revision is a
