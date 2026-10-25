@@ -53,7 +53,7 @@ source "$BINDING"
 
 printf '\nthe bound context is the candidate revision\n'
 context="$TMP/context"
-if pins="$(sol_candidate_bind_context "$workspace" "$CANDIDATE" "$context" 2>"$TMP/bind.err")"; then
+if pins="$(umask 077; sol_candidate_bind_context "$workspace" "$CANDIDATE" "$context" 2>"$TMP/bind.err")"; then
   ok "a workspace at the candidate revision binds"
 else
   no "a workspace at the candidate revision binds" "exit 0" "$(cat "$TMP/bind.err")"
@@ -67,6 +67,8 @@ is "and no pin still names a moving ref" \
   "$(grep -c '#main' "$context/pluto.opam")" "0"
 is "the context carries the revision's application code" \
   "$(cat "$context/sol.yml")" "project: scratch"
+is "the context is readable by a non-root build stage" \
+  "$(stat -c %a "$context/sol.yml" | grep -Eq '^[4-7][4-7][4-7]$' && echo yes || echo no)" "yes"
 
 printf '\nuntracked and modified working-tree state cannot enter the context\n'
 printf 'FROM scratch\n# local edit that is not the revision\n' >"$workspace/app/payments/orders_svc/Dockerfile"
