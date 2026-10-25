@@ -31,6 +31,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: promote-release-${{ inputs.version }}
@@ -53,9 +54,9 @@ jobs:
       # The v2 authorization path is implemented but has not been exercised with
       # a producer-generated, live-qualified candidate. Keep promotion closed
       # until that chain is verified; a draft attachment is never authority.
-      - name: Refuse promotion until typed parity schema v2 lands
+      - name: Refuse promotion until the v2 chain is verified end to end
         run: |
-          echo "::error::Promotion is disabled until the evidence-bound parity schema v2 and typed evaluator land (#1738)." >&2
+          echo "::error::Promotion is disabled until a producer-generated live candidate exercises the typed v2 chain (#1738)." >&2
           exit 1
 
       - name: Require the recorded draft candidate
