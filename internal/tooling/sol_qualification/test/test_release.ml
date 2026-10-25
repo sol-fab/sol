@@ -47,6 +47,14 @@ let write_file path contents =
 let read_file path = In_channel.with_open_bin path In_channel.input_all
 let sha256 text = Qual_domain.sha256 text
 
+let rec mkdir_p path =
+  if Sys.file_exists path
+  then ()
+  else (
+    mkdir_p (Filename.dirname path);
+    Unix.mkdir path 0o700)
+;;
+
 let rec remove_tree path =
   match Unix.lstat path with
   | { Unix.st_kind = Unix.S_DIR; _ } ->
@@ -140,7 +148,8 @@ let contract_json
     ]
 ;;
 
-let contract () = ok "test contract" (R.contract_of_json (contract_json ()))
+let repository () = Sys.getenv "SOL_TEST_REPOSITORY"
+let contract () = ok "canonical contract" (R.load_contract ~repository:(repository ()))
 let contract_id contract = R.contract_id contract
 let contract_digest contract = R.contract_digest contract
 
@@ -1169,8 +1178,16 @@ let test_exception_reason_drift () =
            | `Assoc fields ->
              (match List.assoc_opt "exceptions" fields with
               | Some (`List [ `Assoc exception_fields ]) ->
-                List.assoc_opt "reason" exception_fields
-                = Some (`String "GCP has no RDS final-snapshot preparation step")
+                (match List.assoc_opt "reason" exception_fields with
+                 | Some (`String reason) ->
+                   let needle = "INV-DESTROY-4" in
+                   let rec contains index =
+                     index + String.length needle <= String.length reason
+                     && (String.sub reason index (String.length needle) = needle
+                         || contains (index + 1))
+                   in
+                   contains 0
+                 | _ -> false)
               | _ -> false)
            | _ -> false)
       | R.Refused reasons ->
@@ -1671,8 +1688,36 @@ let test_provider_slot () =
         "slot contains"))
 ;;
 
+let test_unloaded_contract_cannot_pass () =
+  let synthetic = ok "synthetic contract" (R.contract_of_json (contract_json ())) in
+  with_temp_dir "unloaded-aws" (fun aws_dir ->
+    with_temp_dir "unloaded-gcp" (fun gcp_dir ->
+      let aws, _ = fixture synthetic "aws" aws_dir in
+      let gcp, _ = fixture synthetic "gcp" gcp_dir in
+      has_reason
+        "a parser-constructed contract cannot issue a PASS"
+        (evaluate synthetic aws gcp)
+        "repository-owned source"))
+;;
+
+let test_contract_substitution () =
+  with_temp_dir "contract-substitution" (fun directory ->
+    let path = Filename.concat directory R.canonical_contract_path in
+    mkdir_p (Filename.dirname path);
+    let weakened = contract_json ~providers:[ "aws" ] () in
+    write_file path (Yojson.Safe.pretty_to_string weakened ^ "\n");
+    match R.load_contract ~repository:directory with
+    | Error error ->
+      check
+        "a substituted contract file refuses against the evaluator pin"
+        (String.length error.R.diagnostic > 0)
+    | Ok _ -> check "a substituted contract file refuses against the evaluator pin" false)
+;;
+
 let tests () =
   [ "valid pair", test_valid_pair
+  ; "unloaded contract", test_unloaded_contract_cannot_pass
+  ; "contract substitution", test_contract_substitution
   ; "one-provider contract", test_one_provider_contract
   ; "missing phase contract", test_missing_phase_contract
   ; "claim without provider", test_claim_without_provider

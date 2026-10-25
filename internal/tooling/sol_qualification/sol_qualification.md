@@ -394,7 +394,9 @@ provenance) inside a boundary of its own.
 The repository-owned contract is `internal/qualification/qualification-contract.json`.
 It is the one authority for the required claim families, per-provider claim IDs,
 evidence classes, typed exceptions, attempt claim/issuer, and the selection lower
-bound. Required phases are projected from `Qual_lifecycle.required_phases`; a contract
+bound. Its raw bytes are pinned by `Qual_release.canonical_contract_sha256`; a
+contract edit must update that pin in the same reviewed change, and an evaluator
+refuses a checkout whose contract bytes do not match its pin. Required phases are projected from `Qual_lifecycle.required_phases`; a contract
 that omits, adds or reorders them is invalid. There is no second required-claim list in
 the evaluator.
 

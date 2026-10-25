@@ -214,6 +214,7 @@ type verdict =
 
 val evaluator_revision : string
 val canonical_contract_path : string
+val canonical_contract_sha256 : string
 val contract_of_json : ?source:source -> Yojson.Safe.t -> (contract, error) result
 
 (** Parse a provider record only. Evidence references are represented, not

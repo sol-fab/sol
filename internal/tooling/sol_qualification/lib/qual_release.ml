@@ -190,6 +190,14 @@ type verdict =
 
 let evaluator_revision = "sol-qual-release/v2"
 let canonical_contract_path = "internal/qualification/qualification-contract.json"
+
+(* The reviewed pin for the canonical contract bytes. A contract edit must
+   update this digest in the same reviewed change; promotion and the producer
+   then use a binary whose pin matches the contract revision they name. *)
+let canonical_contract_sha256 =
+  "28565d85ed826d27a69c8da0f8254765eaffecd291bbfe7b53faa5b1dc7f098c"
+;;
+
 let max_record_bytes = 8 * 1024 * 1024
 let max_contract_bytes = 1024 * 1024
 let error stage diagnostic = Error { stage; diagnostic }
@@ -1355,6 +1363,9 @@ let evaluator_reasons
       (fun message -> if not condition then reasons := message :: !reasons)
       format
   in
+  check
+    (Option.is_some contract.source)
+    "the contract was not loaded from the repository-owned source";
   check
     (aws.verification = Verified)
     "the aws record was not loaded and evidence-verified";
