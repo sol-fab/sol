@@ -80,6 +80,7 @@ def attempt(directory: str, provider: str) -> None:
     names = {
         "aws": [
             "app-transaction.log",
+            "app-transaction-ts.log",
             "cloud-destroy.log",
             "aws-pre-teardown-identities.json",
             "app-deploy-gate.log",

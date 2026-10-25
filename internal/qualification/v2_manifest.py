@@ -30,7 +30,10 @@ CLAIM_OBSERVATIONS = {
 EVIDENCE = {
     "aws": {
         "profile": (["v2-target.yml"], "mechanism"),
-        "transaction": (["app-transaction.log"], "behavioral"),
+        "transaction": (
+            ["app-transaction.log", "app-transaction-ts.log"],
+            "behavioral",
+        ),
         "destroy-preparation": (
             ["cloud-destroy.log", "aws-pre-teardown-identities.json"],
             "behavioral",
@@ -53,7 +56,7 @@ PHASE_EVIDENCE = {
     "aws": {
         "prepare": ["candidate-binding.txt"],
         "cloud": ["cloud-apply.log"],
-        "app": ["app-transaction.log"],
+        "app": ["app-transaction.log", "app-transaction-ts.log"],
         "destroy": ["cloud-destroy.log"],
     },
     "gcp": {
