@@ -45,6 +45,7 @@ PUBLISHER_SERVICE_ACCOUNT="${PUBLISHER_SERVICE_ACCOUNT:-}"
 export PROJECT REGION
 BASE_DOMAIN="${BASE_DOMAIN:-qual-gcp.sol-fab.dev}"
 PHASE_TIMEOUT="${PHASE_TIMEOUT:-2700}"
+PHASE="${1:-}"
 DELEGATION_WAIT_MINUTES="${DELEGATION_WAIT_MINUTES:-25}"
 LOG_DIR="${LOG_DIR:-/tmp/sol-gcp-qual-$ATTEMPT}"
 export LOG_DIR
@@ -1300,6 +1301,29 @@ capture_pre_teardown_inventory() {
 cleanup() { cleanup_run; }
 TEARDOWN_OK=0
 
+# One attempt, one required sequence. The ledger is the attempt's authority for
+# which phases actually ran and exited, so the v2 producer can bind a record to
+# the same history instead of inferring it from a successful command.
+record_phase_verdict() {
+  local status="${1:-$?}"
+  case "${PHASE:-}" in
+    prepare | cloud | app | destroy | identity | verify) ;;
+    *) return "$status" ;;
+  esac
+  [ -n "${LOG_DIR:-}" ] || return "$status"
+  mkdir -p "$LOG_DIR" 2>/dev/null || return "$status"
+  printf 'phase=%s exit=%s at=%s\n' "$PHASE" "$status" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$LOG_DIR/phase-verdicts.txt" 2>/dev/null || true
+  return "$status"
+}
+
+on_exit() {
+  local status=$?
+  record_phase_verdict "$status"
+  cleanup
+  return "$status"
+}
+
 on_terminate() {
   if [ -n "$TERMINATION_SIGNAL" ]; then return 0; fi
   TERMINATION_SIGNAL="$1"
@@ -1307,7 +1331,7 @@ on_terminate() {
   exit 1
 }
 
-trap cleanup EXIT
+trap on_exit EXIT
 trap 'on_terminate TERM' TERM
 trap 'on_terminate INT' INT
 
