@@ -554,11 +554,12 @@ let contract_reconciliation ctx (plan : Sol_cli_deployment_plan.t) =
   then Ok ()
   else
     Sol_cli_contract.reconciliation_images plan.Sol_cli_deployment_plan.services
-    |> Sol_cli_result.map_list (fun (namespace, image, secret_name) ->
+    |> Sol_cli_result.map_list (fun (namespace, image, secret_name, consumer) ->
       Sol_cli_contract.reconcile_in_destination
         ~ctx:ctx.execution.cluster
         ~kafka:plan.Sol_cli_deployment_plan.kafka
         ~secret_name
+        ~consumer
         ~namespace
         ~image)
     |> Result.map (fun _ -> ())

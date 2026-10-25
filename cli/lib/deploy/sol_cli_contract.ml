@@ -113,47 +113,62 @@ let reconciliation_images services =
            Sol_cli_deployment_plan.namespace_to_string
              spec.Sol_cli_deployment_plan.namespace
          in
+         let candidates =
+           List.filter
+             (fun (candidate : Sol_cli_deployment_plan.service_spec) ->
+                String.equal
+                  (Sol_cli_deployment_plan.namespace_to_string
+                     candidate.Sol_cli_deployment_plan.namespace)
+                  namespace)
+             services
+         in
+         let has_consumer =
+           List.exists
+             (fun (candidate : Sol_cli_deployment_plan.service_spec) ->
+                candidate.Sol_cli_deployment_plan.consumes_kafka)
+             candidates
+         in
          (* The contract Job reconciles the workspace projection, so it needs the
             Kafka delivery of any consumer in this namespace — not merely the first
-            unit that happens to share the language. *)
+            unit that happens to share the language. A namespace with no consumer
+            has no Kafka delivery to require. *)
          let kafka_secret =
-           services
-           |> List.find_map (fun (candidate : Sol_cli_deployment_plan.service_spec) ->
-             if
-               candidate.Sol_cli_deployment_plan.consumes_kafka
-               && String.equal
-                    (Sol_cli_deployment_plan.namespace_to_string
-                       candidate.Sol_cli_deployment_plan.namespace)
-                    namespace
-             then kafka_secret_name candidate
-             else None)
+           List.find_map
+             (fun (candidate : Sol_cli_deployment_plan.service_spec) ->
+                if candidate.Sol_cli_deployment_plan.consumes_kafka
+                then kafka_secret_name candidate
+                else None)
+             candidates
          in
-         Some (namespace, spec.Sol_cli_deployment_plan.image, kafka_secret)))
+         Some (namespace, spec.Sol_cli_deployment_plan.image, kafka_secret, has_consumer)))
     services
 ;;
 
-let reconcile_in_destination ~ctx ~kafka ~secret_name ~namespace ~image =
+let reconcile_in_destination ~ctx ~kafka ~secret_name ~consumer ~namespace ~image =
   (* The Job consumes the same resolved selection and delivered Secret as workload
      rendering. It reads only the keys the transport requires, never every key in the
-     Secret. *)
+     Secret. A namespace with no consumer does not need a delivery at all. *)
   let kafka_config = Sol_cli_resource_binding.kafka_config kafka in
   let transport = Sol_cli_manifest.kafka_transport_of_config kafka_config in
   let* () =
-    match transport with
-    | Sol_cli_manifest.Plaintext -> Ok ()
-    | Sol_cli_manifest.Sasl_ssl ->
-      (match secret_name with
-       | None ->
-         Error
-           "the target's Kafka transport requires a delivered credential Secret, but the \
-            plan resolved none"
-       | Some secret_name ->
-         Sol_cli_secret.verify_required_keys
-           ~ctx
-           ~namespace
-           ~secret_name
-           ~required_keys:(Sol_cli_manifest.kafka_required_secret_keys transport)
-           ())
+    if not consumer
+    then Ok ()
+    else (
+      match transport with
+      | Sol_cli_manifest.Plaintext -> Ok ()
+      | Sol_cli_manifest.Sasl_ssl ->
+        (match secret_name with
+         | None ->
+           Error
+             "the target's Kafka transport requires a delivered credential Secret, but \
+              the plan resolved none"
+         | Some secret_name ->
+           Sol_cli_secret.verify_required_keys
+             ~ctx
+             ~namespace
+             ~secret_name
+             ~required_keys:(Sol_cli_manifest.kafka_required_secret_keys transport)
+             ()))
   in
   match
     Sol_cli_migration_job.submit_doc
