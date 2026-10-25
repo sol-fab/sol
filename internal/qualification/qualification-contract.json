@@ -1,0 +1,42 @@
+{
+  "schema": 2,
+  "id": "sol-cross-provider-release/v2",
+  "revision": "2026-10-25",
+  "providers": ["aws", "gcp"],
+  "phases": ["prepare", "cloud", "app", "destroy"],
+  "attempt_requirements": {
+    "claim": "production",
+    "issuer": "letsencrypt-prod"
+  },
+  "selection": {
+    "languages": ["ocaml", "typescript"],
+    "primitives": ["svc", "worker"]
+  },
+  "claims": [
+    {
+      "family": "application-transaction",
+      "evidence_class": "behavioral",
+      "test": "internal/qualification/local/test-rows-ocaml.sh",
+      "ids": {
+        "aws": "B1",
+        "gcp": "B1"
+      }
+    },
+    {
+      "family": "destroy-preparation",
+      "evidence_class": "behavioral",
+      "test": "internal/qualification/aws/production-single-region-v1-matrix.md",
+      "ids": {
+        "aws": "I8"
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "family": "destroy-preparation",
+      "provider": "gcp",
+      "reason": "GCP has no RDS final-snapshot preparation step; the equivalent teardown guarantee is INV-DESTROY-4's independently observed provider absence",
+      "test": "internal/qualification/gcp/test-verify-matrix.sh"
+    }
+  ]
+}

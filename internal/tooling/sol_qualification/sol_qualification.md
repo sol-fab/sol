@@ -383,3 +383,81 @@ pods/log, patch Deployments/ConfigMaps/Jobs and delete Jobs. These are bounded
 safety checks, not proof of a fully read-only identity or namespace confinement.
 The operator owns other grants and credential refresh. There is no fallback to
 the deploy kubeconfig; observer failure leaves the CA family unestablished.
+
+## Typed release authority (`Qual_release`, schema v2)
+
+`lib/qual_release.ml` is a separate release-authority owner. It does **not** promote
+the MECHANISM-only `Qual_evidence` or `Qual_domain` APIs to release evidence. It reuses
+their public primitives (SHA-256, canonical JSON, the typed phase set and attempt
+provenance) inside a boundary of its own.
+
+The repository-owned contract is `internal/qualification/qualification-contract.json`.
+It is the one authority for the required claim families, per-provider claim IDs,
+evidence classes, typed exceptions, attempt claim/issuer, and the selection lower
+bound. Its raw bytes are pinned by `Qual_release.canonical_contract_sha256`; a
+contract edit must update that pin in the same reviewed change, and an evaluator
+refuses a checkout whose contract bytes do not match its pin. Required phases are projected from `Qual_lifecycle.required_phases`; a contract
+that omits, adds or reorders them is invalid. There is no second required-claim list in
+the evaluator.
+
+The executable accepts no `--contract` argument. It always loads the contract at the
+fixed repository path, so an attached or weaker contract cannot become authority:
+
+```sh
+dune build internal/tooling/sol_qualification/bin/qualification_release.exe
+_build/default/internal/tooling/sol_qualification/bin/qualification_release.exe contract \
+  --repository .
+_build/default/internal/tooling/sol_qualification/bin/qualification_release.exe evaluate \
+  --repository . \
+  --aws-record aws-record.json --aws-evidence . \
+  --gcp-record gcp-record.json --gcp-evidence .
+```
+
+Separation of duties in the module:
+
+- `contract_of_json` / `record_of_json` parse untrusted representations only. They
+  cannot verify evidence, and `evaluate` refuses a record that was not constructed by
+  `load_record`.
+- `load_contract` reads the fixed repository contract, rejects duplicate JSON keys and
+  verifies every declared test reference resolves inside the repository.
+- `load_record` resolves every evidence reference inside the attempt directory (a
+  symlink cannot escape it), verifies the raw-byte SHA-256 and class, and binds the
+  record to the attempt's `attempt.txt`/`phase-verdicts.txt`: attempt identity,
+  candidate revision, provider, target, cluster, claim, issuer and the required phase
+  sequence. `promotion_eligible=yes` is only a consistency input to that assessment,
+  never the decision.
+- `evaluate` is pure. It binds the exact contract semantic digest and raw contract
+  source digest, both provider record byte digests, candidate, harness revision,
+  selection, claim set, typed boundaries, permission bindings, visible exceptions and
+  the evaluator revision and binary digest. A record loaded without verification, or a
+  record produced by a different evaluator, cannot pass.
+- `verdict_to_yojson` emits `PASS` only from the typed constructor. Nothing in this
+  module reads a producer's `verdict`/`promotion_eligible` field as authority.
+
+Two integrity properties are deliberately distinct:
+
+- **File integrity** is the raw-byte SHA-256 of an attached contract or record. A
+  record's byte digest is what the verdict binds.
+- **Semantic identity** is the canonical typed JSON digest. The contract digest that
+  records must name is semantic, so a formatting-only edit does not invalidate a
+  record while any authority-bearing field does.
+
+Selection is a lower bound in the contract and an order-insensitive set in a record;
+both providers' actual selections must be equal. Claims are exact for each provider and
+phases are exact and ordered. A provider-specific omission is valid only through a
+contract exception, is visible in the PASS verdict with its reason and test, and cannot
+be invented by a record.
+
+### Trust boundary
+
+Release-write maintainers are trusted to produce evidence honestly. Content addressing
+proves that the bytes evaluated are the bytes recorded; it does not authenticate a
+fabricated but internally consistent producer. Evidence classes are producer-declared;
+the evaluator checks that a behavioural claim carries behavioural evidence, but does
+not interpret provider observation semantics. Those remain owned by the live harness,
+the provider inventories and the release teardown policy.
+
+Promotion is still fail-closed (`.github/workflows/promote.yml` refuses before reading
+assets). Wiring the typed evaluator into promotion, removing the v1 `decide` path and
+the Python parity evaluator, and producing v2 records from the live harness are the
+remaining #1738/#1737 work. Until then no record set can authorize a release.

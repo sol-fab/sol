@@ -10,6 +10,10 @@ let attempt ?(resumed = false) ?(eligible = true) verdicts =
       ; issuer = "letsencrypt-prod"
       ; resumed_from = (if resumed then Some "/tmp/source" else None)
       ; promotion_eligible = eligible
+      ; target = Some "qual/aws/us-east-1"
+      ; cluster = Some "sol-qual"
+      ; provider = Some "aws"
+      ; candidate_revision = Some (String.make 40 'a')
       }
   ; verdicts
   }
@@ -196,6 +200,38 @@ let test_parse_unknown_phase () =
   check "unknown phase is refused" (Result.is_error (L.phase_of_string "deploy"))
 ;;
 
+let test_of_dir_provenance () =
+  with_temp_dir (fun dir ->
+    write
+      (Filename.concat dir "attempt.txt")
+      [ "attempt=a1"
+      ; "target=qual/aws/us-east-1"
+      ; "cluster=sol-qual"
+      ; "provider=aws"
+      ; "candidate_revision=" ^ String.make 40 'a'
+      ; "claim=production"
+      ; "issuer=letsencrypt-prod"
+      ; "promotion_eligible=yes"
+      ];
+    write
+      (Filename.concat dir "phase-verdicts.txt")
+      [ "phase=prepare exit=0 at=x"
+      ; "phase=cloud exit=0 at=x"
+      ; "phase=app exit=0 at=x"
+      ; "phase=destroy exit=0 at=x"
+      ];
+    match L.of_dir dir with
+    | Error message -> Alcotest.fail message
+    | Ok parsed ->
+      let provenance = parsed.L.provenance in
+      check "target is parsed" (provenance.target = Some "qual/aws/us-east-1");
+      check "cluster is parsed" (provenance.cluster = Some "sol-qual");
+      check "provider is parsed" (provenance.provider = Some "aws");
+      check
+        "candidate revision is parsed"
+        (provenance.candidate_revision = Some (String.make 40 'a')))
+;;
+
 let () =
   Alcotest.run
     "qualification lifecycle"
@@ -225,6 +261,7 @@ let () =
             "resumed production"
             `Quick
             test_resumed_production_is_valid_but_not_eligible
+        ; Alcotest.test_case "attempt provenance" `Quick test_of_dir_provenance
         ] )
     ]
 ;;

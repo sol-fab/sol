@@ -7,3 +7,8 @@
  (name qualification_lifecycle)
  (modules qualification_lifecycle)
  (libraries sol_qualification yojson))
+
+(executable
+ (name qualification_release)
+ (modules qualification_release)
+ (libraries sol_qualification yojson unix))
