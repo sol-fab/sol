@@ -253,10 +253,16 @@ let main () =
       `List
         (List.map
            (fun claim ->
+              let observations =
+                match json_field "observations" claim with
+                | Some (`List values) -> values
+                | None -> []
+                | _ -> die "claim observations must be a list"
+              in
               let fields =
                 [ "id", `String (json_string ~what:"claim" "id" claim)
                 ; "status", `String (json_string ~what:"claim" "status" claim)
-                ; "observations", `List (json_list ~what:"claim" "observations" claim)
+                ; "observations", `List observations
                 ]
               in
               `Assoc
