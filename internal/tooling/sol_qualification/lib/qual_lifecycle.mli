@@ -30,6 +30,10 @@ type provenance =
   ; issuer : string
   ; resumed_from : string option
   ; promotion_eligible : bool
+  ; target : string option
+  ; cluster : string option
+  ; provider : string option
+  ; candidate_revision : string option
   }
 
 type t =

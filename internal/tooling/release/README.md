@@ -185,9 +185,22 @@ result — Sol's exit code and Terraform state are not absence evidence.
 ### Cross-provider parity
 
 A passing AWS record and a passing GCP record are not, by themselves, a
-cross-provider production claim. `internal/tooling/release/qualification_parity.py`
-is the composition gate: it consumes the canonical qualification contract and
-the two provider records, and emits a parity verdict.
+cross-provider production claim. Promotion currently refuses before reading any
+of these assets, so no record set can authorize a release.
+
+The release authority for schema v2 is the typed `Qual_release` owner in
+`internal/tooling/sol_qualification/lib/qual_release.ml`, using the
+repository-owned contract at
+`internal/qualification/qualification-contract.json`. It verifies raw-byte
+evidence, binds the attempt and candidate, projects phases from
+`Qual_lifecycle`, evaluates the contract's claim families and typed exceptions,
+and binds the verdict to the contract, both records and the evaluator binary.
+See
+[the qualification core documentation](../sol_qualification/sol_qualification.md#typed-release-authority-qual_release-schema-v2).
+
+The text below describes the superseded v1 Python gate. It is retained only until
+the typed evaluator is wired into promotion and the v1 `decide`/`qualification_parity`
+paths are removed. It is not promotion authority: `promote.yml` refuses earlier.
 
 The contract owns the required claims, phases and selection; the parity tool
 does not maintain a second requirement list. Every provider record names the

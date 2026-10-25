@@ -11,6 +11,7 @@
   qual_candidate_obligations
   qual_migration_execution
   qual_lifecycle
+  qual_release
   qual_path
   qual_lock_raw)
  (libraries sol_cli_base sol_cli_workspace yojson digestif unix)

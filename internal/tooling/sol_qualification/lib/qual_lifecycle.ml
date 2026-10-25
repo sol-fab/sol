@@ -43,6 +43,10 @@ type provenance =
   ; issuer : string
   ; resumed_from : string option
   ; promotion_eligible : bool
+  ; target : string option
+  ; cluster : string option
+  ; provider : string option
+  ; candidate_revision : string option
   }
 
 type t =
@@ -242,8 +246,22 @@ let of_dir directory =
           (Ok [])
           ledger
       in
+      let* target = unique_field "target" identity in
+      let* cluster = unique_field "cluster" identity in
+      let* provider = unique_field "provider" identity in
+      let* candidate_revision = unique_field "candidate_revision" identity in
       Ok
-        { provenance = { attempt; claim; issuer; resumed_from; promotion_eligible }
+        { provenance =
+            { attempt
+            ; claim
+            ; issuer
+            ; resumed_from
+            ; promotion_eligible
+            ; target
+            ; cluster
+            ; provider
+            ; candidate_revision
+            }
         ; verdicts = List.rev verdicts
         }
   with

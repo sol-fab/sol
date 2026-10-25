@@ -118,3 +118,22 @@
  (name test_lifecycle)
  (modules test_lifecycle)
  (libraries sol_qualification alcotest yojson))
+
+(test
+ (name test_release)
+ (modules test_release)
+ (libraries sol_qualification alcotest yojson unix)
+ (deps
+  ../bin/qualification_release.exe
+  ../../../qualification/qualification-contract.json
+  ../../../qualification/local/test-rows-ocaml.sh
+  ../../../qualification/aws/production-single-region-v1-matrix.md
+  test_release.ml)
+ (action
+  (setenv
+   SOL_TEST_RELEASE_BIN
+   %{dep:../bin/qualification_release.exe}
+   (setenv
+    SOL_TEST_REPOSITORY
+    %{workspace_root}
+    (run %{test})))))
