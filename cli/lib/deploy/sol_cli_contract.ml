@@ -128,11 +128,12 @@ let reconciliation_images services =
                 candidate.Sol_cli_deployment_plan.consumes_kafka)
              candidates
          in
-         (* The contract Job reconciles the workspace projection, so it needs the
-            Kafka delivery of any consumer in this namespace — not merely the first
-            unit that happens to share the language. A namespace with no consumer
-            has no Kafka delivery to require. *)
-         let kafka_secret =
+         (* The contract Job reconciles the workspace projection, so it needs a Kafka
+            delivery — not merely the first unit that happens to share the language.
+            Prefer a consumer in this namespace; otherwise use the first namespace
+            that has a delivered consumer, because the projection is workspace-wide
+            and the language image is the only thing that must come from this spec. *)
+         let own_secret =
            List.find_map
              (fun (candidate : Sol_cli_deployment_plan.service_spec) ->
                 if candidate.Sol_cli_deployment_plan.consumes_kafka
@@ -140,7 +141,31 @@ let reconciliation_images services =
                 else None)
              candidates
          in
-         Some (namespace, spec.Sol_cli_deployment_plan.image, kafka_secret, has_consumer)))
+         let fallback =
+           if has_consumer
+           then None
+           else
+             List.find_map
+               (fun (candidate : Sol_cli_deployment_plan.service_spec) ->
+                  if candidate.Sol_cli_deployment_plan.consumes_kafka
+                  then
+                    kafka_secret_name candidate
+                    |> Option.map (fun secret ->
+                      ( Sol_cli_deployment_plan.namespace_to_string
+                          candidate.Sol_cli_deployment_plan.namespace
+                      , secret ))
+                  else None)
+               services
+         in
+         let delivery_namespace, kafka_secret, consumer =
+           match has_consumer, own_secret, fallback with
+           | true, secret, _ -> namespace, secret, true
+           | false, _, Some (fallback_namespace, secret) ->
+             fallback_namespace, Some secret, true
+           | false, _, None -> namespace, None, false
+         in
+         Some
+           (delivery_namespace, spec.Sol_cli_deployment_plan.image, kafka_secret, consumer)))
     services
 ;;
 

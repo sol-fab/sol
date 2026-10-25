@@ -2937,7 +2937,29 @@ let test_contract_scope_rule () =
     ~msg:"a consumer with no delivered Secret is still distinguishable from no consumer"
     [ "myapp-comms", None, true ]
     (Sol_cli_contract.reconciliation_images [ consumer_without_delivery ]
-     |> List.map (fun (namespace, _, secret, consumer) -> namespace, secret, consumer))
+     |> List.map (fun (namespace, _, secret, consumer) -> namespace, secret, consumer));
+  let ocaml_consumer =
+    { ocaml_spec with
+      consumes_kafka = true
+    ; config = Sol_cli_manifest.production_kafka_config
+    ; secret_sources =
+        [ ( "KAFKA_SASL_PASSWORD"
+          , Sol_cli_secret_source.Target_kafka
+              { secret = "prod-aws-us-east-1-kafka-creds" } )
+        ]
+    }
+  in
+  Windtrap.equal
+    (Windtrap.list
+       (Windtrap.triple Windtrap.string (Windtrap.option Windtrap.string) Windtrap.bool))
+    ~msg:"a language with no delivery uses a namespace that has one"
+    [ "myapp-payments", Some "prod-aws-us-east-1-kafka-creds", true ]
+    (match
+       Sol_cli_contract.reconciliation_images [ ts_spec; ocaml_consumer ]
+       |> List.filter (fun (_, _, _, consumer) -> consumer)
+     with
+     | [] -> Windtrap.fail "no namespace supplied the fallback Kafka delivery"
+     | (namespace, _, secret, consumer) :: _ -> [ namespace, secret, consumer ])
 ;;
 
 let%test
