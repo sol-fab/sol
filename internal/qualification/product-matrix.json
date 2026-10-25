@@ -10,9 +10,9 @@
       "evidence": {
         "local": "cli/test/golden_path_ocaml.sh",
         "aws": "internal/qualification/records/2026-10-20-alpha40-aws.md",
-        "gcp": "internal/qualification/records/2026-10-16-alpha36-gcp.md"
+        "gcp": "internal/qualification/records/2026-10-25-alpha52-gcp.md"
       },
-      "gap": "AWS and GCP production-profile evidence is incomplete; GCP is proven at alpha.36, not on the current head."
+      "gap": "AWS production evidence is alpha.44; GCP is mechanism-only on alpha.52. No GCP production-profile evidence."
     },
     {
       "id": "ocaml-worker",
@@ -23,9 +23,9 @@
       "evidence": {
         "local": "cli/test/golden_path_ocaml.sh",
         "aws": "internal/qualification/records/2026-10-20-alpha40-aws.md",
-        "gcp": "internal/qualification/records/2026-10-16-alpha36-gcp.md"
+        "gcp": "internal/qualification/records/2026-10-25-alpha52-gcp.md"
       },
-      "gap": "AWS Kafka delivery observation is blocked (#1593); GCP managed Kafka is unverified (#1603); broker-loss/resume evidence is missing."
+      "gap": "AWS production evidence is alpha.44; GCP is mechanism-only on alpha.52. No GCP production-profile evidence."
     },
     {
       "id": "ocaml-fn",
@@ -46,9 +46,9 @@
       "gcp": "live",
       "evidence": {
         "local": "cli/test/golden_path_typescript.sh",
-        "gcp": "internal/qualification/records/2026-10-16-alpha36-gcp.md"
+        "gcp": "internal/qualification/records/2026-10-25-alpha52-gcp.md"
       },
-      "gap": "The demo pins `@sol-fab/svc@0.2.0`; the scaffold pins 0.3.0. No live AWS scenario; production-profile evidence is absent."
+      "gap": "No live AWS scenario; GCP is mechanism-only on alpha.52. The demo pins @sol-fab/svc@0.2.0 while the scaffold pins 0.3.0."
     },
     {
       "id": "typescript-worker",
@@ -58,9 +58,9 @@
       "gcp": "live",
       "evidence": {
         "local": "cli/test/golden_path_typescript.sh",
-        "gcp": "internal/qualification/records/2026-10-16-alpha36-gcp.md"
+        "gcp": "internal/qualification/records/2026-10-25-alpha52-gcp.md"
       },
-      "gap": "`@sol-fab/worker@0.1.0` has no consumer-join readiness/`/readyz`; no live AWS scenario; production-profile evidence is absent."
+      "gap": "No live AWS scenario; GCP is mechanism-only on alpha.52. The demo pins @sol-fab/svc@0.2.0 while the scaffold pins 0.3.0."
     },
     {
       "id": "typescript-fn",

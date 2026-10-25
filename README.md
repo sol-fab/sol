@@ -243,11 +243,11 @@ GitHub Issues, and detailed evidence is under `internal/qualification/`.
 
 | Workload | Local | AWS | GCP | Evidence | Gap |
 |---|---|---|---|---|---|
-| OCaml `-svc` | local | live | live | [local](cli/test/golden_path_ocaml.sh), [AWS](internal/qualification/records/2026-10-20-alpha40-aws.md), [GCP](internal/qualification/records/2026-10-16-alpha36-gcp.md) | AWS and GCP production-profile evidence is incomplete; GCP is proven at alpha.36, not on the current head. |
-| OCaml `-worker` | local | live | live | [local](cli/test/golden_path_ocaml.sh), [AWS](internal/qualification/records/2026-10-20-alpha40-aws.md), [GCP](internal/qualification/records/2026-10-16-alpha36-gcp.md) | AWS Kafka delivery observation is blocked (#1593); GCP managed Kafka is unverified (#1603); broker-loss/resume evidence is missing. |
+| OCaml `-svc` | local | live | live | [local](cli/test/golden_path_ocaml.sh), [AWS](internal/qualification/records/2026-10-20-alpha40-aws.md), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | AWS production evidence is alpha.44; GCP is mechanism-only on alpha.52. No GCP production-profile evidence. |
+| OCaml `-worker` | local | live | live | [local](cli/test/golden_path_ocaml.sh), [AWS](internal/qualification/records/2026-10-20-alpha40-aws.md), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | AWS production evidence is alpha.44; GCP is mechanism-only on alpha.52. No GCP production-profile evidence. |
 | OCaml `-fn` | partial | none | none | [local](cli/test/golden_path_ocaml.sh) | The local golden path adds an fn ad hoc; no fn is in the reference app and no cloud CronJob scenario exists. |
-| TypeScript `-svc` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-16-alpha36-gcp.md) | The demo pins `@sol-fab/svc@0.2.0`; the scaffold pins 0.3.0. No live AWS scenario; production-profile evidence is absent. |
-| TypeScript `-worker` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-16-alpha36-gcp.md) | `@sol-fab/worker@0.1.0` has no consumer-join readiness/`/readyz`; no live AWS scenario; production-profile evidence is absent. |
+| TypeScript `-svc` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | No live AWS scenario; GCP is mechanism-only on alpha.52. The demo pins @sol-fab/svc@0.2.0 while the scaffold pins 0.3.0. |
+| TypeScript `-worker` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | No live AWS scenario; GCP is mechanism-only on alpha.52. The demo pins @sol-fab/svc@0.2.0 while the scaffold pins 0.3.0. |
 | TypeScript `-fn` | none | none | none | — | No runtime package, scaffold, or CronJob entrypoint; `sol new fn --language typescript` refuses. |
 
 ### Lifecycle and observability
