@@ -162,8 +162,7 @@ let contract_json
       ]
   in
   `Assoc
-    [ "schema", `Int 2
-    ; "id", `String "test-cross-provider/v2"
+    [ "id", `String "test-cross-provider"
     ; "revision", `String "2026-10-25"
     ; "providers", `List (List.map (fun value -> `String value) providers)
     ; "phases", `List (List.map (fun value -> `String value) phases)
@@ -329,8 +328,7 @@ let record_json
         ]
   in
   `Assoc
-    [ "schema", `Int 2
-    ; "provider", `String provider
+    [ "provider", `String provider
     ; "candidate", candidate
     ; "harness_revision", `String harness
     ; "evaluator", evaluator
@@ -627,7 +625,7 @@ let test_record_duplicate_key () =
   with_temp_dir "duplicate" (fun directory ->
     ignore (write_attempt directory "aws");
     let path = Filename.concat directory "record.json" in
-    write_file path "{\"schema\":2,\"schema\":2}\n";
+    write_file path "{\"provider\":\"aws\",\"provider\":\"aws\"}\n";
     match R.load_record ~contract ~directory ~path with
     | Error _ -> check "duplicate JSON keys refuse" true
     | Ok _ -> check "duplicate JSON keys refuse" false)
@@ -1872,8 +1870,7 @@ let test_emit_record () =
     write_file candidate_path (Yojson.Safe.pretty_to_string (candidate ()) ^ "\n");
     let manifest =
       `Assoc
-        [ "schema", `Int 1
-        ; "provider", `String "aws"
+        [ "provider", `String "aws"
         ; "harness_revision", `String harness
         ; ( "selection"
           , `Assoc
@@ -1944,7 +1941,7 @@ let test_emit_record () =
     in
     let manifest_path = Filename.concat directory "manifest.json" in
     write_file manifest_path (Yojson.Safe.pretty_to_string manifest ^ "\n");
-    let out = Filename.concat directory "record-v2.json" in
+    let out = Filename.concat directory "produced-record.json" in
     let bin = Sys.getenv "SOL_TEST_RELEASE_BIN" in
     let repository = Sys.getenv "SOL_TEST_REPOSITORY" in
     let command =
@@ -2093,10 +2090,55 @@ let test_profile_observations_required () =
       in
       ignore (write_record gcp_dir contract "gcp" mech_json);
       let gcp = load gcp_dir contract in
-      has_reason
-        "mechanism evidence cannot establish the production profile"
-        (evaluate contract aws gcp)
-        "profile is not supported by behavioural evidence"))
+      match evaluate contract aws gcp with
+      | R.Pass _ -> check "mechanism evidence establishes the declared profile" true
+      | R.Refused reasons ->
+        check
+          ("mechanism evidence establishes the declared profile: "
+           ^ String.concat "; " reasons)
+          false))
+;;
+
+let test_duplicate_evidence () =
+  let contract = contract () in
+  with_temp_dir "duplicate-evidence" (fun directory ->
+    let _, json = fixture contract "aws" directory in
+    let json =
+      match json with
+      | `Assoc fields ->
+        `Assoc
+          (List.map
+             (fun (key, value) ->
+                if key <> "observations"
+                then key, value
+                else
+                  ( key
+                  , match value with
+                    | `List (observation :: rest) ->
+                      `List
+                        ((match observation with
+                          | `Assoc fields ->
+                            `Assoc
+                              (List.map
+                                 (fun (field, value) ->
+                                    if field <> "evidence"
+                                    then field, value
+                                    else
+                                      ( field
+                                      , match value with
+                                        | `List (entry :: _) -> `List [ entry; entry ]
+                                        | _ -> value ))
+                                 fields)
+                          | value -> value)
+                         :: rest)
+                    | _ -> value ))
+             fields)
+      | value -> value
+    in
+    let path = write_record directory contract "aws" json in
+    match R.load_record ~contract ~directory ~path with
+    | Error _ -> check "a repeated evidence reference refuses" true
+    | Ok _ -> check "a repeated evidence reference refuses" false)
 ;;
 
 let tests () =
@@ -2142,6 +2184,7 @@ let tests () =
   ; "excluded without exception", test_excluded_without_exception
   ; "exception visible", test_exception_reason_drift
   ; "duplicate selection", test_selection_duplicate
+  ; "duplicate evidence", test_duplicate_evidence
   ; "replay other attempt", test_replay_other_attempt
   ; "resumed attempt", test_resumed_attempt
   ; "provider mislabeled", test_provider_mislabeled

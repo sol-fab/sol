@@ -6,6 +6,8 @@
 hook_aws_prepare_precondition() {
   require_target_terraform_var_file || return 1
   require_target_issuer || return 1
+  mkdir -p "$LOG_DIR"
+  cp "$TARGET_FILE" "$LOG_DIR/profile-target.yml"
 }
 
 hook_aws_prepare_bind() { candidate_bind; }

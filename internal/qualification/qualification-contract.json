@@ -1,6 +1,5 @@
 {
-  "schema": 2,
-  "id": "sol-cross-provider-release/v2",
+  "id": "sol-cross-provider-release",
   "revision": "2026-10-25",
   "providers": ["aws", "gcp"],
   "phases": ["prepare", "cloud", "app", "destroy"],

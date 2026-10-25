@@ -384,7 +384,7 @@ safety checks, not proof of a fully read-only identity or namespace confinement.
 The operator owns other grants and credential refresh. There is no fallback to
 the deploy kubeconfig; observer failure leaves the CA family unestablished.
 
-## Typed release authority (`Qual_release`, schema v2)
+## Typed release authority (`Qual_release`)
 
 `lib/qual_release.ml` is a separate release-authority owner. It does **not** promote
 the MECHANISM-only `Qual_evidence` or `Qual_domain` APIs to release evidence. It reuses
@@ -451,7 +451,7 @@ phases are exact and ordered. A provider-specific omission is valid only through
 contract exception, is visible in the PASS verdict with its reason and test, and cannot
 be invented by a record.
 
-### Producing a v2 record
+### Producing a qualification record
 
 `qualification_release emit-record` is the producer adapter. The harness supplies
 the attempt directory, the candidate identity, and an explicit evidence manifest;
@@ -494,5 +494,5 @@ the provider inventories and the release teardown policy.
 
 Promotion is still fail-closed (`.github/workflows/promote.yml` refuses before reading
 assets). Wiring the typed evaluator into promotion, removing the v1 `decide` path and
-the Python parity evaluator, and producing v2 records from the live harness are the
+the Python parity evaluator, and producing records from the live harness are the
 remaining #1738/#1737 work. Until then no record set can authorize a release.

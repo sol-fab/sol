@@ -108,7 +108,7 @@ built (`candidate-binding.sh`, sol-fab/sol#1280).
 
 The campaign produces `qualification-verdict.json`, whose `candidate` block is
 the candidate identity above and whose provider entries carry the independently
-observed teardown claim. Claims and phases live in the typed v2 provider records,
+observed teardown claim. Claims and phases live in the typed provider records,
 not in this release-policy document:
 
 ```json
@@ -176,7 +176,7 @@ A passing AWS record and a passing GCP record are not, by themselves, a
 cross-provider production claim. Promotion currently refuses before reading any
 of these assets, so no record set can authorize a release.
 
-The release authority for schema v2 is the typed `Qual_release` owner in
+The release authority is the typed `Qual_release` owner in
 `internal/tooling/sol_qualification/lib/qual_release.ml`, using the
 repository-owned contract at
 `internal/qualification/qualification-contract.json`. It verifies raw-byte
@@ -184,7 +184,7 @@ evidence, binds the attempt and candidate, projects phases from
 `Qual_lifecycle`, evaluates the contract's claim families and typed exceptions,
 and binds the verdict to the contract, both records and the evaluator binary.
 See
-[the qualification core documentation](../sol_qualification/sol_qualification.md#typed-release-authority-qual_release-schema-v2).
+[the qualification core documentation](../sol_qualification/sol_qualification.md#typed-release-authority-qual_release).
 
 The v1 `qualification_parity.py` evaluator and the pre-parity `decide` command
 have been removed. There is no second required-claim list and no source-only
@@ -308,7 +308,7 @@ recorded in
 
 ## 3. Promotion (automated gate, operator-triggered)
 
-> **Temporarily disabled.** The v2 authorization path is implemented, but it has
+> **Temporarily disabled.** The typed authorization path is implemented, but it has
 > not yet been exercised with a producer-generated, live-qualified candidate.
 > Promotion refuses before reading assets until that chain is verified (#1738).
 
