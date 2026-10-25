@@ -9,10 +9,10 @@
       "gcp": "live",
       "evidence": {
         "local": "cli/test/golden_path_ocaml.sh",
-        "aws": "internal/qualification/records/2026-10-20-alpha40-aws.md",
+        "aws": "internal/qualification/records/2026-10-24-alpha44-aws-production.md",
         "gcp": "internal/qualification/records/2026-10-25-alpha52-gcp.md"
       },
-      "gap": "AWS production evidence is alpha.44; GCP is mechanism-only on alpha.52. No GCP production-profile evidence."
+      "gap": "AWS production sequence is alpha.44; GCP is mechanism-only on alpha.52. No GCP production-profile evidence."
     },
     {
       "id": "ocaml-worker",
@@ -22,10 +22,10 @@
       "gcp": "live",
       "evidence": {
         "local": "cli/test/golden_path_ocaml.sh",
-        "aws": "internal/qualification/records/2026-10-20-alpha40-aws.md",
+        "aws": "internal/qualification/records/2026-10-24-alpha44-aws-production.md",
         "gcp": "internal/qualification/records/2026-10-25-alpha52-gcp.md"
       },
-      "gap": "AWS production evidence is alpha.44; GCP is mechanism-only on alpha.52. No GCP production-profile evidence."
+      "gap": "AWS production sequence is alpha.44; GCP is mechanism-only on alpha.52. No GCP production-profile evidence."
     },
     {
       "id": "ocaml-fn",
