@@ -17,6 +17,7 @@ GCP_KAFKA = "platform/cloud/gcp/cluster/kafka.tf"
 MODULE = "platform/cloud/modules/platform/main.tf"
 MODULE_VARS = "platform/cloud/modules/platform/variables.tf"
 DEPLOY = "platform/cloud/modules/platform/platform_deploy_rbac.tf"
+NETWORK = "platform/cloud/modules/platform/platform_network_facts.tf"
 PROVISIONER = "platform/cloud/modules/platform/platform_provisioner_rbac.tf"
 BOOTSTRAP = "platform/cloud/aws/bootstrap/main.tf"
 BOOTSTRAP_OUT = "platform/cloud/aws/bootstrap/outputs.tf"
@@ -102,6 +103,7 @@ resource "kubernetes_cluster_role_binding" "everywhere" {
     ("lease-reaches-secrets", edit(DEPLOY, '    resources  = ["configmaps"]\n    verbs      = ["create"]', '    resources  = ["configmaps", "secrets"]\n    verbs      = ["create"]'), "must grant exactly get/create/update/delete"),
     ("lease-bound-to-another-group", edit(DEPLOY, '    name      = "sol:deployers"', '    name      = "sol:everyone"', after='resource "kubernetes_role_binding" "sol_boundary_lease"'), "is not bound to sol:deployers in default"),
     ("service-account-subject-api-group", edit(DEPLOY, '    api_group = ""', '    api_group = "rbac.authorization.k8s.io"', after='kind      = "ServiceAccount"'), "ServiceAccount RBAC subject carries apiGroup"),
+    ("network-facts-service-account-missing", edit(NETWORK, 'subject {\n    kind      = "ServiceAccount"', 'subject_removed {\n    kind      = "ServiceAccount"'), "network_facts does not bind"),
     ("kafka-ca-reader-missing", edit(DEPLOY, 'resource "kubernetes_role" "sol_kafka_ca_reader" {', 'resource "kubernetes_role" "sol_kafka_ca_reader_renamed" {'), "kubernetes_role.sol_kafka_ca_reader not found"),
     ("kafka-ca-reader-wrong-namespace", edit(DEPLOY, '    namespace = kubernetes_namespace.redpanda.metadata[0].name', '    namespace = "default"', after='resource "kubernetes_role" "sol_kafka_ca_reader"'), "must grant exactly get"),
     ("kafka-ca-reader-lists", edit(DEPLOY, '    verbs          = ["get"]', '    verbs          = ["get", "list"]', after='resource "kubernetes_role" "sol_kafka_ca_reader"'), "must grant exactly get"),

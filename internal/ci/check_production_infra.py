@@ -262,6 +262,30 @@ def check_deploy_rbac(root):
     )
     if not ca_binding_ok:
         fail("FAIL: the Kafka CA reader Role is not bound to sol:deployers in redpanda")
+    network_facts = root / "platform/cloud/modules/platform/platform_network_facts.tf"
+    if not network_facts.is_file():
+        fail(f"FAIL: {network_facts} is missing")
+    network_binding = find(
+        tfconfig.resources(network_facts, kinds=("resource",)),
+        "kubernetes_role_binding",
+        "network_facts",
+    )
+    if network_binding is None:
+        fail("FAIL: kubernetes_role_binding.network_facts not found")
+    network_subjects = tfconfig.blocks(network_binding.body, "subject")
+    if not any(
+        literal(subject.get("kind")) == "ServiceAccount"
+        and literal(subject.get("name"))
+        == "${kubernetes_service_account_v1.sol_deploy.metadata[0].name}"
+        and literal(subject.get("namespace"))
+        == "${kubernetes_service_account_v1.sol_deploy.metadata[0].namespace}"
+        and literal(subject.get("api_group")) in ("", None)
+        for subject in network_subjects
+    ):
+        fail(
+            "FAIL: network_facts does not bind the deploy ServiceAccount;",
+            "      the deploy identity cannot read the database-egress fact.",
+        )
     lease = find(found, "kubernetes_role", "sol_boundary_lease")
     if lease is None:
         fail("FAIL: kubernetes_role.sol_boundary_lease not found")
