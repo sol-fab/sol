@@ -45,6 +45,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # The merged parity gate checked internally consistent v1 records, not
+      # evidence-backed parity. Keep the pre-v2 promotion path closed until the
+      # typed schema v2 gate lands (#1738). This is a deliberate trust decision:
+      # v1 records must not authorize a release merely because they are
+      # self-consistent.
+      - name: Refuse promotion until typed parity schema v2 lands
+        run: |
+          echo "::error::Promotion is disabled until the evidence-bound parity schema v2 and typed evaluator land (#1738)." >&2
+          exit 1
+
       - name: Require the recorded draft candidate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

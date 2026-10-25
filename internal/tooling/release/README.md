@@ -313,6 +313,10 @@ recorded in
 
 ## 3. Promotion (automated gate, operator-triggered)
 
+> **Temporarily disabled.** The merged v1 parity gate checked internally
+> consistent records, not evidence-backed parity. Promotion refuses until the
+> typed schema v2 gate lands (#1738); no v1 record set may authorize a release.
+
 `.github/workflows/promote.yml` never builds. It downloads the draft candidate,
 the qualification verdict, the canonical qualification contract, the two provider
 records and the parity verdict, then establishes that every Sol-owned artifact
