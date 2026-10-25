@@ -127,8 +127,8 @@ let attempt_json directory =
          ]
      | _ ->
        die
-         "attempt.txt records no candidate revision, provider, target or cluster; v2 \
-          cannot bind this record")
+         "attempt.txt records no candidate revision, provider, target or cluster; this \
+          qualification contract cannot bind the record")
 ;;
 
 let binary_identity () =
@@ -196,9 +196,6 @@ let main () =
       try Yojson.Safe.from_string (read_bytes manifest_path) with
       | Yojson.Json_error message -> die ("manifest: " ^ message)
     in
-    (match json_field "schema" manifest with
-     | Some (`Int 1) -> ()
-     | _ -> die "manifest: unsupported schema (want 1)");
     let provider = json_string ~what:"manifest" "provider" manifest in
     let provider_value =
       match provider with
@@ -297,8 +294,7 @@ let main () =
     in
     let record =
       `Assoc
-        [ "schema", `Int 2
-        ; "provider", `String provider
+        [ "provider", `String provider
         ; "candidate", candidate
         ; "harness_revision", `String harness_revision
         ; "evaluator", Qual_release.evaluator_json evaluator

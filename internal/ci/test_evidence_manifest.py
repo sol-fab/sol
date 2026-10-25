@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract-derived v2 producer mapping tests."""
+"""Contract-derived qualification producer mapping tests."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "internal" / "qualification"))
-import v2_manifest  # noqa: E402
+import evidence_manifest  # noqa: E402
 
 checks = 0
 failures = 0
@@ -41,7 +41,7 @@ def check(label: str, condition: bool) -> None:
 def reason(label: str, fn, needle: str) -> None:
     try:
         fn()
-    except v2_manifest.ManifestError as error:
+    except evidence_manifest.ManifestError as error:
         check(label, needle in str(error))
     else:
         check(label + " (did not refuse)", False)
@@ -70,7 +70,7 @@ def attempt(directory: str, provider: str) -> None:
             ]
         ),
         "candidate-binding.txt": f"harness_revision: {REVISION}\n",
-        "v2-target.yml": "profile: production-single-region\n"
+        "profile-target.yml": "profile: production-single-region\n"
         "deploy_role_arn: arn:aws:iam::123456789012:role/sol-deploy\n",
         "cloud-apply.log": "cloud applied\n",
     }
@@ -100,13 +100,13 @@ def attempt(directory: str, provider: str) -> None:
 
 
 def build(directory: str, provider: str, contract: dict | None = None) -> dict:
-    return v2_manifest.build(
+    return evidence_manifest.build(
         provider, directory, contract or CONTRACT, CANDIDATE
     )
 
 
 def main() -> int:
-    print("v2 producer manifest")
+    print("qualification producer manifest")
     with tempfile.TemporaryDirectory() as directory:
         for provider in ("aws", "gcp"):
             path = os.path.join(directory, provider)

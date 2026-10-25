@@ -287,7 +287,7 @@ $TARGET_ENV:
         checkout_svc:
           omit: true
 YAML
-  cp "$TARGET_FILE" "$LOG_DIR/v2-target.yml"
+  cp "$TARGET_FILE" "$LOG_DIR/profile-target.yml"
   say "wrote target $TARGET ($TARGET_FILE)"
 }
 
@@ -1744,7 +1744,7 @@ $TARGET_ENV:
         checkout_svc:
           omit: true
 YAML
-  cp "$TARGET_FILE" "$LOG_DIR/v2-target.yml"
+  cp "$TARGET_FILE" "$LOG_DIR/profile-target.yml"
   say "wrote the app target $TARGET ($TARGET_FILE)"
   say "  the production profile is selected; the row carries its guarantees"
   say "  orders_svc/fulfilment_worker (OCaml) and order_svc/fulfillment_worker (TypeScript)"

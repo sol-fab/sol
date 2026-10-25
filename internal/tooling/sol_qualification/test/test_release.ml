@@ -162,8 +162,7 @@ let contract_json
       ]
   in
   `Assoc
-    [ "schema", `Int 2
-    ; "id", `String "test-cross-provider/v2"
+    [ "id", `String "test-cross-provider"
     ; "revision", `String "2026-10-25"
     ; "providers", `List (List.map (fun value -> `String value) providers)
     ; "phases", `List (List.map (fun value -> `String value) phases)
@@ -329,8 +328,7 @@ let record_json
         ]
   in
   `Assoc
-    [ "schema", `Int 2
-    ; "provider", `String provider
+    [ "provider", `String provider
     ; "candidate", candidate
     ; "harness_revision", `String harness
     ; "evaluator", evaluator
@@ -627,7 +625,7 @@ let test_record_duplicate_key () =
   with_temp_dir "duplicate" (fun directory ->
     ignore (write_attempt directory "aws");
     let path = Filename.concat directory "record.json" in
-    write_file path "{\"schema\":2,\"schema\":2}\n";
+    write_file path "{\"provider\":\"aws\",\"provider\":\"aws\"}\n";
     match R.load_record ~contract ~directory ~path with
     | Error _ -> check "duplicate JSON keys refuse" true
     | Ok _ -> check "duplicate JSON keys refuse" false)
@@ -1872,8 +1870,7 @@ let test_emit_record () =
     write_file candidate_path (Yojson.Safe.pretty_to_string (candidate ()) ^ "\n");
     let manifest =
       `Assoc
-        [ "schema", `Int 1
-        ; "provider", `String "aws"
+        [ "provider", `String "aws"
         ; "harness_revision", `String harness
         ; ( "selection"
           , `Assoc
@@ -1944,7 +1941,7 @@ let test_emit_record () =
     in
     let manifest_path = Filename.concat directory "manifest.json" in
     write_file manifest_path (Yojson.Safe.pretty_to_string manifest ^ "\n");
-    let out = Filename.concat directory "record-v2.json" in
+    let out = Filename.concat directory "produced-record.json" in
     let bin = Sys.getenv "SOL_TEST_RELEASE_BIN" in
     let repository = Sys.getenv "SOL_TEST_REPOSITORY" in
     let command =

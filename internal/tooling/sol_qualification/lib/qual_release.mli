@@ -1,4 +1,4 @@
-(** Typed release qualification authority (schema v2).
+(** Typed release qualification authority.
 
     This module is the release-authority owner. [Qual_evidence] and
     [Qual_lifecycle] remain mechanism/attempt authorities: this module does not
@@ -64,7 +64,7 @@ type evaluator = private
   ; binary_sha256 : string
   }
 
-(** The attempt facts v2 binds. [#1729] owns typed attempt transitions; until
+(** The attempt facts the release contract binds. [#1729] owns typed attempt transitions; until
     that owner lands, this is the explicit interim [Qual_lifecycle] boundary:
     the same [attempt.txt]/[phase-verdicts.txt] authority, not a third attempt
     model. *)

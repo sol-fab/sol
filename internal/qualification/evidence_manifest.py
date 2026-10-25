@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a v2 evidence manifest from a completed attempt directory.
+"""Build a qualified evidence manifest from a completed attempt directory.
 
 Required claims, phases, profile and selection come from the canonical contract.
 This producer owns only the mapping from a claim family to the evidence its
@@ -29,7 +29,7 @@ CLAIM_OBSERVATIONS = {
 # Evidence each observation actually produced, relative to the attempt directory.
 EVIDENCE = {
     "aws": {
-        "profile": (["v2-target.yml"], "mechanism"),
+        "profile": (["profile-target.yml"], "mechanism"),
         "transaction": (
             ["app-transaction.log", "app-transaction-ts.log"],
             "behavioral",
@@ -42,7 +42,7 @@ EVIDENCE = {
         "permission": (["app-deploy.log"], "behavioral"),
     },
     "gcp": {
-        "profile": (["v2-target.yml"], "mechanism"),
+        "profile": (["profile-target.yml"], "mechanism"),
         "transaction": (
             ["app-transaction-ocaml.txt", "app-transaction-ts.txt"],
             "behavioral",
@@ -106,7 +106,7 @@ def attempt_field(directory: str, key: str) -> str | None:
 
 
 def target_field(directory: str, key: str) -> str | None:
-    path = os.path.join(directory, "v2-target.yml")
+    path = os.path.join(directory, "profile-target.yml")
     try:
         with open(path, encoding="utf-8") as handle:
             pattern = re.compile(rf"^\s*{re.escape(key)}:\s*(.+?)\s*$")
@@ -159,8 +159,6 @@ def permission(provider: str, directory: str, candidate: dict) -> dict:
 def build(provider: str, directory: str, contract: dict, candidate: dict) -> dict:
     if provider not in ("aws", "gcp"):
         raise ManifestError(f"unknown provider {provider!r}")
-    if contract.get("schema") != 2:
-        raise ManifestError("the contract is not schema 2")
     if provider not in contract.get("providers", []):
         raise ManifestError(f"{provider} is not a contract provider")
     profile = contract.get("profile")
@@ -222,7 +220,6 @@ def build(provider: str, directory: str, contract: dict, candidate: dict) -> dic
         )
 
     return {
-        "schema": 1,
         "provider": provider,
         "harness_revision": harness_revision(directory, candidate),
         "profile": {"kind": profile, "observations": ["profile"]},
@@ -251,7 +248,7 @@ def main(argv: list[str]) -> int:
         candidate = load(args.candidate)
         manifest = build(args.provider, args.attempt_dir, contract, candidate)
     except ManifestError as error:
-        print(f"v2_manifest: {error}", file=sys.stderr)
+        print(f"evidence_manifest: {error}", file=sys.stderr)
         return 1
     with open(args.out, "w", encoding="utf-8") as handle:
         json.dump(manifest, handle, indent=2, sort_keys=True)

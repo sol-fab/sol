@@ -108,7 +108,7 @@ Existing live entry points and matrices retain their current authority.
   worker effect.
 - `gcp/live-qual.sh` — GCP lifecycle/application qualification and provider-backed absence
   inventory.
-- `record-v2.sh` — emits a schema-v2 provider record from the attempt ledger and an
+- `record.sh` — emits a provider qualification record from the attempt ledger and an
   explicit evidence manifest using the verified `qualification-release` evaluator
   artifact. The harness owns the manifest's claim/evidence choices.
 - provider matrices — claims, required evidence class, scenario, pass condition, and current
@@ -180,7 +180,7 @@ Do not add chronological incident narrative to this README or to run procedures.
 attempts remain available in Git; records still cited by a current matrix remain live evidence.
 Actionable work belongs in GitHub Issues.
 
-## v2 provider records and evidence archives
+## Provider records and evidence archives
 
 A live attempt's phase ledger is the attempt authority: AWS has always written
 `phase-verdicts.txt`; GCP now writes the same ledger for `prepare`, `cloud`,
@@ -189,7 +189,7 @@ ledger plus an explicit evidence manifest:
 
 ```sh
 SOL_QUALIFICATION_EVALUATOR=/path/to/qualification-release \
-  internal/qualification/record-v2.sh \
+  internal/qualification/record.sh \
     --provider aws \
     --attempt-dir "$LOG_DIR" \
     --candidate "$SOL_CANDIDATE" \
@@ -228,4 +228,4 @@ extracts it with traversal/link refusal and runs the verified evaluator over the
 record and that directory.
 
 Historical records are not retrofitted: alpha.44 and alpha.52 predate this
-contract and cannot authorize a v2 promotion.
+contract and cannot authorize promotion.

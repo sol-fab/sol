@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end offline v2 authorization chain with the real evaluator.
+"""End-to-end offline authorization chain with the real evaluator.
 
 This composes the producer (`emit-record`), the typed evaluator (`evaluate`),
 the release policy and the provenance download path. It does not run a provider
@@ -25,7 +25,7 @@ sys.path.insert(0, str(REPO / "internal" / "tooling" / "release"))
 sys.path.insert(0, str(REPO / "internal" / "qualification"))
 
 import promotion  # noqa: E402
-import v2_manifest  # noqa: E402
+import evidence_manifest  # noqa: E402
 
 checks = 0
 failures = 0
@@ -116,7 +116,7 @@ def manifest(directory: str, provider: str, revision: str, candidate_doc: dict) 
     _, _, _ = write_attempt(directory, provider, revision)
     files = [
         "candidate-binding.txt",
-        "v2-target.yml",
+        "profile-target.yml",
         "cloud-apply.log",
         "app-transaction.log",
         "app-transaction-ts.log",
@@ -135,7 +135,7 @@ def manifest(directory: str, provider: str, revision: str, candidate_doc: dict) 
             handle.write(f"{name} evidence\n")
     with open(os.path.join(directory, "candidate-binding.txt"), "w", encoding="utf-8") as handle:
         handle.write(f"harness_revision: {revision}\n")
-    with open(os.path.join(directory, "v2-target.yml"), "w", encoding="utf-8") as handle:
+    with open(os.path.join(directory, "profile-target.yml"), "w", encoding="utf-8") as handle:
         handle.write(
             "profile: production-single-region\n"
             "deploy_role_arn: arn:aws:iam::123456789012:role/sol-deploy\n"
@@ -143,7 +143,7 @@ def manifest(directory: str, provider: str, revision: str, candidate_doc: dict) 
     contract = json.loads(
         (REPO / "internal/qualification/qualification-contract.json").read_text()
     )
-    return v2_manifest.build(provider, directory, contract, candidate_doc)
+    return evidence_manifest.build(provider, directory, contract, candidate_doc)
 
 
 def identity() -> dict:
@@ -259,7 +259,7 @@ def runs(revision: str, version: str, **overrides) -> dict:
 
 
 def main() -> int:
-    print("v2 authorization end-to-end (offline)")
+    print("authorization end-to-end (offline)")
     evaluator = identity()
     revision = evaluator["source_revision"]
     candidate_doc = candidate(revision)
@@ -282,7 +282,7 @@ def main() -> int:
             result = subprocess.run(
                 [
                     "bash",
-                    str(REPO / "internal/qualification/record-v2.sh"),
+                    str(REPO / "internal/qualification/record.sh"),
                     "--provider",
                     provider,
                     "--attempt-dir",

@@ -126,8 +126,8 @@
  (deps
   ../bin/qualification_release.exe
   ../../../qualification/qualification-contract.json
-  ../../../qualification/v2_manifest.py
-  ../../../qualification/record-v2.sh
+  ../../../qualification/evidence_manifest.py
+  ../../../qualification/record.sh
   ../../../qualification/local/test-rows-ocaml.sh
   ../../../qualification/aws/production-single-region-v1-matrix.md
   ../../../qualification/gcp/test-verify-matrix.sh
@@ -149,8 +149,8 @@
   ../../release/promotion.py
   ../../release/teardown-policy.v1.json
   ../../../qualification/qualification-contract.json
-  ../../../qualification/v2_manifest.py
-  ../../../qualification/record-v2.sh
+  ../../../qualification/evidence_manifest.py
+  ../../../qualification/record.sh
   ../../../qualification/local/test-rows-ocaml.sh
   ../../../qualification/aws/production-single-region-v1-matrix.md
   ../../../qualification/gcp/test-verify-matrix.sh)

@@ -1,4 +1,4 @@
-(* Typed release authority (schema v2). See the interface for the trust boundary.
+(* Typed release authority. See the interface for the trust boundary.
 
    This module deliberately owns no MECHANISM evidence. It parses untrusted
    representations, verifies repository-owned contract and on-disk evidence, and
@@ -211,14 +211,14 @@ type verdict =
       }
   | Refused of string list
 
-let evaluator_revision = "sol-qual-release/v2"
+let evaluator_revision = "sol-qual-release"
 let canonical_contract_path = "internal/qualification/qualification-contract.json"
 
 (* The reviewed pin for the canonical contract bytes. A contract edit must
    update this digest in the same reviewed change; promotion and the producer
    then use a binary whose pin matches the contract revision they name. *)
 let canonical_contract_sha256 =
-  "08eb18b9cf7b4e70c861168a4169bfb6ea2b003594a2ba9abc8736aeb97230f0"
+  "ddb65485c7cd43c2e4056fba18f5fd38d3d627e99c298e89dec83f33c4767cf6"
 ;;
 
 let max_record_bytes = 8 * 1024 * 1024
@@ -309,12 +309,6 @@ let optional_string ~stage key json =
   | Some (`String value) when nonempty value -> Ok (Some value)
   | Some (`String _) -> fail stage "%s must not be empty" key
   | _ -> fail stage "%s must be a string" key
-;;
-
-let required_int ~stage key json =
-  match field key json with
-  | Some (`Int value) -> Ok value
-  | _ -> fail stage "missing integer %S" key
 ;;
 
 let json_strings ~stage ~what json =
@@ -529,8 +523,7 @@ let claim_family_for (contract : contract) ~provider ~id : claim_family option =
 
 let contract_semantic_json (contract : contract) =
   `Assoc
-    [ "schema", `Int 2
-    ; "id", `String contract.id
+    [ "id", `String contract.id
     ; "revision", `String contract.revision
     ; "providers", `List (List.map provider_json contract.providers)
     ; ( "phases"
@@ -583,253 +576,245 @@ let contract_claim_ids (contract : contract) provider = claim_ids_for contract p
 let contract_of_json_internal ?source:contract_source json =
   let* () = reject_duplicate_keys json in
   let stage = "contract" in
-  let* schema = required_int ~stage "schema" json in
-  if schema <> 2
-  then fail stage "unsupported qualification contract schema %d" schema
-  else
-    let* id = required_string ~stage "id" json in
-    let* revision = required_string ~stage "revision" json in
-    let* provider_values =
-      match field "providers" json with
-      | Some (`List (values : Yojson.Safe.t list)) ->
-        let rec loop acc = function
-          | [] -> Ok (List.rev acc)
-          | `String value :: rest ->
-            let* provider = provider_of_string ~stage value in
-            loop (provider :: acc) rest
-          | _ -> fail stage "contract providers must be strings"
-        in
-        loop [] values
-      | _ -> fail stage "missing provider list"
-    in
-    let* () =
-      if same_strings [ "aws"; "gcp" ] (List.map string_of_provider provider_values)
-      then Ok ()
-      else fail stage "a cross-provider release contract must name exactly aws and gcp"
-    in
-    let providers = [ Aws; Gcp ] in
-    let* phase_values =
-      match field "phases" json with
-      | Some (`List values) ->
-        let rec loop acc = function
-          | [] -> Ok (List.rev acc)
-          | `String name :: rest ->
-            let* phase =
-              Qual_lifecycle.phase_of_string name
-              |> Result.map_error (fun diagnostic -> { stage; diagnostic })
-            in
-            loop (phase :: acc) rest
-          | _ -> fail stage "contract phases must be strings"
-        in
-        loop [] values
-      | _ -> fail stage "missing contract phases"
-    in
-    let* () =
-      if List.length phase_values <> List.length (List.sort_uniq compare phase_values)
-      then fail stage "contract phases repeat a phase"
-      else if
-        same_strings
-          (List.map Qual_lifecycle.string_of_phase phase_values)
-          (List.map Qual_lifecycle.string_of_phase Qual_lifecycle.required_phases)
-      then Ok ()
-      else
-        fail
-          stage
-          "contract phases %s do not equal the lifecycle authority %s"
-          (String.concat "," (List.map Qual_lifecycle.string_of_phase phase_values))
-          (String.concat
-             ","
-             (List.map Qual_lifecycle.string_of_phase Qual_lifecycle.required_phases))
-    in
-    let phases = Qual_lifecycle.required_phases in
-    let* profile =
-      let* value = required_string ~stage "profile" json in
-      profile_of_string value
-    in
-    let* attempt_requirement_values =
-      match field "attempt_requirements" json with
-      | Some (`Assoc fields) -> Ok fields
-      | _ -> fail stage "missing attempt requirements"
-    in
-    let* attempt_claim =
-      required_string ~stage "claim" (`Assoc attempt_requirement_values)
-    in
-    let* attempt_issuer =
-      required_string ~stage "issuer" (`Assoc attempt_requirement_values)
-    in
-    let* selection =
-      match field "selection" json with
-      | Some selection -> selection_of_json ~stage selection
-      | None -> fail stage "missing contract selection"
-    in
-    let* claim_values =
-      match field "claims" json with
-      | Some (`List values) when values <> [] -> Ok values
-      | _ -> fail stage "the contract names no claims"
-    in
-    let* claims =
-      let rec loop seen seen_ids acc = function
+  let* id = required_string ~stage "id" json in
+  let* revision = required_string ~stage "revision" json in
+  let* provider_values =
+    match field "providers" json with
+    | Some (`List (values : Yojson.Safe.t list)) ->
+      let rec loop acc = function
         | [] -> Ok (List.rev acc)
-        | value :: rest ->
-          let* family = required_string ~stage "family" value in
-          if List.mem family seen
-          then fail stage "the contract repeats claim family %S" family
-          else
-            let* evidence_class = required_string ~stage "evidence_class" value in
-            let* evidence_class = evidence_class_of_string ~stage evidence_class in
-            let* test = required_string ~stage "test" value in
-            if not (relative_path test)
-            then fail stage "claim family %S has a non-repository test reference" family
-            else
-              let* ids_json =
-                match field "ids" value with
-                | Some (`Assoc fields) -> Ok fields
-                | _ -> fail stage "claim family %S has no provider id map" family
-              in
-              let* ids, seen_ids =
-                let rec ids_loop known seen_ids acc = function
-                  | [] -> Ok (List.rev acc, seen_ids)
-                  | (key, `String id) :: rest ->
-                    let* provider = provider_of_string ~stage key in
-                    if not (nonempty id)
-                    then fail stage "claim family %S has an empty id" family
-                    else if List.mem (provider, id) known
-                    then fail stage "claim family %S repeats id %S" family id
-                    else if List.mem (provider, id) seen_ids
-                    then fail stage "claim id %S is used by more than one family" id
-                    else
-                      ids_loop
-                        known
-                        ((provider, id) :: seen_ids)
-                        ((provider, id) :: acc)
-                        rest
-                  | (key, _) :: _ ->
-                    fail stage "claim family %S has a non-string id for %S" family key
-                in
-                ids_loop [] seen_ids [] ids_json
-              in
-              let* () =
-                if
-                  List.exists (fun (provider, _) -> not (List.mem provider providers)) ids
-                then
-                  fail
-                    stage
-                    "claim family %S names a provider outside the contract"
-                    family
-                else Ok ()
-              in
-              let ids = List.sort (fun (left, _) (right, _) -> compare left right) ids in
-              if ids = []
-              then fail stage "claim family %S names no provider" family
-              else
-                loop
-                  (family :: seen)
-                  seen_ids
-                  ({ family; evidence_class; ids; test } :: acc)
-                  rest
+        | `String value :: rest ->
+          let* provider = provider_of_string ~stage value in
+          loop (provider :: acc) rest
+        | _ -> fail stage "contract providers must be strings"
       in
-      loop [] [] [] claim_values
-    in
-    let* exception_values =
-      match field "exceptions" json with
-      | None -> Ok []
-      | Some (`List values) -> Ok values
-      | _ -> fail stage "contract exceptions must be a list"
-    in
-    let* exceptions =
-      let rec loop seen acc = function
+      loop [] values
+    | _ -> fail stage "missing provider list"
+  in
+  let* () =
+    if same_strings [ "aws"; "gcp" ] (List.map string_of_provider provider_values)
+    then Ok ()
+    else fail stage "a cross-provider release contract must name exactly aws and gcp"
+  in
+  let providers = [ Aws; Gcp ] in
+  let* phase_values =
+    match field "phases" json with
+    | Some (`List values) ->
+      let rec loop acc = function
         | [] -> Ok (List.rev acc)
-        | value :: rest ->
-          let* family = required_string ~stage "family" value in
-          let* provider_name = required_string ~stage "provider" value in
-          let* provider = provider_of_string ~stage provider_name in
-          let* reason = required_string ~stage "reason" value in
+        | `String name :: rest ->
+          let* phase =
+            Qual_lifecycle.phase_of_string name
+            |> Result.map_error (fun diagnostic -> { stage; diagnostic })
+          in
+          loop (phase :: acc) rest
+        | _ -> fail stage "contract phases must be strings"
+      in
+      loop [] values
+    | _ -> fail stage "missing contract phases"
+  in
+  let* () =
+    if List.length phase_values <> List.length (List.sort_uniq compare phase_values)
+    then fail stage "contract phases repeat a phase"
+    else if
+      same_strings
+        (List.map Qual_lifecycle.string_of_phase phase_values)
+        (List.map Qual_lifecycle.string_of_phase Qual_lifecycle.required_phases)
+    then Ok ()
+    else
+      fail
+        stage
+        "contract phases %s do not equal the lifecycle authority %s"
+        (String.concat "," (List.map Qual_lifecycle.string_of_phase phase_values))
+        (String.concat
+           ","
+           (List.map Qual_lifecycle.string_of_phase Qual_lifecycle.required_phases))
+  in
+  let phases = Qual_lifecycle.required_phases in
+  let* profile =
+    let* value = required_string ~stage "profile" json in
+    profile_of_string value
+  in
+  let* attempt_requirement_values =
+    match field "attempt_requirements" json with
+    | Some (`Assoc fields) -> Ok fields
+    | _ -> fail stage "missing attempt requirements"
+  in
+  let* attempt_claim =
+    required_string ~stage "claim" (`Assoc attempt_requirement_values)
+  in
+  let* attempt_issuer =
+    required_string ~stage "issuer" (`Assoc attempt_requirement_values)
+  in
+  let* selection =
+    match field "selection" json with
+    | Some selection -> selection_of_json ~stage selection
+    | None -> fail stage "missing contract selection"
+  in
+  let* claim_values =
+    match field "claims" json with
+    | Some (`List values) when values <> [] -> Ok values
+    | _ -> fail stage "the contract names no claims"
+  in
+  let* claims =
+    let rec loop seen seen_ids acc = function
+      | [] -> Ok (List.rev acc)
+      | value :: rest ->
+        let* family = required_string ~stage "family" value in
+        if List.mem family seen
+        then fail stage "the contract repeats claim family %S" family
+        else
+          let* evidence_class = required_string ~stage "evidence_class" value in
+          let* evidence_class = evidence_class_of_string ~stage evidence_class in
           let* test = required_string ~stage "test" value in
           if not (relative_path test)
-          then fail stage "an exception has a non-repository test reference"
-          else if List.mem (family, provider) seen
-          then
-            fail stage "the contract repeats the exception for %s/%s" family provider_name
+          then fail stage "claim family %S has a non-repository test reference" family
           else
-            let* claim =
-              match
-                List.find_opt (fun (claim : claim_family) -> claim.family = family) claims
-              with
-              | Some claim -> Ok claim
-              | None -> fail stage "an exception names unknown claim family %S" family
+            let* ids_json =
+              match field "ids" value with
+              | Some (`Assoc fields) -> Ok fields
+              | _ -> fail stage "claim family %S has no provider id map" family
             in
-            if List.mem_assoc provider claim.ids
-            then
-              fail
-                stage
-                "the contract maps a %s id for %S and also declares an exception"
-                provider_name
-                family
+            let* ids, seen_ids =
+              let rec ids_loop known seen_ids acc = function
+                | [] -> Ok (List.rev acc, seen_ids)
+                | (key, `String id) :: rest ->
+                  let* provider = provider_of_string ~stage key in
+                  if not (nonempty id)
+                  then fail stage "claim family %S has an empty id" family
+                  else if List.mem (provider, id) known
+                  then fail stage "claim family %S repeats id %S" family id
+                  else if List.mem (provider, id) seen_ids
+                  then fail stage "claim id %S is used by more than one family" id
+                  else
+                    ids_loop
+                      known
+                      ((provider, id) :: seen_ids)
+                      ((provider, id) :: acc)
+                      rest
+                | (key, _) :: _ ->
+                  fail stage "claim family %S has a non-string id for %S" family key
+              in
+              ids_loop [] seen_ids [] ids_json
+            in
+            let* () =
+              if List.exists (fun (provider, _) -> not (List.mem provider providers)) ids
+              then
+                fail stage "claim family %S names a provider outside the contract" family
+              else Ok ()
+            in
+            let ids = List.sort (fun (left, _) (right, _) -> compare left right) ids in
+            if ids = []
+            then fail stage "claim family %S names no provider" family
             else
               loop
-                ((family, provider) :: seen)
-                (({ family; provider; reason; test } : exception_) :: acc)
+                (family :: seen)
+                seen_ids
+                ({ family; evidence_class; ids; test } :: acc)
                 rest
-      in
-      loop [] [] exception_values
     in
-    let provisional =
-      { id
-      ; revision
-      ; providers
-      ; phases
-      ; profile
-      ; attempt_claim
-      ; attempt_issuer
-      ; selection
-      ; claims
-      ; exceptions
-      ; source = contract_source
-      ; digest = ""
-      }
-    in
-    let* () =
-      let rec check = function
-        | [] -> Ok ()
-        | claim :: rest ->
-          let* () =
-            List.fold_left
-              (fun state provider ->
-                 let* () = state in
-                 if List.mem_assoc provider claim.ids
-                 then Ok ()
-                 else if exception_for provisional ~family:claim.family ~provider <> None
-                 then Ok ()
-                 else
-                   fail
-                     stage
-                     "claim family %S neither maps %s nor declares an exception"
-                     claim.family
-                     (string_of_provider provider))
-              (Ok ())
-              providers
+    loop [] [] [] claim_values
+  in
+  let* exception_values =
+    match field "exceptions" json with
+    | None -> Ok []
+    | Some (`List values) -> Ok values
+    | _ -> fail stage "contract exceptions must be a list"
+  in
+  let* exceptions =
+    let rec loop seen acc = function
+      | [] -> Ok (List.rev acc)
+      | value :: rest ->
+        let* family = required_string ~stage "family" value in
+        let* provider_name = required_string ~stage "provider" value in
+        let* provider = provider_of_string ~stage provider_name in
+        let* reason = required_string ~stage "reason" value in
+        let* test = required_string ~stage "test" value in
+        if not (relative_path test)
+        then fail stage "an exception has a non-repository test reference"
+        else if List.mem (family, provider) seen
+        then
+          fail stage "the contract repeats the exception for %s/%s" family provider_name
+        else
+          let* claim =
+            match
+              List.find_opt (fun (claim : claim_family) -> claim.family = family) claims
+            with
+            | Some claim -> Ok claim
+            | None -> fail stage "an exception names unknown claim family %S" family
           in
-          check rest
-      in
-      check claims
+          if List.mem_assoc provider claim.ids
+          then
+            fail
+              stage
+              "the contract maps a %s id for %S and also declares an exception"
+              provider_name
+              family
+          else
+            loop
+              ((family, provider) :: seen)
+              (({ family; provider; reason; test } : exception_) :: acc)
+              rest
     in
-    let* () =
-      List.fold_left
-        (fun state provider ->
-           let* () = state in
-           if claim_ids_for provisional provider = []
-           then
-             fail
-               stage
-               "the contract maps no claim id to %s; an exception-only provider is \
-                unsatisfiable"
-               (string_of_provider provider)
-           else Ok ())
-        (Ok ())
-        providers
+    loop [] [] exception_values
+  in
+  let provisional =
+    { id
+    ; revision
+    ; providers
+    ; phases
+    ; profile
+    ; attempt_claim
+    ; attempt_issuer
+    ; selection
+    ; claims
+    ; exceptions
+    ; source = contract_source
+    ; digest = ""
+    }
+  in
+  let* () =
+    let rec check = function
+      | [] -> Ok ()
+      | claim :: rest ->
+        let* () =
+          List.fold_left
+            (fun state provider ->
+               let* () = state in
+               if List.mem_assoc provider claim.ids
+               then Ok ()
+               else if exception_for provisional ~family:claim.family ~provider <> None
+               then Ok ()
+               else
+                 fail
+                   stage
+                   "claim family %S neither maps %s nor declares an exception"
+                   claim.family
+                   (string_of_provider provider))
+            (Ok ())
+            providers
+        in
+        check rest
     in
-    let digest = semantic_digest (contract_semantic_json provisional) in
-    Ok { provisional with digest }
+    check claims
+  in
+  let* () =
+    List.fold_left
+      (fun state provider ->
+         let* () = state in
+         if claim_ids_for provisional provider = []
+         then
+           fail
+             stage
+             "the contract maps no claim id to %s; an exception-only provider is \
+              unsatisfiable"
+             (string_of_provider provider)
+         else Ok ())
+      (Ok ())
+      providers
+  in
+  let digest = semantic_digest (contract_semantic_json provisional) in
+  Ok { provisional with digest }
 ;;
 
 (* Record parsing --------------------------------------------------------- *)
@@ -922,246 +907,236 @@ let contract_of_json json = contract_of_json_internal json
 let record_of_json ~(contract : contract) json =
   let* () = reject_duplicate_keys json in
   let stage = "record" in
-  let* schema = required_int ~stage "schema" json in
-  if schema <> 2
-  then fail stage "unsupported provider record schema %d" schema
+  let* provider_name = required_string ~stage "provider" json in
+  let* provider = provider_of_string ~stage provider_name in
+  let* candidate_json_value =
+    match field "candidate" json with
+    | Some value -> Ok value
+    | None -> fail stage "missing candidate"
+  in
+  let* candidate = candidate_of_json ~stage candidate_json_value in
+  let* harness_revision = required_string ~stage "harness_revision" json in
+  if not (hex 40 harness_revision)
+  then fail stage "harness_revision is not a 40-hex commit"
   else
-    let* provider_name = required_string ~stage "provider" json in
-    let* provider = provider_of_string ~stage provider_name in
-    let* candidate_json_value =
-      match field "candidate" json with
-      | Some value -> Ok value
-      | None -> fail stage "missing candidate"
+    let* evaluator =
+      match field "evaluator" json with
+      | Some value -> evaluator_of_json ~stage value
+      | None -> fail stage "missing evaluator identity"
     in
-    let* candidate = candidate_of_json ~stage candidate_json_value in
-    let* harness_revision = required_string ~stage "harness_revision" json in
-    if not (hex 40 harness_revision)
-    then fail stage "harness_revision is not a 40-hex commit"
+    let* attempt_json =
+      match field "attempt" json with
+      | Some value -> Ok value
+      | None -> fail stage "missing attempt provenance"
+    in
+    let* attempt_id = required_string ~stage "id" attempt_json in
+    let* target = required_string ~stage "target" attempt_json in
+    let* cluster = required_string ~stage "cluster" attempt_json in
+    let* attempt_provider_name = required_string ~stage "provider" attempt_json in
+    let* attempt_provider = provider_of_string ~stage attempt_provider_name in
+    let* claim = required_string ~stage "claim" attempt_json in
+    let* issuer = required_string ~stage "issuer" attempt_json in
+    let* candidate_revision = required_string ~stage "candidate_revision" attempt_json in
+    if attempt_provider <> provider
+    then
+      fail
+        stage
+        "attempt provider %S does not match record provider %S"
+        attempt_provider_name
+        provider_name
+    else if not (hex 40 candidate_revision)
+    then fail stage "attempt candidate_revision is not a 40-hex commit"
+    else if candidate_revision <> candidate.revision
+    then fail stage "attempt candidate revision does not match the record candidate"
     else
-      let* evaluator =
-        match field "evaluator" json with
-        | Some value -> evaluator_of_json ~stage value
-        | None -> fail stage "missing evaluator identity"
-      in
-      let* attempt_json =
-        match field "attempt" json with
+      let* contract_json =
+        match field "contract" json with
         | Some value -> Ok value
-        | None -> fail stage "missing attempt provenance"
+        | None -> fail stage "missing contract binding"
       in
-      let* attempt_id = required_string ~stage "id" attempt_json in
-      let* target = required_string ~stage "target" attempt_json in
-      let* cluster = required_string ~stage "cluster" attempt_json in
-      let* attempt_provider_name = required_string ~stage "provider" attempt_json in
-      let* attempt_provider = provider_of_string ~stage attempt_provider_name in
-      let* claim = required_string ~stage "claim" attempt_json in
-      let* issuer = required_string ~stage "issuer" attempt_json in
-      let* candidate_revision =
-        required_string ~stage "candidate_revision" attempt_json
-      in
-      if attempt_provider <> provider
-      then
-        fail
-          stage
-          "attempt provider %S does not match record provider %S"
-          attempt_provider_name
-          provider_name
-      else if not (hex 40 candidate_revision)
-      then fail stage "attempt candidate_revision is not a 40-hex commit"
-      else if candidate_revision <> candidate.revision
-      then fail stage "attempt candidate revision does not match the record candidate"
+      let* contract_id = required_string ~stage "id" contract_json in
+      let* contract_digest = required_string ~stage "digest" contract_json in
+      if contract_id <> contract.id
+      then fail stage "record names contract %S, not %S" contract_id contract.id
+      else if contract_digest <> contract.digest
+      then fail stage "record names a different contract digest than the loaded contract"
       else
-        let* contract_json =
-          match field "contract" json with
-          | Some value -> Ok value
-          | None -> fail stage "missing contract binding"
+        let* selection =
+          match field "selection" json with
+          | Some value -> selection_of_json ~stage value
+          | None -> fail stage "missing selection"
         in
-        let* contract_id = required_string ~stage "id" contract_json in
-        let* contract_digest = required_string ~stage "digest" contract_json in
-        if contract_id <> contract.id
-        then fail stage "record names contract %S, not %S" contract_id contract.id
-        else if contract_digest <> contract.digest
-        then
-          fail stage "record names a different contract digest than the loaded contract"
-        else
-          let* selection =
-            match field "selection" json with
-            | Some value -> selection_of_json ~stage value
-            | None -> fail stage "missing selection"
-          in
-          let* phases =
-            match field "phases" json with
-            | Some (`List values) when values <> [] ->
-              let rec loop seen acc = function
-                | [] -> Ok (List.rev acc)
-                | value :: rest ->
-                  let* name = required_string ~stage "name" value in
-                  let* phase =
-                    Qual_lifecycle.phase_of_string name
-                    |> Result.map_error (fun diagnostic -> { stage; diagnostic })
-                  in
-                  if List.mem phase seen
-                  then fail stage "record repeats phase %S" name
-                  else
-                    let* evidence =
-                      match field "evidence" value with
-                      | Some (`List values) when values <> [] ->
-                        let rec collect acc = function
-                          | [] -> Ok (List.rev acc)
-                          | value :: rest ->
-                            let* value = evidence_of_json ~stage value in
-                            collect (value :: acc) rest
-                        in
-                        collect [] values
-                      | _ -> fail stage "phase %S has no evidence" name
-                    in
-                    loop (phase :: seen) ((phase, evidence) :: acc) rest
-              in
-              loop [] [] values
-            | _ -> fail stage "record has no phases"
-          in
-          let* observations =
-            match field "observations" json with
-            | Some (`List values) when values <> [] ->
-              let rec loop seen acc = function
-                | [] -> Ok (List.rev acc)
-                | value :: rest ->
-                  let* observation = observation_of_json ~stage value in
-                  if List.mem observation.id seen
-                  then fail stage "record repeats observation %S" observation.id
-                  else loop (observation.id :: seen) (observation :: acc) rest
-              in
-              loop [] [] values
-            | _ -> fail stage "record has no observations"
-          in
-          let* claims =
-            match field "claims" json with
-            | Some (`List values) when values <> [] ->
-              let rec loop seen acc = function
-                | [] -> Ok (List.rev acc)
-                | value :: rest ->
-                  let* claim = claim_of_json ~stage value in
-                  if List.mem claim.id seen
-                  then fail stage "record repeats claim %S" claim.id
-                  else loop (claim.id :: seen) (claim :: acc) rest
-              in
-              loop [] [] values
-            | _ -> fail stage "record has no claims"
-          in
-          let* profile_json =
-            match field "profile" json with
-            | Some (`Assoc fields) -> Ok (`Assoc fields)
-            | _ -> fail stage "missing typed deployment profile"
-          in
-          let* profile_kind =
-            let* value = required_string ~stage "kind" profile_json in
-            profile_of_string value
-          in
-          let* profile_observations =
-            match field "observations" profile_json with
-            | Some (`List values) ->
-              let rec loop acc = function
-                | [] -> Ok (List.rev acc)
-                | `String value :: rest when nonempty value ->
-                  if List.mem value acc
-                  then fail stage "profile repeats observation %S" value
-                  else loop (value :: acc) rest
-                | _ -> fail stage "profile observations must be strings"
-              in
-              loop [] values
-            | _ -> fail stage "profile names no observations"
-          in
-          let* boundary_json =
-            match field "boundary" json with
-            | Some value -> Ok value
-            | None -> fail stage "missing typed provider boundary"
-          in
-          let* boundary_name = required_string ~stage "kind" boundary_json in
-          let* boundary_kind = boundary_of_string ~stage boundary_name in
-          let* boundary_observations =
-            match field "observations" boundary_json with
-            | Some (`List values) ->
-              let rec loop acc = function
-                | [] -> Ok (List.rev acc)
-                | `String value :: rest when nonempty value ->
-                  if List.mem value acc
-                  then fail stage "boundary repeats observation %S" value
-                  else loop (value :: acc) rest
-                | _ -> fail stage "boundary observations must be strings"
-              in
-              loop [] values
-            | _ -> fail stage "boundary names no observations"
-          in
-          let* permission_json =
-            match field "permission_binding" json with
-            | Some value -> Ok value
-            | None -> fail stage "missing permission binding"
-          in
-          let* deploy_identity =
-            required_string ~stage "deploy_identity" permission_json
-          in
-          let* mechanism_name = required_string ~stage "mechanism" permission_json in
-          let* mechanism = permission_mechanism_of_string ~stage mechanism_name in
-          let* subject = required_string ~stage "subject" permission_json in
-          if mechanism = Group_mapping && subject = deploy_identity
-          then
-            fail
-              stage
-              "a group permission binding must name how the deploy identity receives the \
-               group"
-          else
-            let* permission_observations =
-              match field "observations" permission_json with
-              | Some (`List values) ->
-                let rec loop acc = function
-                  | [] -> Ok (List.rev acc)
-                  | `String value :: rest when nonempty value ->
-                    if List.mem value acc
-                    then fail stage "permission repeats observation %S" value
-                    else loop (value :: acc) rest
-                  | _ -> fail stage "permission observations must be strings"
+        let* phases =
+          match field "phases" json with
+          | Some (`List values) when values <> [] ->
+            let rec loop seen acc = function
+              | [] -> Ok (List.rev acc)
+              | value :: rest ->
+                let* name = required_string ~stage "name" value in
+                let* phase =
+                  Qual_lifecycle.phase_of_string name
+                  |> Result.map_error (fun diagnostic -> { stage; diagnostic })
                 in
-                loop [] values
-              | _ -> fail stage "permission binding names no observations"
+                if List.mem phase seen
+                then fail stage "record repeats phase %S" name
+                else
+                  let* evidence =
+                    match field "evidence" value with
+                    | Some (`List values) when values <> [] ->
+                      let rec collect acc = function
+                        | [] -> Ok (List.rev acc)
+                        | value :: rest ->
+                          let* value = evidence_of_json ~stage value in
+                          collect (value :: acc) rest
+                      in
+                      collect [] values
+                    | _ -> fail stage "phase %S has no evidence" name
+                  in
+                  loop (phase :: seen) ((phase, evidence) :: acc) rest
             in
-            let content = semantic_digest json in
-            Ok
-              { provider
-              ; candidate
-              ; harness_revision
-              ; evaluator
-              ; attempt =
-                  { id = attempt_id
-                  ; target
-                  ; cluster
-                  ; provider
-                  ; claim
-                  ; issuer
-                  ; candidate_revision
-                  }
-              ; contract_id
-              ; contract_digest
-              ; selection
-              ; phases
-              ; observations
-              ; claims
-              ; profile = { kind = profile_kind; observations = profile_observations }
-              ; boundary = { kind = boundary_kind; observations = boundary_observations }
-              ; permission =
-                  { deploy_identity
-                  ; mechanism
-                  ; subject
-                  ; observations = permission_observations
-                  }
-              ; verification = Unverified
-              ; raw_sha256 = None
-              ; content_sha256 = content
-              }
+            loop [] [] values
+          | _ -> fail stage "record has no phases"
+        in
+        let* observations =
+          match field "observations" json with
+          | Some (`List values) when values <> [] ->
+            let rec loop seen acc = function
+              | [] -> Ok (List.rev acc)
+              | value :: rest ->
+                let* observation = observation_of_json ~stage value in
+                if List.mem observation.id seen
+                then fail stage "record repeats observation %S" observation.id
+                else loop (observation.id :: seen) (observation :: acc) rest
+            in
+            loop [] [] values
+          | _ -> fail stage "record has no observations"
+        in
+        let* claims =
+          match field "claims" json with
+          | Some (`List values) when values <> [] ->
+            let rec loop seen acc = function
+              | [] -> Ok (List.rev acc)
+              | value :: rest ->
+                let* claim = claim_of_json ~stage value in
+                if List.mem claim.id seen
+                then fail stage "record repeats claim %S" claim.id
+                else loop (claim.id :: seen) (claim :: acc) rest
+            in
+            loop [] [] values
+          | _ -> fail stage "record has no claims"
+        in
+        let* profile_json =
+          match field "profile" json with
+          | Some (`Assoc fields) -> Ok (`Assoc fields)
+          | _ -> fail stage "missing typed deployment profile"
+        in
+        let* profile_kind =
+          let* value = required_string ~stage "kind" profile_json in
+          profile_of_string value
+        in
+        let* profile_observations =
+          match field "observations" profile_json with
+          | Some (`List values) ->
+            let rec loop acc = function
+              | [] -> Ok (List.rev acc)
+              | `String value :: rest when nonempty value ->
+                if List.mem value acc
+                then fail stage "profile repeats observation %S" value
+                else loop (value :: acc) rest
+              | _ -> fail stage "profile observations must be strings"
+            in
+            loop [] values
+          | _ -> fail stage "profile names no observations"
+        in
+        let* boundary_json =
+          match field "boundary" json with
+          | Some value -> Ok value
+          | None -> fail stage "missing typed provider boundary"
+        in
+        let* boundary_name = required_string ~stage "kind" boundary_json in
+        let* boundary_kind = boundary_of_string ~stage boundary_name in
+        let* boundary_observations =
+          match field "observations" boundary_json with
+          | Some (`List values) ->
+            let rec loop acc = function
+              | [] -> Ok (List.rev acc)
+              | `String value :: rest when nonempty value ->
+                if List.mem value acc
+                then fail stage "boundary repeats observation %S" value
+                else loop (value :: acc) rest
+              | _ -> fail stage "boundary observations must be strings"
+            in
+            loop [] values
+          | _ -> fail stage "boundary names no observations"
+        in
+        let* permission_json =
+          match field "permission_binding" json with
+          | Some value -> Ok value
+          | None -> fail stage "missing permission binding"
+        in
+        let* deploy_identity = required_string ~stage "deploy_identity" permission_json in
+        let* mechanism_name = required_string ~stage "mechanism" permission_json in
+        let* mechanism = permission_mechanism_of_string ~stage mechanism_name in
+        let* subject = required_string ~stage "subject" permission_json in
+        if mechanism = Group_mapping && subject = deploy_identity
+        then
+          fail
+            stage
+            "a group permission binding must name how the deploy identity receives the \
+             group"
+        else
+          let* permission_observations =
+            match field "observations" permission_json with
+            | Some (`List values) ->
+              let rec loop acc = function
+                | [] -> Ok (List.rev acc)
+                | `String value :: rest when nonempty value ->
+                  if List.mem value acc
+                  then fail stage "permission repeats observation %S" value
+                  else loop (value :: acc) rest
+                | _ -> fail stage "permission observations must be strings"
+              in
+              loop [] values
+            | _ -> fail stage "permission binding names no observations"
+          in
+          let content = semantic_digest json in
+          Ok
+            { provider
+            ; candidate
+            ; harness_revision
+            ; evaluator
+            ; attempt =
+                { id = attempt_id
+                ; target
+                ; cluster
+                ; provider
+                ; claim
+                ; issuer
+                ; candidate_revision
+                }
+            ; contract_id
+            ; contract_digest
+            ; selection
+            ; phases
+            ; observations
+            ; claims
+            ; profile = { kind = profile_kind; observations = profile_observations }
+            ; boundary = { kind = boundary_kind; observations = boundary_observations }
+            ; permission =
+                { deploy_identity
+                ; mechanism
+                ; subject
+                ; observations = permission_observations
+                }
+            ; verification = Unverified
+            ; raw_sha256 = None
+            ; content_sha256 = content
+            }
 ;;
 
 let record_to_yojson (record : record) =
   `Assoc
-    [ "schema", `Int 2
-    ; "provider", provider_json record.provider
+    [ "provider", provider_json record.provider
     ; "candidate", candidate_json record.candidate
     ; "harness_revision", `String record.harness_revision
     ; "evaluator", evaluator_json record.evaluator
@@ -1328,8 +1303,8 @@ let check_attempt ~directory (record : record) =
       | _ ->
         fail
           stage
-          "attempt.txt records no candidate revision, provider, target or cluster; v2 \
-           cannot bind this record"
+          "attempt.txt records no candidate revision, provider, target or cluster; this \
+           qualification contract cannot bind the record"
     in
     let* () =
       if provenance.claim = record.attempt.claim
@@ -1784,8 +1759,7 @@ let record_binding_json (binding : record_binding) =
 let verdict_to_yojson = function
   | Pass pass ->
     `Assoc
-      [ "schema", `Int 2
-      ; "kind", `String "cross-provider-qualification-parity"
+      [ "kind", `String "cross-provider-qualification-parity"
       ; "verdict", `String "PASS"
       ; ( "contract"
         , `Assoc
@@ -1806,8 +1780,7 @@ let verdict_to_yojson = function
       ]
   | Refused reasons ->
     `Assoc
-      [ "schema", `Int 2
-      ; "kind", `String "cross-provider-qualification-parity"
+      [ "kind", `String "cross-provider-qualification-parity"
       ; "verdict", `String "REFUSED"
       ; "reasons", `List (List.map (fun reason -> `String reason) reasons)
       ]
