@@ -176,6 +176,8 @@ def verify_bundle(candidate: object, directory: str) -> None:
     digest = candidate.get("bundle_sha256")
     if not isinstance(name, str) or name == "":
         raise InputError("the candidate record names no bundle")
+    if os.path.isabs(name) or os.path.basename(name) != name or name in (".", ".."):
+        raise InputError(f"the candidate bundle name {name!r} is not a plain file name")
     path = os.path.join(directory, name)
     if not os.path.isfile(path):
         raise InputError(f"the recorded bundle {name} is not present in {directory}")
@@ -444,11 +446,35 @@ def provider_reasons(
     return verify_teardown(provider, entry, candidate, directory, policy)
 
 
+
+
+def record_attempt_binding(path: str, provider: str) -> tuple[dict | None, list[str]]:
+    """Read the attempt facts a provider record binds, for teardown cross-check."""
+    try:
+        record = read_json_file(path)
+    except InputError as error:
+        return None, [f"the {provider} record is not usable: {error}"]
+    if not isinstance(record, dict):
+        return None, [f"the {provider} record is not a JSON object"]
+    if record.get("provider") != provider:
+        return None, [f"the {provider} record names another provider"]
+    attempt = record.get("attempt")
+    if not isinstance(attempt, dict):
+        return None, [f"the {provider} record names no attempt"]
+    for field in ("id", "target", "cluster"):
+        if not nonempty(attempt.get(field)):
+            return None, [f"the {provider} record attempt has no {field!r}"]
+    if attempt.get("provider") != provider:
+        return None, [f"the {provider} record attempt names another provider"]
+    return attempt, []
+
+
 def release_policy_reasons(
     candidate: object,
     verdict: object | None,
     directory: object,
     policy_path: str | None = None,
+    record_attempts: dict[str, dict] | None = None,
 ) -> list[str]:
     """Return the reasons the candidate/teardown release policy is not met."""
     if not isinstance(candidate, dict):
@@ -491,6 +517,26 @@ def release_policy_reasons(
         reasons.extend(
             provider_reasons(provider, providers.get(provider), candidate, directory, policy)
         )
+        if record_attempts is not None:
+            attempt = record_attempts.get(provider)
+            if attempt is None:
+                reasons.append(f"the {provider} record attempt is not available")
+                continue
+            teardown = providers.get(provider, {}).get("teardown")
+            binding = teardown.get("binding") if isinstance(teardown, dict) else None
+            if not isinstance(binding, dict):
+                reasons.append(f"the {provider} teardown claim names no binding")
+                continue
+            for field, value in (
+                ("attempt", attempt.get("id")),
+                ("target", attempt.get("target")),
+                ("cluster", attempt.get("cluster")),
+            ):
+                if binding.get(field) != value:
+                    reasons.append(
+                        f"the {provider} teardown binding {field} is "
+                        f"{binding.get(field)!r}, not the record's {value!r}"
+                    )
     return reasons
 
 
@@ -600,6 +646,10 @@ def run_evaluator(path: str, arguments: list[str]) -> tuple[int, str, str] | Non
 
 
 
+MAX_ARCHIVE_MEMBERS = 10000
+MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
+
+
 def safe_extract(archive: str, destination: str) -> list[str]:
     """Extract a provider evidence archive without traversal or links."""
     reasons = []
@@ -608,6 +658,10 @@ def safe_extract(archive: str, destination: str) -> list[str]:
     try:
         with tarfile.open(archive, "r:*") as bundle:
             members = bundle.getmembers()
+            if len(members) > MAX_ARCHIVE_MEMBERS:
+                return [f"the evidence archive has more than {MAX_ARCHIVE_MEMBERS} members"]
+            if sum(member.size for member in members if member.isfile()) > MAX_ARCHIVE_BYTES:
+                return [f"the evidence archive exceeds {MAX_ARCHIVE_BYTES} uncompressed bytes"]
             for member in members:
                 name = member.name
                 parts = [part for part in name.replace("\\", "/").split("/") if part]
@@ -626,7 +680,12 @@ def safe_extract(archive: str, destination: str) -> list[str]:
                     continue
             if reasons:
                 return reasons
-            bundle.extractall(base, members=members)
+            try:
+                bundle.extractall(base, members=members, filter="data")
+            except TypeError:
+                # Python < 3.12 has no extraction filter; the member checks
+                # above remain the boundary.
+                bundle.extractall(base, members=members)
     except (OSError, tarfile.TarError) as error:
         return [f"the evidence archive {archive} is not usable: {error}"]
     return []
@@ -719,6 +778,13 @@ def resolve_evaluator(
             failures.append(
                 f"release run {run['id']} produced evaluator sha256:{digest}, "
                 f"not the verdict's sha256:{recorded['binary_sha256']}"
+            )
+            continue
+        try:
+            os.chmod(path, 0o755)
+        except OSError as error:
+            failures.append(
+                f"release run {run['id']}: cannot make the evaluator executable: {error}"
             )
             continue
         identity_reasons = verify_evaluator_identity(path, recorded, candidate)
@@ -817,6 +883,7 @@ def authorize_reasons(
     repository: str,
     repository_slug: str,
     version: str,
+    tag_revision: str,
     runs_document: object,
     workdir: str,
     policy_path: str | None = None,
@@ -825,7 +892,33 @@ def authorize_reasons(
     """Return the reasons promotion must refuse; empty means authorized."""
     if not isinstance(candidate, dict):
         return ["the candidate record is not a JSON object"]
-    reasons = release_policy_reasons(candidate, verdict, directory, policy_path)
+    if candidate.get("version") != version:
+        return [
+            f"the candidate record is {candidate.get('version')!r}, not the requested "
+            f"version {version!r}"
+        ]
+    if candidate.get("revision") != tag_revision:
+        return [
+            "the current tag revision "
+            f"{tag_revision!r} does not match the candidate revision "
+            f"{candidate.get('revision')!r}"
+        ]
+    reasons = []
+    try:
+        verify_bundle(candidate, directory if isinstance(directory, str) else "")
+    except InputError as error:
+        reasons.append(f"the candidate bundle is not usable: {error}")
+    record_attempts = {}
+    for provider, path in (("aws", aws_record), ("gcp", gcp_record)):
+        attempt, attempt_reasons = record_attempt_binding(path, provider)
+        reasons.extend(attempt_reasons)
+        if attempt is not None:
+            record_attempts[provider] = attempt
+    reasons.extend(
+        release_policy_reasons(
+            candidate, verdict, directory, policy_path, record_attempts
+        )
+    )
     reasons.extend(verify_attached_contract(contract_path, repository))
     if reasons:
         return reasons
@@ -871,7 +964,7 @@ def main(argv: list[str]) -> int:
     authorize_parser.add_argument("--repository", required=True)
     authorize_parser.add_argument("--repository-slug", required=True)
     authorize_parser.add_argument("--version", required=True)
-    authorize_parser.add_argument("--policy")
+    authorize_parser.add_argument("--tag-revision", required=True)
     extract_parser = commands.add_parser("extract")
     extract_parser.add_argument("--archive", required=True)
     extract_parser.add_argument("--dir", required=True)
@@ -930,9 +1023,9 @@ def main(argv: list[str]) -> int:
                 args.repository,
                 args.repository_slug,
                 args.version,
+                args.tag_revision,
                 runs_document,
                 workdir,
-                args.policy,
             )
         if reasons:
             print("promotion refused:", file=sys.stderr)

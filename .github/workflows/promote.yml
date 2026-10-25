@@ -97,6 +97,11 @@ jobs:
             "$RUNNER_TEMP/candidate/candidate.json")"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$revision&event=push&per_page=100" \
             >"$RUNNER_TEMP/candidate/runs.json"
+          tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" --jq .object.sha)"
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" --jq .object.type)" = "tag" ]; then
+            tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" --jq .object.sha)"
+          fi
+          printf '%s' "$tag_object" >"$RUNNER_TEMP/candidate/tag-revision"
 
       # The published artifact must be the recorded candidate, not merely a
       # bundle that shares its version. This hashes the attached bundle.
@@ -141,7 +146,8 @@ jobs:
             --runs "$RUNNER_TEMP/candidate/runs.json" \
             --repository "$GITHUB_WORKSPACE" \
             --repository-slug "$GITHUB_REPOSITORY" \
-            --version "$VERSION"
+            --version "$VERSION" \
+            --tag-revision "$(cat "$RUNNER_TEMP/candidate/tag-revision")"
 
       # GitHub rejects a release body over 125000 characters, and the generated
       # changelog carries one entry per merged pull request since the previous

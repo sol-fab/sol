@@ -106,8 +106,10 @@ therefore cannot substitute another revision's application while the run reports
 evidence bound to this candidate; a mismatch stops the run before anything is
 built (`candidate-binding.sh`, sol-fab/sol#1280).
 
-The campaign produces one verdict document, `qualification-verdict.json`, whose
-`candidate` block is the candidate identity above:
+The campaign produces `qualification-verdict.json`, whose `candidate` block is
+the candidate identity above and whose provider entries carry the independently
+observed teardown claim. Claims and phases live in the typed v2 provider records,
+not in this release-policy document:
 
 ```json
 {
@@ -119,12 +121,6 @@ The campaign produces one verdict document, `qualification-verdict.json`, whose
   },
   "providers": {
     "aws": {
-      "verdict": "pass",
-      "required_rows": ["B1", "I8"],
-      "rows": [
-        {"id": "B1", "status": "pass", "evidence": "..."},
-        {"id": "I8", "status": "pass", "evidence": "..."}
-      ],
       "teardown": {
         "absence_verdict": "pass",
         "binding": {
@@ -132,10 +128,7 @@ The campaign produces one verdict document, `qualification-verdict.json`, whose
           "attempt": "<attempt>",
           "target": "<target>",
           "cluster": "<cluster>",
-          "scope": {
-            "account": "<account>",
-            "region": "<region>"
-          }
+          "scope": {"account": "<account>", "region": "<region>"}
         },
         "evidence": {
           "path": "aws-inventory-verdict.json",
@@ -144,9 +137,6 @@ The campaign produces one verdict document, `qualification-verdict.json`, whose
       }
     },
     "gcp": {
-      "verdict": "pass",
-      "required_rows": ["B1"],
-      "rows": [{"id": "B1", "status": "pass", "evidence": "..."}],
       "teardown": {
         "absence_verdict": "pass",
         "binding": {
@@ -154,10 +144,7 @@ The campaign produces one verdict document, `qualification-verdict.json`, whose
           "attempt": "<attempt>",
           "target": "<target>",
           "cluster": "<cluster>",
-          "scope": {
-            "project": "<project>",
-            "region": "<region>"
-          }
+          "scope": {"project": "<project>", "region": "<region>"}
         },
         "evidence": {
           "path": "gcp-inventory-verdict.json",
@@ -169,10 +156,11 @@ The campaign produces one verdict document, `qualification-verdict.json`, whose
 }
 ```
 
-Row status is `pass`, `fail`, `blocked`, `not_run` or `excluded`. Every
-`required_rows` id must appear with `status: pass`; `blocked`, `not_run` and
-`excluded` rows stay in the record with a reason and never become a pass through
-omission.
+Promotion binds each teardown claim's `attempt`, `target` and `cluster` to the
+corresponding `aws-record.json` / `gcp-record.json` attempt, so an absence result
+from another attempt cannot be paired with this one's claims. A recorded
+provider `verdict` or row list is not read: the typed parity verdict owns claims
+and phases, and the teardown document owns independently observed absence.
 
 `pass` means the claim was demonstrated and `fail` means it was contradicted.
 `blocked` is the honest answer when a claim could not be established — including
@@ -365,10 +353,12 @@ mechanics only and are not qualification evidence.
 
 ### Exact operator action
 
-0. Initiate the attempt: push the `v*` tag for the chosen `main` revision, or run
-   **Release** with `version=<tag>` to resume an interrupted build of it. The
-   workflow refuses a tag that is not the checkout's commit, records the candidate
-   as a draft, and never publishes.
+0. Initiate the attempt: push the `v*` tag for the chosen `main` revision. To
+   resume an interrupted build, rerun that workflow run (`gh run rerun`) so the
+   successful tag-push run and its evaluator artifact exist. A fresh
+   `workflow_dispatch` build is an emergency rebuild and does not by itself
+   provide promotion provenance. The workflow refuses a tag that is not the
+   checkout's commit, records the candidate as a draft, and never publishes.
 1. Run the authorized AWS and GCP campaign against the installed candidate and
    write the verdict's `candidate` block from the draft's `candidate.json`. The
    campaign writes the structured teardown documents

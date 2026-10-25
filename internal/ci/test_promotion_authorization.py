@@ -283,8 +283,15 @@ def test_authorize_chain() -> None:
         original_download = with_fake_download(evaluator)
         original_policy = promotion.release_policy_reasons
         original_contract = promotion.verify_attached_contract
+        original_bundle = promotion.verify_bundle
+        original_attempt = promotion.record_attempt_binding
         promotion.release_policy_reasons = lambda *args, **kwargs: []
         promotion.verify_attached_contract = lambda *args, **kwargs: []
+        promotion.verify_bundle = lambda *args, **kwargs: None
+        promotion.record_attempt_binding = lambda path, provider: (
+            {"id": f"{provider}-1", "target": "target", "cluster": "cluster", "provider": provider},
+            [],
+        )
         try:
             reasons = promotion.authorize_reasons(
                 CANDIDATE,
@@ -299,6 +306,7 @@ def test_authorize_chain() -> None:
                 REPOSITORY,
                 REPOSITORY,
                 VERSION,
+                CANDIDATE["revision"],
                 runs_document(),
                 directory,
             )
@@ -317,6 +325,7 @@ def test_authorize_chain() -> None:
                 REPOSITORY,
                 REPOSITORY,
                 VERSION,
+                CANDIDATE["revision"],
                 runs_document(),
                 directory,
             )
@@ -325,6 +334,8 @@ def test_authorize_chain() -> None:
             promotion.download_evaluator = original_download
             promotion.release_policy_reasons = original_policy
             promotion.verify_attached_contract = original_contract
+            promotion.verify_bundle = original_bundle
+            promotion.record_attempt_binding = original_attempt
 
 
 def test_safe_extract() -> None:

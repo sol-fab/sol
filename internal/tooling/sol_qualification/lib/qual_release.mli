@@ -215,6 +215,7 @@ type verdict =
 
 val evaluator_revision : string
 val canonical_contract_path : string
+val contained_relative_path : string -> bool
 val canonical_contract_sha256 : string
 val contract_of_json : Yojson.Safe.t -> (contract, error) result
 

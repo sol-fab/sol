@@ -82,6 +82,8 @@ let json_list ~what key json =
 let evidence_ref ~directory entry =
   let path = json_string ~what:"evidence" "path" entry in
   let class_ = json_string ~what:"evidence" "class" entry in
+  if not (Qual_release.contained_relative_path path)
+  then die (Printf.sprintf "evidence path %S is not contained" path);
   let actual = Filename.concat directory path in
   let bytes =
     try In_channel.with_open_bin actual In_channel.input_all with

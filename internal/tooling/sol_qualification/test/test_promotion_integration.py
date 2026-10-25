@@ -161,12 +161,15 @@ def identity() -> dict:
     return value
 
 
+BUNDLE_BYTES = b"test candidate bundle"
+
+
 def candidate(revision: str) -> dict:
     return {
         "version": "v0.0.0-alpha.99",
         "revision": revision,
         "bundle": "sol-v0.0.0-alpha.99-linux-x86_64.tar.gz",
-        "bundle_sha256": "b" * 64,
+        "bundle_sha256": hashlib.sha256(BUNDLE_BYTES).hexdigest(),
         "runner_image": "ghcr.io/example/sol-migration-runner@sha256:" + "c" * 64,
     }
 
@@ -239,7 +242,7 @@ done
 [ -n "$destination" ] || exit 2
 mkdir -p "$destination"
 cp {EVALUATOR!r} "$destination/qualification-release"
-chmod 0755 "$destination/qualification-release"
+# Artifact uploads reset the file mode; authorization must restore it.
 """
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(script)
@@ -274,6 +277,8 @@ def main() -> int:
         candidate_dir = os.path.join(directory, "candidate")
         os.makedirs(candidate_dir)
         candidate_path = os.path.join(candidate_dir, "candidate.json")
+        with open(os.path.join(candidate_dir, candidate_doc["bundle"]), "wb") as handle:
+            handle.write(BUNDLE_BYTES)
         write(candidate_path, candidate_doc)
 
         for provider, provider_dir in (("aws", aws_dir), ("gcp", gcp_dir)):
@@ -344,6 +349,32 @@ def main() -> int:
         }
         gh = fake_gh(directory)
         with tempfile.TemporaryDirectory() as workdir:
+            def authorize_with(
+                *,
+                candidate_doc=candidate_doc,
+                verdict=verdict,
+                contract=attached_contract,
+                parity=parity,
+            ):
+                return promotion.authorize_reasons(
+                    candidate_doc,
+                    verdict,
+                    candidate_dir,
+                    contract,
+                    parity,
+                    os.path.join(directory, "aws-record.json"),
+                    os.path.join(directory, "gcp-record.json"),
+                    aws_dir,
+                    gcp_dir,
+                    str(REPO),
+                    "sol-fab/sol",
+                    version,
+                    revision,
+                    runs(revision, version),
+                    workdir,
+                    gh=gh,
+                )
+
             reasons = promotion.authorize_reasons(
                 candidate_doc,
                 verdict,
@@ -357,6 +388,7 @@ def main() -> int:
                 str(REPO),
                 "sol-fab/sol",
                 version,
+                revision,
                 runs(revision, version),
                 workdir,
                 gh=gh,
@@ -378,6 +410,7 @@ def main() -> int:
                 str(REPO),
                 "sol-fab/sol",
                 version,
+                revision,
                 runs(revision, version, path=".github/workflows/ci.yml"),
                 workdir,
                 gh=gh,
@@ -399,11 +432,95 @@ def main() -> int:
                 str(REPO),
                 "sol-fab/sol",
                 version,
+                revision,
                 runs(revision, version),
                 workdir,
                 gh=gh,
             )
-            check_reason("a candidate from another revision refuses", stale_reasons, "different candidate")
+            check_reason("a candidate from another revision refuses", stale_reasons, "current tag revision")
+
+            moved_tag = promotion.authorize_reasons(
+                candidate_doc,
+                verdict,
+                candidate_dir,
+                attached_contract,
+                parity,
+                os.path.join(directory, "aws-record.json"),
+                os.path.join(directory, "gcp-record.json"),
+                aws_dir,
+                gcp_dir,
+                str(REPO),
+                "sol-fab/sol",
+                version,
+                "f" * 40,
+                runs(revision, version),
+                workdir,
+                gh=gh,
+            )
+            check_reason("a moved tag refuses", moved_tag, "current tag revision")
+
+            wrong_attempt = {
+                **verdict,
+                "providers": {
+                    **verdict["providers"],
+                    "aws": {
+                        "teardown": {
+                            **verdict["providers"]["aws"]["teardown"],
+                            "binding": {
+                                **verdict["providers"]["aws"]["teardown"]["binding"],
+                                "attempt": "aws-other",
+                            },
+                        }
+                    },
+                },
+            }
+            attempt_reasons = promotion.authorize_reasons(
+                candidate_doc,
+                wrong_attempt,
+                candidate_dir,
+                attached_contract,
+                parity,
+                os.path.join(directory, "aws-record.json"),
+                os.path.join(directory, "gcp-record.json"),
+                aws_dir,
+                gcp_dir,
+                str(REPO),
+                "sol-fab/sol",
+                version,
+                revision,
+                runs(revision, version),
+                workdir,
+                gh=gh,
+            )
+            check_reason("teardown evidence from another attempt refuses", attempt_reasons, "not the record's")
+            wrong_version = authorize_with(candidate_doc={**candidate_doc, "version": "v9.9.9"})
+            check_reason("a candidate for another version refuses", wrong_version, "not the requested version")
+
+            bundle_path = os.path.join(candidate_dir, candidate_doc["bundle"])
+            with open(bundle_path, "wb") as handle:
+                handle.write(b"tampered")
+            tampered_bundle = authorize_with()
+            check_reason("a bundle that does not match the candidate refuses", tampered_bundle, "bundle")
+            with open(bundle_path, "wb") as handle:
+                handle.write(BUNDLE_BYTES)
+
+            altered_contract = os.path.join(directory, "altered-contract.json")
+            with open(altered_contract, "wb") as handle:
+                handle.write(b"{}\n")
+            changed_contract = authorize_with(contract=altered_contract)
+            check_reason(
+                "an attached contract that is not the repository copy refuses",
+                changed_contract,
+                "repository-owned contract",
+            )
+
+            aws_inventory = os.path.join(candidate_dir, "aws-inventory-verdict.json")
+            with open(aws_inventory, "wb") as handle:
+                handle.write(b"{}\n")
+            tampered_teardown = authorize_with()
+            check_reason(
+                "tampered teardown evidence refuses", tampered_teardown, "sha256"
+            )
 
     print(f"\n{checks - failures} passed, {failures} failed")
     return 1 if failures else 0

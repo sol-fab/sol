@@ -41,10 +41,11 @@ name: Release candidate
 on:
   push:
     tags: ['v*']
-  # The tag push is the normal path. workflow_dispatch is the recovery path: the
-  # workflow definition comes from the default branch, so a candidate build that
-  # was interrupted can be resumed without moving the tag. The candidate is still
-  # built from the tag's tree below.
+  # The tag push is the normal path. workflow_dispatch is an emergency rebuild
+  # path: the workflow definition comes from the default branch, so a candidate
+  # build that was interrupted can be rebuilt without moving the tag. Promotion
+  # requires the originating tag-push run (or a rerun of it) as evaluator
+  # provenance; a dispatch-only build is not promotion provenance.
   workflow_dispatch:
     inputs:
       version:

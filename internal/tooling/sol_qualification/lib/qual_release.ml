@@ -357,6 +357,8 @@ let relative_path path =
   | parts -> List.for_all (fun part -> part <> "" && part <> "." && part <> "..") parts
 ;;
 
+let contained_relative_path = relative_path
+
 let candidate_of_json ~stage json =
   let* version = required_string ~stage "version" json in
   let* revision = required_string ~stage "revision" json in
