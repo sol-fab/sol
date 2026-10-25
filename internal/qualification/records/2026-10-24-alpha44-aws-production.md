@@ -1,7 +1,11 @@
 # AWS production-single-region attempt on `v0.1.0-alpha.44` (2026-10-24)
 
-**Verdict: promotion-eligible by the live AWS row. Not promoted.** This record is evidence for
-the release gate; promotion is a separate, explicit action and was not run.
+**Verdict: the alpha.44 AWS production sequence is recorded as historical sequence evidence.
+It is not a promotion authorization.** The attempt recorded `promotion_eligible=yes` under the
+lifecycle semantics available at the time. Under the current contract that field is a
+consistency check, not authority: promotion requires the separate candidate/provenance and
+qualification-contract check (#1730). This record does not authorize promotion and no promotion
+was run.
 
 ## Candidate and harness identity
 
@@ -39,7 +43,8 @@ descendant because it contains the issuer-name and phase-lifecycle fixes used by
 | `verify` | 0 | independent inventory re-read ABSENT |
 
 The phase ledger contains exactly one verdict per required phase, all `exit=0`;
-`promotion_eligible=yes`, `required_phases_ok=yes`, `attempt_continuity=continuous`.
+`promotion_eligible=yes`, `required_phases_ok=yes`, `attempt_continuity=continuous` as recorded
+by the alpha.44 assessor. That recorded field is not re-used as promotion authority.
 
 ## Observations
 
@@ -69,6 +74,9 @@ This run does not establish:
 - rollback, upgrade, node-loss recovery, broker durability/failover, backup/PITR or alert
   delivery;
 - that the candidate was promoted. The release gate has not been run.
+- current-candidate parity or a promotion authorization. The recorded `promotion_eligible`
+  field is a consistency check only; this record predates the platform/CLI defects fixed for
+  alpha.52 and predates the per-target Grafana OIDC requirement.
 
 ## Reproduction notes
 
