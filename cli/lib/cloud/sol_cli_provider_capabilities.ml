@@ -1212,7 +1212,7 @@ let gcp : t =
       [ "google_sql_database_instance.postgres"; "google_container_cluster.main" ]
   ; cloud_ready_expectation =
       "the GKE cluster is RUNNING and the Cloud SQL instance is RUNNABLE"
-  ; production_qualified = false
+  ; production_qualified = true
   ; state_locking = None
   ; installation_zone_address = "google_dns_managed_zone.qualification"
   ; installation_zone_import_address = "google_dns_managed_zone.qualification[0]"

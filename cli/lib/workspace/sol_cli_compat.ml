@@ -21,7 +21,7 @@ let of_string s =
          (all |> List.map to_string |> String.concat ", "))
 ;;
 
-let supported_by_profile (_ : Sol_cli_profile.t) = [ Ocaml ]
+let supported_by_profile (_ : Sol_cli_profile.t) = [ Ocaml; Typescript ]
 
 let is_supported_by_profile profile language =
   List.mem language (supported_by_profile profile)

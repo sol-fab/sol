@@ -2450,6 +2450,15 @@ let%test "driver: aws and gcp declare a cloud root (DEC-051)" =
         = Sol_cli_provider_capabilities.Root_present)
 ;;
 
+let%test "driver: GCP is production-qualified" =
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"GCP carries the production profile"
+    true
+    (Sol_cli_provider_capabilities.capabilities_of Sol_cli_provider.Gcp)
+      .production_qualified
+;;
+
 let%test "driver: a rootless driver is never production-qualified" =
   Windtrap.equal
     Windtrap.bool

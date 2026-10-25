@@ -915,21 +915,17 @@ let test_declared_ocaml_establishes_versions () =
       (List.exists (fun (f : Pre.finding) -> f.capability = P.Qualified_versions) fs))
 ;;
 
-let test_typescript_is_not_qualified () =
+let test_typescript_is_qualified () =
   with_workspace (fun () ->
     write "sol.yml" "project: pluto\nservices:\n  charge_svc:\n    language: typescript\n";
     write_target prod_aws selecting;
     let fs =
       findings (preflight ~apply_mode:Sol_cli_release.Direct "prod/aws/us-east-1")
     in
-    match finding_for P.Qualified_versions fs with
-    | None -> Windtrap.fail "expected a TypeScript-not-qualified finding"
-    | Some f ->
-      check_bool "application side" true (f.side = Pre.Application);
-      check_bool
-        "names the language and the alternative"
-        true
-        (Sol_cli_string.contains ~needle:"typescript" f.reason))
+    check_bool
+      "a declared TypeScript workload establishes the version guarantee"
+      false
+      (List.exists (fun (f : Pre.finding) -> f.capability = P.Qualified_versions) fs))
 ;;
 
 let test_missing_alert_receiver_is_a_target_finding () =
@@ -1000,19 +996,17 @@ let test_unqualified_provider_is_a_target_finding () =
       "the production profile still resolves a durable platform shape"
       true
       (plan.platform_shape = P.Durable);
-    let fs =
-      findings (preflight ~plan ~apply_mode:Sol_cli_release.Direct "prod/gcp/us-central1")
+    let target =
+      { (target_of (load "prod/gcp/us-central1")) with
+        Sol_cli_config.provider = Sol_cli_provider.Byo
+      }
     in
     match
-      List.find_opt (fun (f : Pre.finding) -> f.capability = P.Qualified_substrate) fs
+      Pre.establish ~target ~apply_mode:Sol_cli_release.Direct ~plan P.Qualified_substrate
     with
-    | None -> Windtrap.fail "expected a substrate finding"
-    | Some f ->
-      check_bool "target side" true (f.side = Pre.Target);
-      check_bool
-        "names the provider"
-        true
-        (Sol_cli_string.contains ~needle:"gcp" f.reason))
+    | Pre.Unmet (Pre.Target, reason) ->
+      check_bool "names the provider" true (Sol_cli_string.contains ~needle:"byo" reason)
+    | _ -> Windtrap.fail "expected a substrate finding for an unqualified provider")
 ;;
 
 (* Shape is a declaration, not a derivation, and it has one source: both the plan and the
@@ -1080,7 +1074,7 @@ let test_durability_fails_closed_for_an_unqualified_provider () =
     let plan = kafka_consumer_plan (plan_for "prod/aws/us-east-1") in
     let target =
       { (target_of (load "prod/aws/us-east-1")) with
-        Sol_cli_config.provider = Sol_cli_provider.Gcp
+        Sol_cli_config.provider = Sol_cli_provider.Byo
       }
     in
     let unmet capability =
@@ -1480,7 +1474,7 @@ let%test "preflight: declared OCaml establishes the version guarantee" =
   test_declared_ocaml_establishes_versions ()
 ;;
 
-let%test "preflight: TypeScript is not qualified" = test_typescript_is_not_qualified ()
+let%test "preflight: TypeScript is qualified" = test_typescript_is_qualified ()
 
 let%test "preflight: unqualified provider is a target finding" =
   test_unqualified_provider_is_a_target_finding ()
