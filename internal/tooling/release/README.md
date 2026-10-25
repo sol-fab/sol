@@ -313,16 +313,20 @@ recorded in
 
 ## 3. Promotion (automated gate, operator-triggered)
 
-`.github/workflows/promote.yml` never builds. It downloads the draft candidate
-and the verdict attached to it, then, before deciding, establishes that every
-Sol-owned artifact the candidate identifies still exists exactly as recorded:
+`.github/workflows/promote.yml` never builds. It downloads the draft candidate,
+the qualification verdict, the canonical qualification contract, the two provider
+records and the parity verdict, then establishes that every Sol-owned artifact
+the candidate identifies still exists exactly as recorded:
 
 - `promotion.py verify` hashes the attached bundle against the candidate's
   `bundle_sha256`;
 - `verify_runner_image.sh` proves a fresh cluster can pull the exact
   `runner_image` digest anonymously in GHCR (read-only — no rebuild, republish
   or tag substitution);
-- `promotion.py decide` checks the verdict.
+- `promotion.py decide-parity` checks the qualification verdict and recomputes
+  the cross-provider parity verdict from the contract and the exact provider
+  records. The attached parity verdict is accepted only when it matches that
+  recomputation.
 
 Only then does it flip the draft to published with `gh release edit
 --draft=false`. The published bundle is byte-for-byte the candidate that was
@@ -332,12 +336,16 @@ The decision refuses when the verdict is missing, malformed, for another
 candidate, missing a required provider, has a failing/omitted/blocked
 release-blocking row, or carries a teardown claim whose attached evidence is
 missing, unbound, under an unknown policy, incomplete against the release
-policy, reclassified, or altered; promotion also refuses when the recorded
-bundle is absent or changed, or when a fresh cluster can no longer pull the
-recorded runner anonymously. Its mechanics are
-pinned by `internal/ci/test_candidate_promotion.py`,
-`internal/ci/test_teardown_policy.py` and
-`internal/ci/test_runner_image_resolution.sh`; those tests establish the
+policy, reclassified, or altered. It also refuses when the contract, provider
+records or parity verdict are missing or unusable, when the records do not bind
+the contract digest/candidate/harness revision/selection, when a required claim
+or phase is missing, or when the recorded parity verdict differs from the
+recomputation. Promotion also refuses when the recorded bundle is absent or
+changed, or when a fresh cluster can no longer pull the recorded runner
+anonymously. Its mechanics are pinned by
+`internal/ci/test_candidate_promotion.py`,
+`internal/ci/test_parity_promotion.py`, `internal/ci/test_teardown_policy.py`
+and `internal/ci/test_runner_image_resolution.sh`; those tests establish the
 mechanics only and are not qualification evidence.
 
 ### Exact operator action
@@ -349,13 +357,15 @@ mechanics only and are not qualification evidence.
 1. Run the authorized AWS and GCP campaign against the installed candidate and
    write the verdict's `candidate` block from the draft's `candidate.json`. The
    campaign writes the structured teardown documents
-   `aws-inventory-verdict.json` and `gcp-inventory-verdict.json`. The teardown
-   `binding` must name the provider scope fields in the policy (`account` and
-   `region` for AWS, `project` and `region` for GCP); the evidence document
+   `aws-inventory-verdict.json` and `gcp-inventory-verdict.json`, the provider
+   records `aws-record.json` and `gcp-record.json`, and the parity verdict. The
+   teardown `binding` must name the provider scope fields in the policy (`account`
+   and `region` for AWS, `project` and `region` for GCP); the evidence document
    records the same values and names `sol-teardown-v1`.
-2. Record each document's digest in the verdict and attach the verdict and both
-   documents to the draft candidate:
-   `gh release upload <version> qualification-verdict.json aws-inventory-verdict.json gcp-inventory-verdict.json`.
+2. Record each document's digest in the verdict and attach the verdict, the
+   contract, the provider records, the parity verdict and both teardown documents
+   to the draft candidate:
+   `gh release upload <version> qualification-verdict.json qualification-contract.json aws-record.json gcp-record.json parity-verdict.json aws-inventory-verdict.json gcp-inventory-verdict.json`.
    Use `sha256sum <file>` for the digest; the digest is over the exact bytes
    attached, so compute it after the document is final.
 3. Run **Promote release** with `version=<version>`.

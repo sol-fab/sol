@@ -10,8 +10,11 @@
 # The exact operator action is:
 #   1. Qualify the installed candidate per internal/qualification/README.md,
 #      recording the AWS and GCP verdicts against the candidate's identity.
-#   2. Attach the single verdict document to the draft candidate:
-#        gh release upload <version> qualification-verdict.json
+#   2. Attach the qualification verdict, contract and provider records, and the
+#      parity verdict that binds the contract and records:
+#        gh release upload <version> qualification-verdict.json \
+#          qualification-contract.json aws-record.json gcp-record.json \
+#          parity-verdict.json
 #   3. Run this workflow with version=<version>.
 #
 # A successful workflow run is not qualification evidence, and Terraform success
@@ -61,7 +64,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/candidate"
           gh release download "$VERSION" --dir "$RUNNER_TEMP/candidate"
-          for asset in candidate.json qualification-verdict.json; do
+          for asset in candidate.json qualification-verdict.json qualification-contract.json aws-record.json gcp-record.json parity-verdict.json; do
             if [ ! -f "$RUNNER_TEMP/candidate/$asset" ]; then
               echo "::error::$VERSION has no $asset attached; run the operator-authorized AWS and GCP campaign and attach its verdict before promoting"
               exit 1
@@ -98,10 +101,14 @@ jobs:
       # pass by naming it.
       - name: Decide promotion eligibility
         run: |
-          python3 internal/tooling/release/promotion.py decide \
+          python3 internal/tooling/release/promotion.py decide-parity \
             --candidate "$RUNNER_TEMP/candidate/candidate.json" \
             --verdict "$RUNNER_TEMP/candidate/qualification-verdict.json" \
-            --dir "$RUNNER_TEMP/candidate"
+            --dir "$RUNNER_TEMP/candidate" \
+            --contract "$RUNNER_TEMP/candidate/qualification-contract.json" \
+            --aws-record "$RUNNER_TEMP/candidate/aws-record.json" \
+            --gcp-record "$RUNNER_TEMP/candidate/gcp-record.json" \
+            --parity "$RUNNER_TEMP/candidate/parity-verdict.json"
 
       # GitHub rejects a release body over 125000 characters, and the generated
       # changelog carries one entry per merged pull request since the previous

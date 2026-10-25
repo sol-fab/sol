@@ -48,6 +48,8 @@ Usage:
     promotion.py record --version V --revision R --bundle PATH
                         --runner-image IMAGE --out FILE
     promotion.py decide --candidate FILE --verdict FILE --dir DIR
+    promotion.py decide-parity --candidate FILE --verdict FILE --dir DIR
+        --contract FILE --aws-record FILE --gcp-record FILE --parity FILE
 """
 
 from __future__ import annotations
@@ -89,6 +91,12 @@ def load(path: str) -> object:
         raise InputError(f"{path}: not found") from exc
     except json.JSONDecodeError as exc:
         raise InputError(f"{path}: not JSON: {exc}") from exc
+
+
+def canonical(value: object) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
 
 
 TEARDOWN_POLICY_PATH = os.path.join(
@@ -510,6 +518,74 @@ def verify_teardown(
     return reasons
 
 
+def parity_reasons(
+    candidate: object,
+    recorded: object,
+    contract_path: str,
+    aws_record_path: str,
+    gcp_record_path: str,
+) -> list[str]:
+    """Return the reasons the cross-provider parity evidence is not current.
+
+    The parity evaluator recomputes the verdict from the contract and the exact
+    provider records; the recorded verdict is only accepted when it is byte-for-
+    byte the recomputation. This is the composition decision, not a second
+    qualification policy: the contract owns the required claims, phases and
+    selection.
+    """
+    try:
+        from qualification_parity import InputError as ParityInputError
+        from qualification_parity import evaluate, load
+    except ImportError as error:
+        return [f"the qualification parity evaluator is unavailable: {error}"]
+    try:
+        contract = load(contract_path)
+        aws = load(aws_record_path)
+        gcp = load(gcp_record_path)
+        computed = evaluate(contract, {"aws": aws, "gcp": gcp})
+    except ParityInputError as error:
+        return [f"the cross-provider parity evidence is not usable: {error}"]
+    reasons: list[str] = []
+    if computed.get("verdict") != "PASS":
+        reasons.extend(
+            f"cross-provider parity did not pass: {reason}"
+            for reason in computed.get("reasons") or ["the parity verdict was refused"]
+        )
+    if not isinstance(candidate, dict):
+        reasons.append("the candidate record is not a JSON object")
+    else:
+        claimed = computed.get("candidate")
+        if not isinstance(claimed, dict) or identity(claimed) != identity(candidate):
+            reasons.append(
+                "the parity verdict refers to a different candidate than this release"
+            )
+    if not isinstance(recorded, dict):
+        reasons.append("no recorded cross-provider parity verdict was supplied")
+    elif canonical(recorded) != canonical(computed):
+        reasons.append(
+            "the recorded parity verdict does not match the recomputed contract/records"
+        )
+    return reasons
+
+
+def decide_with_parity(
+    candidate: object,
+    verdict: object | None,
+    directory: object,
+    contract_path: str,
+    aws_record_path: str,
+    gcp_record_path: str,
+    parity: object | None,
+    policy_path: str | None = None,
+) -> list[str]:
+    """Return the reasons this candidate may not be promoted under parity."""
+    reasons = decide(candidate, verdict, directory, policy_path=policy_path)
+    reasons.extend(
+        parity_reasons(candidate, parity, contract_path, aws_record_path, gcp_record_path)
+    )
+    return reasons
+
+
 def provider_reasons(
     provider: str, entry: object, candidate: dict, directory: str, policy: dict
 ) -> list[str]:
@@ -569,6 +645,14 @@ def main(argv: list[str]) -> int:
         required=True,
         help="the directory holding the candidate bundle and the evidence the verdict names",
     )
+    parity_parser = commands.add_parser("decide-parity")
+    parity_parser.add_argument("--candidate", required=True)
+    parity_parser.add_argument("--verdict", required=True)
+    parity_parser.add_argument("--dir", required=True)
+    parity_parser.add_argument("--contract", required=True)
+    parity_parser.add_argument("--aws-record", required=True)
+    parity_parser.add_argument("--gcp-record", required=True)
+    parity_parser.add_argument("--parity", required=True)
     same_parser = commands.add_parser("same")
     same_parser.add_argument("--left", required=True)
     same_parser.add_argument("--right", required=True)
@@ -601,7 +685,19 @@ def main(argv: list[str]) -> int:
             return 0
         candidate = load(args.candidate)
         verdict = load(args.verdict)
-        reasons = decide(candidate, verdict, args.dir)
+        parity = load(args.parity) if args.command == "decide-parity" else None
+        if args.command == "decide-parity":
+            reasons = decide_with_parity(
+                candidate,
+                verdict,
+                args.dir,
+                args.contract,
+                args.aws_record,
+                args.gcp_record,
+                parity,
+            )
+        else:
+            reasons = decide(candidate, verdict, args.dir)
         if reasons:
             print("promotion refused:", file=sys.stderr)
             for reason in reasons:
