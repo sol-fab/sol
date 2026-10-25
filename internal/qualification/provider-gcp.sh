@@ -305,8 +305,8 @@ hook_gcp_cloud_freeze() {
 hook_gcp_cloud_diagnose() { capture_platform_failure_evidence; }
 
 hook_gcp_cloud_not_refused() {
-  say "the cold deploy reconciled the environment but did not refuse at the artifact gate"
-  say "(expected 'Deployment incomplete.' in $LOG_DIR/cloud-apply*.log)"
+  say "the cold deploy reconciled the environment but did not stop at the artifact or migration gate"
+  say "(expected 'Deployment incomplete.' or the unapplied-migration refusal in $LOG_DIR/cloud-apply*.log)"
 }
 
 hook_gcp_cloud_pre_verify() {
