@@ -41,11 +41,11 @@ services:
   order_svc:
     type: http
     path: app/demo_ts/order_svc
-    uses: [app_db]
+    uses: [app_db, events]
     language: typescript
 
   fulfillment_worker:
     type: worker
     path: app/demo_ts/fulfillment_worker
-    uses: [app_db]
+    uses: [app_db, events]
     language: typescript
