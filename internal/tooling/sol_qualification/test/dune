@@ -144,8 +144,8 @@
  (deps
   test_promotion_integration.py
   ../bin/qualification_release.exe
-  ../../../release/promotion.py
-  ../../../release/teardown-policy.v1.json
+  ../../release/promotion.py
+  ../../release/teardown-policy.v1.json
   ../../../qualification/qualification-contract.json
   ../../../qualification/local/test-rows-ocaml.sh
   ../../../qualification/aws/production-single-region-v1-matrix.md
