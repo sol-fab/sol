@@ -45,7 +45,7 @@ PUBLISHER_SERVICE_ACCOUNT="${PUBLISHER_SERVICE_ACCOUNT:-}"
 export PROJECT REGION
 BASE_DOMAIN="${BASE_DOMAIN:-qual-gcp.sol-fab.dev}"
 PHASE_TIMEOUT="${PHASE_TIMEOUT:-2700}"
-PHASE="${1:-}"
+PHASE_RECORD="${1:-}"
 DELEGATION_WAIT_MINUTES="${DELEGATION_WAIT_MINUTES:-25}"
 LOG_DIR="${LOG_DIR:-/tmp/sol-gcp-qual-$ATTEMPT}"
 export LOG_DIR
@@ -1306,22 +1306,28 @@ TEARDOWN_OK=0
 # the same history instead of inferring it from a successful command.
 record_phase_verdict() {
   local status="${1:-$?}"
-  case "${PHASE:-}" in
+  case "${PHASE_RECORD:-}" in
     prepare | cloud | app | destroy | identity | verify) ;;
     *) return "$status" ;;
   esac
   [ -n "${LOG_DIR:-}" ] || return "$status"
   mkdir -p "$LOG_DIR" 2>/dev/null || return "$status"
-  printf 'phase=%s exit=%s at=%s\n' "$PHASE" "$status" \
+  printf 'phase=%s exit=%s at=%s\n' "$PHASE_RECORD" "$status" \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$LOG_DIR/phase-verdicts.txt" 2>/dev/null || true
   return "$status"
 }
 
 on_exit() {
   local status=$?
+  # The trap runs under `set -e`; recording a failed phase must not abort before
+  # cleanup. cleanup_run reads the original status from `$?`, then composes it
+  # with the teardown/bundle verdicts; that composed status is the run's status.
+  set +e
   record_phase_verdict "$status"
   cleanup
-  return "$status"
+  local cleanup_status=$?
+  if [ "$status" -ne 0 ]; then cleanup_status=$status; fi
+  exit "$cleanup_status"
 }
 
 on_terminate() {
