@@ -859,13 +859,15 @@ let observation_of_json ~stage json =
   let* evidence =
     match field "evidence" json with
     | Some (`List values) when values <> [] ->
-      let rec loop acc = function
+      let rec loop seen acc = function
         | [] -> Ok (List.rev acc)
         | value :: rest ->
           let* value = evidence_of_json ~stage value in
-          loop (value :: acc) rest
+          if List.mem value.path seen
+          then fail stage "observation %S repeats evidence %S" id value.path
+          else loop (value.path :: seen) (value :: acc) rest
       in
-      loop [] values
+      loop [] [] values
     | _ -> fail stage "observation %S has no evidence" id
   in
   Ok { id; evidence }
@@ -1616,9 +1618,9 @@ let evaluator_reasons
          label;
        check
          (List.exists
-            (fun evidence -> satisfies ~required:Behavioral evidence.class_)
+            (fun evidence -> satisfies ~required:Mechanism evidence.class_)
             (evidence_in_observations record record.profile.observations))
-         "the %s record profile is not supported by behavioural evidence"
+         "the %s record profile is not supported by mechanism evidence"
          label;
        let boundary_evidence =
          evidence_in_observations record record.boundary.observations

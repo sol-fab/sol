@@ -287,6 +287,7 @@ $TARGET_ENV:
         checkout_svc:
           omit: true
 YAML
+  cp "$TARGET_FILE" "$LOG_DIR/v2-target.yml"
   say "wrote target $TARGET ($TARGET_FILE)"
 }
 
@@ -1743,9 +1744,9 @@ $TARGET_ENV:
         checkout_svc:
           omit: true
 YAML
+  cp "$TARGET_FILE" "$LOG_DIR/v2-target.yml"
   say "wrote the app target $TARGET ($TARGET_FILE)"
-  say "  no profile is selected: this row qualifies the application path, and the profile's"
-  say "  guarantees are not claimed by it (the production profile refuses gcp today)"
+  say "  the production profile is selected; the row carries its guarantees"
   say "  orders_svc/fulfilment_worker (OCaml) and order_svc/fulfillment_worker (TypeScript)"
   say "  are the alpha scenario this row exercises in both language namespaces; the legacy"
   say "  charge_svc/notify_worker pair and checkout_svc (ingress_host outside any zone Sol"

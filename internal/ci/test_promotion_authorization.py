@@ -380,6 +380,15 @@ def test_safe_extract() -> None:
         reasons = promotion.safe_extract(linked, os.path.join(directory, "link-out"))
         check_reason("an archive symlink refuses", reasons, "unsafe member")
 
+        existing = os.path.join(directory, "existing-out")
+        os.makedirs(existing)
+        with open(os.path.join(existing, "attempt.txt"), "w", encoding="utf-8") as handle:
+            handle.write("unrelated\n")
+        reasons = promotion.safe_extract(good, existing)
+        check_reason("an archive cannot overwrite an existing file", reasons, "overwrite")
+        with open(os.path.join(existing, "attempt.txt"), encoding="utf-8") as handle:
+            check("the existing file is unchanged", handle.read() == "unrelated\n")
+
 
 def main() -> int:
     print("v2 promotion authorization")

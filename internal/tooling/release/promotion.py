@@ -678,6 +678,11 @@ def safe_extract(archive: str, destination: str) -> list[str]:
                 if target != base and not target.startswith(base + os.sep):
                     reasons.append(f"the evidence archive member {name!r} escapes the directory")
                     continue
+            for member in members:
+                parts = [part for part in member.name.replace("\\", "/").split("/") if part]
+                target = os.path.join(base, *parts)
+                if os.path.lexists(target):
+                    return [f"the evidence archive would overwrite {member.name!r}"]
             if reasons:
                 return reasons
             try:

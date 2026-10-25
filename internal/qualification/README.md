@@ -193,15 +193,24 @@ SOL_QUALIFICATION_EVALUATOR=/path/to/qualification-release \
     --provider aws \
     --attempt-dir "$LOG_DIR" \
     --candidate "$SOL_CANDIDATE" \
-    --manifest aws-evidence-manifest.json \
+    --auto \
     --out aws-record.json
 ```
 
 `qualification-release` is the evaluator artifact built from the release tag and
-attached to the draft. The adapter (`emit-record`) fills in the attempt identity,
-contract id/digest and evaluator identity, hashes every evidence file named in
-the manifest, checks the exact lifecycle phase sequence and per-provider claim
-set, and validates the emitted record through `load_record` before writing it.
+attached to the draft. `--auto` invokes `v2_manifest.py`, which derives the required claims, phases,
+profile and selection from the canonical contract and maps each claim family to
+the evidence its operation produced (`app-transaction.log` /
+`app-transaction-{ocaml,ts}.txt`, `cloud-destroy.log` + pre-teardown identities
+for AWS I8, the phase transcripts, the target declaration, provider boundary and
+permission evidence). It refuses a contract family or phase with no producer
+mapping rather than omitting it. `--manifest` remains available for a reviewed
+explicit map.
+
+The adapter (`emit-record`) fills in the attempt identity,
+contract id/digest and evaluator identity, hashes every evidence file, checks
+the exact lifecycle phase sequence and per-provider claim set, and validates the
+emitted record through `load_record` before writing it.
 
 The manifest names evidence; it does not name policy. It contains `provider`,
 `harness_revision`, a typed `profile` object (`production-single-region/v1` plus

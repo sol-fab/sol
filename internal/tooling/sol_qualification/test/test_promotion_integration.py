@@ -22,8 +22,10 @@ HERE = pathlib.Path(__file__).resolve().parent
 REPO = pathlib.Path(os.environ["SOL_TEST_REPOSITORY"])
 EVALUATOR = os.environ["SOL_TEST_RELEASE_BIN"]
 sys.path.insert(0, str(REPO / "internal" / "tooling" / "release"))
+sys.path.insert(0, str(REPO / "internal" / "qualification"))
 
 import promotion  # noqa: E402
+import v2_manifest  # noqa: E402
 
 checks = 0
 failures = 0
@@ -110,51 +112,37 @@ def write_attempt(directory: str, provider: str, revision: str) -> tuple[str, st
     return attempt, target, cluster
 
 
-def manifest(directory: str, provider: str, revision: str) -> dict:
+def manifest(directory: str, provider: str, revision: str, candidate_doc: dict) -> dict:
     _, _, _ = write_attempt(directory, provider, revision)
-    phases = [
-        {"name": name, "evidence": [evidence(directory, f"phase-{name}.json")]}
-        for name in promotion_policy_phases()
+    files = [
+        "candidate-binding.txt",
+        "v2-target.yml",
+        "cloud-apply.log",
+        "app-transaction.log" ,
+        "app-deploy-gate.log",
+        "app-deploy.log",
+        "cloud-destroy.log",
+        "aws-pre-teardown-identities.json",
+        "destroy.log",
+        "app-transaction-ocaml.txt",
+        "app-transaction-ts.txt",
+        "app-deploy-bootstrap.log",
+        "bindings-provisioner-subjects.log",
     ]
-    observations = [
-        {"id": name, "evidence": [evidence(directory, f"{name}.json")]}
-        for name in ("transaction", "profile", "boundary", "permission")
-    ]
-    claims = [
-        {"id": "B1", "status": "pass", "observations": ["transaction"]},
-    ]
-    if provider == "aws":
-        claims.append({"id": "I8", "status": "pass", "observations": ["transaction"]})
-    return {
-        "schema": 1,
-        "provider": provider,
-        "harness_revision": revision,
-        "selection": {
-            "languages": ["ocaml", "typescript"],
-            "primitives": ["svc", "worker"],
-        },
-        "profile": {
-            "kind": "production-single-region/v1",
-            "observations": ["profile"],
-        },
-        "boundary": {
-            "kind": "artifact-gate" if provider == "aws" else "migration-gate",
-            "observations": ["boundary"],
-        },
-        "permission_binding": {
-            "deploy_identity": f"sol-deploy-{provider}",
-            "mechanism": "direct",
-            "subject": f"{provider}-deploy-identity",
-            "observations": ["permission"],
-        },
-        "phases": phases,
-        "observations": observations,
-        "claims": claims,
-    }
-
-
-def promotion_policy_phases() -> list[str]:
-    return ["prepare", "cloud", "app", "destroy"]
+    for name in files:
+        with open(os.path.join(directory, name), "w", encoding="utf-8") as handle:
+            handle.write(f"{name} evidence\n")
+    with open(os.path.join(directory, "candidate-binding.txt"), "w", encoding="utf-8") as handle:
+        handle.write(f"harness_revision: {revision}\n")
+    with open(os.path.join(directory, "v2-target.yml"), "w", encoding="utf-8") as handle:
+        handle.write(
+            "profile: production-single-region\n"
+            "deploy_role_arn: arn:aws:iam::123456789012:role/sol-deploy\n"
+        )
+    contract = json.loads(
+        (REPO / "internal/qualification/qualification-contract.json").read_text()
+    )
+    return v2_manifest.build(provider, directory, contract, candidate_doc)
 
 
 def identity() -> dict:
@@ -286,30 +274,37 @@ def main() -> int:
         write(candidate_path, candidate_doc)
 
         for provider, provider_dir in (("aws", aws_dir), ("gcp", gcp_dir)):
-            document = manifest(provider_dir, provider, revision)
-            manifest_path = os.path.join(directory, f"{provider}-manifest.json")
-            write(manifest_path, document)
+            manifest(provider_dir, provider, revision, candidate_doc)
             record_path = os.path.join(directory, f"{provider}-record.json")
-            run(
+            environment = dict(os.environ)
+            environment["SOL_QUALIFICATION_EVALUATOR"] = EVALUATOR
+            result = subprocess.run(
                 [
-                    EVALUATOR,
-                    "emit-record",
-                    "--repository",
-                    str(REPO),
+                    "bash",
+                    str(REPO / "internal/qualification/record-v2.sh"),
+                    "--provider",
+                    provider,
                     "--attempt-dir",
                     provider_dir,
                     "--candidate",
                     candidate_path,
-                    "--manifest",
-                    manifest_path,
+                    "--auto",
                     "--out",
                     record_path,
-                ]
+                ],
+                capture_output=True,
+                text=True,
+                env=environment,
             )
-            check(f"the producer emitted the {provider} record", os.path.isfile(record_path))
+            if result.returncode != 0:
+                print(result.stderr or result.stdout)
+            check(
+                f"the producer emitted the {provider} record",
+                result.returncode == 0 and os.path.isfile(record_path),
+            )
 
         parity_path = os.path.join(directory, "parity-verdict.json")
-        run(
+        result = run(
             [
                 EVALUATOR,
                 "evaluate",
@@ -325,8 +320,15 @@ def main() -> int:
                 gcp_dir,
                 "--out",
                 parity_path,
-            ]
+            ],
+            check_code=False,
         )
+        if result.returncode != 0:
+            print(result.stdout)
+            print(result.stderr)
+            if os.path.exists(parity_path):
+                print(open(parity_path, encoding="utf-8").read())
+            raise SystemExit(1)
         with open(parity_path, encoding="utf-8") as handle:
             parity = json.load(handle)
         check("the typed evaluator returned PASS", parity.get("verdict") == "PASS")
