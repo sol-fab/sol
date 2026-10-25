@@ -208,7 +208,11 @@ case "$1" in
         printf 'Kafka: delivered the managed credential to target-kafka-creds in pluto-comms, pluto-payments.\n'
         printf 'The environment for %s is reconciled.\n' "$2"
         if [ "${STUB_NO_PENDING_ARTIFACTS:-0}" != "1" ]; then
-          printf 'Deployment incomplete.\n'
+          if [ "${STUB_MIGRATION_GATE:-0}" = "1" ]; then
+            printf 'error: the required migration set is not applied. Missing: 001_notifications\n'
+          else
+            printf 'Deployment incomplete.\n'
+          fi
         fi
       fi
       [ "${STUB_APPLY_RC:-0}" = "0" ]
@@ -1362,8 +1366,14 @@ has "and the promotion-eligible path" "restart the whole row" "$TMP/spent.out"
 printf '\nscenario: a cold deploy that did not refuse at the artifact gate fails\n'
 run_cloud_case cloud-no-gate STUB_NO_PENDING_ARTIFACTS=1
 is "the cloud phase fails without the artifact-gate refusal" "$(cat "$TMP/cloud-no-gate.rc")" "1"
-has "and says it did not refuse at the artifact gate" \
-  "did not refuse at the artifact gate" "$TMP/cloud-no-gate.out"
+has "and says it did not stop at the artifact or migration gate" \
+  "did not stop at the artifact or migration gate" "$TMP/cloud-no-gate.out"
+
+printf '\nscenario: a cold deploy may stop at the migration gate before the app phase\n'
+run_cloud_case cloud-migration-gate STUB_MIGRATION_GATE=1
+is "the migration gate is a valid cold boundary" "$(cat "$TMP/cloud-migration-gate.rc")" "0"
+has "and the run names the migration refusal" \
+  "required migration set is not applied" "$TMP/cloud-migration-gate.logs/cloud-apply.log"
 
 printf '\nscenario: managed credential failure is never repaired by qualification\n'
 expect_failure "credential initialization failure blocks the row" run_case credential-boundary cloud STUB_APPLY_CREDENTIAL_MISSING=1

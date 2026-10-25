@@ -193,11 +193,13 @@ environment_reconciled() {
   grep -qF "The environment for $TARGET is reconciled." "$LOG_DIR"/cloud-apply*.log 2>/dev/null
 }
 
-# The same cold-deploy contract as AWS: the deploy must stop at the immutable-artifact
-# gate, not merely reconcile the environment. `Deployment incomplete.` is the product's
-# marker that it refused at the right place rather than failing somewhere else.
+# The GCP target selects no production profile, so its cold deploy uses the built tag
+# rather than an immutable digest and may reach the migration gate before the app phase
+# applies migrations. Both refusals happen before a workload moves; accept either named
+# boundary, but not an environment that reconciled without one.
 pending_artifacts_refused() {
-  grep -qF 'Deployment incomplete.' "$LOG_DIR"/cloud-apply*.log 2>/dev/null
+  grep -qF 'Deployment incomplete.' "$LOG_DIR"/cloud-apply*.log 2>/dev/null ||
+    grep -qF 'the required migration set is not applied' "$LOG_DIR"/cloud-apply*.log 2>/dev/null
 }
 
 # A deploy that refused at the installation boundary applies nothing, so teardown must stay
