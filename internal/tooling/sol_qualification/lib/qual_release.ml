@@ -554,6 +554,7 @@ let contract_to_yojson (contract : contract) = contract_semantic_json contract
 let contract_id (contract : contract) = contract.id
 let contract_digest (contract : contract) = contract.digest
 let contract_source (contract : contract) = contract.source
+let contract_claim_ids (contract : contract) provider = claim_ids_for contract provider
 
 let contract_of_json_internal ?source:contract_source json =
   let* () = reject_duplicate_keys json in

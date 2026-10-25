@@ -242,6 +242,7 @@ val evaluator_json : evaluator -> Yojson.Safe.t
 val contract_id : contract -> string
 val contract_digest : contract -> string
 val contract_source : contract -> source option
+val contract_claim_ids : contract -> provider -> string list
 val record_to_yojson : record -> Yojson.Safe.t
 
 (** The evaluator identity for the executable built from this source. The

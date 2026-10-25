@@ -194,16 +194,38 @@ let main () =
       try Yojson.Safe.from_string (read_bytes manifest_path) with
       | Yojson.Json_error message -> die ("manifest: " ^ message)
     in
+    (match json_field "schema" manifest with
+     | Some (`Int 1) -> ()
+     | _ -> die "manifest: unsupported schema (want 1)");
     let provider = json_string ~what:"manifest" "provider" manifest in
+    let provider_value =
+      match provider with
+      | "aws" -> Qual_release.Aws
+      | "gcp" -> Qual_release.Gcp
+      | _ -> die (Printf.sprintf "manifest: unknown provider %S" provider)
+    in
     let harness_revision = json_string ~what:"manifest" "harness_revision" manifest in
+    let phase_values = json_list ~what:"manifest" "phases" manifest in
+    let phase_names =
+      List.map (fun phase -> json_string ~what:"phase" "name" phase) phase_values
+    in
+    if
+      phase_names
+      <> List.map Qual_lifecycle.string_of_phase Qual_lifecycle.required_phases
+    then
+      die
+        ("manifest: phases "
+         ^ String.concat "," phase_names
+         ^ " do not match the lifecycle authority");
     let phases =
       `List
-        (json_list ~what:"manifest" "phases" manifest
-         |> List.map (fun phase ->
-           `Assoc
-             [ "name", `String (json_string ~what:"phase" "name" phase)
-             ; "evidence", evidence_entries ~directory:attempt_dir phase
-             ]))
+        (List.map
+           (fun phase ->
+              `Assoc
+                [ "name", `String (json_string ~what:"phase" "name" phase)
+                ; "evidence", evidence_entries ~directory:attempt_dir phase
+                ])
+           phase_values)
     in
     let observations =
       `List
@@ -214,22 +236,36 @@ let main () =
              ; "evidence", evidence_entries ~directory:attempt_dir observation
              ]))
     in
+    let claim_values = json_list ~what:"manifest" "claims" manifest in
+    let claim_ids =
+      List.map (fun claim -> json_string ~what:"claim" "id" claim) claim_values
+      |> List.sort String.compare
+    in
+    let expected_ids = Qual_release.contract_claim_ids contract provider_value in
+    if claim_ids <> expected_ids
+    then
+      die
+        ("manifest: claims "
+         ^ String.concat "," claim_ids
+         ^ " do not match the contract's "
+         ^ String.concat "," expected_ids);
     let claims =
       `List
-        (json_list ~what:"manifest" "claims" manifest
-         |> List.map (fun claim ->
-           let fields =
-             [ "id", `String (json_string ~what:"claim" "id" claim)
-             ; "status", `String (json_string ~what:"claim" "status" claim)
-             ; "observations", `List (json_list ~what:"claim" "observations" claim)
-             ]
-           in
-           `Assoc
-             (fields
-              @
-              match json_field "reason" claim with
-              | Some (`String reason) -> [ "reason", `String reason ]
-              | _ -> [])))
+        (List.map
+           (fun claim ->
+              let fields =
+                [ "id", `String (json_string ~what:"claim" "id" claim)
+                ; "status", `String (json_string ~what:"claim" "status" claim)
+                ; "observations", `List (json_list ~what:"claim" "observations" claim)
+                ]
+              in
+              `Assoc
+                (fields
+                 @
+                 match json_field "reason" claim with
+                 | Some (`String reason) -> [ "reason", `String reason ]
+                 | _ -> []))
+           claim_values)
     in
     let boundary =
       match json_field "boundary" manifest with
