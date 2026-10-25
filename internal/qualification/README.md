@@ -108,6 +108,9 @@ Existing live entry points and matrices retain their current authority.
   worker effect.
 - `gcp/live-qual.sh` — GCP lifecycle/application qualification and provider-backed absence
   inventory.
+- `record-v2.sh` — emits a schema-v2 provider record from the attempt ledger and an
+  explicit evidence manifest using the verified `qualification-release` evaluator
+  artifact. The harness owns the manifest's claim/evidence choices.
 - provider matrices — claims, required evidence class, scenario, pass condition, and current
   evidence references.
 - `observability/observability-diagnostic-matrix.md` — observability claims.
