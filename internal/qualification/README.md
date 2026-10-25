@@ -108,6 +108,9 @@ Existing live entry points and matrices retain their current authority.
   worker effect.
 - `gcp/live-qual.sh` — GCP lifecycle/application qualification and provider-backed absence
   inventory.
+- `record-v2.sh` — emits a schema-v2 provider record from the attempt ledger and an
+  explicit evidence manifest using the verified `qualification-release` evaluator
+  artifact. The harness owns the manifest's claim/evidence choices.
 - provider matrices — claims, required evidence class, scenario, pass condition, and current
   evidence references.
 - `observability/observability-diagnostic-matrix.md` — observability claims.
@@ -176,3 +179,42 @@ commands/observations used for each affected row, deviations, teardown result, a
 Do not add chronological incident narrative to this README or to run procedures. Historical
 attempts remain available in Git; records still cited by a current matrix remain live evidence.
 Actionable work belongs in GitHub Issues.
+
+## v2 provider records and evidence archives
+
+A live attempt's phase ledger is the attempt authority: AWS has always written
+`phase-verdicts.txt`; GCP now writes the same ledger for `prepare`, `cloud`,
+`app`, `destroy`, `identity` and `verify`. A record is emitted only from that
+ledger plus an explicit evidence manifest:
+
+```sh
+SOL_QUALIFICATION_EVALUATOR=/path/to/qualification-release \
+  internal/qualification/record-v2.sh \
+    --provider aws \
+    --attempt-dir "$LOG_DIR" \
+    --candidate "$SOL_CANDIDATE" \
+    --manifest aws-evidence-manifest.json \
+    --out aws-record.json
+```
+
+`qualification-release` is the evaluator artifact built from the release tag and
+attached to the draft. The adapter (`emit-record`) fills in the attempt identity,
+contract id/digest and evaluator identity, hashes every evidence file named in
+the manifest, checks the exact lifecycle phase sequence and per-provider claim
+set, and validates the emitted record through `load_record` before writing it.
+
+The manifest names evidence; it does not name policy. It contains `provider`,
+`harness_revision`, `selection`, `boundary`, `permission_binding`, `phases`,
+`observations` and `claims`. Each evidence entry is
+`{"path": "<inside attempt dir>", "class": "mechanism"|"behavioral"}`. A claim
+names observation IDs, never its own evidence. Provider-specific omissions must
+be contract exceptions; a record cannot invent one.
+
+Package each provider's attempt directory as an uncompressed-content tarball
+named `aws-evidence.tar.gz` / `gcp-evidence.tar.gz` (no absolute paths, `..`, or
+links) and attach it beside `aws-record.json` / `gcp-record.json`. Promotion
+extracts it with traversal/link refusal and runs the verified evaluator over the
+record and that directory.
+
+Historical records are not retrofitted: alpha.44 and alpha.52 predate this
+contract and cannot authorize a v2 promotion.

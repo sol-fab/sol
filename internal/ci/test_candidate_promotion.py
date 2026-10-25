@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """Regression tests for the release-candidate promotion decision.
 
-The decision is what stops a release being published from its tag before the
-authorized AWS and GCP qualification exists, and what stops a verdict for one
-candidate promoting another. The failure modes are the point: no verdict, a
-verdict for a different candidate, a missing or failing required provider, an
-omitted or non-passing release-blocking row, and a teardown claim that is not
-backed by a verifiable attached evidence document must all refuse; a complete
-verdict that refers to the exact candidate and carries matching evidence must
-allow promotion.
+This release-policy decision stops a release from being published before the
+authorized AWS and GCP qualification exists, and stops a verdict for one
+candidate from promoting another. It verifies candidate identity and the
+independently observed teardown evidence. Cross-provider claims and phases are
+owned by the typed parity evaluator and its workflow artifact provenance, not by
+a second required-row list here.
 
 The teardown checks are decided against the versioned release teardown policy,
 not against the evidence document's own declaration. The tests therefore build
@@ -128,31 +126,18 @@ def verdict(*, aws: dict | None = None, gcp: dict | None = None) -> dict:
     return {
         "candidate": promotion.identity(CANDIDATE),
         "providers": {
-            "aws": {
-                "verdict": "pass",
-                "required_rows": ["B1", "I8"],
-                "rows": [
-                    {"id": "B1", "status": "pass"},
-                    {"id": "I8", "status": "pass"},
-                ],
-                "teardown": aws if aws is not None else teardown("aws"),
-            },
-            "gcp": {
-                "verdict": "pass",
-                "required_rows": ["B1"],
-                "rows": [{"id": "B1", "status": "pass"}],
-                "teardown": gcp if gcp is not None else teardown("gcp"),
-            },
+            "aws": {"teardown": aws if aws is not None else teardown("aws")},
+            "gcp": {"teardown": gcp if gcp is not None else teardown("gcp")},
         },
     }
 
 
 def refuses(label: str, candidate, document) -> None:
-    check(label, promotion.decide(candidate, document, EVIDENCE_DIR) != [])
+    check(label, promotion.release_policy_reasons(candidate, document, EVIDENCE_DIR) != [])
 
 
 def refuses_with(label: str, document, needle: str, candidate=CANDIDATE) -> None:
-    reasons = promotion.decide(candidate, document, EVIDENCE_DIR)
+    reasons = promotion.release_policy_reasons(candidate, document, EVIDENCE_DIR)
     matched = bool(reasons) and any(needle in reason for reason in reasons)
     check(label, matched)
     if not matched:
@@ -160,7 +145,7 @@ def refuses_with(label: str, document, needle: str, candidate=CANDIDATE) -> None
 
 
 def allows(label: str, candidate, document) -> None:
-    reasons = promotion.decide(candidate, document, EVIDENCE_DIR)
+    reasons = promotion.release_policy_reasons(candidate, document, EVIDENCE_DIR)
     check(label, reasons == [])
     if reasons:
         print(f"         reasons: {reasons}")
@@ -192,7 +177,7 @@ def test_identity() -> None:
     )
     refuses("a candidate without a digest runner refuses", {**CANDIDATE, "runner_image": "latest"}, verdict())
     refuses("a threadbare candidate refuses", {"version": "v0.1.0"}, verdict())
-    reasons = promotion.decide(CANDIDATE, verdict(), "")
+    reasons = promotion.release_policy_reasons(CANDIDATE, verdict(), "")
     check(
         "a decision without an attached evidence directory refuses",
         bool(reasons) and any("evidence directory" in reason for reason in reasons),
@@ -202,46 +187,11 @@ def test_identity() -> None:
 def test_providers() -> None:
     refuses("a missing provider refuses", CANDIDATE, {**verdict(), "providers": {"aws": verdict()["providers"]["aws"]}})
     document = verdict()
-    document["providers"]["gcp"]["verdict"] = "fail"
-    refuses("a failing provider refuses", CANDIDATE, document)
-    document = verdict()
-    document["providers"]["gcp"]["verdict"] = "blocked"
-    document["providers"]["gcp"]["reason"] = "quota"
-    refuses("a blocked provider refuses", CANDIDATE, document)
-    document = verdict()
     del document["providers"]["aws"]["teardown"]
     refuses("a provider without a teardown result refuses", CANDIDATE, document)
     document = verdict()
     document["providers"]["aws"]["teardown"]["absence_verdict"] = "present"
     refuses("a provider whose absence result is not a pass refuses", CANDIDATE, document)
-
-
-def test_rows() -> None:
-    document = verdict()
-    document["providers"]["aws"]["rows"][1]["status"] = "fail"
-    refuses("a failing required row refuses", CANDIDATE, document)
-    document = verdict()
-    document["providers"]["aws"]["rows"][1]["status"] = "not_run"
-    refuses("a not-run required row refuses", CANDIDATE, document)
-    document = verdict()
-    del document["providers"]["aws"]["rows"][1]
-    refuses("an omitted required row refuses", CANDIDATE, document)
-    document = verdict()
-    document["providers"]["aws"]["required_rows"] = []
-    refuses("a provider that names no required rows refuses", CANDIDATE, document)
-    document = verdict()
-    document["providers"]["aws"]["rows"].append({"id": "C9", "status": "blocked"})
-    refuses("a blocked extra row without a reason refuses", CANDIDATE, document)
-    document = verdict()
-    document["providers"]["aws"]["rows"].append(
-        {"id": "C9", "status": "blocked", "reason": "not reachable on this target"}
-    )
-    allows("a blocked extra row with a reason stays visible and does not block", CANDIDATE, document)
-    document = verdict()
-    document["providers"]["aws"]["rows"].append(
-        {"id": "C9", "status": "excluded", "reason": "out of scope for this profile"}
-    )
-    allows("an excluded row with a reason stays visible and does not block", CANDIDATE, document)
 
 
 def test_teardown_evidence() -> None:
@@ -453,13 +403,13 @@ def test_policy_file() -> None:
         bad = os.path.join(directory, "bad-policy.json")
         with open(bad, "w", encoding="utf-8") as handle:
             json.dump({"schema": 1}, handle)
-        reasons = promotion.decide(CANDIDATE, verdict(), EVIDENCE_DIR, policy_path=bad)
+        reasons = promotion.release_policy_reasons(CANDIDATE, verdict(), EVIDENCE_DIR, policy_path=bad)
         check(
             "a malformed release policy refuses",
             bool(reasons) and any("release teardown policy" in reason for reason in reasons),
         )
         missing = os.path.join(directory, "missing-policy.json")
-        reasons = promotion.decide(CANDIDATE, verdict(), EVIDENCE_DIR, policy_path=missing)
+        reasons = promotion.release_policy_reasons(CANDIDATE, verdict(), EVIDENCE_DIR, policy_path=missing)
         check(
             "a missing release policy refuses",
             bool(reasons) and any("release teardown policy" in reason for reason in reasons),
@@ -516,75 +466,12 @@ def test_command_line() -> None:
         document = verdict()
         with open(verdict_path, "w", encoding="utf-8") as handle:
             json.dump(document, handle)
-        result = subprocess.run(
-            [
-                sys.executable,
-                script,
-                "decide",
-                "--candidate",
-                candidate_path,
-                "--verdict",
-                verdict_path,
-                "--dir",
-                directory,
-            ],
+        gone = subprocess.run(
+            [sys.executable, script, "decide", "--candidate", candidate_path],
             capture_output=True,
             text=True,
         )
-        check("the command line allows a complete verdict", result.returncode == 0)
-
-        result = subprocess.run(
-            [sys.executable, script, "decide", "--candidate", candidate_path, "--verdict", verdict_path],
-            capture_output=True,
-            text=True,
-        )
-        check(
-            "the command line refuses a decision without an evidence directory",
-            result.returncode == 2,
-        )
-
-        document = verdict(aws=teardown("aws", evidence={"path": "missing.json", "sha256": "d" * 64}))
-        with open(verdict_path, "w", encoding="utf-8") as handle:
-            json.dump(document, handle)
-        result = subprocess.run(
-            [
-                sys.executable,
-                script,
-                "decide",
-                "--candidate",
-                candidate_path,
-                "--verdict",
-                verdict_path,
-                "--dir",
-                directory,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        check("the command line refuses evidence that is not attached", result.returncode == 1)
-        check("and it names the missing evidence", "is not attached" in result.stderr)
-
-        stale = copy.deepcopy(verdict())
-        stale["candidate"]["revision"] = "d" * 40
-        with open(verdict_path, "w", encoding="utf-8") as handle:
-            json.dump(stale, handle)
-        result = subprocess.run(
-            [
-                sys.executable,
-                script,
-                "decide",
-                "--candidate",
-                candidate_path,
-                "--verdict",
-                verdict_path,
-                "--dir",
-                directory,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        check("the command line refuses a stale verdict", result.returncode == 1)
-        check("and it names the mismatch", "different candidate" in result.stderr)
+        check("the obsolete pre-parity decide command is gone", gone.returncode == 2)
         same = subprocess.run(
             [sys.executable, script, "same", "--left", candidate_path, "--right", candidate_path],
             capture_output=True,
@@ -624,7 +511,6 @@ def main() -> int:
         EVIDENCE_DIR = directory
         test_identity()
         test_providers()
-        test_rows()
         test_teardown_evidence()
         test_policy_file()
         test_record()

@@ -25,18 +25,21 @@ let ok label = function
 let has_reason label verdict needle =
   match verdict with
   | R.Refused reasons ->
-    check
-      label
-      (List.exists
-         (fun reason ->
-            let needle_length = String.length needle in
-            let reason_length = String.length reason in
-            let rec contains index =
-              index + needle_length <= reason_length
-              && (String.sub reason index needle_length = needle || contains (index + 1))
-            in
-            contains 0)
-         reasons)
+    let matched =
+      List.exists
+        (fun reason ->
+           let needle_length = String.length needle in
+           let reason_length = String.length reason in
+           let rec contains index =
+             index + needle_length <= reason_length
+             && (String.sub reason index needle_length = needle || contains (index + 1))
+           in
+           contains 0)
+        reasons
+    in
+    if not matched
+    then Printf.printf "         reasons: %s\n" (String.concat "; " reasons);
+    check label matched
   | R.Pass _ -> check (label ^ " (unexpectedly passed)") false
 ;;
 
@@ -90,6 +93,7 @@ let with_temp_dir label f =
 ;;
 
 let revision = String.make 40 'a'
+let source_revision = String.make 40 'a'
 let harness = String.make 40 'd'
 let bundle = String.make 64 'b'
 let binary = String.make 64 'e'
@@ -104,8 +108,17 @@ let candidate () =
     ]
 ;;
 
-let evaluator_json ?(revision = R.evaluator_revision) ?(binary = binary) () =
-  `Assoc [ "revision", `String revision; "binary_sha256", `String binary ]
+let evaluator_json
+      ?(revision = R.evaluator_revision)
+      ?(source_revision = source_revision)
+      ?(binary = binary)
+      ()
+  =
+  `Assoc
+    [ "revision", `String revision
+    ; "source_revision", `String source_revision
+    ; "binary_sha256", `String binary
+    ]
 ;;
 
 let test_path = "internal/tooling/sol_qualification/test/test_release.ml"
@@ -361,7 +374,12 @@ let fixture contract provider directory =
 
 let evaluate contract aws gcp =
   let evaluator =
-    ok "evaluator" (R.evaluator ~revision:R.evaluator_revision ~binary_sha256:binary)
+    ok
+      "evaluator"
+      (R.evaluator
+         ~revision:R.evaluator_revision
+         ~source_revision:(Some source_revision)
+         ~binary_sha256:binary)
   in
   R.evaluate ~evaluator contract aws gcp
 ;;
@@ -761,7 +779,10 @@ let test_evaluator_mismatch () =
       let other =
         ok
           "other evaluator"
-          (R.evaluator ~revision:"other" ~binary_sha256:(String.make 64 'f'))
+          (R.evaluator
+             ~revision:"other"
+             ~source_revision:(Some source_revision)
+             ~binary_sha256:(String.make 64 'f'))
       in
       has_reason
         "a different evaluator implementation refuses"
@@ -1285,8 +1306,15 @@ let test_cli () =
   let contract = ok "canonical contract" (R.load_contract ~repository) in
   with_temp_dir "cli-aws" (fun aws_dir ->
     with_temp_dir "cli-gcp" (fun gcp_dir ->
-      let cli_binary = sha256 (read_file bin) in
-      let evaluator = evaluator_json ~binary:cli_binary () in
+      let identity = Filename.concat aws_dir "identity.json" in
+      let identity_code =
+        Sys.command
+          (String.concat
+             " "
+             (List.map Filename.quote [ bin; "identity"; "--out"; identity ]))
+      in
+      check "the CLI reports its evaluator identity" (identity_code = 0);
+      let evaluator = Yojson.Safe.from_string (read_file identity) in
       ignore
         (write_record
            aws_dir
@@ -1332,8 +1360,15 @@ let test_cli_refusal () =
   with_temp_dir "cliref-aws" (fun aws_dir ->
     with_temp_dir "cliref-gcp" (fun gcp_dir ->
       let contract = ok "canonical contract" (R.load_contract ~repository) in
-      let cli_binary = sha256 (read_file bin) in
-      let evaluator = evaluator_json ~binary:cli_binary () in
+      let identity = Filename.concat aws_dir "identity.json" in
+      let identity_code =
+        Sys.command
+          (String.concat
+             " "
+             (List.map Filename.quote [ bin; "identity"; "--out"; identity ]))
+      in
+      check "the CLI reports its evaluator identity" (identity_code = 0);
+      let evaluator = Yojson.Safe.from_string (read_file identity) in
       ignore
         (write_record
            aws_dir
@@ -1798,9 +1833,135 @@ let test_unverified_record_cannot_pass () =
         "not loaded and evidence-verified"))
 ;;
 
+let test_evaluator_source_revision_mismatch () =
+  let contract = contract () in
+  with_temp_dir "evalsrc-aws" (fun aws_dir ->
+    with_temp_dir "evalsrc-gcp" (fun gcp_dir ->
+      let aws, _ = fixture contract "aws" aws_dir in
+      let gcp_json =
+        record_json
+          ~evaluator:(evaluator_json ~source_revision:(String.make 40 'b') ())
+          ~directory:gcp_dir
+          ~contract
+          ~provider:"gcp"
+          ()
+      in
+      ignore (write_record gcp_dir contract "gcp" gcp_json);
+      let gcp = load gcp_dir contract in
+      has_reason
+        "an evaluator built from another source revision refuses"
+        (evaluate contract aws gcp)
+        "not produced by this evaluator"))
+;;
+
+let test_emit_record () =
+  let contract = contract () in
+  with_temp_dir "emit-record" (fun directory ->
+    ignore (fixture contract "aws" directory);
+    let candidate_path = Filename.concat directory "candidate.json" in
+    write_file candidate_path (Yojson.Safe.pretty_to_string (candidate ()) ^ "\n");
+    let manifest =
+      `Assoc
+        [ "schema", `Int 1
+        ; "provider", `String "aws"
+        ; "harness_revision", `String harness
+        ; ( "selection"
+          , `Assoc
+              [ "languages", `List [ `String "ocaml"; `String "typescript" ]
+              ; "primitives", `List [ `String "svc"; `String "worker" ]
+              ] )
+        ; ( "boundary"
+          , `Assoc
+              [ "kind", `String "artifact-gate"
+              ; "observations", `List [ `String "boundary" ]
+              ] )
+        ; ( "permission_binding"
+          , `Assoc
+              [ "deploy_identity", `String "sol-deploy-aws"
+              ; "mechanism", `String "direct"
+              ; "subject", `String "arn:aws:iam::123456789012:role/sol-deploy"
+              ; "observations", `List [ `String "permission" ]
+              ] )
+        ; ( "phases"
+          , `List
+              (List.map
+                 (fun name ->
+                    `Assoc
+                      [ "name", `String name
+                      ; ( "evidence"
+                        , `List
+                            [ `Assoc
+                                [ "path", `String ("phase-" ^ name ^ ".json")
+                                ; "class", `String "behavioral"
+                                ]
+                            ] )
+                      ])
+                 [ "prepare"; "cloud"; "app"; "destroy" ]) )
+        ; ( "observations"
+          , `List
+              (List.map
+                 (fun id ->
+                    `Assoc
+                      [ "id", `String id
+                      ; ( "evidence"
+                        , `List
+                            [ `Assoc
+                                [ "path", `String (id ^ ".json")
+                                ; "class", `String "behavioral"
+                                ]
+                            ] )
+                      ])
+                 [ "transaction"; "boundary"; "permission" ]) )
+        ; ( "claims"
+          , `List
+              [ `Assoc
+                  [ "id", `String "B1"
+                  ; "status", `String "pass"
+                  ; "observations", `List [ `String "transaction" ]
+                  ]
+              ; `Assoc
+                  [ "id", `String "I8"
+                  ; "status", `String "pass"
+                  ; "observations", `List [ `String "transaction" ]
+                  ]
+              ] )
+        ]
+    in
+    let manifest_path = Filename.concat directory "manifest.json" in
+    write_file manifest_path (Yojson.Safe.pretty_to_string manifest ^ "\n");
+    let out = Filename.concat directory "record-v2.json" in
+    let bin = Sys.getenv "SOL_TEST_RELEASE_BIN" in
+    let repository = Sys.getenv "SOL_TEST_REPOSITORY" in
+    let command =
+      String.concat
+        " "
+        (List.map
+           Filename.quote
+           [ bin
+           ; "emit-record"
+           ; "--repository"
+           ; repository
+           ; "--attempt-dir"
+           ; directory
+           ; "--candidate"
+           ; candidate_path
+           ; "--manifest"
+           ; manifest_path
+           ; "--out"
+           ; out
+           ])
+    in
+    check "the producer emits a record" (Sys.command command = 0);
+    match R.load_record ~contract ~directory ~path:out with
+    | Ok _ -> check "the emitted record passes the v2 loader" true
+    | Error error ->
+      check ("the emitted record passes the v2 loader: " ^ error_text error) false)
+;;
+
 let tests () =
   [ "valid pair", test_valid_pair
   ; "unloaded contract", test_unloaded_contract_cannot_pass
+  ; "emit record", test_emit_record
   ; "contract substitution", test_contract_substitution
   ; "provider without claim", test_contract_provider_without_claim
   ; "unverified record", test_unverified_record_cannot_pass
@@ -1820,6 +1981,7 @@ let tests () =
   ; "harness mismatch", test_harness_mismatch
   ; "evaluator mismatch", test_evaluator_mismatch
   ; "record evaluator mismatch", test_record_evaluator_mismatch
+  ; "evaluator source revision mismatch", test_evaluator_source_revision_mismatch
   ; "same attempt", test_same_attempt
   ; "selection lower bound", test_selection_lower_bound
   ; "selection mismatch", test_selection_mismatch

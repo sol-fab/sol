@@ -106,8 +106,10 @@ therefore cannot substitute another revision's application while the run reports
 evidence bound to this candidate; a mismatch stops the run before anything is
 built (`candidate-binding.sh`, sol-fab/sol#1280).
 
-The campaign produces one verdict document, `qualification-verdict.json`, whose
-`candidate` block is the candidate identity above:
+The campaign produces `qualification-verdict.json`, whose `candidate` block is
+the candidate identity above and whose provider entries carry the independently
+observed teardown claim. Claims and phases live in the typed v2 provider records,
+not in this release-policy document:
 
 ```json
 {
@@ -119,12 +121,6 @@ The campaign produces one verdict document, `qualification-verdict.json`, whose
   },
   "providers": {
     "aws": {
-      "verdict": "pass",
-      "required_rows": ["B1", "I8"],
-      "rows": [
-        {"id": "B1", "status": "pass", "evidence": "..."},
-        {"id": "I8", "status": "pass", "evidence": "..."}
-      ],
       "teardown": {
         "absence_verdict": "pass",
         "binding": {
@@ -132,10 +128,7 @@ The campaign produces one verdict document, `qualification-verdict.json`, whose
           "attempt": "<attempt>",
           "target": "<target>",
           "cluster": "<cluster>",
-          "scope": {
-            "account": "<account>",
-            "region": "<region>"
-          }
+          "scope": {"account": "<account>", "region": "<region>"}
         },
         "evidence": {
           "path": "aws-inventory-verdict.json",
@@ -144,9 +137,6 @@ The campaign produces one verdict document, `qualification-verdict.json`, whose
       }
     },
     "gcp": {
-      "verdict": "pass",
-      "required_rows": ["B1"],
-      "rows": [{"id": "B1", "status": "pass", "evidence": "..."}],
       "teardown": {
         "absence_verdict": "pass",
         "binding": {
@@ -154,10 +144,7 @@ The campaign produces one verdict document, `qualification-verdict.json`, whose
           "attempt": "<attempt>",
           "target": "<target>",
           "cluster": "<cluster>",
-          "scope": {
-            "project": "<project>",
-            "region": "<region>"
-          }
+          "scope": {"project": "<project>", "region": "<region>"}
         },
         "evidence": {
           "path": "gcp-inventory-verdict.json",
@@ -169,10 +156,11 @@ The campaign produces one verdict document, `qualification-verdict.json`, whose
 }
 ```
 
-Row status is `pass`, `fail`, `blocked`, `not_run` or `excluded`. Every
-`required_rows` id must appear with `status: pass`; `blocked`, `not_run` and
-`excluded` rows stay in the record with a reason and never become a pass through
-omission.
+Promotion binds each teardown claim's `attempt`, `target` and `cluster` to the
+corresponding `aws-record.json` / `gcp-record.json` attempt, so an absence result
+from another attempt cannot be paired with this one's claims. A recorded
+provider `verdict` or row list is not read: the typed parity verdict owns claims
+and phases, and the teardown document owns independently observed absence.
 
 `pass` means the claim was demonstrated and `fail` means it was contradicted.
 `blocked` is the honest answer when a claim could not be established — including
@@ -198,31 +186,25 @@ and binds the verdict to the contract, both records and the evaluator binary.
 See
 [the qualification core documentation](../sol_qualification/sol_qualification.md#typed-release-authority-qual_release-schema-v2).
 
-The text below describes the superseded v1 Python gate. It is retained only until
-the typed evaluator is wired into promotion and the v1 `decide`/`qualification_parity`
-paths are removed. It is not promotion authority: `promote.yml` refuses earlier.
+The v1 `qualification_parity.py` evaluator and the pre-parity `decide` command
+have been removed. There is no second required-claim list and no source-only
+evaluator fallback.
 
-The contract owns the required claims, phases and selection; the parity tool
-does not maintain a second requirement list. Every provider record names the
-contract **id and digest**, its candidate identity, its harness revision, its
-selection, its phase results and its claims. The parity verdict is bound to the
-contract digest and to a content hash of each provider record, so it cannot be
-detached from the evidence that justified it. A contract change invalidates
-records and verdicts created under the old digest.
+Provider records reference evidence inside their own attempt directory. Each
+provider's attempt directory is attached as `aws-evidence.tar.gz` /
+`gcp-evidence.tar.gz`; promotion extracts it with traversal/link refusal and
+runs the typed evaluator over the record plus that directory. A record without
+its attempt ledger (`attempt.txt`, `phase-verdicts.txt`) or evidence refuses.
 
-```sh
-python3 internal/tooling/release/qualification_parity.py \
-  --contract qualification-contract.json \
-  --aws aws-record.json --gcp gcp-record.json \
-  --out parity-verdict.json
-```
-
-The command exits 0 only for `verdict: PASS`; a refusal is written with reasons
-and exits 1. It never grants promotion authority, and it never treats a missing,
-blocked, unreadable or historical claim as parity. Provider-specific omissions
-are allowed only through a declared, reasoned and tested contract exception.
-Promotion remains a separate decision over the candidate, the parity verdict and
-the applicable release policy.
+The release candidate workflow builds `qualification-release` from the tagged
+revision, checks that it reports that revision, uploads it as a workflow
+artifact, and attaches it to the draft for the operator. The workflow run
+artifact, not the draft attachment, is promotion's provenance root: promotion
+selects a successful `release.yml` `push` run for the candidate revision and tag
+in this repository, downloads `qualification-release`, and requires its
+SHA-256, its self-reported semantic revision, source revision and binary digest,
+and its recomputed verdict to agree. A missing, substituted, differently-sourced
+or differently-hashing evaluator refuses.
 
 ### Teardown evidence
 
@@ -275,10 +257,10 @@ is a JSON object of this shape:
 }
 ```
 
-`decide` verifies, for each provider:
+The promotion release policy verifies, for each provider:
 
 - the evidence names the release teardown policy it was produced under, and that
-  name matches the policy the gate loaded;
+  name matches the policy promotion loaded;
 - the file is a plain name inside the downloaded evidence directory and its
   SHA-256 matches the claim;
 - `provider`, `attempt`, `target`, `scope.cluster` and every provider scope
@@ -303,7 +285,7 @@ document. The policy is a reviewed release artefact:
   classes and 2 durable prerequisites.
 - It declares the provider scope fields the claim must bind: `account` and
   `region` for AWS, `project` and `region` for GCP.
-- The gate refuses missing, extra or reclassified classes, and an evidence
+- The policy refuses missing, extra or reclassified classes, and an evidence
   `policy` name it does not load. A self-consistent document that declares a
   smaller universe than the policy is therefore not promotion-eligible.
 
@@ -311,10 +293,10 @@ The producer inventories (`RESIDUE_CLASSES` in AWS `absence.py`,
 `INVENTORY_CLASSES` in GCP `live-qual.sh`) remain the observation authority. The
 policy is the release authority; `internal/ci/test_teardown_policy.py` is the
 drift guard that fails when either producer's universe changes without a policy
-update. The gate itself never imports a producer.
+update. The policy itself never imports a producer.
 
 Independence of the observing identity is established by the campaign procedure
-(the harness records the caller), not re-proven by `decide`. The gate is offline
+(the harness records the caller), not re-proven by promotion. The policy is offline
 and makes no provider read. The digest is an integrity check, not proof that the
 producer is authentic; signatures and remote evidence storage are deliberately
 out of scope.
@@ -326,63 +308,70 @@ recorded in
 
 ## 3. Promotion (automated gate, operator-triggered)
 
-> **Temporarily disabled.** The merged v1 parity gate checked internally
-> consistent records, not evidence-backed parity. Promotion refuses until the
-> typed schema v2 gate lands (#1738); no v1 record set may authorize a release.
+> **Temporarily disabled.** The v2 authorization path is implemented, but it has
+> not yet been exercised with a producer-generated, live-qualified candidate.
+> Promotion refuses before reading assets until that chain is verified (#1738).
 
 `.github/workflows/promote.yml` never builds. It downloads the draft candidate,
 the qualification verdict, the canonical qualification contract, the two provider
-records and the parity verdict, then establishes that every Sol-owned artifact
-the candidate identifies still exists exactly as recorded:
+records, both evidence archives and the parity verdict, then establishes that
+every Sol-owned artifact the candidate identifies still exists exactly as
+recorded:
 
 - `promotion.py verify` hashes the attached bundle against the candidate's
   `bundle_sha256`;
 - `verify_runner_image.sh` proves a fresh cluster can pull the exact
   `runner_image` digest anonymously in GHCR (read-only — no rebuild, republish
   or tag substitution);
-- `promotion.py decide-parity` checks the qualification verdict and recomputes
-  the cross-provider parity verdict from the contract and the exact provider
-  records. The attached parity verdict is accepted only when it matches that
-  recomputation.
+- `promotion.py authorize` verifies the attached contract is byte-identical to
+  the repository-owned contract, fully verifies the teardown evidence against the
+  release policy, selects the successful release-workflow run for the candidate
+  revision, downloads its `qualification-release` artifact, and requires that
+  artifact's digest, reported source revision and recomputed parity verdict to
+  match the recorded values.
 
 Only then does it flip the draft to published with `gh release edit
 --draft=false`. The published bundle is byte-for-byte the candidate that was
 qualified.
 
 The decision refuses when the verdict is missing, malformed, for another
-candidate, missing a required provider, has a failing/omitted/blocked
-release-blocking row, or carries a teardown claim whose attached evidence is
-missing, unbound, under an unknown policy, incomplete against the release
-policy, reclassified, or altered. It also refuses when the contract, provider
-records or parity verdict are missing or unusable, when the records do not bind
-the contract digest/candidate/harness revision/selection, when a required claim
-or phase is missing, or when the recorded parity verdict differs from the
-recomputation. Promotion also refuses when the recorded bundle is absent or
-changed, or when a fresh cluster can no longer pull the recorded runner
-anonymously. Its mechanics are pinned by
+candidate, missing a required provider, or carries a teardown claim whose
+attached evidence is missing, unbound, under an unknown policy, incomplete
+against the release policy, reclassified, or altered. It also refuses when the
+contract, provider records or parity verdict are missing or unusable, when the
+records do not bind the contract digest/candidate/harness revision/selection,
+when a required claim or phase is missing, when the recorded parity verdict
+differs from the recomputation, or when the evaluator artifact has no trusted
+release-workflow provenance or a different revision/digest. Promotion also
+refuses when the recorded bundle is absent or changed, or when a fresh cluster
+can no longer pull the recorded runner anonymously. Its mechanics are pinned by
 `internal/ci/test_candidate_promotion.py`,
-`internal/ci/test_parity_promotion.py`, `internal/ci/test_teardown_policy.py`
-and `internal/ci/test_runner_image_resolution.sh`; those tests establish the
+`internal/ci/test_promotion_authorization.py`,
+`internal/ci/test_teardown_policy.py` and
+`internal/ci/test_runner_image_resolution.sh`; those tests establish the
 mechanics only and are not qualification evidence.
 
 ### Exact operator action
 
-0. Initiate the attempt: push the `v*` tag for the chosen `main` revision, or run
-   **Release** with `version=<tag>` to resume an interrupted build of it. The
-   workflow refuses a tag that is not the checkout's commit, records the candidate
-   as a draft, and never publishes.
+0. Initiate the attempt: push the `v*` tag for the chosen `main` revision. To
+   resume an interrupted build, rerun that workflow run (`gh run rerun`) so the
+   successful tag-push run and its evaluator artifact exist. A fresh
+   `workflow_dispatch` build is an emergency rebuild and does not by itself
+   provide promotion provenance. The workflow refuses a tag that is not the
+   checkout's commit, records the candidate as a draft, and never publishes.
 1. Run the authorized AWS and GCP campaign against the installed candidate and
    write the verdict's `candidate` block from the draft's `candidate.json`. The
    campaign writes the structured teardown documents
    `aws-inventory-verdict.json` and `gcp-inventory-verdict.json`, the provider
-   records `aws-record.json` and `gcp-record.json`, and the parity verdict. The
-   teardown `binding` must name the provider scope fields in the policy (`account`
-   and `region` for AWS, `project` and `region` for GCP); the evidence document
-   records the same values and names `sol-teardown-v1`.
+   records `aws-record.json` and `gcp-record.json`, their evidence archives, and
+   the parity verdict. The teardown `binding` must name the provider scope fields
+   in the policy (`account` and `region` for AWS, `project` and `region` for
+   GCP); the evidence document records the same values and names
+   `sol-teardown-v1`.
 2. Record each document's digest in the verdict and attach the verdict, the
-   contract, the provider records, the parity verdict and both teardown documents
-   to the draft candidate:
-   `gh release upload <version> qualification-verdict.json qualification-contract.json aws-record.json gcp-record.json parity-verdict.json aws-inventory-verdict.json gcp-inventory-verdict.json`.
+   contract, the provider records, their evidence archives, the parity verdict
+   and both teardown documents to the draft candidate:
+   `gh release upload <version> qualification-verdict.json qualification-contract.json aws-record.json gcp-record.json aws-evidence.tar.gz gcp-evidence.tar.gz parity-verdict.json aws-inventory-verdict.json gcp-inventory-verdict.json`.
    Use `sha256sum <file>` for the digest; the digest is over the exact bytes
    attached, so compute it after the document is final.
 3. Run **Promote release** with `version=<version>`.

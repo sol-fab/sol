@@ -138,3 +138,23 @@
     SOL_TEST_REPOSITORY
     %{workspace_root}
     (run %{test})))))
+
+(rule
+ (alias runtest)
+ (deps
+  test_promotion_integration.py
+  ../bin/qualification_release.exe
+  ../../release/promotion.py
+  ../../release/teardown-policy.v1.json
+  ../../../qualification/qualification-contract.json
+  ../../../qualification/local/test-rows-ocaml.sh
+  ../../../qualification/aws/production-single-region-v1-matrix.md
+  ../../../qualification/gcp/test-verify-matrix.sh)
+ (action
+  (setenv
+   SOL_TEST_RELEASE_BIN
+   %{dep:../bin/qualification_release.exe}
+   (setenv
+    SOL_TEST_REPOSITORY
+    %{workspace_root}
+    (run python3 %{dep:test_promotion_integration.py})))))

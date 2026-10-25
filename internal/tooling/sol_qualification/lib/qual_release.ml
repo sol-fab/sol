@@ -34,6 +34,7 @@ type candidate =
 
 type evaluator =
   { revision : string
+  ; source_revision : string option
   ; binary_sha256 : string
   }
 
@@ -356,6 +357,8 @@ let relative_path path =
   | parts -> List.for_all (fun part -> part <> "" && part <> "." && part <> "..") parts
 ;;
 
+let contained_relative_path = relative_path
+
 let candidate_of_json ~stage json =
   let* version = required_string ~stage "version" json in
   let* revision = required_string ~stage "revision" json in
@@ -379,24 +382,33 @@ let candidate_json (candidate : candidate) =
     ]
 ;;
 
-let evaluator ~revision ~binary_sha256 =
+let evaluator ~revision ~source_revision ~binary_sha256 =
   if not (nonempty revision)
   then fail "evaluator" "the evaluator revision is empty"
   else if not (hex 64 binary_sha256)
   then fail "evaluator" "the evaluator binary digest is not a sha256"
-  else Ok { revision; binary_sha256 }
+  else (
+    match source_revision with
+    | Some source_revision when not (hex 40 source_revision) ->
+      fail "evaluator" "the evaluator source revision is not a 40-hex commit"
+    | _ -> Ok { revision; source_revision; binary_sha256 })
 ;;
 
 let evaluator_of_json ~stage json =
   let* revision = required_string ~stage "revision" json in
+  let* source_revision = optional_string ~stage "source_revision" json in
   let* binary_sha256 = required_string ~stage "binary_sha256" json in
-  evaluator ~revision ~binary_sha256
+  evaluator ~revision ~source_revision ~binary_sha256
   |> Result.map_error (fun _ -> { stage; diagnostic = "invalid evaluator identity" })
 ;;
 
 let evaluator_json (evaluator : evaluator) =
   `Assoc
     [ "revision", `String evaluator.revision
+    ; ( "source_revision"
+      , match evaluator.source_revision with
+        | None -> `Null
+        | Some revision -> `String revision )
     ; "binary_sha256", `String evaluator.binary_sha256
     ]
 ;;
@@ -544,6 +556,7 @@ let contract_to_yojson (contract : contract) = contract_semantic_json contract
 let contract_id (contract : contract) = contract.id
 let contract_digest (contract : contract) = contract.digest
 let contract_source (contract : contract) = contract.source
+let contract_claim_ids (contract : contract) provider = claim_ids_for contract provider
 
 let contract_of_json_internal ?source:contract_source json =
   let* () = reject_duplicate_keys json in
@@ -1425,7 +1438,10 @@ let evaluator_reasons
     "the aws and gcp records were not judged by the same evaluator";
   check
     (aws.evaluator = evaluator)
-    "the records were not produced by this evaluator revision and binary";
+    "the aws record was not produced by this evaluator revision and binary";
+  check
+    (gcp.evaluator = evaluator)
+    "the gcp record was not produced by this evaluator revision and binary";
   check
     (aws.attempt.id <> gcp.attempt.id)
     "the same attempt cannot be both provider records";
