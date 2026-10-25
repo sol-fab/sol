@@ -27,6 +27,8 @@ QUALIFIER_ROLE="${QUALIFIER_ROLE:-}"
 TRANSPORT="${TRANSPORT:-1}"
 APP_NS="${APP_NS:-pluto-payments}"
 WORKER_NS="${WORKER_NS:-pluto-comms}"
+TS_APP_NS="${TS_APP_NS:-pluto-demo-ts}"
+TS_SERVICE="${TS_SERVICE:-order-svc}"
 APP_SERVICE="${APP_SERVICE:-charge-svc}"
 APP_PORT="${APP_PORT:-80}"
 SCENARIO="${SCENARIO:-charges}"
@@ -44,7 +46,7 @@ LEDGER_PREFIX="${LEDGER_PREFIX:-sol}"
 PHASE_TIMEOUT="${PHASE_TIMEOUT:-2400}"
 APP_TAG="${APP_TAG:-row-$(date -u +%Y%m%d-%H%M%S)}"
 LOG_DIR="${LOG_DIR:-/tmp/sol-aws-row-$ATTEMPT}"
-export AWS_PROFILE AWS_REGION APP_TAG APP_NS WORKER_NS APP_SERVICE APP_PORT SCENARIO
+export AWS_PROFILE AWS_REGION APP_TAG APP_NS WORKER_NS TS_APP_NS TS_SERVICE APP_SERVICE APP_PORT SCENARIO
 
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text 2>/dev/null)"
 STATE_BUCKET="${STATE_BUCKET:-sol-qual5-$ACCOUNT-tfstate}"

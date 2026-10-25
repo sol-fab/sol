@@ -68,6 +68,9 @@ hook_aws_app_bootstrap_deploy() {
   # Deliberately not local: the transaction hook re-reads the namespaces the deploy
   # was expected to enter, which is the same set this step deployed into.
   deploy_namespaces="$APP_NS $WORKER_NS"
+  if app_unit_addresses | grep -q '^app/demo_ts/'; then
+    deploy_namespaces="$deploy_namespaces $TS_APP_NS"
+  fi
   say "deploy-substrate"
   for ns in $deploy_namespaces; do
     if kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get rolebinding sol-deploy -n "$ns" >/dev/null 2>&1; then
@@ -188,9 +191,21 @@ hook_aws_app_transaction_primary() {
   fi
 }
 
-# This provider runs one application transaction; the skeleton's Kafka observation
-# follows it and there is no second language namespace to drive.
-hook_aws_app_transaction_secondary() { return 0; }
+# The contract selects both languages. Drive the TypeScript order path after the
+# OCaml transaction; the same producer requires its transcript as B1 evidence.
+hook_aws_app_transaction_secondary() {
+  if ! app_unit_addresses | grep -q '^app/demo_ts/'; then
+    # The producer requires the TS transcript, so an OCaml-only target cannot
+    # emit a passing record; the harness does not invent a TS deployment here.
+    say "the target selects no TypeScript application unit; the producer will refuse the missing B1 evidence"
+    return 0
+  fi
+  if ! kubectl --kubeconfig "$DEPLOY_KUBECONFIG" get namespace "$TS_APP_NS" >/dev/null 2>&1; then
+    say "the TypeScript namespace $TS_APP_NS is not deployed, so the selected language is not exercised"
+    return 1
+  fi
+  run app-transaction-ts bash "$ROOT/internal/qualification/aws/app-transaction-ts.sh" "$LOG_DIR"
+}
 
 hook_aws_app_evidence() {
   capture_kube_evidence

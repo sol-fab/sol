@@ -229,6 +229,14 @@ exit 0
 STUB
 chmod +x "$ROOT/internal/qualification/aws/app-transaction.sh"
 
+cat >"$ROOT/internal/qualification/aws/app-transaction-ts.sh" <<'STUB'
+#!/usr/bin/env bash
+printf 'order id: ord-qual01\nread-back: the worker effect ord-qual01 is visible to the service\n' \
+  >"$1/app-transaction-ts.txt"
+exit 0
+STUB
+chmod +x "$ROOT/internal/qualification/aws/app-transaction-ts.sh"
+
 cat >"$ROOT/internal/qualification/aws/transport-transaction.sh" <<'STUB'
 #!/usr/bin/env bash
 printf 'KUBECONFIG_TRANSPORT=%s APP_NS=%s APP_SERVICE=%s SCENARIO=%s\n' \
