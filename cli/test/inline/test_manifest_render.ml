@@ -2865,7 +2865,7 @@ let test_contract_scope_rule () =
   let undeclared = { svc_spec with language = None } in
   let images services =
     Sol_cli_contract.reconciliation_images services
-    |> List.map (fun (namespace, image, _) -> namespace, image)
+    |> List.map (fun (namespace, image, _, _) -> namespace, image)
   in
   let expected_images = Windtrap.list (Windtrap.pair Windtrap.string Windtrap.string) in
   Windtrap.equal
@@ -2910,13 +2910,34 @@ let test_contract_scope_rule () =
     ~msg:"the contract Job reads the consumer's delivered Kafka Secret"
     [ "myapp-comms", Some "prod-aws-us-east-1-kafka-creds" ]
     (Sol_cli_contract.reconciliation_images [ kafka_consumer ]
-     |> List.map (fun (namespace, _, secret) -> namespace, secret));
+     |> List.map (fun (namespace, _, secret, _) -> namespace, secret));
   Windtrap.equal
     (Windtrap.list (Windtrap.pair Windtrap.string (Windtrap.option Windtrap.string)))
     ~msg:"a consumer that is not the first unit of its language still supplies the Secret"
     [ "myapp-comms", Some "prod-aws-us-east-1-kafka-creds" ]
     (Sol_cli_contract.reconciliation_images [ ts_spec; kafka_consumer ]
-     |> List.map (fun (namespace, _, secret) -> namespace, secret))
+     |> List.map (fun (namespace, _, secret, _) -> namespace, secret));
+  let consumer_without_delivery =
+    { ts_spec with
+      consumes_kafka = true
+    ; config = Sol_cli_manifest.production_kafka_config
+    ; secret_sources = []
+    }
+  in
+  Windtrap.equal
+    (Windtrap.list
+       (Windtrap.triple Windtrap.string (Windtrap.option Windtrap.string) Windtrap.bool))
+    ~msg:"a namespace with no consumer has no Kafka delivery to require"
+    [ "myapp-comms", None, false ]
+    (Sol_cli_contract.reconciliation_images [ ts_spec ]
+     |> List.map (fun (namespace, _, secret, consumer) -> namespace, secret, consumer));
+  Windtrap.equal
+    (Windtrap.list
+       (Windtrap.triple Windtrap.string (Windtrap.option Windtrap.string) Windtrap.bool))
+    ~msg:"a consumer with no delivered Secret is still distinguishable from no consumer"
+    [ "myapp-comms", None, true ]
+    (Sol_cli_contract.reconciliation_images [ consumer_without_delivery ]
+     |> List.map (fun (namespace, _, secret, consumer) -> namespace, secret, consumer))
 ;;
 
 let%test

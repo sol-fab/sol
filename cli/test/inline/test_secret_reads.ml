@@ -738,6 +738,7 @@ let test_tls_contract_job_refuses_before_submission_without_delivered_inputs () 
         ~ctx
         ~kafka:(Sol_cli_resource_binding.Managed_kafka "events")
         ~secret_name:(Some "prod-aws-us-east-1-kafka-creds")
+        ~consumer:true
         ~namespace:"payments"
         ~image:"contract-image"
     with

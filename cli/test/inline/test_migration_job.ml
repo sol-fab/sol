@@ -304,6 +304,7 @@ esac
            ~ctx:Sol_cli_kube_destination.local_context
            ~kafka:(Sol_cli_resource_binding.Local_kafka "events")
            ~secret_name:None
+           ~consumer:false
            ~namespace:"pluto-payments"
            ~image:"candidate@sha256:abc"
        with
@@ -484,6 +485,7 @@ let%test "contract cleanup: a failed Job remains available for inspection" =
         ~ctx:Sol_cli_kube_destination.local_context
         ~kafka:(Sol_cli_resource_binding.Local_kafka "events")
         ~secret_name:None
+        ~consumer:false
         ~namespace:"pluto-payments"
         ~image:"candidate@sha256:abc"
     in
