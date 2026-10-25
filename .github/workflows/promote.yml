@@ -45,11 +45,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # The merged parity gate checked internally consistent v1 records, not
-      # evidence-backed parity. Keep the pre-v2 promotion path closed until the
-      # typed schema v2 gate lands (#1738). This is a deliberate trust decision:
-      # v1 records must not authorize a release merely because they are
-      # self-consistent.
+      # The v2 authorization path is implemented but has not been exercised with
+      # a producer-generated, live-qualified candidate. Keep promotion closed
+      # until that chain is verified; a draft attachment is never authority.
       - name: Refuse promotion until typed parity schema v2 lands
         run: |
           echo "::error::Promotion is disabled until the evidence-bound parity schema v2 and typed evaluator land (#1738)." >&2
@@ -74,7 +72,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/candidate"
           gh release download "$VERSION" --dir "$RUNNER_TEMP/candidate"
-          for asset in candidate.json qualification-verdict.json qualification-contract.json aws-record.json gcp-record.json parity-verdict.json; do
+          for asset in candidate.json qualification-verdict.json qualification-contract.json aws-record.json gcp-record.json parity-verdict.json aws-evidence.tar.gz gcp-evidence.tar.gz; do
             if [ ! -f "$RUNNER_TEMP/candidate/$asset" ]; then
               echo "::error::$VERSION has no $asset attached; run the operator-authorized AWS and GCP campaign and attach its verdict before promoting"
               exit 1
@@ -82,6 +80,17 @@ jobs:
           done
           echo "the candidate being promoted:"
           cat "$RUNNER_TEMP/candidate/candidate.json"
+          mkdir -p "$RUNNER_TEMP/candidate/aws-evidence" "$RUNNER_TEMP/candidate/gcp-evidence"
+          python3 internal/tooling/release/promotion.py extract \
+            --archive "$RUNNER_TEMP/candidate/aws-evidence.tar.gz" \
+            --dir "$RUNNER_TEMP/candidate/aws-evidence"
+          python3 internal/tooling/release/promotion.py extract \
+            --archive "$RUNNER_TEMP/candidate/gcp-evidence.tar.gz" \
+            --dir "$RUNNER_TEMP/candidate/gcp-evidence"
+          revision="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["revision"])' \
+            "$RUNNER_TEMP/candidate/candidate.json")"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$revision&event=push&per_page=100" \
+            >"$RUNNER_TEMP/candidate/runs.json"
 
       # The published artifact must be the recorded candidate, not merely a
       # bundle that shares its version. This hashes the attached bundle.
@@ -109,16 +118,23 @@ jobs:
       # published. `gh release download` fetched every attached asset into this
       # directory, so a claim that names a file the operator did not attach cannot
       # pass by naming it.
-      - name: Decide promotion eligibility
+      - name: Authorize promotion from the typed verdict and evaluator artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python3 internal/tooling/release/promotion.py decide-parity \
+          python3 internal/tooling/release/promotion.py authorize \
             --candidate "$RUNNER_TEMP/candidate/candidate.json" \
             --verdict "$RUNNER_TEMP/candidate/qualification-verdict.json" \
             --dir "$RUNNER_TEMP/candidate" \
             --contract "$RUNNER_TEMP/candidate/qualification-contract.json" \
             --aws-record "$RUNNER_TEMP/candidate/aws-record.json" \
             --gcp-record "$RUNNER_TEMP/candidate/gcp-record.json" \
-            --parity "$RUNNER_TEMP/candidate/parity-verdict.json"
+            --aws-evidence "$RUNNER_TEMP/candidate/aws-evidence" \
+            --gcp-evidence "$RUNNER_TEMP/candidate/gcp-evidence" \
+            --parity "$RUNNER_TEMP/candidate/parity-verdict.json" \
+            --runs "$RUNNER_TEMP/candidate/runs.json" \
+            --repository "$GITHUB_WORKSPACE" \
+            --version "$VERSION"
 
       # GitHub rejects a release body over 125000 characters, and the generated
       # changelog carries one entry per merged pull request since the previous

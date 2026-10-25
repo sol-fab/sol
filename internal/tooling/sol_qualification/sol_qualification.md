@@ -429,8 +429,8 @@ Separation of duties in the module:
 - `evaluate` is pure. It binds the exact contract semantic digest and raw contract
   source digest, both provider record byte digests, candidate, harness revision,
   selection, claim set, typed boundaries, permission bindings, visible exceptions and
-  the evaluator revision and binary digest. A record loaded without verification, or a
-  record produced by a different evaluator, cannot pass.
+  the evaluator revision, source revision and binary digest. A record loaded without
+  verification, or a record produced by a different evaluator, cannot pass.
 - `verdict_to_yojson` emits `PASS` only from the typed constructor. Nothing in this
   module reads a producer's `verdict`/`promotion_eligible` field as authority.
 
@@ -447,6 +447,38 @@ both providers' actual selections must be equal. Claims are exact for each provi
 phases are exact and ordered. A provider-specific omission is valid only through a
 contract exception, is visible in the PASS verdict with its reason and test, and cannot
 be invented by a record.
+
+### Producing a v2 record
+
+`qualification_release emit-record` is the producer adapter. The harness supplies
+the attempt directory, the candidate identity, and an explicit evidence manifest;
+the adapter fills in the attempt provenance from `Qual_lifecycle`, the contract
+identity from the canonical contract, and its own evaluator identity. It hashes
+each named evidence file and validates the constructed record through the same
+`load_record` boundary before writing it, so a manifest cannot emit a record the
+loader would refuse.
+
+Manifest shape (evidence entries name a path inside the attempt directory and
+its declared class; the adapter computes the digest):
+
+```json
+{
+  "schema": 1,
+  "provider": "aws",
+  "harness_revision": "<40-hex>",
+  "selection": {"languages": ["ocaml", "typescript"],
+                "primitives": ["svc", "worker"]},
+  "boundary": {"kind": "artifact-gate", "observations": ["boundary"]},
+  "permission_binding": {"deploy_identity": "...", "mechanism": "direct",
+                         "subject": "...", "observations": ["permission"]},
+  "phases": [{"name": "prepare", "evidence": [{"path": "...", "class": "behavioral"}]}],
+  "observations": [{"id": "transaction", "evidence": [{"path": "...", "class": "behavioral"}]}],
+  "claims": [{"id": "B1", "status": "pass", "observations": ["transaction"]}]
+}
+```
+
+The harness, not the adapter, owns which evidence establishes each claim.
+Provider-specific omissions are contract exceptions, never record statuses.
 
 ### Trust boundary
 

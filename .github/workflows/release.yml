@@ -131,12 +131,26 @@ jobs:
 
       - name: Release build
         run: |
-          SOL_RELEASE_VERSION="$VERSION" SOL_RELEASE_REVISION="${{ steps.revision.outputs.revision }}" opam exec -- dune build cli/bin/main.exe cli/bin/database_contract_projection.exe
+          SOL_RELEASE_VERSION="$VERSION" SOL_RELEASE_REVISION="${{ steps.revision.outputs.revision }}" opam exec -- dune build cli/bin/main.exe cli/bin/database_contract_projection.exe internal/tooling/sol_qualification/bin/qualification_release.exe
           mkdir -p "$RUNNER_TEMP/runner"
           cp _build/default/cli/bin/main.exe "$RUNNER_TEMP/runner/sol"
           cp _build/default/cli/bin/database_contract_projection.exe "$RUNNER_TEMP/sol-database-contract"
+          cp _build/default/internal/tooling/sol_qualification/bin/qualification_release.exe "$RUNNER_TEMP/qualification-release"
+          chmod 0555 "$RUNNER_TEMP/qualification-release"
           got="$("$RUNNER_TEMP/runner/sol" --version)"
           [ "$got" = "$VERSION" ] || { echo "::error::built binary reports $got, not $VERSION"; exit 1; }
+          identity="$("$RUNNER_TEMP/qualification-release" identity)"
+          printf '%s\n' "$identity"
+          printf '%s\n' "$identity" | grep -q "\"source_revision\": \"${{ steps.revision.outputs.revision }}\"" || {
+            echo "::error::the qualification evaluator does not report the candidate revision ${{ steps.revision.outputs.revision }}"; exit 1; }
+
+      - name: Record the qualification evaluator as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qualification-release
+          path: ${{ runner.temp }}/qualification-release
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -242,6 +256,7 @@ jobs:
           else
             gh release create "$VERSION" \
               "${{ steps.bundle.outputs.archive }}" "$RUNNER_TEMP/candidate.json" \
+              "$RUNNER_TEMP/qualification-release" \
               --draft --verify-tag --title "Sol $VERSION (candidate)" \
               --notes-file "$candidate_notes"
             echo "recorded the draft candidate for $VERSION"

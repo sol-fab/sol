@@ -1,57 +1,25 @@
 #!/usr/bin/env python3
-"""Immutable release candidate identity and promotion eligibility.
+"""Immutable release candidate identity and v2 promotion authorization.
 
-A release tag builds exactly one candidate -- the release bundle and its
-version-aligned migration-runner digest, tied to the tagged revision -- and
-records it as a draft release. Nothing is published from the tag.
+A release tag builds exactly one candidate. Qualification attaches provider
+records, evidence archives, the canonical contract and a typed parity verdict.
+Promotion authorizes publishing that exact candidate only when the recorded
+bundle still hashes to the candidate identity; the release teardown policy
+verifies independently observed absence; the typed parity verdict names this
+candidate and contract; a successful run of the authorized release workflow on
+the candidate's immutable revision produced a `qualification-release` artifact
+whose bytes match the verdict's evaluator digest; and that exact artifact
+reports the candidate revision and its own digest, then reproduces the recorded
+verdict over the attached evidence.
 
-Promotion consumes that exact candidate. It refuses unless a qualification
-verdict refers to the candidate by identity and reports the required AWS and
-GCP rows passing, each with an independently observed absence verdict. The
-verdict is produced by the explicitly operator-authorized live campaign; this
-module makes no provider read and never treats a successful workflow, Sol's exit
-code or Terraform state as qualification or absence evidence.
+A draft release attachment is not a trust root: the evaluator comes from the
+workflow run artifact. There is no source-only fallback and no v1 parity
+evaluator.
 
 Candidate record:
   {"version": ..., "revision": ..., "bundle": ...,
    "bundle_sha256": ..., "runner_image": "<image>@sha256:<64 hex>"}
-
-Qualification verdict:
-  {"candidate": {"version": ..., "revision": ..., "bundle_sha256": ...,
-                 "runner_image": ...},
-   "providers": {"<name>": {"verdict": "pass"|"fail"|...,
-                            "required_rows": ["B1", ...],
-                            "rows": [{"id": ..., "status": ...,
-                                      "reason": ..., "evidence": ...}],
-                            "teardown": {
-                              "absence_verdict": "pass",
-                              "binding": {"provider": ..., "attempt": ...,
-                                          "target": ..., "cluster": ...,
-                                          "scope": {"account": ..., "region": ...}},
-                              "evidence": {"path": ..., "sha256": ...}}}}}
-
-Teardown evidence document (attached beside the verdict):
-  {"schema": 1, "policy": "sol-teardown-v1", "provider": ..., "candidate": {...},
-   "attempt": ..., "target": ..., "scope": {"cluster": ..., "account": ...,
-   "region": ..., ...},
-   "required_classes": [...],
-   "classes": [{"class": ..., "expectation": "absent"|"present",
-                "state": "ABSENT"|"PRESENT"|"UNKNOWN", ...}],
-   "verdict": "ABSENT"|"NOT ABSENT"}
-
-The required class set and each class's disposition come from
-`teardown-policy.v1.json`, not from the evidence document. The document's
-`policy` must name the policy this gate loads; a truncated or reclassified
-document is refused even when its digest and internal classes are consistent.
-
-Usage:
-    promotion.py record --version V --revision R --bundle PATH
-                        --runner-image IMAGE --out FILE
-    promotion.py decide --candidate FILE --verdict FILE --dir DIR
-    promotion.py decide-parity --candidate FILE --verdict FILE --dir DIR
-        --contract FILE --aws-record FILE --gcp-record FILE --parity FILE
 """
-
 from __future__ import annotations
 
 import argparse
@@ -59,7 +27,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tarfile
+import tempfile
 
 IDENTITY_FIELDS = ("version", "revision", "bundle_sha256", "runner_image")
 DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
@@ -213,66 +185,6 @@ def verify_bundle(candidate: object, directory: str) -> None:
             f"the bundle {name} has sha256:{actual}, not the recorded sha256:{digest}"
         )
 
-
-def decide(
-    candidate: object,
-    verdict: object | None,
-    directory: object,
-    required_providers=REQUIRED_PROVIDERS,
-    policy_path: str | None = None,
-) -> list[str]:
-    """Return the reasons this candidate may not be promoted; empty means eligible.
-
-    `directory` is where the evidence attached to the verdict lives. A teardown
-    claim is promotion-eligible only when it names a file there whose bytes,
-    candidate/provider/attempt/target/scope binding, policy class coverage and
-    own verdict all verify; `absence_verdict: "pass"` alone is not enough.
-
-    The required class set and each class's expected disposition come from the
-    versioned release teardown policy, not from the evidence document.
-    """
-    if not isinstance(candidate, dict):
-        return ["the candidate record is not a JSON object"]
-    reasons = []
-    for field in IDENTITY_FIELDS:
-        value = candidate.get(field)
-        if not isinstance(value, str) or value == "":
-            reasons.append(f"the candidate record has no {field!r}")
-    if not DIGEST.search(candidate.get("runner_image") or ""):
-        reasons.append("the candidate's migration-runner image is not a digest reference")
-    if not HEX64.fullmatch(candidate.get("bundle_sha256") or ""):
-        reasons.append("the candidate's bundle digest is not a sha256")
-    if reasons:
-        return reasons
-
-    if verdict is None:
-        return ["no qualification verdict is attached to the candidate"]
-    if not isinstance(verdict, dict):
-        return ["the qualification verdict is not a JSON object"]
-    claimed = verdict.get("candidate")
-    if not isinstance(claimed, dict):
-        reasons.append("the qualification verdict names no candidate")
-    elif identity(claimed) != identity(candidate):
-        reasons.append(
-            "the qualification verdict refers to a different candidate than this release"
-        )
-    providers = verdict.get("providers")
-    if not isinstance(providers, dict):
-        reasons.append("the qualification verdict names no providers")
-        return reasons
-    if not isinstance(directory, str) or directory == "":
-        reasons.append("no attached evidence directory was supplied")
-        return reasons
-    try:
-        policy = load_teardown_policy(policy_path)
-    except InputError as error:
-        reasons.append(f"the release teardown policy is not usable: {error}")
-        return reasons
-    for provider in required_providers:
-        reasons.extend(
-            provider_reasons(provider, providers.get(provider), candidate, directory, policy)
-        )
-    return reasons
 
 
 def nonempty(value: object) -> bool:
@@ -518,114 +430,421 @@ def verify_teardown(
     return reasons
 
 
-def parity_reasons(
-    candidate: object,
-    recorded: object,
-    contract_path: str,
-    aws_record_path: str,
-    gcp_record_path: str,
-) -> list[str]:
-    """Return the reasons the cross-provider parity evidence is not current.
-
-    The parity evaluator recomputes the verdict from the contract and the exact
-    provider records; the recorded verdict is only accepted when it is byte-for-
-    byte the recomputation. This is the composition decision, not a second
-    qualification policy: the contract owns the required claims, phases and
-    selection.
-    """
-    try:
-        from qualification_parity import InputError as ParityInputError
-        from qualification_parity import evaluate, load
-    except ImportError as error:
-        return [f"the qualification parity evaluator is unavailable: {error}"]
-    try:
-        contract = load(contract_path)
-        aws = load(aws_record_path)
-        gcp = load(gcp_record_path)
-        computed = evaluate(contract, {"aws": aws, "gcp": gcp})
-    except ParityInputError as error:
-        return [f"the cross-provider parity evidence is not usable: {error}"]
-    reasons: list[str] = []
-    if computed.get("verdict") != "PASS":
-        reasons.extend(
-            f"cross-provider parity did not pass: {reason}"
-            for reason in computed.get("reasons") or ["the parity verdict was refused"]
-        )
-    if not isinstance(candidate, dict):
-        reasons.append("the candidate record is not a JSON object")
-    else:
-        claimed = computed.get("candidate")
-        if not isinstance(claimed, dict) or identity(claimed) != identity(candidate):
-            reasons.append(
-                "the parity verdict refers to a different candidate than this release"
-            )
-    if not isinstance(recorded, dict):
-        reasons.append("no recorded cross-provider parity verdict was supplied")
-    elif canonical(recorded) != canonical(computed):
-        reasons.append(
-            "the recorded parity verdict does not match the recomputed contract/records"
-        )
-    return reasons
-
-
-def decide_with_parity(
-    candidate: object,
-    verdict: object | None,
-    directory: object,
-    contract_path: str,
-    aws_record_path: str,
-    gcp_record_path: str,
-    parity: object | None,
-    policy_path: str | None = None,
-) -> list[str]:
-    """Return the reasons this candidate may not be promoted under parity."""
-    reasons = decide(candidate, verdict, directory, policy_path=policy_path)
-    reasons.extend(
-        parity_reasons(candidate, parity, contract_path, aws_record_path, gcp_record_path)
-    )
-    return reasons
-
 
 def provider_reasons(
     provider: str, entry: object, candidate: dict, directory: str, policy: dict
 ) -> list[str]:
+    """Return the reasons this provider's teardown claim is not verified.
+
+    The contract owns claims and phases; this release policy owns independently
+    observed teardown. A recorded provider verdict or row list is not authority.
+    """
     if not isinstance(entry, dict):
         return [f"no {provider} qualification verdict"]
+    return verify_teardown(provider, entry, candidate, directory, policy)
+
+
+def release_policy_reasons(
+    candidate: object,
+    verdict: object | None,
+    directory: object,
+    policy_path: str | None = None,
+) -> list[str]:
+    """Return the reasons the candidate/teardown release policy is not met."""
+    if not isinstance(candidate, dict):
+        return ["the candidate record is not a JSON object"]
     reasons = []
-    if entry.get("verdict") != "pass":
-        reasons.append(f"the {provider} verdict is {entry.get('verdict')!r}, not 'pass'")
-    reasons.extend(verify_teardown(provider, entry, candidate, directory, policy))
-    required = entry.get("required_rows")
-    if not isinstance(required, list) or not required:
-        reasons.append(f"the {provider} verdict names no release-blocking row set")
-        required = []
-    rows = entry.get("rows")
-    if not isinstance(rows, list) or not rows:
-        reasons.append(f"the {provider} verdict lists no rows")
+    for field in IDENTITY_FIELDS:
+        value = candidate.get(field)
+        if not isinstance(value, str) or value == "":
+            reasons.append(f"the candidate record has no {field!r}")
+    if not DIGEST.search(candidate.get("runner_image") or ""):
+        reasons.append("the candidate's migration-runner image is not a digest reference")
+    if not HEX64.fullmatch(candidate.get("bundle_sha256") or ""):
+        reasons.append("the candidate's bundle digest is not a sha256")
+    if reasons:
         return reasons
-    by_id: dict[str, dict] = {}
-    for row in rows:
-        if not isinstance(row, dict) or not isinstance(row.get("id"), str) or row["id"] == "":
-            reasons.append(f"the {provider} verdict has a row with no id")
-            continue
-        by_id[row["id"]] = row
-        status = row.get("status")
-        if status == "pass":
-            continue
-        if status in ("excluded", "blocked", "not_run"):
-            if not isinstance(row.get("reason"), str) or row["reason"] == "":
-                reasons.append(f"{provider} row {row['id']} is {status!r} without a reason")
-            continue
-        reasons.append(f"{provider} row {row['id']} is {status!r}, not 'pass'")
-    for row_id in required:
-        row = by_id.get(row_id)
-        if row is None:
-            reasons.append(f"the {provider} verdict omits release-blocking row {row_id}")
-        elif row.get("status") != "pass":
-            reasons.append(
-                f"{provider} release-blocking row {row_id} is {row.get('status')!r}, not 'pass'"
-            )
+    if verdict is None:
+        return ["no qualification verdict is attached to the candidate"]
+    if not isinstance(verdict, dict):
+        return ["the qualification verdict is not a JSON object"]
+    claimed = verdict.get("candidate")
+    if not isinstance(claimed, dict):
+        reasons.append("the qualification verdict names no candidate")
+    elif identity(claimed) != identity(candidate):
+        reasons.append(
+            "the qualification verdict refers to a different candidate than this release"
+        )
+    providers = verdict.get("providers")
+    if not isinstance(providers, dict):
+        reasons.append("the qualification verdict names no providers")
+        return reasons
+    if not isinstance(directory, str) or directory == "":
+        reasons.append("no attached evidence directory was supplied")
+        return reasons
+    try:
+        policy = load_teardown_policy(policy_path)
+    except InputError as error:
+        reasons.append(f"the release teardown policy is not usable: {error}")
+        return reasons
+    for provider in REQUIRED_PROVIDERS:
+        reasons.extend(
+            provider_reasons(provider, providers.get(provider), candidate, directory, policy)
+        )
     return reasons
+
+
+RELEASE_WORKFLOW = ".github/workflows/release.yml"
+EVALUATOR_ARTIFACT = "qualification-release"
+EVALUATOR_TIMEOUT_S = 120
+
+
+def read_json_file(path: str) -> object:
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read()
+    except OSError as error:
+        raise InputError(f"{path}: {error.strerror or error}") from error
+    try:
+        return json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise InputError(f"{path}: not JSON: {error}") from error
+
+
+def matching_release_runs(
+    runs_document: object, candidate: dict, version: str, repository: str
+) -> tuple[list[dict], list[str]]:
+    """Select successful release-workflow runs for this exact tag revision.
+
+    The GitHub workflow run is the provenance root. A release asset or a
+    producer-supplied file cannot substitute for it.
+    """
+    if not isinstance(runs_document, dict):
+        return [], ["the workflow-run document is not a JSON object"]
+    runs = runs_document.get("workflow_runs")
+    if not isinstance(runs, list):
+        return [], ["the workflow-run document names no workflow_runs"]
+    matched = []
+    for run in runs:
+        if not isinstance(run, dict) or not isinstance(run.get("id"), int):
+            continue
+        if run.get("path") != RELEASE_WORKFLOW:
+            continue
+        if run.get("head_sha") != candidate.get("revision"):
+            continue
+        if run.get("event") != "push":
+            continue
+        if run.get("conclusion") != "success":
+            continue
+        if run.get("head_branch") != version:
+            continue
+        run_repository = run.get("repository")
+        if (
+            not isinstance(run_repository, dict)
+            or run_repository.get("full_name") != repository
+        ):
+            continue
+        matched.append(run)
+    if not matched:
+        return [], [
+            f"no successful {RELEASE_WORKFLOW} run on revision "
+            f"{candidate.get('revision')} for tag {version} in {repository}"
+        ]
+    return matched, []
+
+
+def download_evaluator(run_id: int, destination: str, gh: str = "gh") -> tuple[str | None, str | None]:
+    """Download the evaluator artifact produced by one workflow run."""
+    os.makedirs(destination, exist_ok=True)
+    try:
+        result = subprocess.run(
+            [
+                gh,
+                "run",
+                "download",
+                str(run_id),
+                "--name",
+                EVALUATOR_ARTIFACT,
+                "--dir",
+                destination,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return None, f"release run {run_id}: evaluator download failed: {error}"
+    if result.returncode != 0:
+        return None, (
+            f"release run {run_id}: evaluator artifact is not downloadable: "
+            f"{(result.stderr or result.stdout).strip()}"
+        )
+    path = os.path.join(destination, EVALUATOR_ARTIFACT)
+    if not os.path.isfile(path):
+        return None, f"release run {run_id}: artifact contains no {EVALUATOR_ARTIFACT}"
+    return path, None
+
+
+def run_evaluator(path: str, arguments: list[str]) -> tuple[int, str, str] | None:
+    try:
+        result = subprocess.run(
+            [path] + arguments,
+            capture_output=True,
+            text=True,
+            timeout=EVALUATOR_TIMEOUT_S,
+        )
+        return result.returncode, result.stdout, result.stderr
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+
+
+def safe_extract(archive: str, destination: str) -> list[str]:
+    """Extract a provider evidence archive without traversal or links."""
+    reasons = []
+    os.makedirs(destination, exist_ok=True)
+    base = os.path.realpath(destination)
+    try:
+        with tarfile.open(archive, "r:*") as bundle:
+            members = bundle.getmembers()
+            for member in members:
+                name = member.name
+                parts = [part for part in name.replace("\\", "/").split("/") if part]
+                if (
+                    os.path.isabs(name)
+                    or ".." in parts
+                    or member.issym()
+                    or member.islnk()
+                    or not (member.isfile() or member.isdir())
+                ):
+                    reasons.append(f"the evidence archive contains an unsafe member {name!r}")
+                    continue
+                target = os.path.realpath(os.path.join(base, *parts))
+                if target != base and not target.startswith(base + os.sep):
+                    reasons.append(f"the evidence archive member {name!r} escapes the directory")
+                    continue
+            if reasons:
+                return reasons
+            bundle.extractall(base, members=members)
+    except (OSError, tarfile.TarError) as error:
+        return [f"the evidence archive {archive} is not usable: {error}"]
+    return []
+
+
+def recorded_evaluator(parity: object, candidate: dict) -> tuple[dict | None, list[str]]:
+    if not isinstance(parity, dict):
+        return None, ["no recorded parity verdict was supplied"]
+    recorded = parity.get("evaluator")
+    if not isinstance(recorded, dict):
+        return None, ["the recorded parity verdict has no evaluator identity"]
+    reasons = []
+    for field in ("revision", "binary_sha256", "source_revision"):
+        if not nonempty(recorded.get(field)):
+            reasons.append(f"the recorded evaluator has no {field!r}")
+    if not HEX64.fullmatch(recorded.get("binary_sha256") or ""):
+        reasons.append("the recorded evaluator binary digest is not a sha256")
+    source = recorded.get("source_revision")
+    if not nonempty(source) or len(source) != 40 or not all(c in "0123456789abcdef" for c in source):
+        reasons.append("the recorded evaluator source revision is not a 40-hex commit")
+    elif source != candidate.get("revision"):
+        reasons.append(
+            "the recorded evaluator was built from a different revision than the candidate"
+        )
+    return (None if reasons else recorded), reasons
+
+
+def verify_evaluator_identity(
+    path: str, recorded: dict, candidate: dict
+) -> list[str]:
+    """Verify the downloaded bytes and the identity they report at execution."""
+    reasons = []
+    if not os.access(path, os.X_OK):
+        return [f"the evaluator artifact {path} is not executable"]
+    actual = sha256_file(path)
+    if actual != recorded["binary_sha256"]:
+        reasons.append(
+            f"the evaluator artifact has sha256:{actual}, not the recorded "
+            f"sha256:{recorded['binary_sha256']}"
+        )
+        return reasons
+    result = run_evaluator(path, ["identity"])
+    if result is None:
+        return ["the evaluator artifact could not be executed for identity"]
+    code, stdout, stderr = result
+    if code != 0:
+        return [f"the evaluator identity command exited {code}: {(stderr or stdout).strip()}"]
+    try:
+        identity_doc = json.loads(stdout)
+    except json.JSONDecodeError:
+        return ["the evaluator identity command did not emit JSON"]
+    if not isinstance(identity_doc, dict):
+        return ["the evaluator identity is not an object"]
+    if identity_doc.get("revision") != recorded["revision"]:
+        reasons.append("the evaluator artifact reports a different semantic revision")
+    if identity_doc.get("source_revision") != candidate.get("revision"):
+        reasons.append("the evaluator artifact reports a different source revision")
+    if identity_doc.get("binary_sha256") != recorded["binary_sha256"]:
+        reasons.append("the evaluator artifact reports a different binary digest")
+    if identity_doc.get("binary_sha256") != actual:
+        reasons.append("the evaluator artifact does not hash to the digest it reports")
+    return reasons
+
+
+def resolve_evaluator(
+    candidate: dict,
+    parity: object,
+    version: str,
+    repository: str,
+    runs_document: object,
+    workdir: str,
+    gh: str = "gh",
+) -> tuple[str | None, list[str]]:
+    """Find and verify the exact evaluator built by the release workflow."""
+    recorded, reasons = recorded_evaluator(parity, candidate)
+    if recorded is None:
+        return None, reasons
+    runs, reasons = matching_release_runs(runs_document, candidate, version, repository)
+    if not runs:
+        return None, reasons
+    failures = []
+    for run in runs:
+        destination = os.path.join(workdir, f"evaluator-{run['id']}")
+        path, error = download_evaluator(run["id"], destination, gh)
+        if error is not None:
+            failures.append(error)
+            continue
+        digest = sha256_file(path)
+        if digest != recorded["binary_sha256"]:
+            failures.append(
+                f"release run {run['id']} produced evaluator sha256:{digest}, "
+                f"not the verdict's sha256:{recorded['binary_sha256']}"
+            )
+            continue
+        identity_reasons = verify_evaluator_identity(path, recorded, candidate)
+        if identity_reasons:
+            failures.extend(identity_reasons)
+            continue
+        return path, []
+    return None, failures or ["no release workflow run produced the recorded evaluator"]
+
+
+def verify_attached_contract(
+    attached_path: str, repository: str
+) -> list[str]:
+    """The attached contract is evidence; the repository copy is authority."""
+    canonical = os.path.join(
+        repository, "internal", "qualification", "qualification-contract.json"
+    )
+    try:
+        with open(attached_path, "rb") as handle:
+            attached = handle.read()
+        with open(canonical, "rb") as handle:
+            repository_copy = handle.read()
+    except OSError as error:
+        return [f"the canonical contract is not readable: {error}"]
+    if attached != repository_copy:
+        return [
+            "the attached qualification contract is not the repository-owned contract"
+        ]
+    return []
+
+
+def evaluate_parity(
+    evaluator: str,
+    repository: str,
+    candidate: dict,
+    parity: object,
+    aws_record: str,
+    gcp_record: str,
+    aws_evidence: str,
+    gcp_evidence: str,
+) -> list[str]:
+    """Re-run the verified evaluator over the exact attached evidence."""
+    result = run_evaluator(
+        evaluator,
+        [
+            "evaluate",
+            "--repository",
+            repository,
+            "--aws-record",
+            aws_record,
+            "--aws-evidence",
+            aws_evidence,
+            "--gcp-record",
+            gcp_record,
+            "--gcp-evidence",
+            gcp_evidence,
+        ],
+    )
+    if result is None:
+        return ["the verified evaluator could not be executed"]
+    code, stdout, stderr = result
+    if code != 0:
+        return [
+            f"the verified evaluator refused the attached evidence (exit {code}): "
+            f"{(stderr or stdout).strip()}"
+        ]
+    try:
+        computed = json.loads(stdout)
+    except json.JSONDecodeError:
+        return ["the verified evaluator did not emit a JSON verdict"]
+    if not isinstance(computed, dict) or computed.get("verdict") != "PASS":
+        return ["the verified evaluator did not return a PASS verdict"]
+    if not isinstance(parity, dict):
+        return ["no recorded parity verdict was supplied"]
+    if canonical(computed) != canonical(parity):
+        return [
+            "the recorded parity verdict does not match the recomputation over "
+            "the attached contract and evidence"
+        ]
+    claimed = computed.get("candidate")
+    if not isinstance(claimed, dict) or identity(claimed) != identity(candidate):
+        return ["the recomputed parity verdict refers to a different candidate"]
+    return []
+
+
+def authorize_reasons(
+    candidate: object,
+    verdict: object | None,
+    directory: object,
+    contract_path: str,
+    parity: object | None,
+    aws_record: str,
+    gcp_record: str,
+    aws_evidence: str,
+    gcp_evidence: str,
+    repository: str,
+    version: str,
+    runs_document: object,
+    workdir: str,
+    policy_path: str | None = None,
+    gh: str = "gh",
+) -> list[str]:
+    """Return the reasons promotion must refuse; empty means authorized."""
+    if not isinstance(candidate, dict):
+        return ["the candidate record is not a JSON object"]
+    reasons = release_policy_reasons(candidate, verdict, directory, policy_path)
+    reasons.extend(verify_attached_contract(contract_path, repository))
+    if reasons:
+        return reasons
+    if not isinstance(parity, dict):
+        return ["no recorded parity verdict was supplied"]
+    evaluator, reasons = resolve_evaluator(
+        candidate, parity, version, repository, runs_document, workdir, gh
+    )
+    if evaluator is None:
+        return reasons
+    return evaluate_parity(
+        evaluator,
+        repository,
+        candidate,
+        parity,
+        aws_record,
+        gcp_record,
+        aws_evidence,
+        gcp_evidence,
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -637,22 +856,23 @@ def main(argv: list[str]) -> int:
     record_parser.add_argument("--bundle", required=True)
     record_parser.add_argument("--runner-image", required=True)
     record_parser.add_argument("--out", required=True)
-    decide_parser = commands.add_parser("decide")
-    decide_parser.add_argument("--candidate", required=True)
-    decide_parser.add_argument("--verdict", required=True)
-    decide_parser.add_argument(
-        "--dir",
-        required=True,
-        help="the directory holding the candidate bundle and the evidence the verdict names",
-    )
-    parity_parser = commands.add_parser("decide-parity")
-    parity_parser.add_argument("--candidate", required=True)
-    parity_parser.add_argument("--verdict", required=True)
-    parity_parser.add_argument("--dir", required=True)
-    parity_parser.add_argument("--contract", required=True)
-    parity_parser.add_argument("--aws-record", required=True)
-    parity_parser.add_argument("--gcp-record", required=True)
-    parity_parser.add_argument("--parity", required=True)
+    authorize_parser = commands.add_parser("authorize")
+    authorize_parser.add_argument("--candidate", required=True)
+    authorize_parser.add_argument("--verdict", required=True)
+    authorize_parser.add_argument("--dir", required=True)
+    authorize_parser.add_argument("--contract", required=True)
+    authorize_parser.add_argument("--aws-record", required=True)
+    authorize_parser.add_argument("--gcp-record", required=True)
+    authorize_parser.add_argument("--aws-evidence", required=True)
+    authorize_parser.add_argument("--gcp-evidence", required=True)
+    authorize_parser.add_argument("--parity", required=True)
+    authorize_parser.add_argument("--runs", required=True)
+    authorize_parser.add_argument("--repository", required=True)
+    authorize_parser.add_argument("--version", required=True)
+    authorize_parser.add_argument("--policy")
+    extract_parser = commands.add_parser("extract")
+    extract_parser.add_argument("--archive", required=True)
+    extract_parser.add_argument("--dir", required=True)
     same_parser = commands.add_parser("same")
     same_parser.add_argument("--left", required=True)
     same_parser.add_argument("--right", required=True)
@@ -670,6 +890,13 @@ def main(argv: list[str]) -> int:
                 handle.write("\n")
             print(f"recorded candidate {data['version']} at {args.out}")
             return 0
+        if args.command == "extract":
+            reasons = safe_extract(args.archive, args.dir)
+            if reasons:
+                for reason in reasons:
+                    print(reason, file=sys.stderr)
+                return 1
+            return 0
         if args.command == "same":
             if load(args.left) == load(args.right):
                 print(f"{args.left} and {args.right} record the same candidate")
@@ -685,26 +912,32 @@ def main(argv: list[str]) -> int:
             return 0
         candidate = load(args.candidate)
         verdict = load(args.verdict)
-        parity = load(args.parity) if args.command == "decide-parity" else None
-        if args.command == "decide-parity":
-            reasons = decide_with_parity(
+        parity = load(args.parity)
+        runs_document = read_json_file(args.runs)
+        with tempfile.TemporaryDirectory() as workdir:
+            reasons = authorize_reasons(
                 candidate,
                 verdict,
                 args.dir,
                 args.contract,
+                parity,
                 args.aws_record,
                 args.gcp_record,
-                parity,
+                args.aws_evidence,
+                args.gcp_evidence,
+                args.repository,
+                args.version,
+                runs_document,
+                workdir,
+                args.policy,
             )
-        else:
-            reasons = decide(candidate, verdict, args.dir)
         if reasons:
             print("promotion refused:", file=sys.stderr)
             for reason in reasons:
                 print(f"  - {reason}", file=sys.stderr)
             return 1
         print(
-            f"candidate {candidate['version']} ({candidate['revision']}) is eligible for promotion"
+            f"candidate {candidate['version']} ({candidate['revision']}) is authorized for promotion"
         )
         print(f"  bundle {candidate['bundle']} sha256:{candidate['bundle_sha256']}")
         print(f"  runner {candidate['runner_image']}")

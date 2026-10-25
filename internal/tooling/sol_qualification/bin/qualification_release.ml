@@ -61,10 +61,79 @@ let read_bytes path =
   | Sys_error message -> die message
 ;;
 
+let json_field key json =
+  match json with
+  | `Assoc fields -> List.assoc_opt key fields
+  | _ -> None
+;;
+
+let json_string ~what key json =
+  match json_field key json with
+  | Some (`String value) when String.trim value <> "" -> value
+  | _ -> die (Printf.sprintf "%s has no string %S" what key)
+;;
+
+let json_list ~what key json =
+  match json_field key json with
+  | Some (`List values) -> values
+  | _ -> die (Printf.sprintf "%s has no list %S" what key)
+;;
+
+let evidence_ref ~directory entry =
+  let path = json_string ~what:"evidence" "path" entry in
+  let class_ = json_string ~what:"evidence" "class" entry in
+  let actual = Filename.concat directory path in
+  let bytes =
+    try In_channel.with_open_bin actual In_channel.input_all with
+    | Sys_error message -> die message
+  in
+  `Assoc
+    [ "path", `String path
+    ; "sha256", `String (Qual_domain.sha256 bytes)
+    ; "class", `String class_
+    ]
+;;
+
+let evidence_entries ~directory json =
+  `List
+    (json_list ~what:"evidence list" "evidence" json |> List.map (evidence_ref ~directory))
+;;
+
+let attempt_json directory =
+  match Qual_lifecycle.of_dir directory with
+  | Error diagnostic -> die ("attempt: " ^ diagnostic)
+  | Ok lifecycle ->
+    let provenance = lifecycle.Qual_lifecycle.provenance in
+    (match
+       ( provenance.Qual_lifecycle.attempt
+       , provenance.Qual_lifecycle.target
+       , provenance.Qual_lifecycle.cluster
+       , provenance.Qual_lifecycle.provider
+       , provenance.Qual_lifecycle.claim
+       , provenance.Qual_lifecycle.issuer
+       , provenance.Qual_lifecycle.candidate_revision )
+     with
+     | attempt, Some target, Some cluster, Some provider, claim, issuer, Some revision ->
+       `Assoc
+         [ "id", `String attempt
+         ; "target", `String target
+         ; "cluster", `String cluster
+         ; "provider", `String provider
+         ; "claim", `String claim
+         ; "issuer", `String issuer
+         ; "candidate_revision", `String revision
+         ]
+     | _ ->
+       die
+         "attempt.txt records no candidate revision, provider, target or cluster; v2 \
+          cannot bind this record")
+;;
+
 let binary_identity () =
   let revision = Qual_release.evaluator_revision in
+  let source_revision = Sol_cli_build_info.revision in
   let binary_sha256 = Qual_domain.sha256 (read_bytes Sys.executable_name) in
-  match Qual_release.evaluator ~revision ~binary_sha256 with
+  match Qual_release.evaluator ~revision ~source_revision ~binary_sha256 with
   | Ok evaluator -> evaluator
   | Error error -> die (error.stage ^ ": " ^ error.diagnostic)
 ;;
@@ -101,6 +170,118 @@ let main () =
              ; "id", `String (Qual_release.contract_id contract)
              ; "digest", `String (Qual_release.contract_digest contract)
              ]))
+  | "identity" ->
+    known [ "--out" ] values;
+    emit (optional "--out" values) (Qual_release.evaluator_json (binary_identity ()))
+  | "emit-record" ->
+    known [ "--repository"; "--attempt-dir"; "--candidate"; "--manifest"; "--out" ] values;
+    let repository = required "--repository" values in
+    let attempt_dir = required "--attempt-dir" values in
+    let candidate_path = required "--candidate" values in
+    let manifest_path = required "--manifest" values in
+    let out = required "--out" values in
+    let evaluator = binary_identity () in
+    let contract =
+      match Qual_release.load_contract ~repository with
+      | Ok contract -> contract
+      | Error error -> die (error_message error)
+    in
+    let candidate =
+      try Yojson.Safe.from_string (read_bytes candidate_path) with
+      | Yojson.Json_error message -> die ("candidate: " ^ message)
+    in
+    let manifest =
+      try Yojson.Safe.from_string (read_bytes manifest_path) with
+      | Yojson.Json_error message -> die ("manifest: " ^ message)
+    in
+    let provider = json_string ~what:"manifest" "provider" manifest in
+    let harness_revision = json_string ~what:"manifest" "harness_revision" manifest in
+    let phases =
+      `List
+        (json_list ~what:"manifest" "phases" manifest
+         |> List.map (fun phase ->
+           `Assoc
+             [ "name", `String (json_string ~what:"phase" "name" phase)
+             ; "evidence", evidence_entries ~directory:attempt_dir phase
+             ]))
+    in
+    let observations =
+      `List
+        (json_list ~what:"manifest" "observations" manifest
+         |> List.map (fun observation ->
+           `Assoc
+             [ "id", `String (json_string ~what:"observation" "id" observation)
+             ; "evidence", evidence_entries ~directory:attempt_dir observation
+             ]))
+    in
+    let claims =
+      `List
+        (json_list ~what:"manifest" "claims" manifest
+         |> List.map (fun claim ->
+           let fields =
+             [ "id", `String (json_string ~what:"claim" "id" claim)
+             ; "status", `String (json_string ~what:"claim" "status" claim)
+             ; "observations", `List (json_list ~what:"claim" "observations" claim)
+             ]
+           in
+           `Assoc
+             (fields
+              @
+              match json_field "reason" claim with
+              | Some (`String reason) -> [ "reason", `String reason ]
+              | _ -> [])))
+    in
+    let boundary =
+      match json_field "boundary" manifest with
+      | Some (`Assoc fields) -> `Assoc fields
+      | _ -> die "manifest has no boundary object"
+    in
+    let permission =
+      match json_field "permission_binding" manifest with
+      | Some (`Assoc fields) -> `Assoc fields
+      | _ -> die "manifest has no permission_binding object"
+    in
+    let selection =
+      match json_field "selection" manifest with
+      | Some value -> value
+      | None -> die "manifest has no selection"
+    in
+    let record =
+      `Assoc
+        [ "schema", `Int 2
+        ; "provider", `String provider
+        ; "candidate", candidate
+        ; "harness_revision", `String harness_revision
+        ; "evaluator", Qual_release.evaluator_json evaluator
+        ; "attempt", attempt_json attempt_dir
+        ; ( "contract"
+          , `Assoc
+              [ "id", `String (Qual_release.contract_id contract)
+              ; "digest", `String (Qual_release.contract_digest contract)
+              ] )
+        ; "selection", selection
+        ; "phases", phases
+        ; "observations", observations
+        ; "claims", claims
+        ; "boundary", boundary
+        ; "permission_binding", permission
+        ]
+    in
+    let temp = out ^ ".tmp" in
+    (try
+       Out_channel.with_open_bin temp (fun channel ->
+         output_string channel (Yojson.Safe.pretty_to_string record ^ "\n"))
+     with
+     | Sys_error message -> die message);
+    (match Qual_release.load_record ~contract ~directory:attempt_dir ~path:temp with
+     | Error error ->
+       (try Sys.remove temp with
+        | Sys_error _ -> ());
+       die (error_message error)
+     | Ok _ ->
+       (try Sys.rename temp out with
+        | Sys_error message -> die message);
+       print_endline out)
   | "evaluate" ->
     known
       [ "--repository"

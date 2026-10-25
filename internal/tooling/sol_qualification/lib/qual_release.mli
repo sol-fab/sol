@@ -54,6 +54,7 @@ type candidate = private
 
 type evaluator = private
   { revision : string
+  ; source_revision : string option
   ; binary_sha256 : string
   }
 
@@ -237,6 +238,7 @@ val load_record
 val evaluate : evaluator:evaluator -> contract -> record -> record -> verdict
 val verdict_to_yojson : verdict -> Yojson.Safe.t
 val contract_to_yojson : contract -> Yojson.Safe.t
+val evaluator_json : evaluator -> Yojson.Safe.t
 val contract_id : contract -> string
 val contract_digest : contract -> string
 val contract_source : contract -> source option
@@ -246,4 +248,8 @@ val record_to_yojson : record -> Yojson.Safe.t
     revision is the semantic identity of the evaluating implementation; the
     caller supplies the binary digest because only the executable boundary can
     observe its own bytes. *)
-val evaluator : revision:string -> binary_sha256:string -> (evaluator, error) result
+val evaluator
+  :  revision:string
+  -> source_revision:string option
+  -> binary_sha256:string
+  -> (evaluator, error) result
