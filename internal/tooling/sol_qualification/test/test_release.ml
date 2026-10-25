@@ -47,6 +47,24 @@ let write_file path contents =
 let read_file path = In_channel.with_open_bin path In_channel.input_all
 let sha256 text = Qual_domain.sha256 text
 
+let replace_line directory filename replacements =
+  let path = Filename.concat directory filename in
+  let lines = String.split_on_char '\n' (read_file path) in
+  let replaced =
+    List.map
+      (fun line ->
+         match String.index_opt line '=' with
+         | Some index ->
+           let key = String.sub line 0 index in
+           (match List.assoc_opt key replacements with
+            | Some value -> key ^ "=" ^ value
+            | None -> line)
+         | None -> line)
+      lines
+  in
+  write_file path (String.concat "\n" replaced)
+;;
+
 let rec mkdir_p path =
   if Sys.file_exists path
   then ()
@@ -350,6 +368,15 @@ let evaluate contract aws gcp =
 
 (* ------------------------------------------------------------------ *)
 
+let json_records verdict =
+  match R.verdict_to_yojson verdict with
+  | `Assoc fields ->
+    (match List.assoc_opt "records" fields with
+     | Some (`List records) -> records
+     | _ -> [])
+  | _ -> []
+;;
+
 let test_valid_pair () =
   let contract = contract () in
   with_temp_dir "valid-aws" (fun aws_dir ->
@@ -364,7 +391,39 @@ let test_valid_pair () =
           "the pass binds the contract digest"
           (pass.contract_digest = contract_digest contract);
         check "the pass shows the typed exceptions" (List.length pass.exceptions = 1);
-        check "the pass shows both claim families" (List.length pass.claims = 2)
+        check "the pass shows both claim families" (List.length pass.claims = 2);
+        let records = json_records (evaluate contract aws gcp) in
+        let digests =
+          List.filter_map
+            (function
+              | `Assoc fields ->
+                (match List.assoc_opt "record_sha256" fields with
+                 | Some (`String digest) -> Some digest
+                 | _ -> None)
+              | _ -> None)
+            records
+        in
+        let expected =
+          [ sha256 (read_file (Filename.concat aws_dir "record.json"))
+          ; sha256 (read_file (Filename.concat gcp_dir "record.json"))
+          ]
+        in
+        check
+          "the verdict binds each record's raw bytes"
+          (List.sort String.compare digests = List.sort String.compare expected);
+        let attempts =
+          List.filter_map
+            (function
+              | `Assoc fields ->
+                (match List.assoc_opt "attempt" fields with
+                 | Some (`String attempt) -> Some attempt
+                 | _ -> None)
+              | _ -> None)
+            records
+        in
+        check
+          "the verdict binds both attempt identities"
+          (List.sort String.compare attempts = [ "aws-1"; "gcp-1" ])
       | R.Refused reasons ->
         check
           ("a valid two-provider qualification passes: " ^ String.concat "; " reasons)
@@ -582,29 +641,9 @@ let test_attempt_drift () =
 let test_attempt_candidate_drift () =
   let contract = contract () in
   with_temp_dir "attempt-candidate" (fun directory ->
-    let _, json = fixture contract "aws" directory in
-    let other = String.make 40 'f' in
-    let json =
-      match json with
-      | `Assoc fields ->
-        `Assoc
-          (List.map
-             (fun (key, value) ->
-                match key, value with
-                | "candidate", `Assoc candidate ->
-                  ( "candidate"
-                  , `Assoc
-                      (List.map
-                         (fun (field, value) ->
-                            if field = "revision"
-                            then field, `String other
-                            else field, value)
-                         candidate) )
-                | _ -> key, value)
-             fields)
-      | value -> value
-    in
-    let path = write_record directory contract "aws" json in
+    ignore (fixture contract "aws" directory);
+    replace_line directory "attempt.txt" [ "candidate_revision", String.make 40 'f' ];
+    let path = Filename.concat directory "record.json" in
     match R.load_record ~contract ~directory ~path with
     | Error _ -> check "candidate/attempt revision drift refuses" true
     | Ok _ -> check "candidate/attempt revision drift refuses" false)
@@ -1160,7 +1199,7 @@ let test_excluded_without_exception () =
       has_reason
         "a record cannot self-authorize an exception"
         (evaluate contract aws gcp)
-        "excluded without a contract exception"))
+        "a provider-specific omission is a contract exception"))
 ;;
 
 let test_exception_reason_drift () =
@@ -1330,24 +1369,6 @@ let test_cli_refusal () =
         |> String.concat " "
       in
       check "the CLI returns 1 for a refused pair" (Sys.command quoted = 1)))
-;;
-
-let replace_line directory filename replacements =
-  let path = Filename.concat directory filename in
-  let lines = String.split_on_char '\n' (read_file path) in
-  let replaced =
-    List.map
-      (fun line ->
-         match String.index_opt line '=' with
-         | Some index ->
-           let key = String.sub line 0 index in
-           (match List.assoc_opt key replacements with
-            | Some value -> key ^ "=" ^ value
-            | None -> line)
-         | None -> line)
-      lines
-  in
-  write_file path (String.concat "\n" replaced)
 ;;
 
 let test_replay_other_attempt () =
@@ -1704,20 +1725,85 @@ let test_contract_substitution () =
   with_temp_dir "contract-substitution" (fun directory ->
     let path = Filename.concat directory R.canonical_contract_path in
     mkdir_p (Filename.dirname path);
-    let weakened = contract_json ~providers:[ "aws" ] () in
+    let weakened =
+      contract_json
+        ~claims:
+          (Some
+             [ `Assoc
+                 [ "family", `String "application-transaction"
+                 ; "evidence_class", `String "behavioral"
+                 ; "test", `String "internal/qualification/local/test-rows-ocaml.sh"
+                 ; "ids", `Assoc [ "aws", `String "B1"; "gcp", `String "B1" ]
+                 ]
+             ])
+        ~exceptions:(Some [])
+        ()
+    in
     write_file path (Yojson.Safe.pretty_to_string weakened ^ "\n");
     match R.load_contract ~repository:directory with
     | Error error ->
+      let diagnostic = error.R.diagnostic in
+      let needle = "reviewed pin" in
+      let rec contains index =
+        index + String.length needle <= String.length diagnostic
+        && (String.sub diagnostic index (String.length needle) = needle
+            || contains (index + 1))
+      in
       check
-        "a substituted contract file refuses against the evaluator pin"
-        (String.length error.R.diagnostic > 0)
-    | Ok _ -> check "a substituted contract file refuses against the evaluator pin" false)
+        "a structurally valid weakened contract refuses against the evaluator pin"
+        (contains 0)
+    | Ok _ ->
+      check
+        "a structurally valid weakened contract refuses against the evaluator pin"
+        false)
+;;
+
+let test_contract_provider_without_claim () =
+  let claims =
+    [ `Assoc
+        [ "family", `String "application-transaction"
+        ; "evidence_class", `String "behavioral"
+        ; "test", `String "internal/qualification/local/test-rows-ocaml.sh"
+        ; "ids", `Assoc [ "aws", `String "B1" ]
+        ]
+    ]
+  in
+  let exceptions =
+    [ `Assoc
+        [ "family", `String "application-transaction"
+        ; "provider", `String "gcp"
+        ; "reason", `String "no GCP claim"
+        ; "test", `String test_path
+        ]
+    ]
+  in
+  match
+    R.contract_of_json
+      (contract_json ~claims:(Some claims) ~exceptions:(Some exceptions) ())
+  with
+  | Error _ -> check "an exception-only provider is refused as unsatisfiable" true
+  | Ok _ -> check "an exception-only provider is refused as unsatisfiable" false
+;;
+
+let test_unverified_record_cannot_pass () =
+  let contract = contract () in
+  with_temp_dir "unverified-aws" (fun aws_dir ->
+    with_temp_dir "unverified-gcp" (fun gcp_dir ->
+      let aws_json = record_json ~directory:aws_dir ~contract ~provider:"aws" () in
+      let aws = ok "parse-only aws record" (R.record_of_json ~contract aws_json) in
+      let gcp, _ = fixture contract "gcp" gcp_dir in
+      has_reason
+        "a parsed but unverified record cannot pass"
+        (evaluate contract aws gcp)
+        "not loaded and evidence-verified"))
 ;;
 
 let tests () =
   [ "valid pair", test_valid_pair
   ; "unloaded contract", test_unloaded_contract_cannot_pass
   ; "contract substitution", test_contract_substitution
+  ; "provider without claim", test_contract_provider_without_claim
+  ; "unverified record", test_unverified_record_cannot_pass
   ; "one-provider contract", test_one_provider_contract
   ; "missing phase contract", test_missing_phase_contract
   ; "claim without provider", test_claim_without_provider

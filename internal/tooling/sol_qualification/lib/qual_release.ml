@@ -545,7 +545,7 @@ let contract_id (contract : contract) = contract.id
 let contract_digest (contract : contract) = contract.digest
 let contract_source (contract : contract) = contract.source
 
-let contract_of_json ?source:contract_source json =
+let contract_of_json_internal ?source:contract_source json =
   let* () = reject_duplicate_keys json in
   let stage = "contract" in
   let* schema = required_int ~stage "schema" json in
@@ -774,9 +774,19 @@ let contract_of_json ?source:contract_source json =
       check claims
     in
     let* () =
-      if List.for_all (fun provider -> claim_ids_for provisional provider = []) providers
-      then fail stage "the contract maps no claim id to any provider"
-      else Ok ()
+      List.fold_left
+        (fun state provider ->
+           let* () = state in
+           if claim_ids_for provisional provider = []
+           then
+             fail
+               stage
+               "the contract maps no claim id to %s; an exception-only provider is \
+                unsatisfiable"
+               (string_of_provider provider)
+           else Ok ())
+        (Ok ())
+        providers
     in
     let digest = semantic_digest (contract_semantic_json provisional) in
     Ok { provisional with digest }
@@ -864,6 +874,8 @@ let claim_json (claim : claim) =
      | None -> []
      | Some reason -> [ "reason", `String reason ])
 ;;
+
+let contract_of_json json = contract_of_json_internal json
 
 let record_of_json ~(contract : contract) json =
   let* () = reject_duplicate_keys json in
@@ -1140,7 +1152,11 @@ let read_file ~stage ~limit path =
     then fail stage "%s is not a regular file" path
     else if stat.Unix.st_size > limit
     then fail stage "%s exceeds the %d-byte evidence bound" path limit
-    else Ok (In_channel.with_open_bin path In_channel.input_all)
+    else (
+      let bytes = In_channel.with_open_bin path In_channel.input_all in
+      if String.length bytes > limit
+      then fail stage "%s exceeds the %d-byte evidence bound" path limit
+      else Ok bytes)
   with
   | Unix.Unix_error (code, _, _) -> fail stage "%s: %s" path (Unix.error_message code)
   | Sys_error message -> fail stage "%s" message
@@ -1298,12 +1314,24 @@ let load_contract ~repository =
   let path = Filename.concat repository canonical_contract_path in
   let* bytes = read_file ~stage ~limit:max_contract_bytes path in
   let raw_sha256 = sha256 bytes in
+  let* () =
+    if raw_sha256 <> canonical_contract_sha256
+    then
+      fail
+        stage
+        "the contract bytes at %s (sha256:%s) do not match the evaluator's reviewed pin \
+         (sha256:%s)"
+        canonical_contract_path
+        raw_sha256
+        canonical_contract_sha256
+    else Ok ()
+  in
   let* json =
     try Ok (Yojson.Safe.from_string bytes) with
     | Yojson.Json_error diagnostic -> fail stage "malformed contract JSON: %s" diagnostic
   in
   let* contract =
-    contract_of_json ~source:{ path = canonical_contract_path; raw_sha256 } json
+    contract_of_json_internal ~source:{ path = canonical_contract_path; raw_sha256 } json
   in
   let* () =
     List.fold_left
@@ -1490,21 +1518,11 @@ let evaluator_reasons
                    claim.id
                    (string_of_evidence_class family.evidence_class)
                | Claim_excluded ->
-                 (match
-                    exception_for contract ~family:family.family ~provider:record.provider
-                  with
-                  | None ->
-                    refuse
-                      "the %s claim %S is excluded without a contract exception"
-                      label
-                      claim.id
-                  | Some exception_ ->
-                    check
-                      (claim.reason = Some exception_.reason)
-                      "the %s claim %S exclusion reason does not match the contract \
-                       exception"
-                      label
-                      claim.id)
+                 refuse
+                   "the %s claim %S is excluded; a provider-specific omission is a \
+                    contract exception, not a record status"
+                   label
+                   claim.id
                | Claim_fail -> refuse "the %s claim %S failed" label claim.id
                | Claim_blocked -> refuse "the %s claim %S is blocked" label claim.id
                | Claim_not_run -> refuse "the %s claim %S was not run" label claim.id))
@@ -1567,12 +1585,10 @@ let evaluator_reasons
   List.rev !reasons
 ;;
 
-let record_binding (record : record) =
+let record_binding ~record_sha256 (record : record) =
   { provider = record.provider
   ; attempt = record.attempt.id
-  ; record_sha256 =
-      (* The evaluator refuses an unfinished load before a binding is issued. *)
-      Option.value ~default:"" record.raw_sha256
+  ; record_sha256
   ; record_content_sha256 = record.content_sha256
   ; boundary = record.boundary.kind
   ; deploy_identity = record.permission.deploy_identity
@@ -1602,9 +1618,9 @@ let exception_view (exception_ : exception_) =
 
 let evaluate ~(evaluator : evaluator) (contract : contract) aws gcp =
   let reasons = evaluator_reasons ~evaluator contract aws gcp in
-  match reasons with
-  | _ :: _ -> Refused reasons
-  | [] ->
+  match reasons, aws.raw_sha256, gcp.raw_sha256 with
+  | _ :: _, _, _ -> Refused reasons
+  | [], Some aws_sha256, Some gcp_sha256 ->
     Pass
       { contract_id = contract.id
       ; contract_digest = contract.digest
@@ -1613,10 +1629,14 @@ let evaluate ~(evaluator : evaluator) (contract : contract) aws gcp =
       ; harness_revision = aws.harness_revision
       ; selection = aws.selection
       ; evaluator
-      ; records = [ record_binding aws; record_binding gcp ]
+      ; records =
+          [ record_binding ~record_sha256:aws_sha256 aws
+          ; record_binding ~record_sha256:gcp_sha256 gcp
+          ]
       ; claims = List.map (claim_binding contract) contract.claims
       ; exceptions = List.map exception_view contract.exceptions
       }
+  | [], _, _ -> Refused [ "the record bytes were not read" ]
 ;;
 
 (* Verdict encoding ------------------------------------------------------- *)
