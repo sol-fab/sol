@@ -229,12 +229,46 @@ let test_served_kinds_forget_nothing () =
   | Ok unserved -> Windtrap.equal Windtrap.int ~msg:"nothing" 0 (List.length unserved)
 ;;
 
+let test_child_module_manifests_are_found () =
+  match
+    Sol_cli_platform_teardown.unserved_of_show_json
+      ~served:[ "ConfigMap" ]
+      {|{"values":{"root_module":{"resources":[],"child_modules":[{"resources":[{"address":"module.a.kubernetes_manifest.issuer","type":"kubernetes_manifest","values":{"manifest":{"kind":"ClusterIssuer"}}}]},{"child_modules":[{"resources":[{"address":"module.a.module.b.kubernetes_manifest.issuer","type":"kubernetes_manifest","values":{"manifest":{"kind":"ClusterIssuer"}}}]}]}]}}}|}
+  with
+  | Error message -> Windtrap.fail message
+  | Ok unserved ->
+    Windtrap.equal
+      (Windtrap.list (Windtrap.pair Windtrap.string Windtrap.string))
+      ~msg:"manifest resources in nested child modules"
+      [ "module.a.kubernetes_manifest.issuer", "ClusterIssuer"
+      ; "module.a.module.b.kubernetes_manifest.issuer", "ClusterIssuer"
+      ]
+      unserved
+;;
+
 let test_unreadable_state_is_an_error () =
-  (match Sol_cli_platform_teardown.unserved_of_show_json ~served:[] "not json" with
-   | Ok _ -> Windtrap.fail "expected invalid JSON to be an error"
-   | Error _ -> ());
-  match Sol_cli_platform_teardown.unserved_of_show_json ~served:[] {|{"values":{}}|} with
-  | Ok _ -> Windtrap.fail "expected a state with no resources list to be an error"
+  match Sol_cli_platform_teardown.unserved_of_show_json ~served:[] "not json" with
+  | Ok _ -> Windtrap.fail "expected invalid JSON to be an error"
+  | Error _ -> ()
+;;
+
+let test_empty_state_forgets_nothing () =
+  List.iter
+    (fun json ->
+       match Sol_cli_platform_teardown.unserved_of_show_json ~served:[] json with
+       | Ok [] -> ()
+       | Ok _ -> Windtrap.fail "an empty state yielded unserved resources"
+       | Error message -> Windtrap.fail message)
+    [ {|{"values":null}|}; {|{"values":{}}|}; {|{"values":{"root_module":{}}}|} ]
+;;
+
+let test_malformed_resources_is_an_error () =
+  match
+    Sol_cli_platform_teardown.unserved_of_show_json
+      ~served:[]
+      {|{"values":{"root_module":{"resources":"no"}}}|}
+  with
+  | Ok _ -> Windtrap.fail "expected a malformed resources field to be an error"
   | Error _ -> ()
 ;;
 
@@ -261,3 +295,12 @@ let%test "platform teardown: unserved manifests" =
 
 let%test "platform teardown: served kinds" = test_served_kinds_forget_nothing ()
 let%test "platform teardown: unreadable state" = test_unreadable_state_is_an_error ()
+let%test "platform teardown: empty state" = test_empty_state_forgets_nothing ()
+
+let%test "platform teardown: malformed resources" =
+  test_malformed_resources_is_an_error ()
+;;
+
+let%test "platform teardown: child module manifests" =
+  test_child_module_manifests_are_found ()
+;;

@@ -52,12 +52,30 @@ let unserved_of_show_json ~served text =
   match Sol_cli_json.decode_sensitive ~what:"terraform show -json" text with
   | Error message -> Error message
   | Ok json ->
-    Sol_cli_json.require
-      ~what:"unexpected `terraform show -json` shape"
-      [ "values"; "root_module"; "resources" ]
-      Sol_cli_json.list
-      json
-    |> Result.map (List.filter_map unserved)
+    let rec collect acc module_json =
+      let* acc =
+        match Sol_cli_json.field [ "resources" ] module_json with
+        | `Null -> Ok acc
+        | `List resources -> Ok (List.rev_append (List.filter_map unserved resources) acc)
+        | _ -> Error "unexpected `terraform show -json` resources shape"
+      in
+      match Sol_cli_json.field [ "child_modules" ] module_json with
+      | `Null -> Ok acc
+      | `List children ->
+        List.fold_left
+          (fun acc child ->
+             let* acc = acc in
+             collect acc child)
+          (Ok acc)
+          children
+      | _ -> Error "unexpected `terraform show -json` child_modules shape"
+    in
+    (match Sol_cli_json.field [ "values" ] json with
+     | `Null -> Ok []
+     | values ->
+       (match Sol_cli_json.field [ "root_module" ] values with
+        | `Null -> Ok []
+        | root -> Result.map List.rev (collect [] root)))
 ;;
 
 let unserved_manifest_resources ~served ~chdir =
