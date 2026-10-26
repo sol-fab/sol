@@ -247,7 +247,11 @@ resource "helm_release" "redpanda" {
   chart      = "redpanda"
   version    = local.platform_components.versions.redpanda
   namespace  = kubernetes_namespace.redpanda.metadata[0].name
-  timeout    = 600
+  # Three brokers pull images and form quorum on a fresh four-node pool. A
+  # production install has exceeded the old 600s ceiling while still making
+  # progress; allow the same 30m window as cert-manager instead of failing a
+  # healthy rollout.
+  timeout = 1800
 
   values = concat(
     local.redpanda_component_values,
