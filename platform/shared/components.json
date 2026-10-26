@@ -194,6 +194,11 @@
             "cert": "default"
           }
         }
+      },
+      "storage": {
+        "persistentVolume": {
+          "size": "20Gi"
+        }
       }
     }
   },
