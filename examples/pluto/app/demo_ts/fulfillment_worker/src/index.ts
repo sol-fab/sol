@@ -13,7 +13,7 @@ import {
 import { runJobs } from "@sol-fab/jobs";
 import { makeLokiPusher } from "@sol-fab/obs";
 import { runRelay } from "@sol-fab/outbox";
-import { runWorker } from "@sol-fab/worker";
+import { createWorkerHealth, runWorker } from "@sol-fab/worker";
 import {
   ORDER_FULFILLED,
   ORDER_PLACED,
@@ -52,6 +52,7 @@ const {
   outboxPending,
   outboxOldestPendingSeconds,
 } = makeWorkerMetrics();
+const health = createWorkerHealth();
 
 async function main() {
   const postgresUrl = requiredPostgresUrl();
@@ -91,12 +92,19 @@ async function main() {
   await consumer.subscribe({ topic: TOPIC_NAME, fromBeginning: false });
 
   const metricsServer = createServer((req, res) => {
-    if (req.url === "/readyz" || req.url === "/healthz") {
+    const path = req.url ?? "";
+    if (path === "/healthz") {
       res.writeHead(200, { "content-type": "text/plain" });
       res.end("ok\n");
       return;
     }
-    if (req.url === "/metrics") {
+    const healthResponse = health.response(path);
+    if (healthResponse !== undefined) {
+      res.writeHead(healthResponse.status, { "content-type": "text/plain; charset=utf-8" });
+      res.end(healthResponse.body);
+      return;
+    }
+    if (path === "/metrics") {
       metricsRegister.metrics().then((body) => {
         res.writeHead(200, { "content-type": metricsRegister.contentType });
         res.end(body);
@@ -114,6 +122,13 @@ async function main() {
     console.error(`[worker] undecodable message, dead-lettered: ${String(err)}`);
     log("error", "undecodable message, dead-lettered", { error: String(err) });
   };
+
+  consumer.on(consumer.events.GROUP_JOIN, () => {
+    health.onAssignment(1);
+  });
+  consumer.on(consumer.events.HEARTBEAT, () => {
+    health.onPoll();
+  });
 
   await consumer.run({
     eachMessage: wrapEachMessage({

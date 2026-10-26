@@ -20,7 +20,7 @@
     "@sol-fab/obs": "^0.4.0",
     "@sol-fab/outbox": "^0.1.0",
     "@sol-fab/retry": "^0.1.0",
-    "@sol-fab/worker": "^0.1.0",
+    "@sol-fab/worker": "^0.2.0",
     "kafkajs": "^2.2.4",
     "pg": "^8.13.1"
   },
