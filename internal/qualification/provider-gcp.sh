@@ -285,7 +285,10 @@ hook_gcp_cloud_cold_deploy() {
   return "$rc"
 }
 
-hook_gcp_cloud_prestate() { start_cluster_kubeconfig_waiter; }
+hook_gcp_cloud_prestate() {
+  require_letsencrypt_headroom || return 1
+  start_cluster_kubeconfig_waiter
+}
 
 hook_gcp_cloud_post_apply() { :; }
 

@@ -270,3 +270,35 @@ run() {
   say "ok: $name"
 }
 
+
+# Let's Encrypt has no remaining-quota API. Refuse before provisioning when
+# public CT history already shows the duplicate-certificate limit reached, or
+# when that history cannot be read. This is a best-effort guard, not a
+# reservation: CT can lag, so a successful check does not guarantee issuance.
+require_letsencrypt_headroom() {
+  if [ "${CLUSTER_ISSUER:-}" != "letsencrypt-prod" ]; then
+    return 0
+  fi
+  case "${SOL_LE_PREFLIGHT:-enforce}" in
+    off)
+      say "letsencrypt-preflight: skipped by SOL_LE_PREFLIGHT=off"
+      return 0
+      ;;
+    allow-unknown)
+      set -- --allow-unknown
+      ;;
+    *)
+      set --
+      ;;
+  esac
+  local ledger="${SOL_LE_LEDGER:-${XDG_DATA_HOME:-$HOME/.local/share}/sol/qualification/letsencrypt-issuance.json}"
+  if ! python3 "$ROOT/internal/qualification/letsencrypt_preflight.py" \
+    --base-domain "$BASE_DOMAIN" --issuer "$CLUSTER_ISSUER" \
+    --ledger "$ledger" --reserve \
+    --out "$LOG_DIR/letsencrypt-preflight.txt" "$@"; then
+    say "REFUSING: Let's Encrypt duplicate-certificate headroom is not established;"
+    say "  see $LOG_DIR/letsencrypt-preflight.txt. Wait for the reported window or use"
+    say "  a new base domain; only an operator may set SOL_LE_PREFLIGHT=allow-unknown/off."
+    return 1
+  fi
+}
