@@ -143,6 +143,36 @@ wait_for_consumer_join() {
 }
 wait_for_consumer_join
 
+# The worker's readiness contract is the published @sol-fab/worker health
+# state, not merely a running pod: /readyz is 200 only after GROUP_JOIN and
+# /livez is 200 while heartbeats continue.
+worker_pod=$(kubectl get pods -n "$demo_ns" -l app=fulfillment-worker -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$worker_pod" ]; then
+  echo "::error::TS golden-path smoke test: no fulfillment-worker pod was found"
+  exit 1
+fi
+kubectl port-forward -n "$demo_ns" "pod/$worker_pod" 19090:9090 >/tmp/ts-worker-port-forward.log 2>&1 &
+worker_forward=$!
+cleanup_worker_forward() { kill "$worker_forward" >/dev/null 2>&1 || true; wait "$worker_forward" 2>/dev/null || true; }
+trap cleanup_worker_forward EXIT
+worker_probe() {
+  local path=$1 i
+  for i in $(seq 1 30); do
+    if curl -sf "http://localhost:19090${path}" >/dev/null; then
+      echo "worker ${path} OK"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "::error::TS golden-path smoke test: worker ${path} never returned success"
+  cat /tmp/ts-worker-port-forward.log || true
+  return 1
+}
+worker_probe /readyz
+worker_probe /livez
+cleanup_worker_forward
+trap - EXIT
+
 probe() {
   local path=$1
   local i
