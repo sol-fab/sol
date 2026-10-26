@@ -30,7 +30,9 @@ transport only (`internal/qualification/transport/`), never named by a target fi
 ### Alpha row reconciliation (the run's scope)
 
 The workload is the frozen reference scenario, implemented by `FEAT-131`/`FEAT-132` in the
-OCaml namespace; the TypeScript namespace is not in the production profile (DEC-026 §2).
+OCaml namespace. The production profile also includes TypeScript (ADR 0009), so the row
+drives the OCaml charge path and the TypeScript `order_svc`/`fulfillment_worker` order path;
+both transcripts are B1 evidence.
 The harness binds the scenario through `SVC_UNIT`/`WORKER_UNIT` (with their directories
 `SVC_DIR`/`WORKER_DIR`), `APP_NS`/`WORKER_NS`, `APP_SERVICE`, `APP_PORT` and `SCENARIO`. The
 pre-campaign shape is the default (`charge_svc`/`notify_worker`, `charges`); the alpha binding
@@ -139,8 +141,8 @@ command's output.
    `claim=mechanism-only` (staging) or `claim=production` (promotion); a continuation
    preserves the recorded issuer/claim, and a different issuer is a new attempt.
    It also names `cluster_endpoint_cidr` (never
-   `0.0.0.0/0`), `node_failure_headroom_nodes`, `destroy_retention: none`, and the two
-   TypeScript units omitted. The alert fields are required by the profile preflight; they are
+   `0.0.0.0/0`), `node_failure_headroom_nodes`, `destroy_retention: none`, and includes the
+   two TypeScript units (`order_svc`, `fulfillment_worker`). The alert fields are required by the profile preflight; they are
    set to a real receiver only when pursuing G1–G3, and the run records G as blocked otherwise.
 9. Explicit operator authorization for the live run and the release
    version (§7.6).
@@ -408,7 +410,6 @@ checkout build: the artifact a user installs is the thing under qualification (J
 
 - The delivered-and-acknowledged alert (AWS matrix G1–G3) without a real receiver and an owner.
 - Alpha E5 (`VERIF-022`) until `FEAT-134` lands, and the DEC-063 mechanism on `gcp`/`byo`.
-- The TypeScript production profile (DEC-026 §2), GCP, `byo`, `self_hosted_durable` /
-  `external` observability, zone-failure tolerance, multi-team RBAC, admission policy,
-  federation, and signing/SBOM (the matrix's section J).
+- GCP, `byo`, `self_hosted_durable` / `external` observability, zone-failure tolerance,
+  multi-team RBAC, admission policy, federation, and signing/SBOM (the matrix's section J).
 - Any row it does not reach: those stay `NOT RUN` with the reason, never promoted.
