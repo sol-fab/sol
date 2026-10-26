@@ -8,7 +8,8 @@ import {
   makeOrderJobs,
   WORKSPACE,
 } from "../fulfillment_worker/src/jobs.js";
-import { publishFulfilled } from "../fulfillment_worker/src/outbox.js";
+import { FULFILLED_KIND, publishFulfilled } from "../fulfillment_worker/src/outbox.js";
+import { ORDER_PLACED_KIND, publishOrderPlaced } from "../order_svc/src/outbox.js";
 import { fulfillOrder } from "../fulfillment_worker/src/fulfill.js";
 import { applyMigrations } from "./migrations.js";
 import type { OrderFulfilled } from "@demo-ts/contract";
@@ -57,6 +58,7 @@ async function relayUntil(
   const controller = new AbortController();
   return runRelay({
     pool,
+    kinds: [FULFILLED_KIND],
     publish: async (publication) => {
       await publish(publication);
       if (done()) controller.abort();
@@ -149,6 +151,7 @@ withDb("a blocked earlier event holds later events for the same key", async () =
     let failFirst = true;
     const failure = await runRelay({
       pool: db.pool,
+      kinds: [FULFILLED_KIND],
       publish: async (publication) => {
         attempts.push(publication.ord);
         if (failFirst) {
@@ -167,6 +170,104 @@ withDb("a blocked earlier event holds later events for the same key", async () =
     assert.deepEqual(await pending(db.pool), [{ key: "outbox-blocked", ord: 2 }]);
   } finally {
     await clean(db, "outbox-blocked");
+    await db.close();
+  }
+});
+
+withDb("a relay selects only its owned kinds from a shared table", async () => {
+  const db = await makeDb(POSTGRES_URL!);
+  await applyMigrations(db.pool);
+  const key = "outbox-foreign";
+  try {
+    await clean(db, key);
+    await publishOrderPlaced(db.pool, { order_id: key, item: "widget", quantity: 1 }, 1);
+    await publishFulfilled(db.pool, order(key), 2);
+
+    const foreign: Publication[] = [];
+    const controller = new AbortController();
+    const stop = setTimeout(() => controller.abort(), 50);
+    const failure = await runRelay({
+      pool: db.pool,
+      kinds: [FULFILLED_KIND],
+      publish: async (publication) => {
+        foreign.push(publication);
+      },
+      signal: controller.signal,
+      sleep: async () => {},
+      onWarning: () => {},
+    });
+    clearTimeout(stop);
+    assert.equal(failure, undefined);
+    assert.deepEqual(foreign, [], "the fulfillment owner never receives order_placed");
+    assert.deepEqual(await pending(db.pool), [
+      { key, ord: 1 },
+      { key, ord: 2 },
+    ]);
+
+    await db.pool.query("DELETE FROM sol_outbox WHERE aggregate_key = $1 AND ord = 1", [key]);
+    const owned: Publication[] = [];
+    const ownedController = new AbortController();
+    const ownedFailure = await runRelay({
+      pool: db.pool,
+      kinds: [FULFILLED_KIND],
+      publish: async (publication) => {
+        owned.push(publication);
+        ownedController.abort();
+      },
+      signal: ownedController.signal,
+      sleep: async () => {},
+    });
+    assert.equal(ownedFailure, undefined);
+    assert.deepEqual(owned.map((publication) => publication.kind), [FULFILLED_KIND]);
+    assert.equal(await pendingCount(db.pool), 0);
+  } finally {
+    await clean(db, key);
+    await db.close();
+  }
+});
+
+withDb("two kind owners on one table publish their own rows in key order", async () => {
+  const db = await makeDb(POSTGRES_URL!);
+  await applyMigrations(db.pool);
+  const key = "outbox-two-owners";
+  try {
+    await clean(db, key);
+    await publishOrderPlaced(db.pool, { order_id: key, item: "widget", quantity: 1 }, 1);
+    await publishFulfilled(db.pool, order(key), 2);
+
+    const placed: Publication[] = [];
+    const placedController = new AbortController();
+    const placedFailure = await runRelay({
+      pool: db.pool,
+      kinds: [ORDER_PLACED_KIND],
+      publish: async (publication) => {
+        placed.push(publication);
+        placedController.abort();
+      },
+      signal: placedController.signal,
+      sleep: async () => {},
+    });
+    assert.equal(placedFailure, undefined);
+    assert.deepEqual(placed.map((publication) => publication.kind), [ORDER_PLACED_KIND]);
+    assert.deepEqual(await pending(db.pool), [{ key, ord: 2 }]);
+
+    const fulfilled: Publication[] = [];
+    const fulfilledController = new AbortController();
+    const fulfilledFailure = await runRelay({
+      pool: db.pool,
+      kinds: [FULFILLED_KIND],
+      publish: async (publication) => {
+        fulfilled.push(publication);
+        fulfilledController.abort();
+      },
+      signal: fulfilledController.signal,
+      sleep: async () => {},
+    });
+    assert.equal(fulfilledFailure, undefined);
+    assert.deepEqual(fulfilled.map((publication) => publication.kind), [FULFILLED_KIND]);
+    assert.equal(await pendingCount(db.pool), 0);
+  } finally {
+    await clean(db, key);
     await db.close();
   }
 });

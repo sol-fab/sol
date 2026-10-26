@@ -205,6 +205,7 @@ async function main() {
   const outboxRunning = watch(
     runRelay({
     pool: db.pool,
+    kinds: [ORDER_PLACED_KIND],
     publish: async (publication) => {
       if (publication.kind !== ORDER_PLACED_KIND) {
         throw new Error(

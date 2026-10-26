@@ -163,6 +163,7 @@ async function main() {
   const outboxRunning = watch(
     runRelay({
     pool: db.pool,
+    kinds: [FULFILLED_KIND],
     publish: async (publication) => {
       if (publication.kind !== FULFILLED_KIND) {
         throw new Error(
