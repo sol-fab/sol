@@ -302,3 +302,19 @@ require_letsencrypt_headroom() {
     return 1
   fi
 }
+
+# Record the CA's own retry window when a platform apply failed on the
+# duplicate-certificate limit. CT can lag; this local block is authoritative
+# for our next attempt until the CA says the window has passed.
+record_letsencrypt_rate_limit() {
+  [ "${CLUSTER_ISSUER:-}" = "letsencrypt-prod" ] || return 0
+  local retry
+  retry="$(grep -rhoE 'retry after [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} UTC' "$LOG_DIR"/*.log 2>/dev/null     | sed -E 's/^retry after //; s/ UTC$//' | tail -1)"
+  [ -n "$retry" ] || return 0
+  local ledger="${SOL_LE_LEDGER:-${XDG_DATA_HOME:-$HOME/.local/share}/sol/qualification/letsencrypt-issuance.json}"
+  python3 "$ROOT/internal/qualification/letsencrypt_preflight.py" \
+    --record-block --ledger "$ledger" --base-domain "$BASE_DOMAIN" --issuer "$CLUSTER_ISSUER" \
+    --retry-after "$retry" \
+    | sed 's/^/letsencrypt-preflight: /'
+  say "recorded the CA rate-limit window; the next attempt will refuse before provisioning"
+}

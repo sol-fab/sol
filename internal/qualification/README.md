@@ -79,6 +79,10 @@ history for the Let's Encrypt duplicate-certificate window (5 per exact identifi
 `XDG_DATA_HOME/sol/qualification/letsencrypt-issuance.json`, so repeated campaigns cannot
 silently exhaust the same window when CT logs lag.
 
+If a cloud phase fails on the CA's `429 ... retry after ...` response, the harness records
+that window in `letsencrypt-blocked.json` beside the issuance ledger; the next attempt refuses
+before provisioning until the window passes.
+
 This is a best-effort guard, not an authoritative reservation: Let's Encrypt has no
 remaining-quota API, and CT can be incomplete or delayed. A successful check does not
 guarantee issuance. An unreadable CT response fails closed; an operator can explicitly set
