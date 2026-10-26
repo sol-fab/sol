@@ -254,7 +254,7 @@ $TARGET_ENV:
       dns_zone_ownership: sol
       # This row claims the production profile explicitly. The shape remains durable:
       # the platform publishes the authenticated Kafka credential the row's units read.
-      $(production_target_fields)
+$(production_target_fields)
       shape: durable
       letsencrypt_email: $le_email
       cluster_issuer: $CLUSTER_ISSUER
@@ -1710,7 +1710,7 @@ $TARGET_ENV:
       # The production profile is re-declared for the app deploy, and the durable shape
       # matches the installation the cloud phase created: its Kafka is authenticated, so
       # the included units require the platform's Kafka credential.
-      $(production_target_fields)
+$(production_target_fields)
       shape: durable
       letsencrypt_email: $LE_EMAIL
       cluster_issuer: $CLUSTER_ISSUER
