@@ -69,7 +69,7 @@
       "aws": "none",
       "gcp": "none",
       "evidence": {},
-      "gap": "`@sol-fab/fn@0.1.0` and the `fn-ts` scaffold are source-complete; the package is not published, so no generated-workspace build or CronJob deployment evidence yet."
+      "gap": "`@sol-fab/fn@0.1.0` and the `fn-ts` scaffold are published; a generated workspace installs and builds. No deployed CronJob scenario yet."
     }
   ],
   "lifecycle": [

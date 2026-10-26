@@ -256,7 +256,7 @@ GitHub Issues, and detailed evidence is under `internal/qualification/`.
 | OCaml `-fn` | local | none | none | [local](cli/test/golden_path_ocaml.sh) | The local golden path invokes the deployed CronJob manually; no cloud CronJob scenario exists and the reference app still does not include an fn. |
 | TypeScript `-svc` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | No live AWS scenario; GCP is mechanism-only on alpha.52. The demo pins @sol-fab/svc@0.2.0 while the scaffold pins 0.3.0. |
 | TypeScript `-worker` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | No live AWS scenario; GCP is mechanism-only on alpha.52. The demo pins @sol-fab/svc@0.2.0 while the scaffold pins 0.3.0. |
-| TypeScript `-fn` | none | none | none | — | `@sol-fab/fn@0.1.0` and the `fn-ts` scaffold are source-complete; the package is not published, so no generated-workspace build or CronJob deployment evidence yet. |
+| TypeScript `-fn` | none | none | none | — | `@sol-fab/fn@0.1.0` and the `fn-ts` scaffold are published; a generated workspace installs and builds. No deployed CronJob scenario yet. |
 
 ### Lifecycle and observability
 
@@ -327,7 +327,7 @@ sol/
 - [Documentation map](docs/README.md) — what exists, who each page is for, and the documentation roadmap
 - [Tutorial](docs/guides/TUTORIAL.md) — full walkthrough, start to finish
 - [Contract](docs/reference/README.md) — the language-neutral application contract
-- [TypeScript packages](https://github.com/sol-fab/sol-typescript) — the four published `@sol-fab/*` packages ([`kafka`](https://github.com/loganbnielsen/sol-kafka), [`obs`](https://github.com/loganbnielsen/sol-obs), `svc`, `worker`), plus the [`demo_ts`](examples/pluto/app/demo_ts/README.md) showcase
+- [TypeScript packages](https://github.com/sol-fab/sol-typescript) — the published `@sol-fab/*` packages ([`kafka`](https://github.com/loganbnielsen/sol-kafka), [`obs`](https://github.com/loganbnielsen/sol-obs), `svc`, `worker`, `fn`, `jobs`, `outbox`, `retry`), plus the [`demo_ts`](examples/pluto/app/demo_ts/README.md) showcase
 - [Product Architecture](docs/architecture/PRODUCT_ARCHITECTURE.md) — factory model, design principles, ownership lanes
 - [Factory Pipeline](docs/architecture/devops-pipeline.md) — what each `sol` command does
 - [Deployment escape hatches](docs/deployment/escape-hatches.md) — `sol.toml` reference

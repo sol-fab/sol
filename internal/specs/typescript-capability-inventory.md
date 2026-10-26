@@ -13,18 +13,18 @@ underneath may differ.
 | Sol contract | `production-single-region/v1` | `docs/deployment/compatibility.md`, ADR 0009 |
 | OCaml framework | this checkout's `framework/ocaml/*` | source of the reference behaviour |
 | `@sol-fab/svc` | `0.3.0` | `runService`, `isReady`, shutdown delay, workload-identity guard, peer helpers |
-| `@sol-fab/worker` | `0.2.0` source | `runWorker` plus `createWorkerHealth`; publication pending (sol-typescript#19) |
-| `@sol-fab/fn` | `0.1.0` source | run-once CronJob contract; publication pending (sol-typescript#20) |
+| `@sol-fab/worker` | `0.2.0` | `runWorker` plus `createWorkerHealth`; published on npm |
+| `@sol-fab/fn` | `0.1.0` | run-once CronJob contract; published on npm |
 | `@sol-fab/kafka` | `0.5.2` | Confluent wire format, schema/topic registration, DLQ, outcomes |
 | `@sol-fab/obs` | `0.4.0` | workload identity, Loki labels/flush, traceparent helpers |
 | `@sol-fab/jobs` | `0.1.2` | leased Postgres queue |
-| `@sol-fab/outbox` | `0.1.0` | transactional outbox/relay |
+| `@sol-fab/outbox` | `0.2.0` | transactional outbox/relay |
 | `@sol-fab/retry` | `0.1.0` | shared retry vocabulary |
 
-The two source-only packages are contract work, not optional parity: the Sol
-templates pin `@sol-fab/worker@^0.2.0` and `@sol-fab/fn@^0.1.0`, so a generated
-workspace cannot install until those versions are published. The demo's
-`@sol-fab/svc` is aligned to `0.3.0`.
+The Sol templates pin `@sol-fab/worker@^0.2.0` and `@sol-fab/fn@^0.1.0`.
+Both are published on npm, and a freshly generated TypeScript fn/worker
+installs and compiles against the registry. The demo's `@sol-fab/svc` is
+aligned to `0.3.0`.
 
 ## Capability verdicts
 
@@ -34,9 +34,9 @@ workspace cannot install until those versions are published. The demo's
 | `-svc` lifecycle | `Sol_svc.Service.Make`: signal, `/readyz` 503 on stop, shutdown delay, bounded drain | `runService`: signal, `isReady`, shutdown delay, bounded drain | implemented |
 | `-svc` inbound identity | `Sol_svc.Auth`/`Route`, workload-identity verification | `createWorkloadIdentityGuard`, `verifyWorkloadIdentity`; scaffold uses it for non-public paths | implemented in package/scaffold; demo does not yet exercise a protected route |
 | `-svc` peer calls | `Peer.url`/`Peer.headers` for declared `calls` | `declaredPeer`/`peerUrl`/`peerHeaders`; token rotation read per call | implemented in package; no generated peer call in the current demo |
-| `-worker` lifecycle | `Worker.Make`: join/readiness, unbounded drain, `on_ready` | `runWorker` + `createWorkerHealth`: `/readyz` on group join, `/livez` on heartbeat, abort/drain | implemented in source/template; publish pending |
+| `-worker` lifecycle | `Worker.Make`: join/readiness, unbounded drain, `on_ready` | `runWorker` + `createWorkerHealth`: `/readyz` on group join, `/livez` on heartbeat, abort/drain | implemented in package/template; generated build verified |
 | `-worker` outcome vocabulary | `Ack \| Fail`; `Fail` stops the consumer and leaves the offset uncommitted | `ACK`/fail; `wireCrashListener` stops the consumer | implemented |
-| `-fn` lifecycle | `Fn.Make`: one run, exit 0/1/130, Pushgateway metrics, SIGTERM cancel | `runFn`: one run, exit 0/1/130, AbortSignal, `sol_fn_*` metrics and Pushgateway | implemented in source/template; publish pending |
+| `-fn` lifecycle | `Fn.Make`: one run, exit 0/1/130, Pushgateway metrics, SIGTERM cancel | `runFn`: one run, exit 0/1/130, AbortSignal, `sol_fn_*` metrics and Pushgateway | implemented in package/template; generated build verified |
 | Confluent wire format | magic `0x00` + BE u32 id + JSON | `encodeWire`/`decodeWire` | implemented, byte-compatible |
 | Schema registry | `register_contract` sets `FULL` then registers, both fatal; runtime read-only | `registerContract`/`connectTopic`; projection CLI | implemented |
 | Partitioning and key | declared partitions/key; no reduction | `TopicContract`/`registerTopic`; no reduction | implemented |
@@ -55,22 +55,13 @@ workspace cannot install until those versions are published. The demo's
 
 ## Remaining work to close the TypeScript target
 
-1. **Publish `@sol-fab/worker@0.2.0` and `@sol-fab/fn@0.1.0`.** The source and
-   tests are in sol-typescript#19/#20. Worker `0.2.0` can go through the OIDC
-   tag workflow (`worker-v0.2.0`); `fn` needs its first authenticated publish
-   and npm trust bootstrap (`fn-v0.1.0`).
-2. **Verify the generated TypeScript workspace.** After publish, `sol new
-   workspace`/`sol new fn --language typescript` must build from npm and the
-   worker's `/readyz`/`/livez` must be probed when the consumed topic is
-   declared. Add the TS fn/worker paths to the golden-path smoke rather than
-   only asserting template contents.
-3. **Exercise peer/identity in the demo.** The svc package and scaffold have the
+1. **Exercise the generated fn/worker at runtime.** The generated workspace
+   installs and compiles from npm, but no deployed CronJob has run and no
+   consumed-topic worker readiness probe has been observed. Add both to the
+   golden-path smoke rather than only asserting template contents.
+2. **Exercise peer/identity in the demo.** The svc package and scaffold have the
    surface; the deployed demo does not yet call a peer through a declared
    `calls` edge or serve a protected route. Add that before claiming production
    parity.
-4. **Admit TypeScript at the production preflight.** `supported_by_profile`
-   remains `[Ocaml]` until the type/language evidence above exists. This is an
-   evidence gate, not a permanent exclusion; the support table in the README is
-   the current measurement.
-5. **Keep the config/secrets gaps explicit.** The transport posture is
+3. **Keep the config/secrets gaps explicit.** The transport posture is
    equivalent; the schema/admin URL helper and TypeScript `Secret.get` are not.
