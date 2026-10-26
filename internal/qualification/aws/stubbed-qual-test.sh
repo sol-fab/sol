@@ -1580,6 +1580,7 @@ is "the transport is established exactly twice" \
 lacks "never the deploy identity's kubeconfig" \
   "KUBECONFIG_TRANSPORT=$TMP/apptransport.logs/kubeconfig-deploy.yaml" "$TMP/apptransport.transport"
 exists "and the application's own logs are captured for the record" "$TMP/apptransport.logs/app-svc.log"
+has "and an OCaml-only target leaves the missing TS evidence to the producer" "producer will refuse" "$TMP/apptransport.out"
 exists "for the worker too" "$TMP/apptransport.logs/app-worker.log"
 establish_at="$(grep -n 'transport-establish' "$TMP/apptransport.out" | head -1 | cut -d: -f1)"
 transaction_at="$(grep -n 'app-transaction' "$TMP/apptransport.out" | head -1 | cut -d: -f1)"
