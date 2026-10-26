@@ -67,6 +67,25 @@ success. A skipped capability is named as skipped; it is not silently promoted.
 10. Live cloud qualification may incur cost. Do not start it without explicit operator
    authorization.
 
+
+### Rate-limit preflight
+
+Before either provider creates billable resources, `require_letsencrypt_headroom` runs
+`internal/qualification/letsencrypt_preflight.py` when the attempt uses
+`cluster_issuer: letsencrypt-prod`. It checks the platform's two certificate names
+(`argocd.<base_domain>`, `grafana.<base_domain>`) against public Certificate Transparency
+history for the Let's Encrypt duplicate-certificate window (5 per exact identifier set in
+168h). It also reserves each attempted certificate in a durable local ledger under
+`XDG_DATA_HOME/sol/qualification/letsencrypt-issuance.json`, so repeated campaigns cannot
+silently exhaust the same window when CT logs lag.
+
+This is a best-effort guard, not an authoritative reservation: Let's Encrypt has no
+remaining-quota API, and CT can be incomplete or delayed. A successful check does not
+guarantee issuance. An unreadable CT response fails closed; an operator can explicitly set
+`SOL_LE_PREFLIGHT=allow-unknown` (CT unavailable) or `SOL_LE_PREFLIGHT=off` (skip the check).
+The reservation is conservative: a failed attempt still consumes its slot until the 168h
+window passes.
+
 ## Releases versus features — which method verifies what
 
 **The harness qualifies releases. Direct runs verify features.**
