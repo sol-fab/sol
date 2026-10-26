@@ -18,12 +18,12 @@ These primitives share a common observability layer (Loki for logs, Prometheus f
 
 The `sol` CLI scaffolds new services, manages the local development cluster, builds and deploys container images, and runs database migrations.
 
-This walkthrough uses OCaml, the deeper-supported path. `sol new svc` and
-`sol new worker` also scaffold TypeScript units with `--language typescript`, and
-the generated unit consumes the published `@sol-fab/*` packages. `sol new fn` is
-OCaml-only for now: the TypeScript `-fn` runtime contract is not implemented (the
-`-fn` row in [`framework-conventions.md`](../../internal/specs/framework-conventions.md)).
-The hand-built reference for the TypeScript path is
+This walkthrough uses OCaml, the deeper-supported path. `sol new svc`,
+`sol new worker` and `sol new fn` also scaffold TypeScript units with
+`--language typescript`, and the generated unit consumes the published
+`@sol-fab/*` packages. The TypeScript `-fn` scaffold uses `@sol-fab/fn@0.1.0`;
+the generated workspace installs and compiles against the registry. The
+hand-built reference for the TypeScript path is
 [`examples/pluto/app/demo_ts`](../../examples/pluto/app/demo_ts/README.md).
 
 ---

@@ -202,16 +202,15 @@ observability vocabulary — is identical either way. Parity means **capability 
 parity, not implementation parity**: the contract holds in both languages, while TypeScript
 keeps the Node ecosystem underneath and the OCaml path keeps `kafka-eio`/`pg-eio`.
 
-Pick for the team you have. Scaffolding supports both languages; production-profile qualification remains limited:
+Pick for the team you have. Scaffolding supports both languages and all three primitives:
 
-- **Scaffolding.** `sol new svc` and `sol new worker` support
-  `--language typescript`; OCaml remains the default. `sol new fn` supports OCaml
-  only. Both language shapes use the same workspace declaration and `sol check`.
-- **The production profile.** The production profile's preflight still refuses a TypeScript
-  workload, because DEC-026 §2's triggers are not all met; the state and the remaining trigger
-  are recorded in **FEAT-102** and in
-  [compatibility.md](../deployment/compatibility.md). The local path and the TypeScript golden
-  path (`FEAT-082`) work.
+- **Scaffolding.** `sol new svc`, `sol new worker` and `sol new fn` support
+  `--language typescript`; OCaml remains the default. Both language shapes use
+  the same workspace declaration and `sol check`.
+- **The production profile.** ADR 0009 makes the profile cloud- and
+  language-neutral, so TypeScript is accepted by the preflight; live
+  qualification evidence remains a separate, tracked gap. The local path and
+  the TypeScript golden path (`FEAT-082`) work.
 
 Read the TypeScript demos as the worked examples: `order_svc` is the `-svc` shape and
 `fulfillment_worker` is the `-worker` shape, in the same workspace as the OCaml ones.

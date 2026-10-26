@@ -11,7 +11,7 @@ import {
   type Outcome,
 } from "@sol-fab/kafka";
 import { makeLokiPusher } from "@sol-fab/obs";
-import { runWorker } from "@sol-fab/worker";
+import { createWorkerHealth, runWorker } from "@sol-fab/worker";
 import { decodePayload } from "./wire.js";
 import { makeWorkerMetrics } from "./metrics.js";
 
@@ -41,6 +41,7 @@ const log = makeLokiPusher({
 });
 const { register: metricsRegister, messagesTotal, decodeErrorsTotal, messageDuration } =
   makeWorkerMetrics();
+const health = createWorkerHealth();
 
 async function handle(message: ReturnType<typeof decodePayload>): Promise<Outcome> {
   const start = process.hrtime.bigint();
@@ -70,11 +71,18 @@ async function main() {
   await consumer.subscribe({ topic: TOPIC_NAME, fromBeginning: false });
 
   const metricsServer = createServer((req, res) => {
-    if (req.url === "/metrics") {
+    const path = req.url ?? "";
+    if (path === "/metrics") {
       metricsRegister.metrics().then((body) => {
         res.writeHead(200, { "content-type": metricsRegister.contentType });
         res.end(body);
       });
+      return;
+    }
+    const response = health.response(path);
+    if (response !== undefined) {
+      res.writeHead(response.status, { "content-type": "text/plain; charset=utf-8" });
+      res.end(response.body);
       return;
     }
     res.writeHead(404);
@@ -82,6 +90,13 @@ async function main() {
   });
   metricsServer.listen(METRICS_PORT, () => {
     console.log(`[{{binary}}] metrics on :${METRICS_PORT}`);
+  });
+
+  consumer.on(consumer.events.GROUP_JOIN, () => {
+    health.onAssignment(1);
+  });
+  consumer.on(consumer.events.HEARTBEAT, () => {
+    health.onPoll();
   });
 
   await consumer.run({

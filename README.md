@@ -174,13 +174,21 @@ published npm packages, all Apache-2.0:
   label vocabularies, Loki push shape, and W3C `traceparent` propagation, so TS
   and OCaml workloads land in the same Grafana panels and Tempo traces.
 - [`@sol-fab/svc`](https://github.com/sol-fab/sol-typescript) — the service
-  lifecycle contract: bounded drain (`drainTimeoutMs`, matching the OCaml
-  `sol-svc`'s `drain_timeout_s`) and idempotent `SIGTERM`/`SIGINT` handling.
-- [`@sol-fab/worker`](https://github.com/sol-fab/sol-typescript) — the
-  worker lifecycle contract, for a unit that owns no request boundary. It has no
-  `on_ready` equivalent yet (DEC-028), which is one of the triggers that stages
-  TypeScript behind the production profile (DEC-026 §2) — see
-  [compatibility](docs/deployment/compatibility.md).
+  lifecycle contract: readiness, shutdown delay, bounded drain
+  (`drainTimeoutMs`, matching the OCaml `sol-svc`'s `drain_timeout_s`),
+  idempotent `SIGTERM`/`SIGINT` handling, workload-identity verification and
+  declared-peer helpers.
+- [`@sol-fab/worker`](https://github.com/sol-fab/sol-typescript) — the worker
+  lifecycle contract plus `createWorkerHealth`: group-join readiness,
+  heartbeat liveness and the `/readyz`/`/livez` responses the manifest probes.
+- [`@sol-fab/fn`](https://github.com/sol-fab/sol-typescript) — the run-once
+  `-fn` contract: exit 0/1/130, SIGTERM cancellation, invocation metrics and the
+  Pushgateway push.
+
+`@sol-fab/worker` 0.2.0 and `@sol-fab/fn` 0.1.0 are source-complete; publication
+and live generated-workspace evidence are the remaining admission gate for the
+TypeScript production preflight — see
+[compatibility](docs/deployment/compatibility.md).
 
 Ownership follows the extraction: `@sol-fab/kafka` and `@sol-fab/obs` each live
 in their own public repository with their own CI, while `@sol-fab/svc` and
@@ -245,10 +253,10 @@ GitHub Issues, and detailed evidence is under `internal/qualification/`.
 |---|---|---|---|---|---|
 | OCaml `-svc` | local | live | live | [local](cli/test/golden_path_ocaml.sh), [AWS](internal/qualification/records/2026-10-24-alpha44-aws-production.md), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | AWS production sequence is alpha.44; GCP is mechanism-only on alpha.52. No GCP production-profile evidence. |
 | OCaml `-worker` | local | live | live | [local](cli/test/golden_path_ocaml.sh), [AWS](internal/qualification/records/2026-10-24-alpha44-aws-production.md), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | AWS production sequence is alpha.44; GCP is mechanism-only on alpha.52. No GCP production-profile evidence. |
-| OCaml `-fn` | partial | none | none | [local](cli/test/golden_path_ocaml.sh) | The local golden path adds an fn ad hoc; no fn is in the reference app and no cloud CronJob scenario exists. |
+| OCaml `-fn` | local | none | none | [local](cli/test/golden_path_ocaml.sh) | The local golden path invokes the deployed CronJob manually; no cloud CronJob scenario exists and the reference app still does not include an fn. |
 | TypeScript `-svc` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | No live AWS scenario; GCP is mechanism-only on alpha.52. The demo pins @sol-fab/svc@0.2.0 while the scaffold pins 0.3.0. |
 | TypeScript `-worker` | local | none | live | [local](cli/test/golden_path_typescript.sh), [GCP](internal/qualification/records/2026-10-25-alpha52-gcp.md) | No live AWS scenario; GCP is mechanism-only on alpha.52. The demo pins @sol-fab/svc@0.2.0 while the scaffold pins 0.3.0. |
-| TypeScript `-fn` | none | none | none | — | No runtime package, scaffold, or CronJob entrypoint; `sol new fn --language typescript` refuses. |
+| TypeScript `-fn` | none | none | none | — | `@sol-fab/fn@0.1.0` and the `fn-ts` scaffold are published; a generated workspace installs and builds. No deployed CronJob scenario yet. |
 
 ### Lifecycle and observability
 
@@ -319,7 +327,7 @@ sol/
 - [Documentation map](docs/README.md) — what exists, who each page is for, and the documentation roadmap
 - [Tutorial](docs/guides/TUTORIAL.md) — full walkthrough, start to finish
 - [Contract](docs/reference/README.md) — the language-neutral application contract
-- [TypeScript packages](https://github.com/sol-fab/sol-typescript) — the four published `@sol-fab/*` packages ([`kafka`](https://github.com/loganbnielsen/sol-kafka), [`obs`](https://github.com/loganbnielsen/sol-obs), `svc`, `worker`), plus the [`demo_ts`](examples/pluto/app/demo_ts/README.md) showcase
+- [TypeScript packages](https://github.com/sol-fab/sol-typescript) — the published `@sol-fab/*` packages ([`kafka`](https://github.com/loganbnielsen/sol-kafka), [`obs`](https://github.com/loganbnielsen/sol-obs), `svc`, `worker`, `fn`, `jobs`, `outbox`, `retry`), plus the [`demo_ts`](examples/pluto/app/demo_ts/README.md) showcase
 - [Product Architecture](docs/architecture/PRODUCT_ARCHITECTURE.md) — factory model, design principles, ownership lanes
 - [Factory Pipeline](docs/architecture/devops-pipeline.md) — what each `sol` command does
 - [Deployment escape hatches](docs/deployment/escape-hatches.md) — `sol.toml` reference
