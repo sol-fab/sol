@@ -526,6 +526,7 @@ let contract_semantic_json (contract : contract) =
     [ "id", `String contract.id
     ; "revision", `String contract.revision
     ; "providers", `List (List.map provider_json contract.providers)
+    ; "profile", `String (string_of_profile contract.profile)
     ; ( "phases"
       , `List
           (List.map

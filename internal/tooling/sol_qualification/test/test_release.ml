@@ -1996,6 +1996,18 @@ let test_contract_profile_required () =
   | Ok _ -> check "an untyped/durable profile cannot be the contract profile" false
 ;;
 
+let test_contract_json_binds_profile () =
+  let json = R.contract_to_yojson (contract ()) in
+  let profile =
+    match json with
+    | `Assoc fields -> List.assoc_opt "profile" fields
+    | _ -> None
+  in
+  check
+    "the contract digest and display bind the typed profile"
+    (profile = Some (`String "production-single-region/v1"))
+;;
+
 let test_record_profile_required () =
   let contract = contract () in
   with_temp_dir "profile-missing" (fun directory ->
@@ -2144,6 +2156,7 @@ let test_duplicate_evidence () =
 let tests () =
   [ "valid pair", test_valid_pair
   ; "contract profile required", test_contract_profile_required
+  ; "contract json binds profile", test_contract_json_binds_profile
   ; "record profile required", test_record_profile_required
   ; "profile observations required", test_profile_observations_required
   ; "unloaded contract", test_unloaded_contract_cannot_pass
