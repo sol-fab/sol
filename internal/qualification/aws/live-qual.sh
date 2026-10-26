@@ -465,7 +465,7 @@ unit_dir() {
 
 image_digest() {
   local ref="$1" digest
-  digest="$(docker inspect --format='{{index .RepoDigests 0}}' "$ref" 2>/dev/null || true)"
+  digest="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$ref" 2>/dev/null | grep -F "${ref%:*}@" | head -1 || true)"
   case "$digest" in
     *"@sha256:"*) printf '%s' "$digest" ;;
     *)
