@@ -198,7 +198,7 @@ SOL_QUALIFICATION_EVALUATOR=/path/to/qualification-release \
 ```
 
 `qualification-release` is the evaluator artifact built from the release tag and
-attached to the draft. `--auto` invokes `v2_manifest.py`, which derives the required claims, phases,
+attached to the draft. `--auto` invokes `evidence_manifest.py`, which derives the required claims, phases,
 profile and selection from the canonical contract and maps each claim family to
 the evidence its operation produced (`app-transaction.log` /
 `app-transaction-{ocaml,ts}.txt`, `cloud-destroy.log` + pre-teardown identities
