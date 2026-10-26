@@ -405,7 +405,9 @@ hook_aws_cloud_pre_verify() { ensure_contexts; }
 # teardown reads the attempt directory and runs its own inventory.
 hook_aws_cloud_freeze() { :; }
 hook_aws_cloud_diagnose() { :; }
-hook_aws_cloud_failed() { :; }
+hook_aws_cloud_failed() {
+  record_letsencrypt_rate_limit || true
+}
 
 hook_aws_cloud_reconciled() {
   # Publish the images `prepare` built into the repositories the deploy just created,

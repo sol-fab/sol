@@ -321,6 +321,7 @@ hook_gcp_cloud_pre_verify() {
 }
 
 hook_gcp_cloud_failed() {
+  record_letsencrypt_rate_limit || true
   capture_pre_teardown_inventory
   freeze_evidence
   finalise_bundle
