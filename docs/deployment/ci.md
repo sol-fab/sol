@@ -59,7 +59,7 @@ versa. The deploy identity holds no IAM-mutating permission at all; a structural
 
 | Variable | Provider | Meaning |
 |---|---|---|
-| `SOL_VERSION` | both | the Sol release that generated the workspace, e.g. `v0.1.0-alpha.44`; the workflow downloads that exact bundle |
+| `SOL_VERSION` | both | the Sol release that generated the workspace, e.g. `v0.1.0-prealpha.1`; the workflow downloads that exact bundle |
 | `SOL_TARGET` | both | `<env>/<provider>/<region>`, e.g. `prod/aws/us-east-1`; must be declared in `sol/environments.yml` |
 | `SOL_REGISTRY` | both | image registry prefix, e.g. `123456789.dkr.ecr.us-east-1.amazonaws.com` |
 | `SOL_DEPLOY_ROLE_ARN` | AWS | the target's `deploy_role_arn`, assumed through OIDC |

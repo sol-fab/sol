@@ -77,9 +77,9 @@ actually recorded.
 
 ```json
 {
-  "version": "v0.1.0-alpha.9",
+  "version": "v0.1.0-prealpha.1",
   "revision": "<40-hex commit>",
-  "bundle": "sol-v0.1.0-alpha.9-linux-x86_64.tar.gz",
+  "bundle": "sol-v0.1.0-prealpha.1-linux-x86_64.tar.gz",
   "bundle_sha256": "<64-hex>",
   "runner_image": "ghcr.io/<owner>/sol-migration-runner@sha256:<64-hex>"
 }
@@ -114,7 +114,7 @@ not in this release-policy document:
 ```json
 {
   "candidate": {
-    "version": "v0.1.0-alpha.9",
+    "version": "v0.1.0-prealpha.1",
     "revision": "<40-hex commit>",
     "bundle_sha256": "<64-hex>",
     "runner_image": "ghcr.io/<owner>/sol-migration-runner@sha256:<64-hex>"
