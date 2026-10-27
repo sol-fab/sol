@@ -275,3 +275,8 @@
    python3
    %{dep:test_database_setup_postgres.py}
    %{dep:print_database_setup.exe})))
+
+(test
+ (name test_cloud_run)
+ (modules test_cloud_run)
+ (libraries sol_cli windtrap yojson))

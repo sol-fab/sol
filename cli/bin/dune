@@ -32,6 +32,7 @@
   cmd_plan
   cmd_deploy
   cmd_destroy
+  cmd_cloud_run
   cmd_deploy_event
   cmd_migrate
   cmd_rollback
