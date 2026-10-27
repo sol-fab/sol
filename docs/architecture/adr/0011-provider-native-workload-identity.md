@@ -89,10 +89,10 @@ For `google_oidc_service_account`:
   malformed token.
 - Google's discovery document publishes its `jwks_uri` on a different origin
   (`https://www.googleapis.com/oauth2/v3/certs`) from the issuer
-  (`https://accounts.google.com`). The adapter must therefore be able to supply
-  an explicit trusted JWKS URI; the Kubernetes discovery path keeps its
-  same-origin rule. The URI is part of the target identity configuration and
-  must be HTTPS.
+  (`https://accounts.google.com`). The adapter must supply an explicit trusted
+  JWKS URI for the Google scheme; the Kubernetes scheme rejects that override
+  and keeps its same-origin discovery rule. The URI is part of the target
+  identity configuration, must be HTTPS, and is required for the Google scheme.
 - the adapter may use Google's discovery/JWKS endpoint to validate the token;
   the application does not hard-code a second trust root.
 
