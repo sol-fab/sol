@@ -72,9 +72,11 @@ Kubernetes scheme.
 
 For `google_oidc_service_account`:
 
-- the adapter configures the exact trusted issuer. The initial candidate is
-  `https://accounts.google.com`; the implementation must verify the issuer
-  Google actually emits and fail closed on any mismatch.
+- the adapter configures the trusted issuer. Google documents both
+  `https://accounts.google.com` and `accounts.google.com` as valid spellings
+  for Google ID tokens; the Google scheme may canonicalize only those two
+  spellings to one authority. Kubernetes remains exact-match. Any other value
+  is rejected.
 - the application audience is explicit and is **not** assumed to equal the
   Cloud Run ingress audience. The Cloud Run service URL audience used by
   ingress IAM is a different audience from the Sol application audience.
@@ -90,7 +92,11 @@ For `google_oidc_service_account`:
 
 The exact Google claim set must be recorded in the implementation tests,
 including `iss`, `aud`, `sub`, `exp`, and the absence of a Kubernetes subject.
-See Google's [OpenID Connect documentation](https://developers.google.com/identity/openid-connect/openid-connect).
+The implementation uses a locally generated RSA key for the token fixture; it
+does **not** establish that Google will issue the expected production token or
+that the intended caller can obtain a token with the Sol application audience.
+See Google's
+[OpenID Connect documentation](https://developers.google.com/identity/openid-connect/openid-connect).
 
 ### 4. Audience and ingress are independent
 
@@ -145,10 +151,11 @@ Missing, contradictory or unsupported identity configuration must fail:
 
 ### 7. Local development
 
-Local development keeps an explicit local identity scheme and issuer. It must
-not trust the production issuer implicitly, and it must not require production
-credentials. The local test path exercises the same caller-policy semantics as a
-real backend, using locally established identities.
+Local development uses the existing Kubernetes subject scheme against a local
+cluster and an explicitly local issuer. It must not trust the production issuer
+implicitly, and it must not require production credentials. The local test path
+exercises the same caller-policy semantics as a real backend, using locally
+established identities; no separate unverified local scheme is introduced.
 
 ### 8. Implementation gates
 
