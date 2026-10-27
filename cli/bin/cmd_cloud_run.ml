@@ -30,25 +30,22 @@ let runner () =
   in
   let http ~url ~token =
     let config = Filename.temp_file "sol-cloud-run-curl-" ".conf" in
-    let cleanup () =
-      try Sys.remove config with
-      | Sys_error _ -> ()
-    in
+    let cleanup () = Sol_cli_fs.remove_reporting config in
     let write_config () =
-      let channel = open_out_gen [ Open_creat; Open_trunc; Open_text ] 0o600 config in
-      Fun.protect
-        ~finally:(fun () -> close_out channel)
-        (fun () ->
-           match token with
-           | None -> ()
-           | Some token ->
-             output_string
-               channel
-               (Printf.sprintf "header = \"Authorization: Bearer %s\"\n" token))
+      match token with
+      | None -> Ok ()
+      | Some token ->
+        Sol_cli_fs.write_atomic
+          ~perm:0o600
+          config
+          (Printf.sprintf "header = \"Authorization: Bearer %s\"\n" token)
     in
     Fun.protect ~finally:cleanup (fun () ->
       try
-        write_config ();
+        let* () =
+          write_config ()
+          |> Result.map_error (fun message -> "could not write curl config: " ^ message)
+        in
         let argv =
           [ "curl"
           ; "--silent"
