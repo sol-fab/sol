@@ -10,7 +10,7 @@ set -euo pipefail
 case "$1 $2 $3" in
   "run services describe")
     cat <<'JSON'
-{"metadata":{"labels":{"sol-owned":"cloud-run-experiment","sol-service":"checkout_svc"}},"status":{"url":"https://observed.example","latestReadyRevisionName":"rev-1","traffic":[{"revisionName":"rev-1","percent":100}]}}
+{"spec":{"template":{"spec":{"containers":[{"image":"repo@sha256:abc123"}]}}},"metadata":{"labels":{"sol-owned":"cloud-run-experiment","sol-service":"checkout_svc"}},"status":{"url":"https://observed.example","latestReadyRevisionName":"rev-1","traffic":[{"revisionName":"rev-1","percent":100}]}}
 JSON
     ;;
   *)
