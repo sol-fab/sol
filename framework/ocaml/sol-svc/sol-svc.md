@@ -97,9 +97,12 @@ type jwt_config =
 type workload_identity_config =
   { audience : string
   ; callers : (string * string) list
-      (** service account ["<namespace>:<serviceaccount>"] -> caller unit *)
+      (** scheme-specific subject -> caller unit *)
   ; trusted_issuer : string
-      (** target-established Kubernetes service-account issuer *)
+      (** target-established issuer *)
+  ; trusted_jwks_uri : string option
+      (** explicit HTTPS JWKS URI where discovery's JWKS origin differs *)
+  ; subject_scheme : subject_scheme
   }
 
 type level =
