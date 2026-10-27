@@ -211,43 +211,33 @@ let traffic_argv ~project ~region ~service ~revision =
   ]
 ;;
 
-let member_string json name =
-  match Yojson.Safe.Util.member name json with
-  | `String value -> Some value
-  | _ -> None
-;;
-
-let int_member json name =
-  match Yojson.Safe.Util.member name json with
-  | `Int value -> Some value
-  | _ -> None
-;;
-
 let parse_observed text =
   let* json =
-    match Yojson.Safe.from_string text with
-    | json -> Ok json
-    | exception Yojson.Json_error message ->
-      Error ("describe returned invalid JSON: " ^ message)
+    Sol_cli_json.decode ~what:"Cloud Run service" text
+    |> Result.map_error (fun message -> "describe returned invalid JSON: " ^ message)
   in
-  let status = Yojson.Safe.Util.member "status" json in
+  let status = Sol_cli_json.field [ "status" ] json in
   let* url =
-    member_string status "url" |> Option.to_result ~none:"describe has no status.url"
+    Sol_cli_json.string (Sol_cli_json.field [ "url" ] status)
+    |> Option.to_result ~none:"describe has no status.url"
   in
   let* revision =
-    member_string status "latestReadyRevisionName"
+    Sol_cli_json.string (Sol_cli_json.field [ "latestReadyRevisionName" ] status)
     |> Option.to_result ~none:"describe has no latestReadyRevisionName"
   in
   let traffic =
-    match Yojson.Safe.Util.member "traffic" status with
-    | `List entries ->
+    match Sol_cli_json.list (Sol_cli_json.field [ "traffic" ] status) with
+    | None -> []
+    | Some entries ->
       List.filter_map
         (fun entry ->
-           match member_string entry "revisionName", int_member entry "percent" with
+           match
+             ( Sol_cli_json.string (Sol_cli_json.field [ "revisionName" ] entry)
+             , Sol_cli_json.int (Sol_cli_json.field [ "percent" ] entry) )
+           with
            | Some revision, Some percent -> Some (revision, percent)
            | _ -> None)
         entries
-    | _ -> []
   in
   if not (String.starts_with ~prefix:"https://" url)
   then Error "Cloud Run service URL is not HTTPS"

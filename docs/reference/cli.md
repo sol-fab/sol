@@ -94,6 +94,10 @@ No positional: the command acts on the workspace, and a target or scope is a nar
 |---|---|---|---|---|
 | `sol assets` | — | — | documented | Show where this sol's own assets come from (a source |
 | `sol ci init` | PROVIDER | `--force` | documented | Write the supported CI workflow into the current |
+| `sol cloud-run deploy` | — | `--caller=UNIT=SUBJECT`, `--image=IMAGE`, `--ingress=INGRESS`, `--issuer=ISSUER`, `--jwks-uri=URI`, `--project=PROJECT`, `--record=PATH`, `--region=REGION`, `--service=SERVICE`, `--unit=UNIT` | documented | Deploy or update one HTTP service on Cloud Run |
+| `sol cloud-run destroy` | — | `--apply`, `--caller=UNIT=SUBJECT`, `--image=IMAGE`, `--issuer=ISSUER`, `--jwks-uri=URI`, `--project=PROJECT`, `--record=PATH`, `--region=REGION`, `--service=SERVICE`, `--unit=UNIT` | documented | Delete the named Cloud Run service and verify |
+| `sol cloud-run rollback` | — | `--caller=UNIT=SUBJECT`, `--image=IMAGE`, `--ingress=INGRESS`, `--issuer=ISSUER`, `--jwks-uri=URI`, `--project=PROJECT`, `--record=PATH`, `--region=REGION`, `--revision=REVISION`, `--service=SERVICE`, `--unit=UNIT` | documented | Restore a Cloud Run revision and verify its |
+| `sol cloud-run verify` | — | `--caller=UNIT=SUBJECT`, `--image=IMAGE`, `--ingress=INGRESS`, `--issuer=ISSUER`, `--jwks-uri=URI`, `--project=PROJECT`, `--record=PATH`, `--region=REGION`, `--service=SERVICE`, `--token-file=PATH`, `--unit=UNIT` | documented | Verify readiness and authorized/unauthorized |
 | `sol contract generate` | — | `--check` | documented | Generate application peer and event bindings |
 | `sol migrate rollback` | — | `--dir=DIR`, `--table=TABLE` | documented | Roll back the last applied migration |
 | `sol migrate status` | — | `--dir=DIR`, `--json`, `--table=TABLE` | documented | Show per-file applied/pending status, and drift |
