@@ -300,14 +300,20 @@ require_gcp_ssd_headroom() {
     return 1
   fi
   if ! python3 "$ROOT/internal/qualification/gcp_quota_preflight.py" \
-    --quota-json "$quotas" --node-count "$node_count" --node-disk-gb "$node_disk" \
-    --out "$LOG_DIR/gcp-quota-preflight.txt" >>"$LOG_DIR/gcp-quota-preflight.log" 2>&1; then
+    --quota-json "$quotas" --tfvars "${TFVARS:-}" --node-count "$node_count" \
+    --node-disk-gb "$node_disk" --out "$LOG_DIR/gcp-quota-preflight.txt" \
+    >>"$LOG_DIR/gcp-quota-preflight.log" 2>&1; then
     say "REFUSING: GCP SSD quota headroom is not sufficient for this target"
     say "  see $LOG_DIR/gcp-quota-preflight.txt; raise the regional SSD_TOTAL_GB quota"
     say "  or lower TF_VAR_node_disk_gb, then retry before any infrastructure is created."
     return 1
   fi
-  say "gcp preflight: SSD quota headroom established"
+  if grep -q '^WARNING:' "$LOG_DIR/gcp-quota-preflight.log" 2>/dev/null; then
+    say "gcp preflight: the initial SSD footprint fits, but a node-pool upgrade surge does not"
+    say "  see $LOG_DIR/gcp-quota-preflight.txt; raise SSD_TOTAL_GB before an upgrade"
+  else
+    say "gcp preflight: SSD quota headroom established for the initial footprint and one-node surge"
+  fi
 }
 
 hook_gcp_cloud_prestate() {
