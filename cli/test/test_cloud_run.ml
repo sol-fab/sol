@@ -70,7 +70,15 @@ let test_preflight () =
       identity = { (request ()).identity with jwks_uri = "https://example/certs" }
     }
   in
-  check "non-Google JWKS refused" (Result.is_error (Sol_cli_cloud_run.preflight bad_jwks))
+  check "non-Google JWKS refused" (Result.is_error (Sol_cli_cloud_run.preflight bad_jwks));
+  let bad_separator =
+    { (request ()) with
+      identity = { (request ()).identity with callers = [ "subject,with,comma", "unit" ] }
+    }
+  in
+  check
+    "caller separator is refused"
+    (Result.is_error (Sol_cli_cloud_run.preflight bad_separator))
 ;;
 
 let test_deploy_argv () =

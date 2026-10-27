@@ -86,7 +86,9 @@ let valid_caller (subject, unit) =
   subject <> ""
   && unit <> ""
   && (not (String.starts_with ~prefix:"system:serviceaccount:" subject))
-  && not (String.contains subject ':')
+  && (not (String.contains subject ':'))
+  && (not (String.contains subject ','))
+  && not (String.contains subject '=')
 ;;
 
 let preflight (request : request) =
