@@ -29,7 +29,15 @@ let request ?(record = None) () =
 let describe_json ~revision ~percent =
   Yojson.Safe.to_string
     (`Assoc
-        [ ( "status"
+        [ ( "metadata"
+          , `Assoc
+              [ ( "labels"
+                , `Assoc
+                    [ "sol-owned", `String "cloud-run-experiment"
+                    ; "sol-service", `String "sol-test"
+                    ] )
+              ] )
+        ; ( "status"
           , `Assoc
               [ "url", `String "https://service.example"
               ; "latestReadyRevisionName", `String revision
@@ -160,11 +168,19 @@ let test_rollback () =
             revision := "rev-prev";
             Ok "done"
           | _ -> Error "unexpected")
-    ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+    ; http =
+        (fun ~url ~token ->
+          match url, token with
+          | url, None when String.ends_with ~suffix:"/readyz" url -> Ok (200, "")
+          | url, Some _ when String.ends_with ~suffix:"/quote" url -> Ok (200, "")
+          | url, None when String.ends_with ~suffix:"/quote" url -> Ok (401, "")
+          | _ -> Error "unexpected")
     }
   in
   revision := "rev-current";
-  match Sol_cli_cloud_run.rollback runner (request ()) ~revision:"rev-prev" with
+  match
+    Sol_cli_cloud_run.rollback runner (request ()) ~revision:"rev-prev" ~token:"token"
+  with
   | Ok observed ->
     check "rollback observes previous revision" (observed.revision = "rev-prev")
   | Error e -> check ("rollback " ^ Sol_cli_cloud_run.failure_to_string e) false
@@ -191,9 +207,35 @@ let test_destroy () =
     ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
     }
   in
-  match Sol_cli_cloud_run.destroy runner ~project:"p" ~region:"r" ~service:"sol-test" with
-  | Ok () -> check "destroy deletes and verifies absence" !deleted
-  | Error e -> check ("destroy " ^ Sol_cli_cloud_run.failure_to_string e) false
+  let record = Filename.temp_file "sol-cloud-run-record-" ".json" in
+  Fun.protect
+    ~finally:(fun () ->
+      try Sys.remove record with
+      | Sys_error _ -> ())
+    (fun () ->
+       let channel = open_out record in
+       output_string
+         channel
+         (Yojson.Safe.to_string
+            (`Assoc
+                [ "project", `String "p"
+                ; "region", `String "r"
+                ; "service", `String "sol-test"
+                ; "revision", `String "rev-1"
+                ; "url", `String "https://service.example"
+                ; "image", `String "repo@sha256:abc"
+                ]));
+       close_out channel;
+       match
+         Sol_cli_cloud_run.destroy
+           runner
+           ~project:"p"
+           ~region:"r"
+           ~service:"sol-test"
+           ~record
+       with
+       | Ok () -> check "destroy deletes and verifies absence" !deleted
+       | Error e -> check ("destroy " ^ Sol_cli_cloud_run.failure_to_string e) false)
 ;;
 
 let test_partial_deploy () =
@@ -244,9 +286,201 @@ let test_rollback_requires_target_traffic () =
     ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
     }
   in
-  match Sol_cli_cloud_run.rollback runner (request ()) ~revision:"rev-wanted" with
+  match
+    Sol_cli_cloud_run.rollback runner (request ()) ~revision:"rev-wanted" ~token:"token"
+  with
   | Error (Unknown _) -> check "rollback refuses unobserved target revision" true
   | _ -> check "rollback refuses unobserved target revision" false
+;;
+
+let test_destroy_requires_matching_ownership () =
+  let runner =
+    { Sol_cli_cloud_run.run =
+        (fun argv ->
+          match argv with
+          | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+            Ok (describe_json ~revision:"rev-1" ~percent:100)
+          | "gcloud" :: "run" :: "services" :: "delete" :: _ ->
+            check "unowned destroy never deletes" false;
+            Ok "deleted"
+          | _ -> Error "unexpected")
+    ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+    }
+  in
+  match
+    Sol_cli_cloud_run.destroy
+      runner
+      ~project:"p"
+      ~region:"r"
+      ~service:"sol-test"
+      ~record:"/definitely/missing/record.json"
+  with
+  | Error (Refused _) -> check "destroy without ownership record refuses" true
+  | _ -> check "destroy without ownership record refuses" false
+;;
+
+let test_rollback_requires_authorization () =
+  let described = ref "rev-current" in
+  let runner =
+    { Sol_cli_cloud_run.run =
+        (fun argv ->
+          match argv with
+          | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+            Ok (describe_json ~revision:!described ~percent:100)
+          | "gcloud" :: "run" :: "services" :: "update-traffic" :: _ ->
+            described := "rev-prev";
+            Ok "updated"
+          | _ -> Error "unexpected")
+    ; http =
+        (fun ~url ~token ->
+          match url, token with
+          | url, None when String.ends_with ~suffix:"/readyz" url -> Ok (200, "")
+          | url, Some _ when String.ends_with ~suffix:"/quote" url -> Ok (200, "")
+          | url, None when String.ends_with ~suffix:"/quote" url -> Ok (200, "")
+          | _ -> Error "unexpected")
+    }
+  in
+  match
+    Sol_cli_cloud_run.rollback runner (request ()) ~revision:"rev-prev" ~token:"token"
+  with
+  | Error (Unknown _) -> check "rollback refuses unauthenticated serving state" true
+  | _ -> check "rollback refuses unauthenticated serving state" false
+;;
+
+let test_destroy_refuses_unowned_live_service () =
+  let record = Filename.temp_file "sol-cloud-run-record-" ".json" in
+  Fun.protect
+    ~finally:(fun () ->
+      try Sys.remove record with
+      | Sys_error _ -> ())
+    (fun () ->
+       let channel = open_out record in
+       output_string
+         channel
+         (Yojson.Safe.to_string
+            (`Assoc
+                [ "project", `String "p"
+                ; "region", `String "r"
+                ; "service", `String "sol-test"
+                ; "revision", `String "rev-1"
+                ; "url", `String "https://service.example"
+                ; "image", `String "repo@sha256:abc"
+                ]));
+       close_out channel;
+       let runner =
+         { Sol_cli_cloud_run.run =
+             (fun argv ->
+               match argv with
+               | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+                 (* A pre-existing service: matching record but no adapter labels. *)
+                 Ok
+                   (Yojson.Safe.to_string
+                      (`Assoc
+                          [ ( "status"
+                            , `Assoc
+                                [ "url", `String "https://pre-existing.example"
+                                ; "latestReadyRevisionName", `String "rev-1"
+                                ; ( "traffic"
+                                  , `List
+                                      [ `Assoc
+                                          [ "revisionName", `String "rev-1"
+                                          ; "percent", `Int 100
+                                          ]
+                                      ] )
+                                ] )
+                          ]))
+               | "gcloud" :: "run" :: "services" :: "delete" :: _ ->
+                 check "unowned live service never deletes" false;
+                 Ok "deleted"
+               | _ -> Error "unexpected")
+         ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+         }
+       in
+       match
+         Sol_cli_cloud_run.destroy
+           runner
+           ~project:"p"
+           ~region:"r"
+           ~service:"sol-test"
+           ~record
+       with
+       | Error (Refused _) -> check "unowned live service refuses destroy" true
+       | _ -> check "unowned live service refuses destroy" false)
+;;
+
+let test_verify_writes_release_record () =
+  let record = Filename.temp_file "sol-cloud-run-release-" ".json" in
+  Fun.protect
+    ~finally:(fun () ->
+      try Sys.remove record with
+      | Sys_error _ -> ())
+    (fun () ->
+       let runner =
+         { Sol_cli_cloud_run.run =
+             (fun _ -> Ok (describe_json ~revision:"rev-verified" ~percent:100))
+         ; http =
+             (fun ~url ~token ->
+               match url, token with
+               | url, None when String.ends_with ~suffix:"/readyz" url -> Ok (200, "")
+               | url, Some _ when String.ends_with ~suffix:"/quote" url -> Ok (200, "")
+               | url, None when String.ends_with ~suffix:"/quote" url -> Ok (401, "")
+               | _ -> Error "unexpected")
+         }
+       in
+       match
+         Sol_cli_cloud_run.verify
+           runner
+           { (request ()) with record = Some record }
+           ~token:"token"
+       with
+       | Ok _ ->
+         let text = In_channel.with_open_bin record In_channel.input_all in
+         check "verify writes release record" (String.contains text 'r');
+         check
+           "release record names observed revision"
+           (String.length text > 0
+            &&
+            match Yojson.Safe.from_string text with
+            | `Assoc _ -> true
+            | _ -> false)
+       | Error e ->
+         check ("verify release record " ^ Sol_cli_cloud_run.failure_to_string e) false)
+;;
+
+let test_deploy_refuses_unowned_service () =
+  let deployed = ref false in
+  let runner =
+    { Sol_cli_cloud_run.run =
+        (fun argv ->
+          match argv with
+          | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+            Ok
+              (Yojson.Safe.to_string
+                 (`Assoc
+                     [ ( "status"
+                       , `Assoc
+                           [ "url", `String "https://pre-existing.example"
+                           ; "latestReadyRevisionName", `String "rev-old"
+                           ; ( "traffic"
+                             , `List
+                                 [ `Assoc
+                                     [ "revisionName", `String "rev-old"
+                                     ; "percent", `Int 100
+                                     ]
+                                 ] )
+                           ] )
+                     ]))
+          | "gcloud" :: "run" :: "deploy" :: _ ->
+            deployed := true;
+            Ok "deployed"
+          | _ -> Error "unexpected")
+    ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+    }
+  in
+  (match Sol_cli_cloud_run.deploy runner (request ()) with
+   | Error (Refused _) -> check "deploy refuses unowned pre-existing service" true
+   | _ -> check "deploy refuses unowned pre-existing service" false);
+  check "unowned deploy did not mutate" (not !deployed)
 ;;
 
 let () =
@@ -260,6 +494,11 @@ let () =
   test_partial_deploy ();
   test_deploy_requires_serving_revision ();
   test_rollback_requires_target_traffic ();
+  test_destroy_requires_matching_ownership ();
+  test_destroy_refuses_unowned_live_service ();
+  test_rollback_requires_authorization ();
+  test_verify_writes_release_record ();
+  test_deploy_refuses_unowned_service ();
   Printf.printf "%d passed, %d failed\n" !passed !failed;
   if !failed > 0 then exit 1
 ;;

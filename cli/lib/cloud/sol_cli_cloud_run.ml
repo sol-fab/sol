@@ -23,10 +23,13 @@ type observed =
   { url : string
   ; revision : string
   ; traffic : (string * int) list
+  ; labels : (string * string) list
   }
 
 type release =
-  { service : string
+  { project : string
+  ; region : string
+  ; service : string
   ; revision : string
   ; url : string
   ; image : string
@@ -153,6 +156,8 @@ let deploy_argv (request : request) =
   ; env_vars request
     |> List.map (fun (key, value) -> key ^ "=" ^ value)
     |> String.concat ","
+  ; "--labels"
+  ; "sol-owned=cloud-run-experiment,sol-service=" ^ request.service
   ; "--quiet"
   ]
 ;;
@@ -241,9 +246,20 @@ let parse_observed text =
            | _ -> None)
         entries
   in
+  let labels =
+    match Sol_cli_json.assoc (Sol_cli_json.field [ "metadata"; "labels" ] json) with
+    | None -> []
+    | Some fields ->
+      List.filter_map
+        (fun (key, value) ->
+           match Sol_cli_json.string value with
+           | Some value -> Some (key, value)
+           | None -> None)
+        fields
+  in
   if not (String.starts_with ~prefix:"https://" url)
   then Error "Cloud Run service URL is not HTTPS"
-  else Ok { url; revision; traffic }
+  else Ok { url; revision; traffic; labels }
 ;;
 
 let contains text needle =
@@ -276,7 +292,9 @@ let describe runner (request : request) =
 ;;
 
 let release (request : request) (observed : observed) =
-  { service = request.service
+  { project = request.project
+  ; region = request.region
+  ; service = request.service
   ; revision = observed.revision
   ; url = observed.url
   ; image = request.image
@@ -286,26 +304,73 @@ let release (request : request) (observed : observed) =
 let write_record ~path release =
   let json =
     `Assoc
-      [ "service", `String release.service
+      [ "project", `String release.project
+      ; "region", `String release.region
+      ; "service", `String release.service
       ; "revision", `String release.revision
       ; "url", `String release.url
       ; "image", `String release.image
       ]
   in
+  Sol_cli_fs.write_atomic ~perm:0o600 path (Yojson.Safe.to_string json ^ "\n")
+;;
+
+let read_record ~path =
   try
-    let channel = open_out_bin path in
-    Fun.protect
-      ~finally:(fun () -> close_out channel)
-      (fun () ->
-         Yojson.Safe.to_channel channel json;
-         output_char channel '\n');
-    Ok ()
+    let text = In_channel.with_open_bin path In_channel.input_all in
+    let* json =
+      Sol_cli_json.decode ~what:"Cloud Run release record" text
+      |> Result.map_error (fun message -> "release record is invalid: " ^ message)
+    in
+    let* project =
+      Sol_cli_json.string (Sol_cli_json.field [ "project" ] json)
+      |> Option.to_result ~none:"release record has no project"
+    in
+    let* region =
+      Sol_cli_json.string (Sol_cli_json.field [ "region" ] json)
+      |> Option.to_result ~none:"release record has no region"
+    in
+    let* service =
+      Sol_cli_json.string (Sol_cli_json.field [ "service" ] json)
+      |> Option.to_result ~none:"release record has no service"
+    in
+    let* revision =
+      Sol_cli_json.string (Sol_cli_json.field [ "revision" ] json)
+      |> Option.to_result ~none:"release record has no revision"
+    in
+    let* url =
+      Sol_cli_json.string (Sol_cli_json.field [ "url" ] json)
+      |> Option.to_result ~none:"release record has no url"
+    in
+    let* image =
+      Sol_cli_json.string (Sol_cli_json.field [ "image" ] json)
+      |> Option.to_result ~none:"release record has no image"
+    in
+    Ok { project; region; service; revision; url; image }
   with
-  | Sys_error message -> Error message
+  | Sys_error message -> Error ("cannot read release record: " ^ message)
+;;
+
+let owns service observed =
+  List.assoc_opt "sol-owned" observed.labels = Some "cloud-run-experiment"
+  && List.assoc_opt "sol-service" observed.labels = Some service
 ;;
 
 let deploy runner (request : request) =
   let* () = preflight request in
+  let* () =
+    match describe runner request with
+    | Ok (`Present observed) when owns request.service observed -> Ok ()
+    | Ok (`Present _) ->
+      Error
+        (Refused
+           "Cloud Run service already exists without this adapter's ownership labels; \
+            refusing to take it over")
+    | Error `Not_found -> Ok ()
+    | Error (`Provider message) ->
+      Error (Unknown ("could not inspect existing service: " ^ message))
+    | Error (`Unknown message) -> Error (Unknown message)
+  in
   match runner.run (deploy_argv request) with
   | Error message ->
     let observed =
@@ -323,6 +388,11 @@ let deploy runner (request : request) =
      | Error (`Unknown message) -> Error (Unknown message)
      | Ok (`Present observed) ->
        let* () =
+         if owns request.service observed
+         then Ok ()
+         else Error (Unknown "the deployed service lacks this adapter's ownership labels")
+       in
+       let* () =
          if
            List.exists
              (fun (revision, percent) -> revision = observed.revision && percent = 100)
@@ -330,16 +400,7 @@ let deploy runner (request : request) =
          then Ok ()
          else Error (Unknown "the deployed revision is not serving 100% of traffic")
        in
-       let deployed = release request observed in
-       let* () =
-         match request.record with
-         | None -> Ok ()
-         | Some path ->
-           write_record ~path deployed
-           |> Result.map_error (fun message ->
-             Provider ("could not write release record: " ^ message))
-       in
-       Ok deployed)
+       Ok (release request observed))
 ;;
 
 let verify runner (request : request) ~token =
@@ -386,10 +447,18 @@ let verify runner (request : request) ~token =
         Error
           (Unknown (Printf.sprintf "unauthenticated /quote returned %d" unauth_status))
     in
+    let* () =
+      match request.record with
+      | None -> Ok ()
+      | Some path ->
+        write_record ~path (release request observed)
+        |> Result.map_error (fun message ->
+          Provider ("could not write release record: " ^ message))
+    in
     Ok observed
 ;;
 
-let rollback runner (request : request) ~revision =
+let rollback runner (request : request) ~revision ~token =
   match describe runner request with
   | Error `Not_found -> Error (Unknown "service is absent; cannot roll back")
   | Error (`Provider message) -> Error (Provider message)
@@ -416,18 +485,38 @@ let rollback runner (request : request) ~revision =
             List.exists
               (fun (name, percent) -> name = revision && percent = 100)
               observed.traffic
-          then Ok observed
+          then
+            let* () =
+              verify runner { request with record = None } ~token
+              |> Result.map (fun _ -> ())
+            in
+            Ok observed
           else
             Error
               (Unknown "rollback did not establish the requested revision at 100% traffic")))
 ;;
 
-let destroy runner ~project ~region ~service =
+let destroy runner ~project ~region ~service ~record =
+  let* expected =
+    read_record ~path:record
+    |> Result.map_error (fun message ->
+      Refused ("destroy requires an ownership record: " ^ message))
+  in
+  let* () =
+    if
+      expected.project = project && expected.region = region && expected.service = service
+    then Ok ()
+    else
+      Error
+        (Refused
+           "ownership record does not match the requested project, region and service; \
+            refusing to delete an unverified resource")
+  in
   let request =
     { project
     ; region
     ; service
-    ; image = "unused"
+    ; image = expected.image
     ; identity = { unit = ""; callers = []; issuer = ""; jwks_uri = "" }
     ; ingress = Public
     ; record = None
@@ -447,7 +536,15 @@ let destroy runner ~project ~region ~service =
        else Ok ())
   | Error (`Provider message) -> Error (Provider message)
   | Error (`Unknown message) -> Error (Unknown message)
-  | Ok (`Present _) ->
+  | Ok (`Present observed) ->
+    let* () =
+      if owns service observed
+      then Ok ()
+      else
+        Error
+          (Refused
+             "live service lacks this adapter's ownership labels; refusing to delete it")
+    in
     (match runner.run (delete_argv ~project ~region ~service) with
      | Error message -> Error (Partial (message, None))
      | Ok _ ->
@@ -467,6 +564,7 @@ let observed_json (observed : observed) =
   `Assoc
     [ "url", `String observed.url
     ; "revision", `String observed.revision
+    ; "labels", `Assoc (List.map (fun (key, value) -> key, `String value) observed.labels)
     ; ( "traffic"
       , `Assoc
           (List.map (fun (revision, percent) -> revision, `Int percent) observed.traffic)
@@ -476,7 +574,9 @@ let observed_json (observed : observed) =
 
 let release_json (release : release) =
   `Assoc
-    [ "service", `String release.service
+    [ "project", `String release.project
+    ; "region", `String release.region
+    ; "service", `String release.service
     ; "revision", `String release.revision
     ; "url", `String release.url
     ; "image", `String release.image

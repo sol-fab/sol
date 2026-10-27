@@ -21,10 +21,13 @@ type observed =
   { url : string
   ; revision : string
   ; traffic : (string * int) list
+  ; labels : (string * string) list
   }
 
 type release =
-  { service : string
+  { project : string
+  ; region : string
+  ; service : string
   ; revision : string
   ; url : string
   ; image : string
@@ -49,13 +52,20 @@ val deploy_argv : request -> string list
 val deploy : runner -> request -> (release, failure) result
 val verify : runner -> request -> token:string -> (observed, failure) result
 val rollback_argv : request -> revision:string -> string list
-val rollback : runner -> request -> revision:string -> (observed, failure) result
+
+val rollback
+  :  runner
+  -> request
+  -> revision:string
+  -> token:string
+  -> (observed, failure) result
 
 val destroy
   :  runner
   -> project:string
   -> region:string
   -> service:string
+  -> record:string
   -> (unit, failure) result
 
 val observed_json : observed -> Yojson.Safe.t

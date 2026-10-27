@@ -61,7 +61,10 @@ let runner () =
         in
         let* body_status = run argv in
         match String.rindex_opt body_status '\n' with
-        | None -> Error "curl returned no HTTP status"
+        | None ->
+          (match int_of_string_opt (String.trim body_status) with
+           | Some status -> Ok (status, "")
+           | None -> Error "curl returned no HTTP status")
         | Some at ->
           let body = String.sub body_status 0 at in
           let status =
@@ -107,6 +110,16 @@ let ingress_arg =
         [ "ingress" ]
         ~docv:"INGRESS"
         ~doc:"Explicit ingress mode; only public is supported")
+;;
+
+let record_arg =
+  Arg.(
+    value
+    & opt (some string) None
+    & info
+        [ "record" ]
+        ~docv:"PATH"
+        ~doc:"Release/ownership record path (verify writes it)")
 ;;
 
 let parse_ingress value =
@@ -156,15 +169,10 @@ let common_terms =
       value
       & opt_all string []
       & info [ "caller" ] ~docv:"UNIT=SUBJECT" ~doc:"Authorized caller entry; repeatable")
-  and record =
-    Arg.(
-      value
-      & opt (some string) None
-      & info [ "record" ] ~docv:"PATH" ~doc:"Write the release record to PATH")
   in
   Term.(
-    const (fun project region service image unit issuer jwks_uri callers record ->
-      project, region, service, image, unit, issuer, jwks_uri, callers, record)
+    const (fun project region service image unit issuer jwks_uri callers ->
+      project, region, service, image, unit, issuer, jwks_uri, callers)
     $ project
     $ region
     $ service
@@ -172,22 +180,10 @@ let common_terms =
     $ unit
     $ issuer
     $ jwks_uri
-    $ callers
-    $ record)
+    $ callers)
 ;;
 
-let deploy_run
-      project
-      region
-      service
-      image
-      unit
-      issuer
-      jwks_uri
-      callers
-      record
-      ingress_value
-  =
+let deploy_run project region service image unit issuer jwks_uri callers ingress_value =
   let* () = service_is_http service in
   let* ingress = parse_ingress ingress_value in
   let callers =
@@ -211,7 +207,7 @@ let deploy_run
       ~issuer
       ~jwks_uri
       ~callers
-      ~record
+      ~record:None
       ~ingress
   in
   let* release =
@@ -223,23 +219,12 @@ let deploy_run
   Ok ()
 ;;
 
-let with_common f =
-  Term.(
-    const
-      (fun (project, region, service, image, unit, issuer, jwks_uri, callers, record) ->
-         f project region service image unit issuer jwks_uri callers record)
-    $ common_terms)
-;;
-
 let deploy_cmd =
   let doc = "Deploy or update one HTTP service on Cloud Run (experimental)." in
   let term =
     Term.(
       const
-        (fun
-            (project, region, service, image, unit, issuer, jwks_uri, callers, record)
-             ingress
-           ->
+        (fun (project, region, service, image, unit, issuer, jwks_uri, callers) ingress ->
            Sol_cli_exit.exit_on
              (deploy_run
                 project
@@ -250,7 +235,6 @@ let deploy_cmd =
                 issuer
                 jwks_uri
                 callers
-                record
                 ingress))
       $ common_terms
       $ ingress_arg)
@@ -258,7 +242,18 @@ let deploy_cmd =
   Cmd.v (Cmd.info "deploy" ~doc) term
 ;;
 
-let verify_run project region service image unit issuer jwks_uri token_file ingress_value =
+let verify_run
+      project
+      region
+      service
+      image
+      unit
+      issuer
+      jwks_uri
+      token_file
+      record
+      ingress_value
+  =
   let* () = service_is_http service in
   let* ingress = parse_ingress ingress_value in
   let* token =
@@ -278,7 +273,7 @@ let verify_run project region service image unit issuer jwks_uri token_file ingr
       ~issuer
       ~jwks_uri
       ~callers:[]
-      ~record:None
+      ~record
       ~ingress
   in
   let* observed =
@@ -308,8 +303,9 @@ let verify_cmd =
     Term.(
       const
         (fun
-            (project, region, service, image, unit, issuer, jwks_uri, _, _)
+            (project, region, service, image, unit, issuer, jwks_uri, _)
              token_file
+             record
              ingress
            ->
            Sol_cli_exit.exit_on
@@ -322,17 +318,45 @@ let verify_cmd =
                 issuer
                 jwks_uri
                 token_file
+                record
                 ingress))
       $ common_terms
       $ token_file
+      $ record_arg
       $ ingress_arg)
   in
   Cmd.v (Cmd.info "verify" ~doc) term
 ;;
 
-let rollback_run project region service image unit issuer jwks_uri revision ingress_value =
+let rollback_run
+      project
+      region
+      service
+      image
+      unit
+      issuer
+      jwks_uri
+      revision
+      token_file
+      ingress_value
+  =
   let* () = service_is_http service in
   let* ingress = parse_ingress ingress_value in
+  let* token =
+    match token_file with
+    | None ->
+      Error (command_error "rollback requires --token-file for serving verification")
+    | Some path ->
+      (try
+         let token = String.trim (In_channel.with_open_bin path In_channel.input_all) in
+         if token = ""
+         then Error (command_error "token file is empty")
+         else if String.exists (fun c -> c = '\n' || c = '\r') token
+         then Error (command_error "token file must contain exactly one token")
+         else Ok token
+       with
+       | Sys_error message -> Error (command_error message))
+  in
   let request =
     request
       ~project
@@ -347,7 +371,7 @@ let rollback_run project region service image unit issuer jwks_uri revision ingr
       ~ingress
   in
   let* observed =
-    Sol_cli_cloud_run.rollback (runner ()) request ~revision
+    Sol_cli_cloud_run.rollback (runner ()) request ~revision ~token
     |> Result.map_error (fun failure ->
       command_error (Sol_cli_cloud_run.failure_to_string failure))
   in
@@ -362,12 +386,22 @@ let rollback_cmd =
       & opt (some string) None
       & info [ "revision" ] ~docv:"REVISION" ~doc:"Revision to restore")
   in
+  let token_file =
+    Arg.(
+      value
+      & opt (some string) None
+      & info
+          [ "token-file" ]
+          ~docv:"PATH"
+          ~doc:"Authorized token file for serving verification")
+  in
   let term =
     Term.(
       const
         (fun
-            (project, region, service, image, unit, issuer, jwks_uri, _, _)
+            (project, region, service, image, unit, issuer, jwks_uri, _)
              revision
+             token_file
              ingress
            ->
            Sol_cli_exit.exit_on
@@ -380,9 +414,11 @@ let rollback_cmd =
                 issuer
                 jwks_uri
                 revision
+                token_file
                 ingress))
       $ common_terms
       $ revision
+      $ token_file
       $ ingress_arg)
   in
   Cmd.v
@@ -390,12 +426,19 @@ let rollback_cmd =
     term
 ;;
 
-let destroy_run project region service apply =
+let destroy_run project region service record apply =
   let* () = if apply then Ok () else Error (command_error "destroy requires --apply") in
   let* () = service_is_http service in
-  Sol_cli_cloud_run.destroy (runner ()) ~project ~region ~service
+  Sol_cli_cloud_run.destroy (runner ()) ~project ~region ~service ~record
   |> Result.map_error (fun failure ->
     command_error (Sol_cli_cloud_run.failure_to_string failure))
+;;
+
+let destroy_record_arg =
+  Arg.(
+    required
+    & opt (some string) None
+    & info [ "record" ] ~docv:"PATH" ~doc:"Ownership record written by verify")
 ;;
 
 let destroy_cmd =
@@ -404,13 +447,18 @@ let destroy_cmd =
   in
   let term =
     Term.(
-      const (fun (project, region, service, _, _, _, _, _, _) apply ->
-        Sol_cli_exit.exit_on (destroy_run project region service apply))
+      const (fun (project, region, service, _, _, _, _, _) record apply ->
+        Sol_cli_exit.exit_on (destroy_run project region service record apply))
       $ common_terms
+      $ destroy_record_arg
       $ apply)
   in
   Cmd.v
-    (Cmd.info "destroy" ~doc:"Delete the named Cloud Run service and verify absence.")
+    (Cmd.info
+       "destroy"
+       ~doc:
+         "Delete the named Cloud Run service and verify absence. The image repository is \
+          an external prerequisite and is not removed.")
     term
 ;;
 
