@@ -590,6 +590,10 @@ let observed_json (observed : observed) =
   `Assoc
     [ "url", `String observed.url
     ; "revision", `String observed.revision
+    ; ( "image"
+      , match observed.image with
+        | Some image -> `String image
+        | None -> `Null )
     ; "labels", `Assoc (List.map (fun (key, value) -> key, `String value) observed.labels)
     ; ( "traffic"
       , `Assoc
