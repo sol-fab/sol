@@ -226,8 +226,18 @@ the application model.
 One HTTP `-svc`, managed PostgreSQL, one task queue, and one queue handler. No
 Kafka in the first slice.
 
-- AWS: API Gateway/Lambda HTTP + RDS + SQS + Lambda consumer.
-- GCP: Cloud Run HTTP + Cloud SQL + Pub/Sub push + Cloud Run handler.
+**Provider order:** Cloud Run first for the HTTP experimental slice; Lambda
+second. The HTTP spike showed that Cloud Run can reuse the existing container,
+while Lambda requires a request adapter. This is a scoped implementation order,
+not a production or queue qualification.
+
+- GCP first: Cloud Run HTTP + Cloud SQL; queue follows after the identity and
+  HTTP lifecycle proof.
+- AWS second: API Gateway/Lambda HTTP + RDS; SQS follows the same queue gate.
+
+Before implementation, define the identity contract (unit/audience, trusted
+issuer, caller set, token projection, local development) and prove a protected
+route, not just `/readyz`.
 
 Acceptance:
 
@@ -239,21 +249,53 @@ Acceptance:
 - unsupported combinations refuse before mutation;
 - no production-profile claim until separately qualified.
 
-## 5. Provider-order spike
+## 5. Provider-order decision
 
-Do not choose the first provider by intuition. Compare the same workload and
-acceptance criteria:
+The bounded HTTP spike answered the ordering question:
 
-- **Cloud Run:** reuse the existing `sol-svc` container/listener; learn how much
-  of the HTTP runtime survives a managed HTTP service.
-- **Lambda:** adapt the request path; learn what a true invocation adapter costs
-  and whether the shared boundary holds.
+- **Cloud Run first.** The existing `sol-svc` checkout container ran after the
+  target identity inputs were supplied; `/readyz` returned 200 and
+  revision/traffic rollback worked.
+- **Lambda second.** Lambda required a separate HTTP handler; the existing
+  listener was not reusable. Function URL policy and path handling were
+  provider-specific. Lambda remains the second adapter and the proof that the
+  lifecycle seam generalizes.
 
-Record time-to-first-working-slice, code/adapters changed, provider-specific
-configuration, behavioral gaps, and what each taught the lifecycle seam. The
-result decides the first adapter; neither provider is assumed.
+This is an HTTP-only experimental order. It does not approve queue support,
+worker mapping, or production profile conformance.
 
-## 6. Open decisions
+## 6. Identity contract (prerequisite for the Cloud Run slice)
+
+The spike proved the existing container starts only when the target supplies:
+
+- `SOL_UNIT` — the workload's own unit/audience;
+- `SOL_TRUSTED_WORKLOAD_ISSUER` — the trusted issuer for projected tokens;
+- `SOL_CALLED_BY` — the caller set, when the unit has declared callers.
+
+`/quote` remained 401 without a token, so a healthy `/readyz` is not sufficient
+evidence of an integrated workload. The implementation must establish:
+
+- which Sol component supplies the unit/audience, caller set and issuer;
+- which provider-native identity issues the projected token on Cloud Run;
+- how the application validates issuer, audience and caller identity;
+- how missing/malformed identity fails before readiness or deployment;
+- the local-development equivalent without using the production issuer.
+
+Do not make these environment-variable names a provider-neutral API merely
+because the current runtime reads them. Define the Sol identity intent; let each
+adapter project it natively.
+
+## 7. Lifecycle identity convention
+
+A release records the provider-native identity, not a Kubernetes-shaped object:
+
+- Cloud Run: service, revision, traffic allocation, URL;
+- Lambda: function, version/alias, URL.
+
+Verification and rollback require observed post-operation state. An API `200`
+without observing which revision/version is serving is not success.
+
+## 8. Open decisions
 
 1. Target `execution` field shape and exact refusal messages.
 2. Whether the queue runtime is a trigger on an existing primitive or a new
@@ -262,4 +304,5 @@ result decides the first adapter; neither provider is assumed.
    delivery-vs-handler-attempt mapping, and DLQ replay scope.
 4. Whether release identity can remain provider-neutral without a plan refactor.
 5. Serverless profile evidence and refusal criteria.
-6. The provider-spike winner.
+6. Cloud Run-first provider decision is recorded; Lambda remains the second
+   adapter.

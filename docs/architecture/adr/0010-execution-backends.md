@@ -136,10 +136,50 @@ establish `production-single-region/v1` conformance. Production guarantees are
 qualified separately, with the same evidence discipline as the current
 Kubernetes campaign.
 
-Provider order is a spike decision, not an architectural assumption. Cloud Run
-may be cheaper to try because it can run the existing HTTP container; AWS Lambda
-requires a request adapter. The comparison must include what each adapter teaches
-the shared boundary, not only which one deploys first.
+The bounded HTTP spike established the first provider order:
+
+- **Cloud Run is the first experimental adapter.** It ran the existing `sol-svc`
+  container with `/readyz` 200 and supported revision/traffic rollback.
+- **Lambda is the second adapter.** It required a separate HTTP handler and
+  exposed a genuine request-adapter boundary. It will validate whether the
+  lifecycle seam generalizes; it is not the first implementation.
+
+This order is limited to HTTP. It is not evidence for queues, workers, or
+production qualification.
+
+### 8. Identity is part of the runtime contract
+
+The Cloud Run spike showed that a running container is not a healthy workload:
+`SOL_UNIT` and the trusted workload issuer are required at startup, and a
+protected route still rejects an unauthenticated request.
+
+The Sol-level identity contract is:
+
+- the workload's unit/audience;
+- the callers allowed to invoke it;
+- the trusted issuer for projected workload tokens;
+- the provider-native mechanism that supplies the token and issuer.
+
+These are Sol contract inputs, not a universal provider API. The current runtime
+happens to read `SOL_UNIT`, `SOL_CALLED_BY`, and
+`SOL_TRUSTED_WORKLOAD_ISSUER`; the adapter owns projecting them. A future adapter
+may use a different native mechanism. Missing or invalid identity configuration
+must fail before deployment or readiness, never produce a misleadingly healthy
+deployment. Local development needs an explicit local identity/trust contract,
+not the production issuer.
+
+The identity implementation and protected-route proof are a prerequisite for the
+Cloud Run slice; `/readyz` alone is not sufficient.
+
+### 9. Lifecycle identity is provider-native
+
+The lifecycle contract may be shared, but the identity of what was deployed is
+provider-native. Cloud Run revisions and traffic assignments differ from Lambda
+versions and aliases. The release record must retain the provider-native
+revision/version/alias identity and the observed serving state.
+
+Rollback and verification are accepted only when the post-operation provider
+state is observed, not merely when an API call returns success.
 
 ## Consequences
 
