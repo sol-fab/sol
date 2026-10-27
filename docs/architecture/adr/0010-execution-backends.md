@@ -93,12 +93,16 @@ An adapter implements the contract; it does not silently weaken it.
 ### 5. Keep Kubernetes and Kafka explicit
 
 `resources.events: type: kafka` remains explicit Kafka semantics. A generic
-`queue` resource is not introduced. A future `task_queue` resource is defined
-only after its delivery, retry, acknowledgement, duplicate, dead-letter,
-ordering, and concurrency guarantees are decided.
+`queue` resource is not introduced. A future `task_queue` resource is a **durable
+work queue**: at-least-once delivery, stable task identity, application
+idempotency, bounded retries, dead-lettering, no global ordering, and no claim of
+exactly-once external side effects. Its detailed contract and provider
+acceptance tests are in the proposal.
 
 Kafka and a task queue are separate contracts. Pub/Sub, SQS, Cloud Tasks, and
-Kafka must not be presented as interchangeable.
+Kafka must not be presented as interchangeable. SQS + Lambda and Pub/Sub +
+Cloud Run are candidates to test, not accepted mappings; Cloud Tasks is not the
+first mapping without native dead-letter/ack parity.
 
 ### 6. Define the lifecycle boundary before extracting it
 
@@ -113,10 +117,11 @@ minimum lifecycle operations:
 - failure reporting that preserves provider context.
 
 The first implementation step is a design of this boundary and a thin
-Kubernetes adapter around existing behavior. A broad refactor of the deployment
-plan is not authorized until a second adapter demonstrates which parts are
-genuinely shared. The candidate boundary and its current-code mapping are in
-`docs/architecture/proposals/serverless-execution.md`.
+Kubernetes adapter around existing behavior. The seam must carry ownership,
+evidence, failure semantics and provider-native diagnostics for each operation.
+A broad refactor of the deployment plan is not authorized until a second adapter
+demonstrates which parts are genuinely shared. The candidate boundary and its
+current-code mapping are in `docs/architecture/proposals/serverless-execution.md`.
 
 ### 7. Experimental serverless first
 
