@@ -286,6 +286,7 @@ hook_gcp_cloud_cold_deploy() {
 }
 
 hook_gcp_cloud_prestate() {
+  require_grafana_oidc_inputs || return 1
   require_letsencrypt_headroom || return 1
   start_cluster_kubeconfig_waiter
 }
