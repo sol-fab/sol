@@ -27,15 +27,39 @@ type jwt_config =
   ; verification : jwt_verification
   }
 
+type subject_scheme =
+  | Kubernetes_service_account
+  | Google_oidc_service_account
+
+let subject_scheme_to_string = function
+  | Kubernetes_service_account -> "kubernetes_service_account"
+  | Google_oidc_service_account -> "google_oidc_service_account"
+;;
+
+let subject_scheme_of_string = function
+  | "kubernetes_service_account" -> Ok Kubernetes_service_account
+  | "google_oidc_service_account" -> Ok Google_oidc_service_account
+  | value ->
+    Error
+      (Printf.sprintf
+         "unknown workload identity subject scheme %S (expected           \
+          kubernetes_service_account or google_oidc_service_account)"
+         value)
+;;
+
 (* DEC-063: a Sol-to-Sol call authenticates with the caller's projected
-   ServiceAccount token. The callee checks the token against a trusted issuer,
-   maps the subject to a caller unit, and requires that unit in [callers]. The
-   trusted issuer is projected from the target capability. *)
+   identity token. The callee checks the token against a trusted issuer, maps
+   the subject according to an explicit scheme, and requires that subject in
+   [callers]. The scheme is part of the target capability, never inferred from
+   a subject string. *)
 type workload_identity_config =
   { audience : string
   ; callers : (string * string) list
-    (* service account "<namespace>:<serviceaccount>" -> caller unit *)
+    (* K8s: "<namespace>:<serviceaccount>" -> caller unit.
+       Google: the token's stable subject -> caller unit. *)
   ; trusted_issuer : string
+  ; trusted_jwks_uri : string option
+  ; subject_scheme : subject_scheme
   }
 
 type level =
@@ -92,6 +116,61 @@ type pending_workload_auth =
   ; config : workload_identity_config
   ; key_id : string option
   }
+
+let has_prefix value prefix =
+  let plen = String.length prefix in
+  String.length value >= plen && String.sub value 0 plen = prefix
+;;
+
+(* Google emits both spellings of its issuer. They are the same authority; the
+   adapter supplies the canonical value and the token may carry either. This
+   normalization is scoped to the Google scheme and does not affect Kubernetes. *)
+let canonical_issuer = function
+  | "accounts.google.com" -> "https://accounts.google.com"
+  | issuer -> issuer
+;;
+
+let issuer_matches scheme ~trusted actual =
+  match scheme with
+  | Kubernetes_service_account -> String.equal trusted actual
+  | Google_oidc_service_account ->
+    String.equal (canonical_issuer trusted) (canonical_issuer actual)
+;;
+
+let valid_caller_key scheme key =
+  match scheme with
+  | Kubernetes_service_account ->
+    (match String.split_on_char ':' key with
+     | [ namespace; service_account ] -> namespace <> "" && service_account <> ""
+     | _ -> false)
+  | Google_oidc_service_account ->
+    key <> ""
+    && (not (has_prefix key "system:serviceaccount:"))
+    && not (String.contains key ':')
+;;
+
+let validate_callers scheme callers =
+  let seen = Hashtbl.create (List.length callers) in
+  let rec loop = function
+    | [] -> Ok ()
+    | (subject, unit) :: rest ->
+      if subject = "" || unit = ""
+      then Error "workload identity callers must have a non-empty subject and unit"
+      else if not (valid_caller_key scheme subject)
+      then
+        Error
+          (Printf.sprintf
+             "workload identity caller %S is not valid for subject scheme %s"
+             subject
+             (subject_scheme_to_string scheme))
+      else if Hashtbl.mem seen subject
+      then Error (Printf.sprintf "duplicate workload identity caller subject %S" subject)
+      else (
+        Hashtbl.add seen subject ();
+        loop rest)
+  in
+  loop callers
+;;
 
 let callers_of_projection raw =
   raw
@@ -162,11 +241,16 @@ let begin_workload_auth config ~authorization =
     | None -> Error (`Unauthorized "JWT issuer missing")
   in
   let* () =
-    if issuer = config.trusted_issuer
+    if issuer_matches config.subject_scheme ~trusted:config.trusted_issuer issuer
     then Ok ()
     else Error (`Unauthorized ("JWT issuer is not trusted: " ^ issuer))
   in
   let key_id = parsed.Jose.Jwt.header.Jose.Header.kid in
+  let issuer =
+    match config.subject_scheme with
+    | Google_oidc_service_account -> canonical_issuer issuer
+    | Kubernetes_service_account -> issuer
+  in
   Ok ({ issuer; key_id }, { token; issuer; config; key_id })
 ;;
 
@@ -197,7 +281,9 @@ let finish_workload_auth pending ~jwks ~now =
   let* claims = claims_object verified.Jose.Jwt.payload in
   let* () =
     match claims_string claims "iss" with
-    | Some issuer when issuer = pending.issuer -> Ok ()
+    | Some issuer
+      when issuer_matches pending.config.subject_scheme ~trusted:pending.issuer issuer ->
+      Ok ()
     | _ -> Error (`Unauthorized "JWT issuer mismatch")
   in
   let* () =
@@ -227,14 +313,26 @@ let finish_workload_auth pending ~jwks ~now =
     | None -> Error (`Forbidden "authenticated subject is not a workload identity")
   in
   let prefix = "system:serviceaccount:" in
-  let prefix_len = String.length prefix in
   let* service_account =
-    if String.length subject > prefix_len && String.sub subject 0 prefix_len = prefix
-    then Ok (String.sub subject prefix_len (String.length subject - prefix_len))
-    else
-      Error
-        (`Forbidden
-            (Printf.sprintf "authenticated subject %S is not a workload identity" subject))
+    match pending.config.subject_scheme with
+    | Kubernetes_service_account ->
+      let plen = String.length prefix in
+      if String.length subject > plen && String.sub subject 0 plen = prefix
+      then Ok (String.sub subject plen (String.length subject - plen))
+      else
+        Error
+          (`Forbidden
+              (Printf.sprintf
+                 "authenticated subject %S is not a workload identity"
+                 subject))
+    | Google_oidc_service_account ->
+      if has_prefix subject prefix
+      then
+        Error
+          (`Forbidden
+              "a Kubernetes-style subject cannot authenticate under the Google OIDC \
+               scheme")
+      else Ok subject
   in
   match List.assoc_opt service_account pending.config.callers with
   | None ->

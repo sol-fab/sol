@@ -22,3 +22,8 @@
  (name ci-unit)
  (deps
   (alias_rec runtest)))
+
+(executable
+ (name real_google_token)
+ (modules real_google_token)
+ (libraries sol_svc sol_svc_core eio eio_main cohttp-eio http yojson jose))

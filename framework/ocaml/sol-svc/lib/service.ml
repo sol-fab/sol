@@ -425,29 +425,83 @@ let workload_identity_requested routes metrics_auth =
 let workload_identity_config routes metrics_auth =
   if not (workload_identity_requested routes metrics_auth)
   then Ok None
-  else
+  else (
+    let nonempty name value =
+      if String.trim value = ""
+      then Error (`Config (Printf.sprintf "%s must not be empty" name))
+      else Ok value
+    in
     let* audience =
       match Sol_runtime.setting "SOL_UNIT" with
-      | Some unit -> Ok unit
+      | Some unit -> nonempty "SOL_UNIT" unit
       | None ->
         Error
           (`Config
               "a route uses Workload_identity auth but SOL_UNIT is not set; the callee's \
                own unit is required to check the token audience")
     in
+    let* subject_scheme =
+      (* [Sol_runtime.setting] treats an empty value as absent. The scheme is the
+         one exception where absence has a compatibility default; an explicitly
+         empty value must not silently select Kubernetes. *)
+      match Sys.getenv_opt "SOL_WORKLOAD_SUBJECT_SCHEME" with
+      | None -> Ok Auth.Kubernetes_service_account
+      | Some "" -> Error (`Config "SOL_WORKLOAD_SUBJECT_SCHEME must not be empty")
+      | Some raw ->
+        (match Auth.subject_scheme_of_string raw with
+         | Ok scheme -> Ok scheme
+         | Error message -> Error (`Config message))
+    in
     let callers =
       match Sol_runtime.setting "SOL_CALLED_BY" with
       | None -> []
       | Some raw -> Auth.callers_of_projection raw
     in
-    match Sol_runtime.setting "SOL_TRUSTED_WORKLOAD_ISSUER" with
-    | None ->
-      Error
-        (`Config
-            "a route requires Sol workload authentication but \
-             SOL_TRUSTED_WORKLOAD_ISSUER is not set by Sol's target capability \
-             projection")
-    | Some trusted_issuer -> Ok (Some { Auth.audience; callers; trusted_issuer })
+    let* () =
+      match Auth.validate_callers subject_scheme callers with
+      | Ok () -> Ok ()
+      | Error message -> Error (`Config message)
+    in
+    let* trusted_issuer =
+      match Sol_runtime.setting "SOL_TRUSTED_WORKLOAD_ISSUER" with
+      | Some issuer -> nonempty "SOL_TRUSTED_WORKLOAD_ISSUER" issuer
+      | None ->
+        Error
+          (`Config
+              "a route requires Sol workload authentication but \
+               SOL_TRUSTED_WORKLOAD_ISSUER is not set by Sol's target capability \
+               projection")
+    in
+    let* trusted_jwks_uri =
+      match Sol_runtime.setting "SOL_TRUSTED_WORKLOAD_JWKS_URI" with
+      | None -> Ok None
+      | Some raw ->
+        let raw = String.trim raw in
+        if raw = ""
+        then Error (`Config "SOL_TRUSTED_WORKLOAD_JWKS_URI must not be empty")
+        else (
+          let uri = Uri.of_string raw in
+          match Uri.scheme uri, Uri.host uri, Uri.userinfo uri with
+          | Some "https", Some host, None when host <> "" -> Ok (Some raw)
+          | _ ->
+            Error
+              (`Config "SOL_TRUSTED_WORKLOAD_JWKS_URI must be an absolute https:// URL"))
+    in
+    let* () =
+      match subject_scheme, trusted_jwks_uri with
+      | Auth.Google_oidc_service_account, None ->
+        Error
+          (`Config
+              "the Google OIDC subject scheme requires SOL_TRUSTED_WORKLOAD_JWKS_URI; \
+               Google's discovery JWKS origin differs from its issuer")
+      | Auth.Kubernetes_service_account, Some _ ->
+        Error
+          (`Config
+              "SOL_TRUSTED_WORKLOAD_JWKS_URI is only supported for the Google OIDC \
+               subject scheme; Kubernetes keeps same-origin discovery")
+      | _ -> Ok ()
+    in
+    Ok (Some { Auth.audience; callers; trusted_issuer; trusted_jwks_uri; subject_scheme }))
 ;;
 
 let emit_request_observation
@@ -624,7 +678,12 @@ module Make (H : HANDLER) = struct
     let* () = refuse_non_https_jwks metrics_auth in
     let* read_api_key = api_key_reader ~env ~required:(api_key_required metrics_auth) in
     let* workload_identity = workload_identity_config H.routes metrics_auth in
-    let fetch_workload_jwks = Auth_internal.fetch_workload_jwks_over_https ~env in
+    let fetch_workload_jwks =
+      match workload_identity with
+      | Some { Auth.trusted_jwks_uri = Some uri; _ } ->
+        fun _ -> Auth_internal.fetch_jwks_over_https ~env uri
+      | _ -> Auth_internal.fetch_workload_jwks_over_https ~env
+    in
     let lifecycle = Lifecycle.create () in
     let signal_stop, signal_stop_r = Eio.Promise.create () in
     let await_stop () =

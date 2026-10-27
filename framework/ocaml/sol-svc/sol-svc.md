@@ -97,9 +97,12 @@ type jwt_config =
 type workload_identity_config =
   { audience : string
   ; callers : (string * string) list
-      (** service account ["<namespace>:<serviceaccount>"] -> caller unit *)
+      (** scheme-specific subject -> caller unit *)
   ; trusted_issuer : string
-      (** target-established Kubernetes service-account issuer *)
+      (** target-established issuer *)
+  ; trusted_jwks_uri : string option
+      (** explicit HTTPS JWKS URI where discovery's JWKS origin differs *)
+  ; subject_scheme : subject_scheme
   }
 
 type level =
@@ -234,10 +237,15 @@ driven by `kid` lookup in the JWKS, not by attacker input.
    through `config.callers`. A valid signature whose subject is not a workload
    identity, or whose unit is not declared, is a 403.
 
-`config.audience` comes from `SOL_UNIT`, `config.callers` from `SOL_CALLED_BY`, and
-`config.trusted_issuer` from `SOL_TRUSTED_WORKLOAD_ISSUER`. Sol derives all three
-from the caller-owned `calls` graph or target capability and projects them into the
-workload. Application code calls `Service.run` without choosing a trusted issuer.
+`config.audience` comes from `SOL_UNIT`, `config.callers` from `SOL_CALLED_BY`,
+`config.trusted_issuer` from `SOL_TRUSTED_WORKLOAD_ISSUER`, an optional explicit
+JWKS URL from `SOL_TRUSTED_WORKLOAD_JWKS_URI` (needed where the provider's
+discovery document uses a different JWKS origin, such as Google), and the subject
+scheme from `SOL_WORKLOAD_SUBJECT_SCHEME` (default
+`kubernetes_service_account`). Sol
+derives the first three from the caller-owned `calls` graph or target capability
+and projects them into the workload. The Google scheme uses the token's stable
+`sub` as the caller subject; an email is never authority. Application code calls `Service.run` without choosing a trusted issuer.
 A route that requires workload authentication without any required projection fails
 at startup with a `Config` error.
 
@@ -250,7 +258,7 @@ at startup with a `Config` error.
 | `SOL_API_KEY` and `SOL_API_KEY_FILE` both unset while `/metrics` uses `` `Api_key `` | the service does not start: `run` returns a `Config` error |
 | Workload identity: untrusted `iss`, bad signature, wrong `aud`, missing/expired token | 401 |
 | Workload identity: authenticated subject is not a workload identity, or its unit is not allowed by the declared `calls` graph | 403 |
-| Workload identity: `SOL_UNIT` unset, or no trusted-issuer root supplied | the service does not start: `run` returns a `Config` error |
+| Workload identity: `SOL_UNIT` unset, no trusted-issuer root supplied, or an invalid/contradictory subject scheme or caller mapping | the service does not start: `run` returns a `Config` error |
 | Workload identity: discovery or JWKS fetch/parse/issuer/origin validation fails | 500 (fail closed) |
 
 ---

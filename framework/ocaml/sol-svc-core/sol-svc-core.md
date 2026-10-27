@@ -21,10 +21,16 @@ runtime dependency.
 ## Public API
 
 ```ocaml
+type subject_scheme =
+  | Kubernetes_service_account
+  | Google_oidc_service_account
+
 type workload_identity_config =
   { audience : string
   ; callers : (string * string) list
   ; trusted_issuer : string
+  ; trusted_jwks_uri : string option
+  ; subject_scheme : subject_scheme
   }
 
 type key_request =
