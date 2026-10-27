@@ -82,11 +82,17 @@ provider additionally requires the authorization, token and userinfo URLs.
 
 The GCP provider runs `require_gcp_ssd_headroom` before the first mutation. It
 reads the region's `SSD_TOTAL_GB` quota and computes the profile footprint from
-the actual sizing inputs: `TF_VAR_node_count` (default 4) ×
-`TF_VAR_node_disk_gb` (default 100), plus 60GB for the three 20Gi broker volumes
-and 20GB for the monitoring PVCs. Insufficient or unreadable quota refuses with
-the limit/usage/required numbers and the two remedies: raise the regional quota
-or lower `TF_VAR_node_disk_gb`.
+the same `TFVARS` the deployment receives, falling back to `TF_VAR_node_count`
+(default 4) and `TF_VAR_node_disk_gb` (default 100): node boot disks, plus 60GB
+for the three 20Gi broker volumes and 20GB for the monitoring PVCs. A
+non-literal `tfvars` sizing value is refused rather than silently replaced.
+Insufficient or unreadable quota refuses with the limit/usage/required numbers.
+
+It also reports one-node upgrade surge separately. The current 100GB-node
+profile needs 480GB initially, leaving 20GB of a 500GB quota; a surge node would
+bring the transient requirement to 580GB, so the preflight warns that the node
+pool cannot be upgraded within quota even though the initial apply fits. The
+warning is not a substitute for the provider's own enforcement.
 
 This is independent of the ACME rate-limit check: a passing certificate preflight
 does not establish disk quota, and vice versa.
