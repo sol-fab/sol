@@ -275,3 +275,28 @@
    python3
    %{dep:test_database_setup_postgres.py}
    %{dep:print_database_setup.exe})))
+
+(test
+ (name test_cloud_run)
+ (modules test_cloud_run)
+ (libraries sol_cli windtrap yojson))
+
+(rule
+ (alias runtest)
+ (deps ../bin/main.exe test_cloud_run_cli.sh)
+ (action
+  (run
+   bash
+   %{dep:test_cloud_run_cli.sh}
+   %{dep:../bin/main.exe}
+   %{workspace_root}/examples/pluto)))
+
+(rule
+ (alias runtest)
+ (deps ../bin/main.exe test_cloud_run_verify_cli.sh)
+ (action
+  (run
+   bash
+   %{dep:test_cloud_run_verify_cli.sh}
+   %{dep:../bin/main.exe}
+   %{workspace_root}/examples/pluto)))
