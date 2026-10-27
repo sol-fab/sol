@@ -645,6 +645,7 @@ let test_identity_configuration_fails_closed () =
        [ "SOL_UNIT", workload_audience
        ; "SOL_TRUSTED_WORKLOAD_ISSUER", google_issuer
        ; "SOL_WORKLOAD_SUBJECT_SCHEME", "google_oidc_service_account"
+       ; "SOL_TRUSTED_WORKLOAD_JWKS_URI", "https://www.googleapis.com/oauth2/v3/certs"
        ; "SOL_CALLED_BY", "a=123,b=123"
        ]
    with
@@ -675,6 +676,33 @@ let test_identity_configuration_fails_closed () =
        [ "SOL_UNIT", workload_audience
        ; "SOL_TRUSTED_WORKLOAD_ISSUER", google_issuer
        ; "SOL_WORKLOAD_SUBJECT_SCHEME", "google_oidc_service_account"
+       ]
+   with
+   | Error (`Config message) ->
+     Windtrap.is_true
+       ~msg:"Google scheme requires an explicit JWKS URI"
+       (String.starts_with ~prefix:"the Google OIDC subject scheme requires" message)
+   | Ok _ -> Windtrap.fail "Google scheme accepted without a JWKS URI");
+  (match
+     config
+       [ "SOL_UNIT", workload_audience
+       ; "SOL_TRUSTED_WORKLOAD_ISSUER", workload_issuer
+       ; "SOL_WORKLOAD_SUBJECT_SCHEME", "kubernetes_service_account"
+       ; "SOL_TRUSTED_WORKLOAD_JWKS_URI", "https://www.googleapis.com/oauth2/v3/certs"
+       ]
+   with
+   | Error (`Config message) ->
+     Windtrap.is_true
+       ~msg:"Kubernetes scheme rejects an explicit JWKS URI"
+       (String.starts_with
+          ~prefix:"SOL_TRUSTED_WORKLOAD_JWKS_URI is only supported"
+          message)
+   | Ok _ -> Windtrap.fail "Kubernetes scheme accepted an explicit JWKS URI");
+  (match
+     config
+       [ "SOL_UNIT", workload_audience
+       ; "SOL_TRUSTED_WORKLOAD_ISSUER", google_issuer
+       ; "SOL_WORKLOAD_SUBJECT_SCHEME", "google_oidc_service_account"
        ; "SOL_TRUSTED_WORKLOAD_JWKS_URI", "http://www.googleapis.com/certs"
        ]
    with
@@ -693,14 +721,15 @@ let test_identity_configuration_fails_closed () =
    with
    | Error (`Config message) ->
      Windtrap.is_true
-       ~msg:"empty JWKS URI is rejected"
-       (String.equal message "SOL_TRUSTED_WORKLOAD_JWKS_URI must not be empty")
+       ~msg:"empty JWKS URI is treated as missing and rejected"
+       (String.starts_with ~prefix:"the Google OIDC subject scheme requires" message)
    | Ok _ -> Windtrap.fail "empty JWKS URI was accepted");
   match
     config
       [ "SOL_UNIT", workload_audience
       ; "SOL_TRUSTED_WORKLOAD_ISSUER", google_issuer
       ; "SOL_WORKLOAD_SUBJECT_SCHEME", "google_oidc_service_account"
+      ; "SOL_TRUSTED_WORKLOAD_JWKS_URI", "https://www.googleapis.com/oauth2/v3/certs"
       ; "SOL_CALLED_BY", "a=system:serviceaccount:ns:sa"
       ]
   with

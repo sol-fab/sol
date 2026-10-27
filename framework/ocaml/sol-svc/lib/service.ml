@@ -473,7 +473,7 @@ let workload_identity_config routes metrics_auth =
                projection")
     in
     let* trusted_jwks_uri =
-      match Sys.getenv_opt "SOL_TRUSTED_WORKLOAD_JWKS_URI" with
+      match Sol_runtime.setting "SOL_TRUSTED_WORKLOAD_JWKS_URI" with
       | None -> Ok None
       | Some raw ->
         let raw = String.trim raw in
@@ -486,6 +486,20 @@ let workload_identity_config routes metrics_auth =
           | _ ->
             Error
               (`Config "SOL_TRUSTED_WORKLOAD_JWKS_URI must be an absolute https:// URL"))
+    in
+    let* () =
+      match subject_scheme, trusted_jwks_uri with
+      | Auth.Google_oidc_service_account, None ->
+        Error
+          (`Config
+              "the Google OIDC subject scheme requires SOL_TRUSTED_WORKLOAD_JWKS_URI; \
+               Google's discovery JWKS origin differs from its issuer")
+      | Auth.Kubernetes_service_account, Some _ ->
+        Error
+          (`Config
+              "SOL_TRUSTED_WORKLOAD_JWKS_URI is only supported for the Google OIDC \
+               subject scheme; Kubernetes keeps same-origin discovery")
+      | _ -> Ok ()
     in
     Ok (Some { Auth.audience; callers; trusted_issuer; trusted_jwks_uri; subject_scheme }))
 ;;
