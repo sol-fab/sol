@@ -68,6 +68,16 @@ success. A skipped capability is named as skipped; it is not silently promoted.
    authorization.
 
 
+### Grafana OIDC preflight
+
+A `letsencrypt-prod` attempt also requires Grafana SSO inputs: Terraform's
+`grafana_oidc_client_id`/`grafana_oidc_client_secret` default to empty, so a
+missing client would otherwise surface only after the cluster and database
+exist. `require_grafana_oidc_inputs` refuses before mutation and names the
+redirect URI (`https://grafana.<base_domain>/login/generic_oauth`) and the
+missing `TF_VAR_grafana_oidc_*` names without recording their values. A custom
+provider additionally requires the authorization, token and userinfo URLs.
+
 ### Rate-limit preflight
 
 Before either provider creates billable resources, `require_letsencrypt_headroom` runs

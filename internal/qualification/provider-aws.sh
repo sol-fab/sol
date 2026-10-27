@@ -382,6 +382,7 @@ hook_aws_cloud_cold_deploy() {
 }
 
 hook_aws_cloud_prestate() {
+  require_grafana_oidc_inputs || return 1
   require_letsencrypt_headroom || return 1
   capture_independent_identities --initial || return 1
   # A fixed repository name is not made fresh by a fresh target name, so record it on the way in.
