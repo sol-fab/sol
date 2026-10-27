@@ -285,8 +285,34 @@ hook_gcp_cloud_cold_deploy() {
   return "$rc"
 }
 
+# SSD_TOTAL_GB is a real regional quota, not a rate limit. The production
+# profile uses four nodes plus three broker volumes and the monitoring PVCs;
+# calculate that footprint from the same sizing inputs Terraform will receive.
+require_gcp_ssd_headroom() {
+  local node_disk="${TF_VAR_node_disk_gb:-100}"
+  local node_count="${TF_VAR_node_count:-4}"
+  local quotas="$LOG_DIR/gcp-quotas.json"
+  mkdir -p "$LOG_DIR"
+  if ! gcloud compute regions describe "$REGION" --project "$PROJECT" \
+    --format='json' >"$quotas" 2>"$LOG_DIR/gcp-quotas.err"; then
+    say "REFUSING: cannot read the region's SSD_TOTAL_GB quota before provisioning"
+    say "  see $LOG_DIR/gcp-quotas.err"
+    return 1
+  fi
+  if ! python3 "$ROOT/internal/qualification/gcp_quota_preflight.py" \
+    --quota-json "$quotas" --node-count "$node_count" --node-disk-gb "$node_disk" \
+    --out "$LOG_DIR/gcp-quota-preflight.txt" >>"$LOG_DIR/gcp-quota-preflight.log" 2>&1; then
+    say "REFUSING: GCP SSD quota headroom is not sufficient for this target"
+    say "  see $LOG_DIR/gcp-quota-preflight.txt; raise the regional SSD_TOTAL_GB quota"
+    say "  or lower TF_VAR_node_disk_gb, then retry before any infrastructure is created."
+    return 1
+  fi
+  say "gcp preflight: SSD quota headroom established"
+}
+
 hook_gcp_cloud_prestate() {
   require_grafana_oidc_inputs || return 1
+  require_gcp_ssd_headroom || return 1
   require_letsencrypt_headroom || return 1
   start_cluster_kubeconfig_waiter
 }

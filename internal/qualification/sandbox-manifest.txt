@@ -16,3 +16,5 @@ gcp/observer.py
 lib
 provider-aws.sh
 provider-gcp.sh
+letsencrypt_preflight.py
+gcp_quota_preflight.py
