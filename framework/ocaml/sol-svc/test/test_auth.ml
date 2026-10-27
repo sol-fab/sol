@@ -62,6 +62,7 @@ let sign_workload
       ?(aud = workload_audience)
       ?(iss = workload_issuer)
       ?email
+      ?azp
       ?(exp_offset = 3600.0)
       ()
   =
@@ -75,6 +76,9 @@ let sign_workload
           (match email with
            | None -> []
            | Some email -> [ "email", `String email ]))
+         @ (match azp with
+            | None -> []
+            | Some azp -> [ "azp", `String azp ])
          @ [ "exp", `Int (int_of_float (Unix.gettimeofday () +. exp_offset)) ]))
 ;;
 
@@ -822,6 +826,28 @@ let test_google_missing_audience_is_unauthorized () =
     (dispatch ~identity:(google_identity ()) (headers token)).Response.status
 ;;
 
+let test_google_azp_is_not_caller_authority () =
+  (* Google documents azp as the presenting client's identifier, not the
+     workload subject. Sol authorizes the service-account sub against the
+     application audience; a different azp does not create a different Sol
+     caller. This is a deliberate policy decision, not an omitted check. *)
+  let response =
+    dispatch
+      ~identity:(google_identity ())
+      (headers
+         (sign_workload
+            ~iss:google_issuer
+            ~sub:google_subject
+            ~azp:"another-presenting-client"
+            ()))
+  in
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"azp is not a Sol caller identity; authorized sub still succeeds"
+    200
+    response.Response.status
+;;
+
 let () =
   Windtrap.run
     "sol-svc workload identity"
@@ -886,6 +912,9 @@ let () =
     ; Windtrap.test
         "Google missing subject is forbidden"
         test_google_missing_subject_is_forbidden
+    ; Windtrap.test
+        "Google azp is not caller authority"
+        test_google_azp_is_not_caller_authority
     ; Windtrap.test
         "Google expired token is unauthorized"
         test_google_expired_token_is_unauthorized
