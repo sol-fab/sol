@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 sol="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+examples="${2:-examples/pluto}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
@@ -44,7 +45,7 @@ chmod +x "$work/bin/gcloud"
 export PATH="$work/bin:$PATH"
 export FAKE_GCLOUD_LOG="$work/gcloud.log"
 export FAKE_GCLOUD_STATE="$work/deployed"
-cd examples/pluto
+cd "$examples"
 if ! "$sol" cloud-run deploy \
   --project p --region r --service checkout_svc \
   --image repo@sha256:abc123 \

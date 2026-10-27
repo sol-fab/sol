@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 sol="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+examples="${2:-examples/pluto}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/tmp"
@@ -44,7 +45,7 @@ chmod +x "$work/bin/gcloud" "$work/bin/curl"
 export PATH="$work/bin:$PATH"
 export TMPDIR="$work/tmp"
 printf 'secret-token\n' > "$work/token"
-cd examples/pluto
+cd "$examples"
 if ! "$sol" cloud-run verify \
   --project p --region r --service checkout_svc \
   --image repo@sha256:abc123 \

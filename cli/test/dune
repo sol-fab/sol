@@ -285,10 +285,18 @@
  (alias runtest)
  (deps ../bin/main.exe test_cloud_run_cli.sh)
  (action
-  (run bash %{dep:test_cloud_run_cli.sh} %{dep:../bin/main.exe})))
+  (run
+   bash
+   %{dep:test_cloud_run_cli.sh}
+   %{dep:../bin/main.exe}
+   %{workspace_root}/examples/pluto)))
 
 (rule
  (alias runtest)
  (deps ../bin/main.exe test_cloud_run_verify_cli.sh)
  (action
-  (run bash %{dep:test_cloud_run_verify_cli.sh} %{dep:../bin/main.exe})))
+  (run
+   bash
+   %{dep:test_cloud_run_verify_cli.sh}
+   %{dep:../bin/main.exe}
+   %{workspace_root}/examples/pluto)))
