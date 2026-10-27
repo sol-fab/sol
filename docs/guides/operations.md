@@ -26,16 +26,28 @@ provider for managed resources. Sol's deployment result establishes whether its
 own operation reached the required postconditions; it is not a replacement for
 those systems' operational interfaces.
 
-### Grafana SSO
+### Grafana SSO (platform operator)
 
 A production target installs one Grafana at
 `https://grafana.<base_domain>`, protected by the `grafana-tls` certificate and
-an OIDC login. Anonymous access is disabled; Grafana refuses to install when the
-SSO inputs are absent. The deploy reports the URL.
+an OIDC login. Anonymous access is disabled. This is a **platform-operator**
+prerequisite, not an app-developer step: application authors deploying a unit
+do not create OIDC clients and do not need these values.
 
-The client is created at the identity provider with the redirect URI
-`https://grafana.<base_domain>/login/generic_oauth`. Supply the values out of
-band so the client secret never appears on the Terraform command line:
+Create one OAuth web client per target/base domain at the identity provider.
+For Google:
+
+- **Internal** is the right choice for a Google Workspace organization. Only
+  accounts in that organization can sign in.
+- **External** is for other audiences. While the app is in *Testing*, only
+  listed test users can sign in and refresh tokens expire quickly; production
+  use requires Google verification or an internal audience.
+- Register the exact redirect URI
+  `https://grafana.<base_domain>/login/generic_oauth`. A client scoped to one
+  target does not authorize another target's hostname.
+
+Supply the values out of band so the client secret never appears in a target
+file or on a Terraform command line:
 
 ```bash
 export TF_VAR_grafana_oidc_client_id="<client-id>"
@@ -45,6 +57,11 @@ export TF_VAR_grafana_oidc_client_secret="<client-secret>"
 # export TF_VAR_grafana_oidc_role_attribute_path="contains(groups[*], 'sol-observability-admins') && 'Admin' || 'Viewer'"
 sol deploy <target>
 ```
+
+The production qualification preflight refuses before provisioning when the
+client ID or secret is absent (and, for a custom provider, when the auth/token/
+userinfo URLs are absent), naming the redirect URI above. A passing check means
+the inputs are present, not that the identity provider accepts them.
 
 For a standard OIDC provider other than Google, also set
 `TF_VAR_grafana_oidc_provider=custom` and the explicit
