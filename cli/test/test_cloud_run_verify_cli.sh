@@ -59,4 +59,16 @@ if ! "$sol" cloud-run verify \
 fi
 grep -q '"revision":"rev-1"' "$work/release.json"
 [[ ! -n "$(find "$work/tmp" -name 'sol-cloud-run-curl-*' -print -quit)" ]]
+printf 'first-token\nsecond-token\n' > "$work/bad-token"
+if "$sol" cloud-run verify \
+  --project p --region r --service checkout_svc \
+  --image repo@sha256:abc123 \
+  --unit checkout/checkout_svc \
+  --issuer https://accounts.google.com \
+  --jwks-uri https://www.googleapis.com/oauth2/v3/certs \
+  --token-file "$work/bad-token" --ingress public > /dev/null 2> "$work/bad-err"; then
+  echo "multi-line token was accepted" >&2
+  exit 1
+fi
+grep -q 'exactly one token' "$work/bad-err"
 echo "cloud-run verify CLI/token cleanup test passed"

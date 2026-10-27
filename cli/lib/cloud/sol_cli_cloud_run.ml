@@ -461,7 +461,17 @@ let verify runner (request : request) ~token =
       match request.record with
       | None -> Ok ()
       | Some path ->
-        write_record ~path (release request observed)
+        let* image =
+          match observed.image with
+          | Some image -> Ok image
+          | None ->
+            Error
+              (Unknown
+                 "describe did not report the deployed image; refusing to write a \
+                  release record")
+        in
+        let recorded = { (release request observed) with image } in
+        write_record ~path recorded
         |> Result.map_error (fun message ->
           Provider ("could not write release record: " ^ message))
     in
