@@ -1,6 +1,7 @@
 # ADR 0010: Execution backends are target-scoped adapters
 
-- **Status:** Proposed
+- **Status:** Accepted (architecture direction); provider mappings and
+  numerical queue defaults remain provisional
 - **Date:** 2026-10-27
 - **Decision owner:** operator
 - **Related:** ADR 0009 (one product contract), DEC-022 (language parity),
@@ -26,6 +27,10 @@ resource envelope of the current Kubernetes backend. Its results inform this
 decision but do not determine it, and this ADR creates no storage or cloud work.
 
 ## Decision
+
+The architectural principles are accepted. Provider mappings, the task-queue
+defaults, the lifecycle seam's eventual shape, and production qualification are
+**not** accepted by this ADR; each remains a spike/qualification decision.
 
 ### 1. One target-scoped execution choice
 

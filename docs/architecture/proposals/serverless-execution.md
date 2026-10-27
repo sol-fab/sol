@@ -167,6 +167,9 @@ pass the same tests before `task_queue` is accepted.
 | Payload over 256 KiB | Enqueue is refused with a clear error. |
 | Concurrency limit | Observed concurrent handlers do not exceed the declared bound, or the adapter reports a capability difference. |
 | No ordering assumption | The contract makes no ordering promise; a handler that requires ordering is rejected by design review, not silently serialized. |
+| Partial batch accounting | In a batch, a failed task is retried/DLQ'd independently; successfully processed tasks are not retried, and each task's handler-attempt count is reported correctly. |
+| Pre-handler failure accounting | A delivered-but-never-handled task does not consume a handler attempt; the adapter reports it as a delivery failure, not as a handler attempt. |
+| Durable attempt identity | The attempt number is stable across redelivery. The spike establishes whether provider-native counters suffice or Sol-managed durable state is required, including duplicate-invocation/concurrency implications. |
 
 ### 2.7 Provider mapping status
 
@@ -185,6 +188,15 @@ The first cross-provider proof should test **SQS + Lambda** and
 HTTP task-dispatch contract; it is not assumed equivalent. Pub/Sub is used with
 one work subscription, not as a general event bus. These are hypotheses to be
 validated by the acceptance tests, not accepted mappings.
+
+**Hard spike gate:** per-task accounting under partial failures, distinguishing
+pre-handler delivery failures from handler attempts, and stable attempt numbers
+across redelivery must be demonstrated on both adapters. If a provider cannot
+enforce these without unacceptable provider-specific behavior, the adapter must
+refuse qualification rather than claim equivalence. Provider-native delivery
+counters are not assumed sufficient; the spike determines whether Sol-managed
+durable state is needed and what that means for duplicate invocations and
+concurrency.
 
 ## 3. Runtime semantics: `-worker`, `-fn`, and queue handlers
 
