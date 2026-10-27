@@ -81,10 +81,49 @@ choose a different policy only where the provider can honor it explicitly.
 
 ### 2.4 Retry, exhaustion and dead-lettering
 
-- Default maximum delivery attempts: **5**, configurable within provider bounds.
+#### What counts as an attempt
+
+Sol counts **handler attempts**, not provider deliveries:
+
+> An attempt begins when the queue runtime has validated the task envelope and
+> invokes the application handler for one task. It includes handler timeouts,
+> cancellation, crashes and abnormal exits. It does not include a delivery or
+> transport failure that occurs before the handler is entered.
+
+This definition matters because providers may count deliveries differently. The
+adapter must expose both counters separately:
+
+- **delivery failures** — provider delivery/transport failures before handler
+  entry;
+- **handler attempts** — handler invocations, including failures, timeouts and
+  cancellation.
+
+Rules:
+
+- A batch is not an attempt. Each task in a batch has its own attempt count.
+- A malformed task envelope that never enters the handler is a delivery/task
+  failure, not a handler attempt; it is dead-lettered without silently
+  acknowledging a valid task.
+- A handler that times out or is cancelled still consumed its attempt.
+- An infrastructure failure before the handler starts does not consume a
+  handler attempt; it must be reported as a delivery failure.
+- If a handler succeeds but acknowledgement fails, that success does not erase
+  the task's history. If the task is redelivered, the next handler invocation is
+  a new attempt; the ack failure is recorded separately.
+- The attempt number is stable in the task metadata and does not reset on
+  redelivery.
+
+The initial budget is **5 handler attempts**, provisional. Provider mappings must
+either permit at least that many handler entries before dead-lettering or report
+a capability difference/refuse. A provider setting that counts all deliveries
+(for example `maxReceiveCount`/`maxDeliveryAttempts`) must be tested against
+pre-handler delivery failures; it is not assumed to equal Sol's handler budget.
+
+#### Exhaustion and dead-lettering
+
 - Retry uses bounded backoff supplied by the adapter; the contract does not
   promise identical timing across providers.
-- When the attempt budget is exhausted, the adapter moves the task to a
+- When the handler-attempt budget is exhausted, the adapter moves the task to a
   provider-owned dead-letter destination.
 - Dead-letter retention: **at least 7 days**, configurable within provider
   bounds; the actual retention is recorded in evidence.
@@ -117,8 +156,12 @@ pass the same tests before `task_queue` is accepted.
 | Duplicate delivery | Second delivery sees the same `task_id`; application idempotency prevents a second effect; second delivery acknowledges. |
 | Crash after side effect, before ack | Task is redelivered; handler's idempotency prevents a duplicate; eventual ack. |
 | Crash before side effect | Task is retried and succeeds. |
-| Transient failure | Retries until success, within the attempt budget. |
-| Exhausted retries | Task appears in the dead-letter destination; source is not silently lost. |
+| Transient failure | Retries until success, within the handler-attempt budget. |
+| Exhausted handler attempts | After exactly five handler entries, the task appears in the dead-letter destination; source is not silently lost. |
+| Handler timeout/cancellation | Counts as an attempt; five such outcomes exhaust the budget. |
+| Pre-handler delivery failure | Reported as a delivery failure and does not consume a handler attempt; the adapter must expose the distinction. |
+| Batch partial failure | Each failed task in the batch has its own attempt count; successful tasks are not retried. |
+| Ack failure after success | Task may be redelivered; the next handler invocation is a new attempt; ack failure is recorded separately. |
 | Permanent handler failure | Task is dead-lettered without exhausting ordinary retries. |
 | Dead-letter publish failure | Source is not acknowledged; failure is exposed. |
 | Payload over 256 KiB | Enqueue is refused with a clear error. |
@@ -203,7 +246,8 @@ result decides the first adapter; neither provider is assumed.
 1. Target `execution` field shape and exact refusal messages.
 2. Whether the queue runtime is a trigger on an existing primitive or a new
    primitive.
-3. Confirmation of the 5-attempt/7-day/256-KiB defaults and DLQ replay scope.
+3. Confirmation of the 5-handler-attempt/7-day/256-KiB defaults, the
+   delivery-vs-handler-attempt mapping, and DLQ replay scope.
 4. Whether release identity can remain provider-neutral without a plan refactor.
 5. Serverless profile evidence and refusal criteria.
 6. The provider-spike winner.

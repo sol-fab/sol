@@ -96,8 +96,9 @@ An adapter implements the contract; it does not silently weaken it.
 `queue` resource is not introduced. A future `task_queue` resource is a **durable
 work queue**: at-least-once delivery, stable task identity, application
 idempotency, bounded retries, dead-lettering, no global ordering, and no claim of
-exactly-once external side effects. Its detailed contract and provider
-acceptance tests are in the proposal.
+exactly-once external side effects. Its retry budget counts **handler attempts**,
+not provider deliveries, with pre-handler delivery failures reported separately.
+Its detailed contract and provider acceptance tests are in the proposal.
 
 Kafka and a task queue are separate contracts. Pub/Sub, SQS, Cloud Tasks, and
 Kafka must not be presented as interchangeable. SQS + Lambda and Pub/Sub +
