@@ -54,6 +54,16 @@ def main():
             ]
         )
     )
+    if cluster_zones and any(zone != "${local.node_zones}" for zone in cluster_zones):
+        problems.append(
+            "the cluster's node_locations must resolve the provider's valid zone through "
+            "local.node_zones, not a literal (a hardcoded -a zone fails in regions without one)"
+        )
+    if pool_zones and any(zone != "${local.node_zones}" for zone in pool_zones):
+        problems.append(
+            "the node pool's node_locations must resolve the provider's valid zone through "
+            "local.node_zones, not a literal"
+        )
     if not cluster_zones:
         problems.append(
             "the cluster declares no node_locations, so GKE places its transient default pool in a "

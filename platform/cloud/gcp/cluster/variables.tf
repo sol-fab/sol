@@ -173,6 +173,12 @@ variable "node_machine_type" {
   default     = "e2-standard-4"
 }
 
+variable "node_zones" {
+  description = "Optional explicit zone list for the GKE control plane/node pool. Empty uses the first UP zone the provider reports for the region, so regions without an -a zone are valid; the pool keeps one zone and the four-node count."
+  type        = list(string)
+  default     = []
+}
+
 variable "node_disk_gb" {
   description = "Boot disk size for each node, in GiB. pd-balanced disks count against the region's SSD_TOTAL_GB quota, which the lifecycle checks before the platform asks for a volume."
   type        = number

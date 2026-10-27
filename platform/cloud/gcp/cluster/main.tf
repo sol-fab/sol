@@ -65,6 +65,16 @@ resource "google_compute_router_nat" "main" {
   source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
 }
 
+data "google_compute_zones" "available" {
+  project = var.project_id
+  region  = var.region
+  status  = "UP"
+}
+
+locals {
+  node_zones = length(var.node_zones) > 0 ? var.node_zones : [data.google_compute_zones.available.names[0]]
+}
+
 resource "google_container_cluster" "main" {
   name     = var.cluster_name
   location = var.region
@@ -74,7 +84,7 @@ resource "google_container_cluster" "main" {
   remove_default_node_pool = true
   initial_node_count       = 1
 
-  node_locations = ["${var.region}-a"]
+  node_locations = local.node_zones
 
   network    = google_compute_network.main.id
   subnetwork = google_compute_subnetwork.main.id
@@ -115,7 +125,7 @@ resource "google_container_node_pool" "main" {
   cluster  = google_container_cluster.main.id
   location = var.region
 
-  node_locations = ["${var.region}-a"]
+  node_locations = local.node_zones
   node_count     = var.node_count
 
   node_config {
