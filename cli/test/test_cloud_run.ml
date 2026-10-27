@@ -490,7 +490,10 @@ let test_verify_writes_release_record () =
        match
          Sol_cli_cloud_run.verify
            runner
-           { (request ()) with record = Some record }
+           { (request ()) with
+             image = "requested@sha256:different"
+           ; record = Some record
+           }
            ~token:"token"
        with
        | Ok _ ->
@@ -543,6 +546,51 @@ let test_deploy_refuses_unowned_service () =
   check "unowned deploy did not mutate" (not !deployed)
 ;;
 
+let test_destroy_unreadable_inventory_is_unknown () =
+  let record = Filename.temp_file "sol-cloud-run-record-" ".json" in
+  Fun.protect
+    ~finally:(fun () ->
+      try Sys.remove record with
+      | Sys_error _ -> ())
+    (fun () ->
+       let channel = open_out record in
+       output_string
+         channel
+         (Yojson.Safe.to_string
+            (`Assoc
+                [ "project", `String "p"
+                ; "region", `String "r"
+                ; "service", `String "sol-test"
+                ; "revision", `String "rev-1"
+                ; "url", `String "https://service.example"
+                ; "image", `String "repo@sha256:abc123"
+                ]));
+       close_out channel;
+       let runner =
+         { Sol_cli_cloud_run.run =
+             (fun argv ->
+               match argv with
+               | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+                 Ok (describe_json ~revision:"rev-1" ~percent:100)
+               | "gcloud" :: "run" :: "services" :: "delete" :: _ -> Ok "deleted"
+               | "gcloud" :: "run" :: "services" :: "list" :: _ ->
+                 Error "inventory unavailable"
+               | _ -> Error "unexpected")
+         ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+         }
+       in
+       match
+         Sol_cli_cloud_run.destroy
+           runner
+           ~project:"p"
+           ~region:"r"
+           ~service:"sol-test"
+           ~record
+       with
+       | Error (Unknown _) -> check "unreadable inventory is unknown" true
+       | _ -> check "unreadable inventory is unknown" false)
+;;
+
 let () =
   test_ingress ();
   test_preflight ();
@@ -557,6 +605,7 @@ let () =
   test_destroy_requires_matching_ownership ();
   test_destroy_refuses_unowned_live_service ();
   test_destroy_refuses_stale_record ();
+  test_destroy_unreadable_inventory_is_unknown ();
   test_rollback_requires_authorization ();
   test_verify_writes_release_record ();
   test_deploy_refuses_unowned_service ();

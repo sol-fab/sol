@@ -64,4 +64,16 @@ if ! grep -q 'sol-owned=cloud-run-experiment' "$FAKE_GCLOUD_LOG"; then
   exit 1
 fi
 grep -q 'SOL_WORKLOAD_SUBJECT_SCHEME=google_oidc_service_account' "$FAKE_GCLOUD_LOG"
+if "$sol" cloud-run deploy \
+  --project p --region r --service checkout_svc \
+  --image repo@sha256:abc123 \
+  --unit checkout/checkout_svc \
+  --issuer https://accounts.google.com \
+  --jwks-uri https://www.googleapis.com/oauth2/v3/certs \
+  --caller malformed \
+  --ingress public > /dev/null 2> "$work/bad-caller"; then
+  echo "malformed caller was accepted" >&2
+  exit 1
+fi
+grep -q 'invalid --caller' "$work/bad-caller"
 echo "cloud-run CLI fake-provider test passed"

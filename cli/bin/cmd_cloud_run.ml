@@ -22,6 +22,18 @@ let service_is_http name =
        Error (command_error (Printf.sprintf "service %S is not an HTTP service" name)))
 ;;
 
+let read_token_file path =
+  try
+    let token = String.trim (In_channel.with_open_bin path In_channel.input_all) in
+    if token = ""
+    then Error (command_error "token file is empty")
+    else if String.exists (fun c -> c = '\n' || c = '\r') token
+    then Error (command_error "token file must contain exactly one token")
+    else Ok token
+  with
+  | Sys_error message -> Error (command_error message)
+;;
+
 let runner () =
   let run argv =
     Sol_cli_process.run (Sol_cli_process.cmd argv)
@@ -186,16 +198,30 @@ let common_terms =
 let deploy_run project region service image unit issuer jwks_uri callers ingress_value =
   let* () = service_is_http service in
   let* ingress = parse_ingress ingress_value in
-  let callers =
-    List.filter_map
-      (fun entry ->
-         match String.index_opt entry '=' with
-         | None -> None
-         | Some at ->
-           let unit = String.sub entry 0 at in
-           let subject = String.sub entry (at + 1) (String.length entry - at - 1) in
-           if unit = "" || subject = "" then None else Some (subject, unit))
-      callers
+  let* callers =
+    let parse entry =
+      match String.index_opt entry '=' with
+      | None ->
+        Error
+          (command_error
+             (Printf.sprintf "invalid --caller %S; expected UNIT=SUBJECT" entry))
+      | Some at ->
+        let unit = String.sub entry 0 at in
+        let subject = String.sub entry (at + 1) (String.length entry - at - 1) in
+        if unit = "" || subject = ""
+        then
+          Error
+            (command_error
+               (Printf.sprintf "invalid --caller %S; expected UNIT=SUBJECT" entry))
+        else Ok (subject, unit)
+    in
+    let rec loop acc = function
+      | [] -> Ok (List.rev acc)
+      | entry :: rest ->
+        let* caller = parse entry in
+        loop (caller :: acc) rest
+    in
+    loop [] callers
   in
   let request =
     request
@@ -259,9 +285,7 @@ let verify_run
   let* token =
     match token_file with
     | None -> Error (command_error "verify requires --token-file")
-    | Some path ->
-      (try Ok (String.trim (In_channel.with_open_bin path In_channel.input_all)) with
-       | Sys_error message -> Error (command_error message))
+    | Some path -> read_token_file path
   in
   let request =
     request
@@ -346,16 +370,7 @@ let rollback_run
     match token_file with
     | None ->
       Error (command_error "rollback requires --token-file for serving verification")
-    | Some path ->
-      (try
-         let token = String.trim (In_channel.with_open_bin path In_channel.input_all) in
-         if token = ""
-         then Error (command_error "token file is empty")
-         else if String.exists (fun c -> c = '\n' || c = '\r') token
-         then Error (command_error "token file must contain exactly one token")
-         else Ok token
-       with
-       | Sys_error message -> Error (command_error message))
+    | Some path -> read_token_file path
   in
   let request =
     request
