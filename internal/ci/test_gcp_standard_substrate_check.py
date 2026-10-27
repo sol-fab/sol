@@ -55,7 +55,9 @@ CASES = [
     ("sizing-became-target-configuration", sizing_in_contract),
     ("one-sizing-default-removed", drop_disk_default),
     ("cluster-zone-list-dropped", substitute(
-        r'\n\s*node_locations = \["\$\{var\.region\}-a"\]\n', "\n")),
+        r'\n\s*node_locations = local\.node_zones\n', "\n")),
+    ("node-zone-hardcoded", substitute(
+        r'node_locations = local\.node_zones', 'node_locations = ["us-east1-a"]')),
     ("control-plane-became-zonal", substitute(
         r"location\s*=\s*var\.region", 'location = "${var.region}-a"')),
 ]
