@@ -58,6 +58,7 @@ type workload_identity_config =
     (* K8s: "<namespace>:<serviceaccount>" -> caller unit.
        Google: the token's stable subject -> caller unit. *)
   ; trusted_issuer : string
+  ; trusted_jwks_uri : string option
   ; subject_scheme : subject_scheme
   }
 

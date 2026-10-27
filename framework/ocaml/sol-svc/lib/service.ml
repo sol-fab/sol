@@ -472,7 +472,22 @@ let workload_identity_config routes metrics_auth =
                SOL_TRUSTED_WORKLOAD_ISSUER is not set by Sol's target capability \
                projection")
     in
-    Ok (Some { Auth.audience; callers; trusted_issuer; subject_scheme }))
+    let* trusted_jwks_uri =
+      match Sys.getenv_opt "SOL_TRUSTED_WORKLOAD_JWKS_URI" with
+      | None -> Ok None
+      | Some raw ->
+        let raw = String.trim raw in
+        if raw = ""
+        then Error (`Config "SOL_TRUSTED_WORKLOAD_JWKS_URI must not be empty")
+        else (
+          let uri = Uri.of_string raw in
+          match Uri.scheme uri, Uri.host uri, Uri.userinfo uri with
+          | Some "https", Some host, None when host <> "" -> Ok (Some raw)
+          | _ ->
+            Error
+              (`Config "SOL_TRUSTED_WORKLOAD_JWKS_URI must be an absolute https:// URL"))
+    in
+    Ok (Some { Auth.audience; callers; trusted_issuer; trusted_jwks_uri; subject_scheme }))
 ;;
 
 let emit_request_observation
@@ -649,7 +664,12 @@ module Make (H : HANDLER) = struct
     let* () = refuse_non_https_jwks metrics_auth in
     let* read_api_key = api_key_reader ~env ~required:(api_key_required metrics_auth) in
     let* workload_identity = workload_identity_config H.routes metrics_auth in
-    let fetch_workload_jwks = Auth_internal.fetch_workload_jwks_over_https ~env in
+    let fetch_workload_jwks =
+      match workload_identity with
+      | Some { Auth.trusted_jwks_uri = Some uri; _ } ->
+        fun _ -> Auth_internal.fetch_jwks_over_https ~env uri
+      | _ -> Auth_internal.fetch_workload_jwks_over_https ~env
+    in
     let lifecycle = Lifecycle.create () in
     let signal_stop, signal_stop_r = Eio.Promise.create () in
     let await_stop () =

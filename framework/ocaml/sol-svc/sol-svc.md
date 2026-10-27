@@ -235,8 +235,11 @@ driven by `kid` lookup in the JWKS, not by attacker input.
    identity, or whose unit is not declared, is a 403.
 
 `config.audience` comes from `SOL_UNIT`, `config.callers` from `SOL_CALLED_BY`,
-`config.trusted_issuer` from `SOL_TRUSTED_WORKLOAD_ISSUER`, and the subject scheme
-from `SOL_WORKLOAD_SUBJECT_SCHEME` (default `kubernetes_service_account`). Sol
+`config.trusted_issuer` from `SOL_TRUSTED_WORKLOAD_ISSUER`, an optional explicit
+JWKS URL from `SOL_TRUSTED_WORKLOAD_JWKS_URI` (needed where the provider's
+discovery document uses a different JWKS origin, such as Google), and the subject
+scheme from `SOL_WORKLOAD_SUBJECT_SCHEME` (default
+`kubernetes_service_account`). Sol
 derives the first three from the caller-owned `calls` graph or target capability
 and projects them into the workload. The Google scheme uses the token's stable
 `sub` as the caller subject; an email is never authority. Application code calls `Service.run` without choosing a trusted issuer.

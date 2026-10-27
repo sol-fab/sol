@@ -29,6 +29,7 @@ type workload_identity_config =
   { audience : string
   ; callers : (string * string) list
   ; trusted_issuer : string
+  ; trusted_jwks_uri : string option
   ; subject_scheme : subject_scheme
   }
 
