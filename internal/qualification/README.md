@@ -88,14 +88,18 @@ for the three 20Gi broker volumes and 20GB for the monitoring PVCs. A
 non-literal `tfvars` sizing value is refused rather than silently replaced.
 Insufficient or unreadable quota refuses with the limit/usage/required numbers.
 
-It also reports one-node upgrade surge separately. The current 100GB-node
+It also reports a conservative one-node upgrade budget separately (Sol does
+not pin `upgrade_settings`, so this is a planning assumption until the actual
+GKE surge is confirmed). The current 100GB-node
 profile needs 480GB initially, leaving 20GB of a 500GB quota; a surge node would
 bring the transient requirement to 580GB, so the preflight warns that the node
 pool cannot be upgraded within quota even though the initial apply fits. The
 warning is not a substitute for the provider's own enforcement.
 
 This is independent of the ACME rate-limit check: a passing certificate preflight
-does not establish disk quota, and vice versa.
+does not establish disk quota, and vice versa. The storage-default decision
+process and required live measurements are in
+[`gcp/storage-baseline-plan.md`](gcp/storage-baseline-plan.md).
 
 ### Rate-limit preflight
 

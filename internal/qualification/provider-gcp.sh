@@ -309,7 +309,7 @@ require_gcp_ssd_headroom() {
     return 1
   fi
   if grep -q '^WARNING:' "$LOG_DIR/gcp-quota-preflight.log" 2>/dev/null; then
-    say "gcp preflight: the initial SSD footprint fits, but a node-pool upgrade surge does not"
+    say "gcp preflight: the initial SSD footprint fits, but the conservative one-node upgrade budget does not"
     say "  see $LOG_DIR/gcp-quota-preflight.txt; raise SSD_TOTAL_GB before an upgrade"
   else
     say "gcp preflight: SSD quota headroom established for the initial footprint and one-node surge"

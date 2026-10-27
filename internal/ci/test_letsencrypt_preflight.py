@@ -88,11 +88,11 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as directory:
         ledger = os.path.join(directory, "issuance.json")
         blocked = os.path.join(directory, "letsencrypt-blocked.json")
-        preflight.record_block(blocked, [host], "2026-10-27T14:59:59+00:00")
+        preflight.record_block(blocked, [host], "2099-10-27T14:59:59+00:00")
         preflight.fetch = fake([])
         ok, lines = preflight.check("qual.example.dev", "letsencrypt-prod", "https://crt.sh", False, ledger, False)
         check("an active CA rate-limit window fails closed", not ok and any("rate-limited" in line for line in lines))
-        preflight.record_block(blocked, [host], "2026-10-20T00:00:00+00:00")
+        preflight.record_block(blocked, [host], "2000-10-20T00:00:00+00:00")
         ok, lines = preflight.check("qual.example.dev", "letsencrypt-prod", "https://crt.sh", False, ledger, False)
         check("an expired CA rate-limit window does not block", ok)
         preflight.fetch = orig_fetch
