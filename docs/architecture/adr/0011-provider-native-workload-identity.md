@@ -87,6 +87,12 @@ For `google_oidc_service_account`:
 - the caller policy maps the scheme's subject to a Sol caller unit. An unknown
   subject is authenticated but unauthorized, distinct from a missing or
   malformed token.
+- Google's discovery document publishes its `jwks_uri` on a different origin
+  (`https://www.googleapis.com/oauth2/v3/certs`) from the issuer
+  (`https://accounts.google.com`). The adapter must therefore be able to supply
+  an explicit trusted JWKS URI; the Kubernetes discovery path keeps its
+  same-origin rule. The URI is part of the target identity configuration and
+  must be HTTPS.
 - the adapter may use Google's discovery/JWKS endpoint to validate the token;
   the application does not hard-code a second trust root.
 
