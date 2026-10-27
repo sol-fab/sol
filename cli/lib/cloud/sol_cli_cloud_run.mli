@@ -21,6 +21,7 @@ type observed =
   { url : string
   ; revision : string
   ; traffic : (string * int) list
+  ; image : string option
   ; labels : (string * string) list
   }
 

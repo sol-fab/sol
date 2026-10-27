@@ -23,6 +23,7 @@ type observed =
   { url : string
   ; revision : string
   ; traffic : (string * int) list
+  ; image : string option
   ; labels : (string * string) list
   }
 
@@ -257,9 +258,18 @@ let parse_observed text =
            | None -> None)
         fields
   in
+  let image =
+    match
+      Sol_cli_json.list
+        (Sol_cli_json.field [ "spec"; "template"; "spec"; "containers" ] json)
+    with
+    | Some (container :: _) ->
+      Sol_cli_json.string (Sol_cli_json.field [ "image" ] container)
+    | _ -> None
+  in
   if not (String.starts_with ~prefix:"https://" url)
   then Error "Cloud Run service URL is not HTTPS"
-  else Ok { url; revision; traffic; labels }
+  else Ok { url; revision; traffic; image; labels }
 ;;
 
 let contains text needle =
@@ -485,12 +495,16 @@ let rollback runner (request : request) ~revision ~token =
             List.exists
               (fun (name, percent) -> name = revision && percent = 100)
               observed.traffic
-          then
-            let* () =
-              verify runner { request with record = None } ~token
-              |> Result.map (fun _ -> ())
-            in
-            Ok observed
+          then (
+            match verify runner { request with record = None } ~token with
+            | Ok _ -> Ok observed
+            | Error failure ->
+              Error
+                (Partial
+                   ( "rollback traffic reached the requested revision at 100%, \
+                      but                        serving verification failed: "
+                     ^ failure_to_string failure
+                   , Some observed )))
           else
             Error
               (Unknown "rollback did not establish the requested revision at 100% traffic")))
@@ -544,6 +558,18 @@ let destroy runner ~project ~region ~service ~record =
         Error
           (Refused
              "live service lacks this adapter's ownership labels; refusing to delete it")
+    in
+    let* () =
+      if
+        expected.revision = observed.revision
+        && expected.url = observed.url
+        && observed.image = Some expected.image
+      then Ok ()
+      else
+        Error
+          (Refused
+             "live service does not match the recorded revision, URL and image; refusing \
+              to delete a different deployment")
     in
     (match runner.run (delete_argv ~project ~region ~service) with
      | Error message -> Error (Partial (message, None))

@@ -29,7 +29,18 @@ let request ?(record = None) () =
 let describe_json ~revision ~percent =
   Yojson.Safe.to_string
     (`Assoc
-        [ ( "metadata"
+        [ ( "spec"
+          , `Assoc
+              [ ( "template"
+                , `Assoc
+                    [ ( "spec"
+                      , `Assoc
+                          [ ( "containers"
+                            , `List [ `Assoc [ "image", `String "repo@sha256:abc123" ] ] )
+                          ] )
+                    ] )
+              ] )
+        ; ( "metadata"
           , `Assoc
               [ ( "labels"
                 , `Assoc
@@ -223,7 +234,7 @@ let test_destroy () =
                 ; "service", `String "sol-test"
                 ; "revision", `String "rev-1"
                 ; "url", `String "https://service.example"
-                ; "image", `String "repo@sha256:abc"
+                ; "image", `String "repo@sha256:abc123"
                 ]));
        close_out channel;
        match
@@ -319,6 +330,51 @@ let test_destroy_requires_matching_ownership () =
   | _ -> check "destroy without ownership record refuses" false
 ;;
 
+let test_destroy_refuses_stale_record () =
+  let record = Filename.temp_file "sol-cloud-run-stale-" ".json" in
+  Fun.protect
+    ~finally:(fun () ->
+      try Sys.remove record with
+      | Sys_error _ -> ())
+    (fun () ->
+       let channel = open_out record in
+       output_string
+         channel
+         (Yojson.Safe.to_string
+            (`Assoc
+                [ "project", `String "p"
+                ; "region", `String "r"
+                ; "service", `String "sol-test"
+                ; "revision", `String "rev-old"
+                ; "url", `String "https://service.example"
+                ; "image", `String "repo@sha256:abc123"
+                ]));
+       close_out channel;
+       let runner =
+         { Sol_cli_cloud_run.run =
+             (fun argv ->
+               match argv with
+               | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+                 Ok (describe_json ~revision:"rev-new" ~percent:100)
+               | "gcloud" :: "run" :: "services" :: "delete" :: _ ->
+                 check "stale record never deletes" false;
+                 Ok "deleted"
+               | _ -> Error "unexpected")
+         ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+         }
+       in
+       match
+         Sol_cli_cloud_run.destroy
+           runner
+           ~project:"p"
+           ~region:"r"
+           ~service:"sol-test"
+           ~record
+       with
+       | Error (Refused _) -> check "stale record refuses destroy" true
+       | _ -> check "stale record refuses destroy" false)
+;;
+
 let test_rollback_requires_authorization () =
   let described = ref "rev-current" in
   let runner =
@@ -343,7 +399,11 @@ let test_rollback_requires_authorization () =
   match
     Sol_cli_cloud_run.rollback runner (request ()) ~revision:"rev-prev" ~token:"token"
   with
-  | Error (Unknown _) -> check "rollback refuses unauthenticated serving state" true
+  | Error (Partial (_, Some observed)) ->
+    check
+      ("rollback reports observed revision after verification failure: "
+       ^ observed.revision)
+      (observed.revision = "rev-prev")
   | _ -> check "rollback refuses unauthenticated serving state" false
 ;;
 
@@ -364,7 +424,7 @@ let test_destroy_refuses_unowned_live_service () =
                 ; "service", `String "sol-test"
                 ; "revision", `String "rev-1"
                 ; "url", `String "https://service.example"
-                ; "image", `String "repo@sha256:abc"
+                ; "image", `String "repo@sha256:abc123"
                 ]));
        close_out channel;
        let runner =
@@ -496,6 +556,7 @@ let () =
   test_rollback_requires_target_traffic ();
   test_destroy_requires_matching_ownership ();
   test_destroy_refuses_unowned_live_service ();
+  test_destroy_refuses_stale_record ();
   test_rollback_requires_authorization ();
   test_verify_writes_release_record ();
   test_deploy_refuses_unowned_service ();
