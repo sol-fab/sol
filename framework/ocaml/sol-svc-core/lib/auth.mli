@@ -27,14 +27,26 @@ type jwt_config =
   ; verification : jwt_verification
   }
 
-(** DEC-063: Sol-to-Sol workload identity. [callers] maps a service-account
-    subject ("<namespace>:<serviceaccount>") to the caller's Sol unit;
-    [trusted_issuer] is the target-established Kubernetes issuer. *)
+type subject_scheme =
+  | Kubernetes_service_account
+  | Google_oidc_service_account
+
+val subject_scheme_to_string : subject_scheme -> string
+val subject_scheme_of_string : string -> (subject_scheme, string) result
+
+(** DEC-063: Sol-to-Sol workload identity. [callers] maps a subject to the
+    caller's Sol unit. For [Kubernetes_service_account] the subject is
+    "<namespace>:<serviceaccount>"; for [Google_oidc_service_account] it is the
+    stable Google subject. [trusted_issuer] is the target-established issuer. *)
 type workload_identity_config =
   { audience : string
   ; callers : (string * string) list
   ; trusted_issuer : string
+  ; subject_scheme : subject_scheme
   }
+
+(** Reject duplicate or scheme-invalid caller entries. *)
+val validate_callers : subject_scheme -> (string * string) list -> (unit, string) result
 
 type level =
   [ `Public

@@ -425,29 +425,54 @@ let workload_identity_requested routes metrics_auth =
 let workload_identity_config routes metrics_auth =
   if not (workload_identity_requested routes metrics_auth)
   then Ok None
-  else
+  else (
+    let nonempty name value =
+      if String.trim value = ""
+      then Error (`Config (Printf.sprintf "%s must not be empty" name))
+      else Ok value
+    in
     let* audience =
       match Sol_runtime.setting "SOL_UNIT" with
-      | Some unit -> Ok unit
+      | Some unit -> nonempty "SOL_UNIT" unit
       | None ->
         Error
           (`Config
               "a route uses Workload_identity auth but SOL_UNIT is not set; the callee's \
                own unit is required to check the token audience")
     in
+    let* subject_scheme =
+      (* [Sol_runtime.setting] treats an empty value as absent. The scheme is the
+         one exception where absence has a compatibility default; an explicitly
+         empty value must not silently select Kubernetes. *)
+      match Sys.getenv_opt "SOL_WORKLOAD_SUBJECT_SCHEME" with
+      | None -> Ok Auth.Kubernetes_service_account
+      | Some "" -> Error (`Config "SOL_WORKLOAD_SUBJECT_SCHEME must not be empty")
+      | Some raw ->
+        (match Auth.subject_scheme_of_string raw with
+         | Ok scheme -> Ok scheme
+         | Error message -> Error (`Config message))
+    in
     let callers =
       match Sol_runtime.setting "SOL_CALLED_BY" with
       | None -> []
       | Some raw -> Auth.callers_of_projection raw
     in
-    match Sol_runtime.setting "SOL_TRUSTED_WORKLOAD_ISSUER" with
-    | None ->
-      Error
-        (`Config
-            "a route requires Sol workload authentication but \
-             SOL_TRUSTED_WORKLOAD_ISSUER is not set by Sol's target capability \
-             projection")
-    | Some trusted_issuer -> Ok (Some { Auth.audience; callers; trusted_issuer })
+    let* () =
+      match Auth.validate_callers subject_scheme callers with
+      | Ok () -> Ok ()
+      | Error message -> Error (`Config message)
+    in
+    let* trusted_issuer =
+      match Sol_runtime.setting "SOL_TRUSTED_WORKLOAD_ISSUER" with
+      | Some issuer -> nonempty "SOL_TRUSTED_WORKLOAD_ISSUER" issuer
+      | None ->
+        Error
+          (`Config
+              "a route requires Sol workload authentication but \
+               SOL_TRUSTED_WORKLOAD_ISSUER is not set by Sol's target capability \
+               projection")
+    in
+    Ok (Some { Auth.audience; callers; trusted_issuer; subject_scheme }))
 ;;
 
 let emit_request_observation

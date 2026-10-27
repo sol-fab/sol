@@ -22,8 +22,36 @@ let rotated_jwks =
 (* The identity key `Auth_internal.get_jwks` caches workload-issuer keys under. *)
 let workload_jwks_cache_key = "sol-workload-issuer:" ^ workload_issuer
 
-let workload_identity ?(callers = [ caller_service_account, caller_unit ]) () =
-  Auth.{ audience = workload_audience; callers; trusted_issuer = workload_issuer }
+let workload_identity
+      ?(callers = [ caller_service_account, caller_unit ])
+      ?(scheme = Auth.Kubernetes_service_account)
+      ?(issuer = workload_issuer)
+      ()
+  =
+  Auth.
+    { audience = workload_audience
+    ; callers
+    ; trusted_issuer = issuer
+    ; subject_scheme = scheme
+    }
+;;
+
+let google_issuer = "https://accounts.google.com"
+let google_subject = "123456789012345678901"
+let google_email = "caller@example.iam.gserviceaccount.com"
+
+let google_identity ?(callers = [ google_subject, caller_unit ]) () =
+  workload_identity
+    ~callers
+    ~scheme:Auth.Google_oidc_service_account
+    ~issuer:google_issuer
+    ()
+;;
+
+let sign_payload ?(key = rsa_priv_jwk) payload =
+  match Jose.Jwt.sign ~payload key with
+  | Ok token -> Jose.Jwt.to_string token
+  | Error (`Msg message) -> failwith ("sign_workload: " ^ message)
 ;;
 
 let sign_workload
@@ -31,20 +59,34 @@ let sign_workload
       ?(sub = caller_subject)
       ?(aud = workload_audience)
       ?(iss = workload_issuer)
+      ?email
       ?(exp_offset = 3600.0)
       ()
   =
-  let payload =
-    `Assoc
-      [ "sub", `String sub
-      ; "iss", `String iss
-      ; "aud", `String aud
-      ; "exp", `Int (int_of_float (Unix.gettimeofday () +. exp_offset))
-      ]
+  sign_payload
+    ~key
+    (`Assoc
+        ((("sub", `String sub)
+          :: ("iss", `String iss)
+          :: ("aud", `String aud)
+          ::
+          (match email with
+           | None -> []
+           | Some email -> [ "email", `String email ]))
+         @ [ "exp", `Int (int_of_float (Unix.gettimeofday () +. exp_offset)) ]))
+;;
+
+let unsigned_none_token claims =
+  let encode value =
+    Base64.encode_string
+      ~pad:false
+      ~alphabet:Base64.uri_safe_alphabet
+      (Yojson.Safe.to_string value)
   in
-  match Jose.Jwt.sign ~payload key with
-  | Ok token -> Jose.Jwt.to_string token
-  | Error (`Msg message) -> failwith ("sign_workload: " ^ message)
+  encode (`Assoc [ "alg", `String "none"; "typ", `String "JWT" ])
+  ^ "."
+  ^ encode claims
+  ^ "."
 ;;
 
 let headers token = Http.Header.of_list [ "authorization", "Bearer " ^ token ]
@@ -69,6 +111,7 @@ let test_service_reads_the_sol_projected_trust_and_call_policy () =
     [ "SOL_UNIT", workload_audience
     ; "SOL_CALLED_BY", caller_unit ^ "=" ^ caller_service_account
     ; "SOL_TRUSTED_WORKLOAD_ISSUER", workload_issuer
+    ; "SOL_WORKLOAD_SUBJECT_SCHEME", "kubernetes_service_account"
     ]
     (fun () ->
        match
@@ -93,7 +136,12 @@ let test_service_reads_the_sol_projected_trust_and_call_policy () =
            Windtrap.string
            ~msg:"target capability issuer projection"
            workload_issuer
-           config.trusted_issuer)
+           config.trusted_issuer;
+         Windtrap.equal
+           Windtrap.string
+           ~msg:"explicit Kubernetes subject scheme"
+           "kubernetes_service_account"
+           (Auth.subject_scheme_to_string config.subject_scheme))
 ;;
 
 let test_internal_route_without_target_issuer_fails_startup () =
@@ -101,6 +149,7 @@ let test_internal_route_without_target_issuer_fails_startup () =
     [ "SOL_UNIT", workload_audience
     ; "SOL_CALLED_BY", ""
     ; "SOL_TRUSTED_WORKLOAD_ISSUER", ""
+    ; "SOL_WORKLOAD_SUBJECT_SCHEME", "kubernetes_service_account"
     ]
     (fun () ->
        match
@@ -114,7 +163,11 @@ let test_internal_route_without_target_issuer_fails_startup () =
            (List.mem "SOL_TRUSTED_WORKLOAD_ISSUER" (String.split_on_char ' ' message))
        | Ok _ -> Windtrap.fail "an internal route started without a target-trusted issuer");
   with_env
-    [ "SOL_UNIT", ""; "SOL_CALLED_BY", ""; "SOL_TRUSTED_WORKLOAD_ISSUER", "" ]
+    [ "SOL_UNIT", ""
+    ; "SOL_CALLED_BY", ""
+    ; "SOL_TRUSTED_WORKLOAD_ISSUER", ""
+    ; "SOL_WORKLOAD_SUBJECT_SCHEME", "kubernetes_service_account"
+    ]
     (fun () ->
        match
          Service.For_testing.workload_identity_config
@@ -128,11 +181,17 @@ let test_internal_route_without_target_issuer_fails_startup () =
 ;;
 
 let dispatch
+      ?identity
       ?(callers = [ caller_service_account, caller_unit ])
       ?(fetch_workload_jwks = fun _ -> Ok rsa_jwks)
       ?on_boundary
       headers
   =
+  let identity =
+    match identity with
+    | Some identity -> identity
+    | None -> workload_identity ~callers ()
+  in
   let handler req =
     match req.Request.auth with
     | Some { Auth.principal = Auth.Unit { unit; service_account }; _ } ->
@@ -143,7 +202,7 @@ let dispatch
   in
   Service.For_testing.dispatch
     ~fetch_workload_jwks
-    ~workload_identity:(workload_identity ~callers ())
+    ~workload_identity:identity
     ?on_boundary
     ~routes:[ Route.get "/probe" handler ]
     (Http.Request.make ~meth:`GET ~headers "/probe")
@@ -421,6 +480,274 @@ let test_external_route_bypasses_only_sol_workload_auth () =
     response.Response.status
 ;;
 
+let test_google_authorized_caller_authenticates () =
+  let response =
+    dispatch
+      ~identity:(google_identity ())
+      (headers
+         (sign_workload ~iss:google_issuer ~sub:google_subject ~email:google_email ()))
+  in
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"Google caller authorized → 200"
+    200
+    response.Response.status;
+  let payload = Yojson.Safe.from_string response.Response.body in
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"Google subject is the caller identity"
+    google_subject
+    (Yojson.Safe.Util.member "service_account" payload |> Yojson.Safe.Util.to_string)
+;;
+
+let test_google_alternate_issuer_spelling_is_accepted () =
+  let response =
+    dispatch
+      ~identity:(google_identity ())
+      (headers (sign_workload ~iss:"accounts.google.com" ~sub:google_subject ()))
+  in
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"Google's alternate issuer spelling is the same authority"
+    200
+    response.Response.status
+;;
+
+let test_google_wrong_issuer_is_rejected () =
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"Wrong Google issuer → 401"
+    401
+    (dispatch
+       ~identity:(google_identity ())
+       (headers (sign_workload ~iss:"https://attacker.example" ~sub:google_subject ())))
+      .Response.status
+;;
+
+let test_google_wrong_audience_is_rejected () =
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"Wrong Google audience → 401"
+    401
+    (dispatch
+       ~identity:(google_identity ())
+       (headers
+          (sign_workload ~iss:google_issuer ~sub:google_subject ~aud:"other/unit" ())))
+      .Response.status
+;;
+
+let test_google_unauthorized_subject_is_rejected () =
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"Authenticated but unauthorized Google subject → 403"
+    403
+    (dispatch
+       ~identity:(google_identity ())
+       (headers (sign_workload ~iss:google_issuer ~sub:"999999999" ())))
+      .Response.status
+;;
+
+let test_google_email_is_not_authority () =
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"An allowed email does not authorize a different sub → 403"
+    403
+    (dispatch
+       ~identity:(google_identity ~callers:[ google_email, caller_unit ] ())
+       (headers
+          (sign_workload ~iss:google_issuer ~sub:"different-sub" ~email:google_email ())))
+      .Response.status
+;;
+
+let test_scheme_confusion_is_forbidden () =
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"Google subject is not a Kubernetes callers entry → 403"
+    403
+    (dispatch
+       ~identity:(workload_identity ())
+       (headers (sign_workload ~iss:workload_issuer ~sub:google_subject ())))
+      .Response.status;
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"Kubernetes-style subject is not a Google subject → 403"
+    403
+    (dispatch
+       ~identity:(google_identity ~callers:[ caller_subject, caller_unit ] ())
+       (headers (sign_workload ~iss:google_issuer ~sub:caller_subject ())))
+      .Response.status
+;;
+
+let test_identity_configuration_fails_closed () =
+  let config bindings =
+    with_env bindings (fun () ->
+      Service.For_testing.workload_identity_config
+        [ Route.get "/probe" (fun _ -> Response.ok "") ]
+        `Public)
+  in
+  (match
+     config
+       [ "SOL_UNIT", ""
+       ; "SOL_TRUSTED_WORKLOAD_ISSUER", google_issuer
+       ; "SOL_WORKLOAD_SUBJECT_SCHEME", "kubernetes_service_account"
+       ]
+   with
+   | Error (`Config message) ->
+     Windtrap.is_true
+       ~msg:"empty audience is invalid"
+       (String.starts_with
+          ~prefix:"a route uses Workload_identity auth but SOL_UNIT"
+          message)
+   | Ok _ -> Windtrap.fail "empty audience was accepted");
+  (match
+     config
+       [ "SOL_UNIT", workload_audience
+       ; "SOL_TRUSTED_WORKLOAD_ISSUER", ""
+       ; "SOL_WORKLOAD_SUBJECT_SCHEME", "kubernetes_service_account"
+       ]
+   with
+   | Error (`Config message) ->
+     Windtrap.is_true
+       ~msg:"empty issuer is invalid"
+       (String.starts_with
+          ~prefix:
+            "a route requires Sol workload authentication but SOL_TRUSTED_WORKLOAD_ISSUER"
+          message)
+   | Ok _ -> Windtrap.fail "empty issuer was accepted");
+  (match
+     config
+       [ "SOL_UNIT", workload_audience
+       ; "SOL_TRUSTED_WORKLOAD_ISSUER", google_issuer
+       ; "SOL_WORKLOAD_SUBJECT_SCHEME", ""
+       ]
+   with
+   | Error (`Config message) ->
+     Windtrap.is_true
+       ~msg:"explicitly empty scheme is invalid"
+       (String.equal message "SOL_WORKLOAD_SUBJECT_SCHEME must not be empty")
+   | Ok _ -> Windtrap.fail "explicitly empty subject scheme was accepted");
+  (match
+     config
+       [ "SOL_UNIT", workload_audience
+       ; "SOL_TRUSTED_WORKLOAD_ISSUER", google_issuer
+       ; "SOL_WORKLOAD_SUBJECT_SCHEME", "unknown"
+       ]
+   with
+   | Error (`Config message) ->
+     Windtrap.is_true
+       ~msg:"unknown scheme names the supported values"
+       (String.starts_with ~prefix:"unknown workload identity subject scheme" message)
+   | Ok _ -> Windtrap.fail "unknown subject scheme was accepted");
+  (match
+     config
+       [ "SOL_UNIT", workload_audience
+       ; "SOL_TRUSTED_WORKLOAD_ISSUER", google_issuer
+       ; "SOL_WORKLOAD_SUBJECT_SCHEME", "google_oidc_service_account"
+       ; "SOL_CALLED_BY", "a=123,b=123"
+       ]
+   with
+   | Error (`Config message) ->
+     Windtrap.is_true
+       ~msg:"duplicate caller subjects are rejected"
+       (String.equal message "duplicate workload identity caller subject \"123\"")
+   | Ok _ -> Windtrap.fail "duplicate caller subjects were accepted");
+  match
+    config
+      [ "SOL_UNIT", workload_audience
+      ; "SOL_TRUSTED_WORKLOAD_ISSUER", google_issuer
+      ; "SOL_WORKLOAD_SUBJECT_SCHEME", "google_oidc_service_account"
+      ; "SOL_CALLED_BY", "a=system:serviceaccount:ns:sa"
+      ]
+  with
+  | Error (`Config message) ->
+    Windtrap.is_true
+      ~msg:"Kubernetes subject under Google scheme is rejected at configuration"
+      (String.starts_with ~prefix:"workload identity caller" message)
+  | Ok _ -> Windtrap.fail "Kubernetes subject was accepted under Google scheme"
+;;
+
+let test_google_missing_subject_is_forbidden () =
+  let token =
+    sign_payload
+      (`Assoc
+          [ "iss", `String google_issuer
+          ; "aud", `String workload_audience
+          ; "exp", `Int (int_of_float (Unix.gettimeofday () +. 3600.0))
+          ])
+  in
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"Google token without sub → 403"
+    403
+    (dispatch ~identity:(google_identity ()) (headers token)).Response.status
+;;
+
+let test_google_expired_token_is_unauthorized () =
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"Google expired token → 401"
+    401
+    (dispatch
+       ~identity:(google_identity ())
+       (headers
+          (sign_workload ~iss:google_issuer ~sub:google_subject ~exp_offset:(-10.0) ())))
+      .Response.status
+;;
+
+let test_google_unsupported_algorithm_is_unauthorized () =
+  let token =
+    unsigned_none_token
+      (`Assoc
+          [ "iss", `String google_issuer
+          ; "aud", `String workload_audience
+          ; "sub", `String google_subject
+          ; "exp", `Int (int_of_float (Unix.gettimeofday () +. 3600.0))
+          ])
+  in
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"Google token with alg=none → 401"
+    401
+    (dispatch ~identity:(google_identity ()) (headers token)).Response.status
+;;
+
+let test_google_invalid_signature_is_unauthorized () =
+  let token = sign_workload ~iss:google_issuer ~sub:google_subject () in
+  match String.split_on_char '.' token with
+  | [ header; payload; signature ] ->
+    let replacement = if signature.[0] = 'A' then 'B' else 'A' in
+    let tampered =
+      String.concat
+        "."
+        [ header
+        ; payload
+        ; String.make 1 replacement ^ String.sub signature 1 (String.length signature - 1)
+        ]
+    in
+    Windtrap.equal
+      Windtrap.int
+      ~msg:"Google tampered signature → 401"
+      401
+      (dispatch ~identity:(google_identity ()) (headers tampered)).Response.status
+  | _ -> Windtrap.fail "signed Google token should have three parts"
+;;
+
+let test_google_missing_audience_is_unauthorized () =
+  let token =
+    sign_payload
+      (`Assoc
+          [ "iss", `String google_issuer
+          ; "sub", `String google_subject
+          ; "exp", `Int (int_of_float (Unix.gettimeofday () +. 3600.0))
+          ])
+  in
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"Google token without aud → 401"
+    401
+    (dispatch ~identity:(google_identity ()) (headers token)).Response.status
+;;
+
 let () =
   Windtrap.run
     "sol-svc workload identity"
@@ -462,5 +789,40 @@ let () =
     ; Windtrap.test
         "external route bypasses only Sol workload auth"
         test_external_route_bypasses_only_sol_workload_auth
+    ; Windtrap.test
+        "Google authorized caller authenticates"
+        test_google_authorized_caller_authenticates
+    ; Windtrap.test
+        "Google alternate issuer spelling is accepted"
+        test_google_alternate_issuer_spelling_is_accepted
+    ; Windtrap.test "Google wrong issuer is rejected" test_google_wrong_issuer_is_rejected
+    ; Windtrap.test
+        "Google wrong audience is rejected"
+        test_google_wrong_audience_is_rejected
+    ; Windtrap.test
+        "Google unauthorized subject is rejected"
+        test_google_unauthorized_subject_is_rejected
+    ; Windtrap.test "Google email is not authority" test_google_email_is_not_authority
+    ; Windtrap.test
+        "Kubernetes and Google schemes cannot be confused"
+        test_scheme_confusion_is_forbidden
+    ; Windtrap.test
+        "identity configuration fails closed"
+        test_identity_configuration_fails_closed
+    ; Windtrap.test
+        "Google missing subject is forbidden"
+        test_google_missing_subject_is_forbidden
+    ; Windtrap.test
+        "Google expired token is unauthorized"
+        test_google_expired_token_is_unauthorized
+    ; Windtrap.test
+        "Google unsupported algorithm is unauthorized"
+        test_google_unsupported_algorithm_is_unauthorized
+    ; Windtrap.test
+        "Google invalid signature is unauthorized"
+        test_google_invalid_signature_is_unauthorized
+    ; Windtrap.test
+        "Google missing audience is unauthorized"
+        test_google_missing_audience_is_unauthorized
     ]
 ;;
