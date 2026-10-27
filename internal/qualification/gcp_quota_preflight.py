@@ -106,7 +106,8 @@ def main(argv: list[str]) -> int:
         f"upgrade surge = {args.surge_nodes} x {node_disk}GB node disk; "
         f"surge total {surge_required:g}GB ("
         + ("fits" if surge_ok else "does not fit")
-        + ")\n"
+        + "), conservative planning assumption; verify the node pool's actual "
+        "maxSurge before relying on this number\n"
     )
     print(report, end="")
     if args.out:

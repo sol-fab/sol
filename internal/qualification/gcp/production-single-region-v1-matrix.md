@@ -189,3 +189,33 @@ Every matrix row records its evidence class. A complete run has one result per r
 at the row's required class, or the profile is non-conformant. Behavioral rows need live
 observation; mechanism rows need an executable or rendered artifact. A skipped, blocked, or
 unread class is recorded as such, never promoted to a pass.
+
+## Storage and capacity
+
+`INV-STORE-1` and `INV-STORE-2` fold the storage baseline into this campaign.
+The reference application is a platform fixture, not a proxy for a customer's
+production workload. It establishes platform overhead and the lifecycle
+envelope the campaign actually exercises; it does not establish a large
+customer's image, log or Kafka-retention requirements.
+
+The supporting procedure is [`storage-baseline-plan.md`](storage-baseline-plan.md).
+Its thresholds are fixed before the run: 20% free boot bytes and 10% free inodes
+at peak on every node, no `DiskPressure`, eviction or image-GC failure, and
+`steady provisioned capacity + measured transient additional capacity <=
+available regional SSD_TOTAL_GB` at every lifecycle boundary. Transient
+additional capacity is measured above steady state; it is never added as a
+second total. Teardown must return quota to the pre-run baseline and independent
+inventory must establish absence.
+
+Peak means the maximum of a predeclared time series sampled at least every
+5 seconds during image pull, deploy/rollout, upgrade and repair, with node
+conditions and disk-pressure/eviction/GC events captured continuously. A final
+snapshot cannot establish that a temporary peak was safe; a sampling gap larger
+than two intervals marks the affected interval `UNKNOWN`, not pass. The
+reference deploy must exercise at least two image pulls/redeploys; otherwise the
+image-cache portion remains `UNQUALIFIED`.
+
+A run that cannot establish the declared upgrade settings, a required
+measurement, or an inventory class records the affected row as `BLOCKED` or
+`UNKNOWN`; it does not infer a pass. The storage rows do not weaken the existing
+authorization, absence or promotion gates.
