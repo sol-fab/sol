@@ -295,7 +295,8 @@ require_letsencrypt_headroom() {
   if ! python3 "$ROOT/internal/qualification/letsencrypt_preflight.py" \
     --base-domain "$BASE_DOMAIN" --issuer "$CLUSTER_ISSUER" \
     --ledger "$ledger" --reserve \
-    --out "$LOG_DIR/letsencrypt-preflight.txt" "$@"; then
+    --out "$LOG_DIR/letsencrypt-preflight.txt" "$@" \
+    >>"$LOG_DIR/letsencrypt-preflight.log" 2>&1; then
     say "REFUSING: Let's Encrypt duplicate-certificate headroom is not established;"
     say "  see $LOG_DIR/letsencrypt-preflight.txt. Wait for the reported window or use"
     say "  a new base domain; only an operator may set SOL_LE_PREFLIGHT=allow-unknown/off."
