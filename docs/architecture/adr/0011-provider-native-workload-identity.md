@@ -94,7 +94,16 @@ For `google_oidc_service_account`:
   and keeps its same-origin discovery rule. The URI is part of the target
   identity configuration, must be HTTPS, and is required for the Google scheme.
 - the adapter may use Google's discovery/JWKS endpoint to validate the token;
-  the application does not hard-code a second trust root.
+  the application does not hard-code a second trust root. The JWKS URI is
+  supplied by the target, never by a request; the HTTPS client has no redirect
+  handling and a non-200 response fails closed.
+- `azp` is **not** caller authority for this flow. Google documents it as the
+  presenting client's identifier, needed when the requester and audience
+  differ. Sol authorizes the service-account `sub` against the application
+  audience; `azp` is not mapped to a Sol unit. A future policy that treats
+  `azp` as a caller identity requires an explicit contract change. The observed
+  service-account token has `azp == sub`, but no policy is inferred from one
+  token.
 
 The exact Google claim set must be recorded in the implementation tests,
 including `iss`, `aud`, `sub`, `exp`, and the absence of a Kubernetes subject.
