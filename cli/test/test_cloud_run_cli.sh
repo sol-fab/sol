@@ -22,11 +22,11 @@ case "$1 $2" in
           exit 1
         fi
         cat <<'JSON'
-{"metadata":{"labels":{"sol-owned":"cloud-run-experiment","sol-service":"checkout_svc"}},"status":{"url":"https://observed.example","latestReadyRevisionName":"rev-1","traffic":[{"revisionName":"rev-1","percent":100}]}}
+{"metadata":{"name":"checkout-svc","labels":{"sol-owned":"cloud-run-experiment","sol-service":"checkout-svc"}},"status":{"url":"https://observed.example","latestReadyRevisionName":"rev-1","traffic":[{"revisionName":"rev-1","percent":100}]}}
 JSON
         ;;
       list)
-        echo "checkout_svc"
+        echo "checkout-svc"
         ;;
       *)
         echo "unexpected gcloud: $*" >&2
@@ -59,7 +59,7 @@ if ! "$sol" cloud-run deploy \
 fi
 grep -q '"revision":"rev-1"' "$work/out"
 grep -q '"url":"https://observed.example"' "$work/out"
-grep -q 'run deploy checkout_svc' "$FAKE_GCLOUD_LOG"
+grep -q 'run deploy checkout-svc' "$FAKE_GCLOUD_LOG"
 if ! grep -q 'sol-owned=cloud-run-experiment' "$FAKE_GCLOUD_LOG"; then
   cat "$FAKE_GCLOUD_LOG" >&2
   exit 1
@@ -77,4 +77,27 @@ if "$sol" cloud-run deploy \
   exit 1
 fi
 grep -q 'invalid --caller' "$work/bad-caller"
+# A second declared HTTP service that normalizes to the same Cloud Run name must be refused.
+mkdir "$work/collision"
+cp "$examples/sol.yml" "$work/collision/sol.yml"
+chmod u+w "$work/collision/sol.yml"
+cat >> "$work/collision/sol.yml" <<'YAML'
+
+  checkout-svc:
+    type: http
+    path: app/checkout/checkout_svc
+YAML
+cd "$work/collision"
+if "$sol" cloud-run deploy \
+  --project p --region r --service checkout_svc \
+  --image repo@sha256:abc123 \
+  --unit checkout/checkout_svc \
+  --issuer https://accounts.google.com \
+  --jwks-uri https://www.googleapis.com/oauth2/v3/certs \
+  --caller checkout/checkout_svc=103076866099743206289 \
+  --ingress public > /dev/null 2> "$work/collision-err"; then
+  echo "colliding provider name was accepted" >&2
+  exit 1
+fi
+grep -q 'ambiguous' "$work/collision-err"
 echo "cloud-run CLI fake-provider test passed"

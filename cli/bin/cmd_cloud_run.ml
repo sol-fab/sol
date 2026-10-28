@@ -9,17 +9,53 @@ let service_is_http name =
     | Some root -> root
     | None -> "."
   in
-  match Sol_cli_config.load_declared ~root with
-  | Error e -> Error (command_error (Sol_cli_config.error_to_string e))
-  | Ok declared ->
-    (match
-       List.find_opt (fun (s : Sol_cli_config.service) -> s.name = name) declared.services
-     with
-     | None ->
-       Error (command_error (Printf.sprintf "service %S is not declared in sol.yml" name))
-     | Some { typ = Some ("http" | "svc"); _ } -> Ok ()
-     | Some _ ->
-       Error (command_error (Printf.sprintf "service %S is not an HTTP service" name)))
+  let* declared =
+    Sol_cli_config.load_declared ~root
+    |> Result.map_error (fun e -> command_error (Sol_cli_config.error_to_string e))
+  in
+  let* () =
+    match
+      List.find_opt (fun (s : Sol_cli_config.service) -> s.name = name) declared.services
+    with
+    | None ->
+      Error (command_error (Printf.sprintf "service %S is not declared in sol.yml" name))
+    | Some { typ = Some ("http" | "svc"); _ } -> Ok ()
+    | Some _ ->
+      Error (command_error (Printf.sprintf "service %S is not an HTTP service" name))
+  in
+  let* provider =
+    Sol_cli_cloud_run.provider_service_of name
+    |> Result.map_error (fun failure ->
+      command_error (Sol_cli_cloud_run.failure_to_string failure))
+  in
+  let http_services =
+    List.filter
+      (fun (s : Sol_cli_config.service) ->
+         match s.typ with
+         | Some ("http" | "svc") -> true
+         | _ -> false)
+      declared.services
+  in
+  let provider_names =
+    List.filter_map
+      (fun (s : Sol_cli_config.service) ->
+         match Sol_cli_cloud_run.provider_service_of s.name with
+         | Ok provider -> Some provider
+         | Error _ -> None)
+      http_services
+  in
+  let collisions =
+    List.length (List.filter (fun candidate -> candidate = provider) provider_names)
+  in
+  if collisions > 1
+  then
+    Error
+      (command_error
+         (Printf.sprintf
+            "Cloud Run name %S is ambiguous: multiple declared HTTP services normalize \
+             to              it"
+            provider))
+  else Ok provider
 ;;
 
 let read_token_file path =
@@ -95,6 +131,7 @@ let request
       ~project
       ~region
       ~service
+      ~provider_service
       ~image
       ~unit
       ~issuer
@@ -107,6 +144,7 @@ let request
     { project
     ; region
     ; service
+    ; provider_service
     ; image
     ; identity = { unit; callers; issuer; jwks_uri }
     ; ingress
@@ -196,7 +234,7 @@ let common_terms =
 ;;
 
 let deploy_run project region service image unit issuer jwks_uri callers ingress_value =
-  let* () = service_is_http service in
+  let* provider_service = service_is_http service in
   let* ingress = parse_ingress ingress_value in
   let* callers =
     let parse entry =
@@ -228,6 +266,7 @@ let deploy_run project region service image unit issuer jwks_uri callers ingress
       ~project
       ~region
       ~service
+      ~provider_service
       ~image
       ~unit
       ~issuer
@@ -280,7 +319,7 @@ let verify_run
       record
       ingress_value
   =
-  let* () = service_is_http service in
+  let* provider_service = service_is_http service in
   let* ingress = parse_ingress ingress_value in
   let* token =
     match token_file with
@@ -292,6 +331,7 @@ let verify_run
       ~project
       ~region
       ~service
+      ~provider_service
       ~image
       ~unit
       ~issuer
@@ -364,7 +404,7 @@ let rollback_run
       token_file
       ingress_value
   =
-  let* () = service_is_http service in
+  let* provider_service = service_is_http service in
   let* ingress = parse_ingress ingress_value in
   let* token =
     match token_file with
@@ -377,6 +417,7 @@ let rollback_run
       ~project
       ~region
       ~service
+      ~provider_service
       ~image
       ~unit
       ~issuer
@@ -443,7 +484,7 @@ let rollback_cmd =
 
 let destroy_run project region service record apply =
   let* () = if apply then Ok () else Error (command_error "destroy requires --apply") in
-  let* () = service_is_http service in
+  let* _provider_service = service_is_http service in
   Sol_cli_cloud_run.destroy (runner ()) ~project ~region ~service ~record
   |> Result.map_error (fun failure ->
     command_error (Sol_cli_cloud_run.failure_to_string failure))

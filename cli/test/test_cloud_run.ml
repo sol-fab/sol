@@ -14,6 +14,7 @@ let request ?(record = None) () =
     { project = "sol-qualification"
     ; region = "us-west1"
     ; service = "sol-test"
+    ; provider_service = "sol-test"
     ; image = "us-west1-docker.pkg.dev/p/r/image@sha256:abc123"
     ; identity =
         { unit = "checkout/checkout_svc"
@@ -42,7 +43,8 @@ let describe_json ~revision ~percent =
               ] )
         ; ( "metadata"
           , `Assoc
-              [ ( "labels"
+              [ "name", `String "sol-test"
+              ; ( "labels"
                 , `Assoc
                     [ "sol-owned", `String "cloud-run-experiment"
                     ; "sol-service", `String "sol-test"
@@ -232,6 +234,7 @@ let test_destroy () =
                 [ "project", `String "p"
                 ; "region", `String "r"
                 ; "service", `String "sol-test"
+                ; "provider_service", `String "sol-test"
                 ; "revision", `String "rev-1"
                 ; "url", `String "https://service.example"
                 ; "image", `String "repo@sha256:abc123"
@@ -345,6 +348,7 @@ let test_destroy_refuses_stale_record () =
                 [ "project", `String "p"
                 ; "region", `String "r"
                 ; "service", `String "sol-test"
+                ; "provider_service", `String "sol-test"
                 ; "revision", `String "rev-old"
                 ; "url", `String "https://service.example"
                 ; "image", `String "repo@sha256:abc123"
@@ -422,6 +426,7 @@ let test_destroy_refuses_unowned_live_service () =
                 [ "project", `String "p"
                 ; "region", `String "r"
                 ; "service", `String "sol-test"
+                ; "provider_service", `String "sol-test"
                 ; "revision", `String "rev-1"
                 ; "url", `String "https://service.example"
                 ; "image", `String "repo@sha256:abc123"
@@ -436,7 +441,8 @@ let test_destroy_refuses_unowned_live_service () =
                  Ok
                    (Yojson.Safe.to_string
                       (`Assoc
-                          [ ( "status"
+                          [ "metadata", `Assoc [ "name", `String "sol-test" ]
+                          ; ( "status"
                             , `Assoc
                                 [ "url", `String "https://pre-existing.example"
                                 ; "latestReadyRevisionName", `String "rev-1"
@@ -520,7 +526,8 @@ let test_deploy_refuses_unowned_service () =
             Ok
               (Yojson.Safe.to_string
                  (`Assoc
-                     [ ( "status"
+                     [ "metadata", `Assoc [ "name", `String "sol-test" ]
+                     ; ( "status"
                        , `Assoc
                            [ "url", `String "https://pre-existing.example"
                            ; "latestReadyRevisionName", `String "rev-old"
@@ -546,6 +553,52 @@ let test_deploy_refuses_unowned_service () =
   check "unowned deploy did not mutate" (not !deployed)
 ;;
 
+let test_destroy_refuses_provider_record_mismatch () =
+  let record = Filename.temp_file "sol-cloud-run-provider-" ".json" in
+  Fun.protect
+    ~finally:(fun () ->
+      try Sys.remove record with
+      | Sys_error _ -> ())
+    (fun () ->
+       let channel = open_out record in
+       output_string
+         channel
+         (Yojson.Safe.to_string
+            (`Assoc
+                [ "project", `String "p"
+                ; "region", `String "r"
+                ; "service", `String "sol-test"
+                ; "provider_service", `String "checkout-svc"
+                ; "revision", `String "rev-1"
+                ; "url", `String "https://service.example"
+                ; "image", `String "repo@sha256:abc123"
+                ]));
+       close_out channel;
+       let runner =
+         { Sol_cli_cloud_run.run =
+             (fun argv ->
+               match argv with
+               | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+                 Ok (describe_json ~revision:"rev-1" ~percent:100)
+               | "gcloud" :: "run" :: "services" :: "delete" :: _ ->
+                 check "mismatched provider record never deletes" false;
+                 Ok "deleted"
+               | _ -> Error "unexpected")
+         ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+         }
+       in
+       match
+         Sol_cli_cloud_run.destroy
+           runner
+           ~project:"p"
+           ~region:"r"
+           ~service:"sol-test"
+           ~record
+       with
+       | Error (Refused _) -> check "mismatched provider record refuses destroy" true
+       | _ -> check "mismatched provider record refuses destroy" false)
+;;
+
 let test_destroy_unreadable_inventory_is_unknown () =
   let record = Filename.temp_file "sol-cloud-run-record-" ".json" in
   Fun.protect
@@ -561,6 +614,7 @@ let test_destroy_unreadable_inventory_is_unknown () =
                 [ "project", `String "p"
                 ; "region", `String "r"
                 ; "service", `String "sol-test"
+                ; "provider_service", `String "sol-test"
                 ; "revision", `String "rev-1"
                 ; "url", `String "https://service.example"
                 ; "image", `String "repo@sha256:abc123"
@@ -591,8 +645,31 @@ let test_destroy_unreadable_inventory_is_unknown () =
        | _ -> check "unreadable inventory is unknown" false)
 ;;
 
+let test_provider_naming () =
+  (match Sol_cli_cloud_run.provider_service_of "checkout_svc" with
+   | Ok provider -> check "checkout_svc maps to checkout-svc" (provider = "checkout-svc")
+   | Error e ->
+     check
+       ("checkout_svc provider mapping " ^ Sol_cli_cloud_run.failure_to_string e)
+       false);
+  check
+    "invalid provider name is refused"
+    (Result.is_error (Sol_cli_cloud_run.provider_service_of "_"));
+  let checkout =
+    { (request ()) with service = "checkout_svc"; provider_service = "checkout-svc" }
+  in
+  check
+    "checkout_svc preflight accepts canonical provider"
+    (Result.is_ok (Sol_cli_cloud_run.preflight checkout));
+  let mismatched = { checkout with provider_service = "checkout_svc" } in
+  check
+    "provider/Sol name mismatch is refused"
+    (Result.is_error (Sol_cli_cloud_run.preflight mismatched))
+;;
+
 let () =
   test_ingress ();
+  test_provider_naming ();
   test_preflight ();
   test_deploy_argv ();
   test_deploy_and_verify ();
@@ -605,6 +682,7 @@ let () =
   test_destroy_requires_matching_ownership ();
   test_destroy_refuses_unowned_live_service ();
   test_destroy_refuses_stale_record ();
+  test_destroy_refuses_provider_record_mismatch ();
   test_destroy_unreadable_inventory_is_unknown ();
   test_rollback_requires_authorization ();
   test_verify_writes_release_record ();

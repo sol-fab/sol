@@ -11,6 +11,7 @@ type request =
   { project : string
   ; region : string
   ; service : string
+  ; provider_service : string
   ; image : string
   ; identity : identity
   ; ingress : ingress
@@ -22,6 +23,7 @@ type observed =
   ; revision : string
   ; traffic : (string * int) list
   ; image : string option
+  ; provider_service : string
   ; labels : (string * string) list
   }
 
@@ -29,6 +31,7 @@ type release =
   { project : string
   ; region : string
   ; service : string
+  ; provider_service : string
   ; revision : string
   ; url : string
   ; image : string
@@ -41,6 +44,7 @@ type failure =
   | Unknown of string
 
 val ingress_of_string : string -> (ingress, failure) result
+val provider_service_of : string -> (string, failure) result
 
 type runner =
   { run : string list -> (string, string) result
