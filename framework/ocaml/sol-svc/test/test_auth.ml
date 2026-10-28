@@ -848,6 +848,24 @@ let test_google_azp_is_not_caller_authority () =
     response.Response.status
 ;;
 
+let test_numeric_https_jwks_uri () =
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"HTTPS JWKS gets numeric 443 port"
+    "https://www.googleapis.com:443/oauth2/v3/certs"
+    (Service.For_testing.numeric_https_uri "https://www.googleapis.com/oauth2/v3/certs");
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"explicit port is preserved"
+    "https://example.test:8443/certs"
+    (Service.For_testing.numeric_https_uri "https://example.test:8443/certs");
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"http is unchanged"
+    "http://example.test/certs"
+    (Service.For_testing.numeric_https_uri "http://example.test/certs")
+;;
+
 let () =
   Windtrap.run
     "sol-svc workload identity"
@@ -912,6 +930,7 @@ let () =
     ; Windtrap.test
         "Google missing subject is forbidden"
         test_google_missing_subject_is_forbidden
+    ; Windtrap.test "numeric HTTPS JWKS port" test_numeric_https_jwks_uri
     ; Windtrap.test
         "Google azp is not caller authority"
         test_google_azp_is_not_caller_authority

@@ -75,4 +75,5 @@ module For_testing : sig
   val parse_called_by : string -> (string * string) list
   val workload_identity_requested : Route.t list -> Auth.level -> bool
   val jwks_uri_of_discovery : issuer:string -> string -> (string, string) result
+  val numeric_https_uri : string -> string
 end
