@@ -1,3 +1,5 @@
+let out stdout = { Sol_cli_cloud_run.stdout; stderr = "" }
+let out_with_warning stdout stderr = { Sol_cli_cloud_run.stdout; stderr }
 let passed = ref 0
 let failed = ref 0
 
@@ -124,9 +126,10 @@ let test_deploy_and_verify () =
         (fun argv ->
           calls := argv :: !calls;
           match argv with
-          | "gcloud" :: "run" :: "deploy" :: _ -> Ok "deployed"
+          | "gcloud" :: "run" :: "services" :: "list" :: _ -> Ok (out "")
+          | "gcloud" :: "run" :: "deploy" :: _ -> Ok (out "deployed")
           | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
-            Ok (describe_json ~revision:"rev-1" ~percent:100)
+            Ok (out (describe_json ~revision:"rev-1" ~percent:100))
           | _ -> Error ("unexpected " ^ String.concat " " argv))
     ; http =
         (fun ~url ~token ->
@@ -154,7 +157,8 @@ let test_deploy_and_verify () =
 
 let test_verify_does_not_accept_unauth () =
   let runner =
-    { Sol_cli_cloud_run.run = (fun _ -> Ok (describe_json ~revision:"rev-1" ~percent:100))
+    { Sol_cli_cloud_run.run =
+        (fun _ -> Ok (out (describe_json ~revision:"rev-1" ~percent:100)))
     ; http =
         (fun ~url ~token ->
           match url, token with
@@ -176,10 +180,10 @@ let test_rollback () =
         (fun argv ->
           match argv with
           | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
-            Ok (describe_json ~revision:!revision ~percent:100)
+            Ok (out (describe_json ~revision:!revision ~percent:100))
           | "gcloud" :: "run" :: "services" :: "update-traffic" :: _ ->
             revision := "rev-prev";
-            Ok "done"
+            Ok (out "done")
           | _ -> Error "unexpected")
     ; http =
         (fun ~url ~token ->
@@ -208,14 +212,14 @@ let test_destroy () =
           match argv with
           | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
             if !present
-            then Ok (describe_json ~revision:"rev-1" ~percent:100)
+            then Ok (out (describe_json ~revision:"rev-1" ~percent:100))
             else Error "not found"
           | "gcloud" :: "run" :: "services" :: "delete" :: _ ->
             present := false;
             deleted := true;
-            Ok "deleted"
+            Ok (out "deleted")
           | "gcloud" :: "run" :: "services" :: "list" :: _ ->
-            if !present then Ok "sol-test" else Ok ""
+            if !present then Ok (out "sol-test") else Ok (out "")
           | _ -> Error "unexpected")
     ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
     }
@@ -257,9 +261,10 @@ let test_partial_deploy () =
     { Sol_cli_cloud_run.run =
         (fun argv ->
           match argv with
+          | "gcloud" :: "run" :: "services" :: "list" :: _ -> Ok (out "")
           | "gcloud" :: "run" :: "deploy" :: _ -> Error "deploy failed"
           | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
-            Ok (describe_json ~revision:"rev-old" ~percent:100)
+            Ok (out (describe_json ~revision:"rev-old" ~percent:100))
           | _ -> Error "unexpected")
     ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
     }
@@ -275,9 +280,10 @@ let test_deploy_requires_serving_revision () =
     { Sol_cli_cloud_run.run =
         (fun argv ->
           match argv with
-          | "gcloud" :: "run" :: "deploy" :: _ -> Ok "deployed"
+          | "gcloud" :: "run" :: "services" :: "list" :: _ -> Ok (out "")
+          | "gcloud" :: "run" :: "deploy" :: _ -> Ok (out "deployed")
           | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
-            Ok (describe_json ~revision:"rev-new" ~percent:0)
+            Ok (out (describe_json ~revision:"rev-new" ~percent:0))
           | _ -> Error "unexpected")
     ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
     }
@@ -294,8 +300,8 @@ let test_rollback_requires_target_traffic () =
         (fun argv ->
           match argv with
           | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
-            Ok (describe_json ~revision:!described ~percent:100)
-          | "gcloud" :: "run" :: "services" :: "update-traffic" :: _ -> Ok "updated"
+            Ok (out (describe_json ~revision:!described ~percent:100))
+          | "gcloud" :: "run" :: "services" :: "update-traffic" :: _ -> Ok (out "updated")
           | _ -> Error "unexpected")
     ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
     }
@@ -313,10 +319,10 @@ let test_destroy_requires_matching_ownership () =
         (fun argv ->
           match argv with
           | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
-            Ok (describe_json ~revision:"rev-1" ~percent:100)
+            Ok (out (describe_json ~revision:"rev-1" ~percent:100))
           | "gcloud" :: "run" :: "services" :: "delete" :: _ ->
             check "unowned destroy never deletes" false;
-            Ok "deleted"
+            Ok (out "deleted")
           | _ -> Error "unexpected")
     ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
     }
@@ -358,11 +364,12 @@ let test_destroy_refuses_stale_record () =
          { Sol_cli_cloud_run.run =
              (fun argv ->
                match argv with
+               | "gcloud" :: "run" :: "services" :: "list" :: _ -> Ok (out "sol-test")
                | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
-                 Ok (describe_json ~revision:"rev-new" ~percent:100)
+                 Ok (out (describe_json ~revision:"rev-new" ~percent:100))
                | "gcloud" :: "run" :: "services" :: "delete" :: _ ->
                  check "stale record never deletes" false;
-                 Ok "deleted"
+                 Ok (out "deleted")
                | _ -> Error "unexpected")
          ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
          }
@@ -386,10 +393,10 @@ let test_rollback_requires_authorization () =
         (fun argv ->
           match argv with
           | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
-            Ok (describe_json ~revision:!described ~percent:100)
+            Ok (out (describe_json ~revision:!described ~percent:100))
           | "gcloud" :: "run" :: "services" :: "update-traffic" :: _ ->
             described := "rev-prev";
-            Ok "updated"
+            Ok (out "updated")
           | _ -> Error "unexpected")
     ; http =
         (fun ~url ~token ->
@@ -436,28 +443,30 @@ let test_destroy_refuses_unowned_live_service () =
          { Sol_cli_cloud_run.run =
              (fun argv ->
                match argv with
+               | "gcloud" :: "run" :: "services" :: "list" :: _ -> Ok (out "sol-test")
                | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
                  (* A pre-existing service: matching record but no adapter labels. *)
                  Ok
-                   (Yojson.Safe.to_string
-                      (`Assoc
-                          [ "metadata", `Assoc [ "name", `String "sol-test" ]
-                          ; ( "status"
-                            , `Assoc
-                                [ "url", `String "https://pre-existing.example"
-                                ; "latestReadyRevisionName", `String "rev-1"
-                                ; ( "traffic"
-                                  , `List
-                                      [ `Assoc
-                                          [ "revisionName", `String "rev-1"
-                                          ; "percent", `Int 100
-                                          ]
-                                      ] )
-                                ] )
-                          ]))
+                   (out
+                      (Yojson.Safe.to_string
+                         (`Assoc
+                             [ "metadata", `Assoc [ "name", `String "sol-test" ]
+                             ; ( "status"
+                               , `Assoc
+                                   [ "url", `String "https://pre-existing.example"
+                                   ; "latestReadyRevisionName", `String "rev-1"
+                                   ; ( "traffic"
+                                     , `List
+                                         [ `Assoc
+                                             [ "revisionName", `String "rev-1"
+                                             ; "percent", `Int 100
+                                             ]
+                                         ] )
+                                   ] )
+                             ])))
                | "gcloud" :: "run" :: "services" :: "delete" :: _ ->
                  check "unowned live service never deletes" false;
-                 Ok "deleted"
+                 Ok (out "deleted")
                | _ -> Error "unexpected")
          ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
          }
@@ -483,7 +492,7 @@ let test_verify_writes_release_record () =
     (fun () ->
        let runner =
          { Sol_cli_cloud_run.run =
-             (fun _ -> Ok (describe_json ~revision:"rev-verified" ~percent:100))
+             (fun _ -> Ok (out (describe_json ~revision:"rev-verified" ~percent:100)))
          ; http =
              (fun ~url ~token ->
                match url, token with
@@ -522,27 +531,29 @@ let test_deploy_refuses_unowned_service () =
     { Sol_cli_cloud_run.run =
         (fun argv ->
           match argv with
+          | "gcloud" :: "run" :: "services" :: "list" :: _ -> Ok (out "sol-test")
           | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
             Ok
-              (Yojson.Safe.to_string
-                 (`Assoc
-                     [ "metadata", `Assoc [ "name", `String "sol-test" ]
-                     ; ( "status"
-                       , `Assoc
-                           [ "url", `String "https://pre-existing.example"
-                           ; "latestReadyRevisionName", `String "rev-old"
-                           ; ( "traffic"
-                             , `List
-                                 [ `Assoc
-                                     [ "revisionName", `String "rev-old"
-                                     ; "percent", `Int 100
-                                     ]
-                                 ] )
-                           ] )
-                     ]))
+              (out
+                 (Yojson.Safe.to_string
+                    (`Assoc
+                        [ "metadata", `Assoc [ "name", `String "sol-test" ]
+                        ; ( "status"
+                          , `Assoc
+                              [ "url", `String "https://pre-existing.example"
+                              ; "latestReadyRevisionName", `String "rev-old"
+                              ; ( "traffic"
+                                , `List
+                                    [ `Assoc
+                                        [ "revisionName", `String "rev-old"
+                                        ; "percent", `Int 100
+                                        ]
+                                    ] )
+                              ] )
+                        ])))
           | "gcloud" :: "run" :: "deploy" :: _ ->
             deployed := true;
-            Ok "deployed"
+            Ok (out "deployed")
           | _ -> Error "unexpected")
     ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
     }
@@ -579,10 +590,10 @@ let test_destroy_refuses_provider_record_mismatch () =
              (fun argv ->
                match argv with
                | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
-                 Ok (describe_json ~revision:"rev-1" ~percent:100)
+                 Ok (out (describe_json ~revision:"rev-1" ~percent:100))
                | "gcloud" :: "run" :: "services" :: "delete" :: _ ->
                  check "mismatched provider record never deletes" false;
-                 Ok "deleted"
+                 Ok (out "deleted")
                | _ -> Error "unexpected")
          ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
          }
@@ -625,8 +636,8 @@ let test_destroy_unreadable_inventory_is_unknown () =
              (fun argv ->
                match argv with
                | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
-                 Ok (describe_json ~revision:"rev-1" ~percent:100)
-               | "gcloud" :: "run" :: "services" :: "delete" :: _ -> Ok "deleted"
+                 Ok (out (describe_json ~revision:"rev-1" ~percent:100))
+               | "gcloud" :: "run" :: "services" :: "delete" :: _ -> Ok (out "deleted")
                | "gcloud" :: "run" :: "services" :: "list" :: _ ->
                  Error "inventory unavailable"
                | _ -> Error "unexpected")
@@ -667,9 +678,53 @@ let test_provider_naming () =
     (Result.is_error (Sol_cli_cloud_run.preflight mismatched))
 ;;
 
+let test_describe_error_is_not_absence () =
+  let deployed = ref false in
+  let runner =
+    { Sol_cli_cloud_run.run =
+        (fun argv ->
+          match argv with
+          | "gcloud" :: "run" :: "services" :: "list" :: _ ->
+            Error "ERROR: Cannot find service [sol-test]"
+          | "gcloud" :: "run" :: "deploy" :: _ ->
+            deployed := true;
+            Ok (out "deployed")
+          | _ -> Error "unexpected")
+    ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+    }
+  in
+  (match Sol_cli_cloud_run.deploy runner (request ()) with
+   | Error (Unknown _) -> check "failed inventory is unknown, not absent" true
+   | _ -> check "failed inventory is unknown, not absent" false);
+  check "failed inventory did not mutate" (not !deployed)
+;;
+
+let test_inventory_warning_is_unknown () =
+  let deployed = ref false in
+  let runner =
+    { Sol_cli_cloud_run.run =
+        (fun argv ->
+          match argv with
+          | "gcloud" :: "run" :: "services" :: "list" :: _ ->
+            Ok (out_with_warning "" "WARNING: scope could not be fully enumerated")
+          | "gcloud" :: "run" :: "deploy" :: _ ->
+            deployed := true;
+            Ok (out "deployed")
+          | _ -> Error "unexpected")
+    ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+    }
+  in
+  (match Sol_cli_cloud_run.deploy runner (request ()) with
+   | Error (Unknown _) -> check "warning-bearing inventory is unknown" true
+   | _ -> check "warning-bearing inventory is unknown" false);
+  check "warning-bearing inventory did not mutate" (not !deployed)
+;;
+
 let () =
   test_ingress ();
   test_provider_naming ();
+  test_describe_error_is_not_absence ();
+  test_inventory_warning_is_unknown ();
   test_preflight ();
   test_deploy_argv ();
   test_deploy_and_verify ();

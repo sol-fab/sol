@@ -18,7 +18,7 @@ case "$1 $2" in
     case "$3" in
       describe)
         if [[ ! -f "$FAKE_GCLOUD_STATE" ]]; then
-          echo "ERROR: service not found" >&2
+          echo "ERROR: Cannot find service [checkout-svc]" >&2
           exit 1
         fi
         cat <<'JSON'
@@ -26,7 +26,7 @@ case "$1 $2" in
 JSON
         ;;
       list)
-        echo "checkout-svc"
+        [[ -f "$FAKE_GCLOUD_STATE" ]] && echo "checkout-svc" || true
         ;;
       *)
         echo "unexpected gcloud: $*" >&2

@@ -67,8 +67,13 @@ let provider_service_of service =
             message))
 ;;
 
+type output =
+  { stdout : string
+  ; stderr : string
+  }
+
 type runner =
-  { run : string list -> (string, string) result
+  { run : string list -> (output, string) result
   ; http : url:string -> token:string option -> (int * string, string) result
   }
 
@@ -309,19 +314,25 @@ let parse_observed text =
   else Ok { url; revision; traffic; image; provider_service; labels }
 ;;
 
-let contains text needle =
-  let n = String.length needle in
-  let rec scan i =
-    i + n <= String.length text && (String.sub text i n = needle || scan (i + 1))
-  in
-  scan 0
+let inventory runner ~project ~region =
+  match runner.run (list_argv ~project ~region) with
+  | Error message -> Error message
+  | Ok output ->
+    if not (Sol_cli_gcp_absence.benign_empty_list_warning output.stderr)
+    then
+      Error
+        (Printf.sprintf
+           "service inventory emitted an unexpected warning: %s"
+           (String.trim output.stderr))
+    else
+      Ok
+        (String.split_on_char '\n' output.stdout
+         |> List.map String.trim
+         |> List.filter (fun name -> name <> ""))
 ;;
 
-let is_not_found text =
-  let text = String.lowercase_ascii text in
-  List.exists (contains text) [ "not found"; "not_found"; "404"; "does not exist" ]
-;;
-
+(* A successful, scoped listing establishes absence. A failed describe cannot: the
+   project, API scope, or caller may be wrong, and gcloud's wording is not a contract. *)
 let describe runner (request : request) =
   match
     runner.run
@@ -330,12 +341,21 @@ let describe runner (request : request) =
          ~region:request.region
          ~service:request.provider_service)
   with
-  | Error error ->
-    if is_not_found error then Error `Not_found else Error (`Provider error)
-  | Ok text ->
-    (match parse_observed text with
-     | Ok observed -> Ok (`Present observed)
+  | Error error -> Error (`Unknown error)
+  | Ok output ->
+    (match parse_observed output.stdout with
+     | Ok observed -> Ok observed
      | Error message -> Error (`Unknown message))
+;;
+
+let observe runner (request : request) =
+  match inventory runner ~project:request.project ~region:request.region with
+  | Error message -> Error (`Unknown message)
+  | Ok names when not (List.mem request.provider_service names) -> Ok `Absent
+  | Ok _ ->
+    (match describe runner request with
+     | Ok observed -> Ok (`Present observed)
+     | Error error -> Error error)
 ;;
 
 let release (request : request) (observed : observed) =
@@ -414,7 +434,8 @@ let owns ~service ~provider observed =
 let deploy runner (request : request) =
   let* () = preflight request in
   let* () =
-    match describe runner request with
+    match observe runner request with
+    | Ok `Absent -> Ok ()
     | Ok (`Present observed)
       when owns ~service:request.service ~provider:request.provider_service observed ->
       Ok ()
@@ -423,27 +444,22 @@ let deploy runner (request : request) =
         (Refused
            "Cloud Run service already exists without this adapter's ownership labels; \
             refusing to take it over")
-    | Error `Not_found -> Ok ()
-    | Error (`Provider message) ->
+    | Error (`Unknown message) ->
       Error (Unknown ("could not inspect existing service: " ^ message))
-    | Error (`Unknown message) -> Error (Unknown message)
   in
   match runner.run (deploy_argv request) with
   | Error message ->
     let observed =
       match describe runner request with
-      | Ok (`Present observed) -> Some observed
-      | _ -> None
+      | Ok observed -> Some observed
+      | Error _ -> None
     in
     Error (Partial (message, observed))
   | Ok _ ->
     (match describe runner request with
-     | Error `Not_found ->
-       Error (Unknown "deploy returned success but the service is absent")
-     | Error (`Provider message) ->
+     | Error (`Unknown message) ->
        Error (Unknown ("could not read the deployed service: " ^ message))
-     | Error (`Unknown message) -> Error (Unknown message)
-     | Ok (`Present observed) ->
+     | Ok observed ->
        let* () =
          if owns ~service:request.service ~provider:request.provider_service observed
          then Ok ()
@@ -462,10 +478,8 @@ let deploy runner (request : request) =
 
 let verify runner (request : request) ~token =
   match describe runner request with
-  | Error `Not_found -> Error (Unknown "service is absent; nothing to verify")
-  | Error (`Provider message) -> Error (Provider message)
   | Error (`Unknown message) -> Error (Unknown message)
-  | Ok (`Present observed) ->
+  | Ok observed ->
     let* () =
       if token = ""
       then
@@ -527,10 +541,8 @@ let verify runner (request : request) ~token =
 
 let rollback runner (request : request) ~revision ~token =
   match describe runner request with
-  | Error `Not_found -> Error (Unknown "service is absent; cannot roll back")
-  | Error (`Provider message) -> Error (Provider message)
   | Error (`Unknown message) -> Error (Unknown message)
-  | Ok (`Present _) ->
+  | Ok _ ->
     (match
        runner.run
          (traffic_argv
@@ -542,12 +554,9 @@ let rollback runner (request : request) ~revision ~token =
      | Error message -> Error (Partial (message, None))
      | Ok _ ->
        (match describe runner request with
-        | Error `Not_found ->
-          Error (Unknown "rollback returned success but the service is absent")
-        | Error (`Provider message) ->
+        | Error (`Unknown message) ->
           Error (Unknown ("could not read rolled-back service: " ^ message))
-        | Error (`Unknown message) -> Error (Unknown message)
-        | Ok (`Present observed) ->
+        | Ok observed ->
           if
             List.exists
               (fun (name, percent) -> name = revision && percent = 100)
@@ -598,54 +607,45 @@ let destroy runner ~project ~region ~service ~record =
     ; record = None
     }
   in
-  match describe runner request with
-  | Error `Not_found ->
-    (match runner.run (list_argv ~project ~region) with
-     | Error message ->
-       Error (Unknown ("service is not readable and inventory failed: " ^ message))
-     | Ok names ->
-       if
-         List.exists
-           (fun name -> String.trim name = provider_service)
-           (String.split_on_char '\n' names)
-       then Error (Unknown "service was absent by describe but present in inventory")
-       else Ok ())
-  | Error (`Provider message) -> Error (Provider message)
-  | Error (`Unknown message) -> Error (Unknown message)
-  | Ok (`Present observed) ->
-    let* () =
-      if owns ~service ~provider:provider_service observed
-      then Ok ()
-      else
-        Error
-          (Refused
-             "live service lacks this adapter's ownership labels; refusing to delete it")
-    in
-    let* () =
-      if
-        expected.revision = observed.revision
-        && expected.url = observed.url
-        && observed.image = Some expected.image
-      then Ok ()
-      else
-        Error
-          (Refused
-             "live service does not match the recorded revision, URL and image; refusing \
-              to delete a different deployment")
-    in
-    (match runner.run (delete_argv ~project ~region ~service:provider_service) with
-     | Error message -> Error (Partial (message, None))
-     | Ok _ ->
-       (match runner.run (list_argv ~project ~region) with
-        | Error message ->
-          Error (Unknown ("delete returned success but inventory failed: " ^ message))
-        | Ok names ->
-          if
-            List.exists
-              (fun name -> String.trim name = provider_service)
-              (String.split_on_char '\n' names)
-          then Error (Unknown "service remains after delete")
-          else Ok ()))
+  match inventory runner ~project ~region with
+  | Error message ->
+    Error (Unknown ("service inventory failed; absence is unknown: " ^ message))
+  | Ok names when not (List.mem provider_service names) -> Ok ()
+  | Ok _ ->
+    (match describe runner request with
+     | Error (`Unknown message) -> Error (Unknown message)
+     | Ok observed ->
+       let* () =
+         if owns ~service ~provider:provider_service observed
+         then Ok ()
+         else
+           Error
+             (Refused
+                "live service lacks this adapter's ownership labels; refusing to delete \
+                 it")
+       in
+       let* () =
+         if
+           expected.revision = observed.revision
+           && expected.url = observed.url
+           && observed.image = Some expected.image
+         then Ok ()
+         else
+           Error
+             (Refused
+                "live service does not match the recorded revision, URL and image; \
+                 refusing to delete a different deployment")
+       in
+       (match runner.run (delete_argv ~project ~region ~service:provider_service) with
+        | Error message -> Error (Partial (message, None))
+        | Ok _ ->
+          (match inventory runner ~project ~region with
+           | Error message ->
+             Error (Unknown ("delete returned success but inventory failed: " ^ message))
+           | Ok names ->
+             if List.mem provider_service names
+             then Error (Unknown "service remains after delete")
+             else Ok ())))
 ;;
 
 let observed_json (observed : observed) =

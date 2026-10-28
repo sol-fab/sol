@@ -1,3 +1,5 @@
+val benign_empty_list_warning : string -> bool
+
 val observations
   :  ?previously_attributed:(string * string list) list
   -> ?authorization_identities:(string * string list) list
