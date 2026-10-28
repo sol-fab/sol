@@ -120,8 +120,8 @@ The target field names are explicit; no ECR repository, role, or IAM policy is c
 verified Lambda lifecycle and writes `serverless-release.json` in the deploy run log.
 
 Current limits: exactly one HTTP `-svc`, no service dependencies, apply only (no
-dry-run/emit), AWS only, and the application token remains the Google demonstration
-identity rather than AWS-native incoming identity.
+dry-run/emit), and the application token remains the Google demonstration identity
+rather than AWS-native incoming identity.
 
 ## Target-scoped GCP Cloud Run HTTP
 

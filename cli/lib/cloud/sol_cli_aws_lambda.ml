@@ -293,40 +293,64 @@ let deploy (r : request) =
                      (`Assoc (List.map (fun (k, v) -> k, `String v) o.tags))))))
     else Ok false
   in
+  let env =
+    `Assoc
+      [ ( "Variables"
+        , `Assoc
+            [ "SOL_UNIT", `String r.identity.unit
+            ; ( "SOL_CALLED_BY"
+              , `String
+                  (r.identity.callers
+                   |> List.map (fun (s, u) -> u ^ "=" ^ s)
+                   |> String.concat ",") )
+            ; "SOL_TRUSTED_WORKLOAD_ISSUER", `String r.identity.issuer
+            ; "SOL_TRUSTED_WORKLOAD_JWKS_URI", `String r.identity.jwks_uri
+            ; "SOL_WORKLOAD_SUBJECT_SCHEME", `String "google_oidc_service_account"
+            ; "AWS_LWA_PORT", `String "8080"
+            ] )
+      ]
+    |> Yojson.Safe.to_string
+  in
   let* () =
     if existing
     then
+      let* () =
+        r.run
+          (aws
+             r
+             [ "lambda"
+             ; "update-function-code"
+             ; "--function-name"
+             ; r.function_name
+             ; "--image-uri"
+             ; r.image
+             ])
+        |> Result.map (fun _ -> ())
+        |> Result.map_error (fun m -> Partial (m, None))
+      in
+      let* () =
+        r.run
+          (aws
+             r
+             [ "lambda"; "wait"; "function-updated"; "--function-name"; r.function_name ])
+        |> Result.map (fun _ -> ())
+        |> Result.map_error (fun m -> Unknown ("wait after code update: " ^ m))
+      in
       r.run
         (aws
            r
            [ "lambda"
-           ; "update-function-code"
+           ; "update-function-configuration"
            ; "--function-name"
            ; r.function_name
-           ; "--image-uri"
-           ; r.image
+           ; "--role"
+           ; r.role_arn
+           ; "--environment"
+           ; env
            ])
       |> Result.map (fun _ -> ())
       |> Result.map_error (fun m -> Partial (m, None))
-    else (
-      let env =
-        `Assoc
-          [ ( "Variables"
-            , `Assoc
-                [ "SOL_UNIT", `String r.identity.unit
-                ; ( "SOL_CALLED_BY"
-                  , `String
-                      (r.identity.callers
-                       |> List.map (fun (s, u) -> u ^ "=" ^ s)
-                       |> String.concat ",") )
-                ; "SOL_TRUSTED_WORKLOAD_ISSUER", `String r.identity.issuer
-                ; "SOL_TRUSTED_WORKLOAD_JWKS_URI", `String r.identity.jwks_uri
-                ; "SOL_WORKLOAD_SUBJECT_SCHEME", `String "google_oidc_service_account"
-                ; "AWS_LWA_PORT", `String "8080"
-                ] )
-          ]
-        |> Yojson.Safe.to_string
-      in
+    else
       r.run
         (aws
            r
@@ -352,7 +376,7 @@ let deploy (r : request) =
            ; "sol-owned=lambda-experiment,sol-service=" ^ r.function_name
            ])
       |> Result.map (fun _ -> ())
-      |> Result.map_error (fun m -> Partial (m, None)))
+      |> Result.map_error (fun m -> Partial (m, None))
   in
   let* () =
     r.run

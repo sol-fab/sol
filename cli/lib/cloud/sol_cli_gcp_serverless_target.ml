@@ -19,7 +19,14 @@ let callers target =
         let subject =
           String.sub entry (at + 1) (String.length entry - at - 1) |> String.trim
         in
-        if unit = "" || subject = "" then None else Some (unit, subject))
+        if unit = "" || subject = "" then None else Some (subject, unit))
+;;
+
+let unit_of_service ~project (service : Sol_cli_manifest.service) =
+  match String.split_on_char '/' service.dir |> List.rev with
+  | name :: domain :: _ when name = service.name && domain <> "" && domain <> "." ->
+    domain ^ "/" ^ service.name
+  | _ -> project ^ "/" ^ service.name
 ;;
 
 let deploy ~target ~config ~project ~(service : Sol_cli_manifest.service) ~image ~record =
@@ -55,7 +62,7 @@ let deploy ~target ~config ~project ~(service : Sol_cli_manifest.service) ~image
     |> Result.map_error Sol_cli_cloud_run.failure_to_string
   in
   let identity =
-    { Sol_cli_cloud_run.unit = project ^ "/" ^ service.name
+    { Sol_cli_cloud_run.unit = unit_of_service ~project service
     ; callers = callers target
     ; issuer = "https://accounts.google.com"
     ; jwks_uri = "https://www.googleapis.com/oauth2/v3/certs"

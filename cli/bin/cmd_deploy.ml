@@ -1206,7 +1206,8 @@ let run (req : Sol_cli_command_request.deploy_request) =
      (match req.action with
       | Sol_cli_command_request.Deploy_apply ->
         Sol_cli_exit.exit_on
-          (run_serverless ~resolved_config ~target_cfg ~deployed ~selection ~run_log)
+          (run_serverless ~resolved_config ~target_cfg ~deployed ~selection ~run_log);
+        Stdlib.exit 0
       | Deploy_dry_run _ | Deploy_emit_to _ ->
         Sol_cli_exit.exit_on
           (Error
