@@ -122,3 +122,22 @@ verified Lambda lifecycle and writes `serverless-release.json` in the deploy run
 Current limits: exactly one HTTP `-svc`, no service dependencies, apply only (no
 dry-run/emit), AWS only, and the application token remains the Google demonstration
 identity rather than AWS-native incoming identity.
+
+## Target-scoped GCP Cloud Run HTTP
+
+GCP follows the same target contract:
+
+```yaml
+production:
+  targets:
+    gcp/us-west1:
+      execution: serverless
+      gcp:
+        project_id: example-project
+        serverless_callers: checkout/checkout_svc=1234567890
+```
+
+`sol deploy production/gcp/us-west1 --image-ref checkout_svc=...@sha256:...` uses the
+verified Cloud Run lifecycle. `gcp.project_id` and the target region supply the provider
+coordinates; Cloud Run creates no execution role. The same limits apply: one
+dependency-free HTTP `-svc`, apply only, and application authentication remains explicit.

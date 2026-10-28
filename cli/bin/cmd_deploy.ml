@@ -62,18 +62,37 @@ let run_serverless
               service.name))
   in
   let record = Filename.concat (Sol_cli_run_log.dir run_log) "serverless-release.json" in
-  let* release =
-    Sol_cli_aws_serverless_target.deploy
-      ~target:target_cfg
-      ~config:resolved_config
-      ~project
-      ~service
-      ~image
-      ~record
-    |> Result.map_error Sol_cli_exit.error
-  in
-  print_endline (Yojson.Safe.to_string (Sol_cli_aws_lambda.release_json release));
-  Ok ()
+  match target_cfg.provider with
+  | Sol_cli_provider.Aws ->
+    let* release =
+      Sol_cli_aws_serverless_target.deploy
+        ~target:target_cfg
+        ~config:resolved_config
+        ~project
+        ~service
+        ~image
+        ~record
+      |> Result.map_error Sol_cli_exit.error
+    in
+    print_endline (Yojson.Safe.to_string (Sol_cli_aws_lambda.release_json release));
+    Ok ()
+  | Sol_cli_provider.Gcp ->
+    let* release =
+      Sol_cli_gcp_serverless_target.deploy
+        ~target:target_cfg
+        ~config:resolved_config
+        ~project
+        ~service
+        ~image
+        ~record
+      |> Result.map_error Sol_cli_exit.error
+    in
+    print_endline (Yojson.Safe.to_string (Sol_cli_cloud_run.release_json release));
+    Ok ()
+  | Sol_cli_provider.Byo ->
+    Error
+      (Sol_cli_exit.error
+         "target-scoped serverless dispatch currently supports AWS and GCP only")
 ;;
 
 let build_plan
