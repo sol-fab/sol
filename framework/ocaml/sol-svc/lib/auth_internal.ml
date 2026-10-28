@@ -155,7 +155,17 @@ let validate_unverified_jwt config headers =
 
 let jwks_refresh_mutex = Eio.Mutex.create ()
 
+(* Cloud Run's resolver does not support the service-name form "https"; an
+   explicit numeric port is the same TLS endpoint and avoids that lookup. *)
+let numeric_https_uri url =
+  let uri = Uri.of_string url in
+  match Uri.scheme uri, Uri.port uri with
+  | Some "https", None -> Uri.to_string (Uri.with_port uri (Some 443))
+  | _ -> url
+;;
+
 let fetch_jwks_over_https ~env url =
+  let url = numeric_https_uri url in
   match
     Https_eio.request
       ~net:env#net
@@ -228,6 +238,7 @@ let fetch_workload_jwks_over_https ~env issuer =
       else issuer
     in
     let discovery_url = issuer_base ^ "/.well-known/openid-configuration" in
+    let discovery_url = numeric_https_uri discovery_url in
     let* status, body =
       Https_eio.request
         ~net:env#net
