@@ -64,8 +64,9 @@ event model and AWS-native workload identity are not yet part of Sol's contract.
 
 ## GCP Cloud Run HTTP
 
-See [the Cloud Run runbook](../../.qualification/cloudrun-adapter-live-runbook.md)
-for the provider lifecycle. It uses the same application container and a
+The Cloud Run lifecycle uses the same application container and a Google OIDC
+application-audience token; its deploy/verify/rollback/destroy behavior is
+covered by the provider CLI and prior bounded live evidence. It uses the same application container and a
 Google OIDC application-audience token. Cloud Run is also a standalone
 experimental command, not yet a target execution backend.
 
