@@ -102,3 +102,60 @@ let deploy ~target ~config ~project ~(service : Sol_cli_manifest.service) ~image
   in
   Ok release
 ;;
+
+let rollback
+      ~target
+      ~project
+      ~(service : Sol_cli_manifest.service)
+      ~record
+      ~revision
+      ~token
+  =
+  let* () =
+    if Sol_cli_config.execution_of_target target = Sol_cli_config.Serverless
+    then Ok ()
+    else Error "target does not select execution: serverless"
+  in
+  let* () =
+    if target.provider = Sol_cli_provider.Gcp
+    then Ok ()
+    else Error "target-scoped serverless rollback expected a GCP target"
+  in
+  let* release = Sol_cli_cloud_run.read_record ~path:record in
+  let* cloud_project = required_project target in
+  let* provider_service =
+    Sol_cli_cloud_run.provider_service_of service.name
+    |> Result.map_error Sol_cli_cloud_run.failure_to_string
+  in
+  let request =
+    { Sol_cli_cloud_run.project = cloud_project
+    ; region = target.region
+    ; service = service.name
+    ; provider_service
+    ; image = release.image
+    ; identity =
+        { Sol_cli_cloud_run.unit = unit_of_service ~project service
+        ; callers = callers target
+        ; issuer = "https://accounts.google.com"
+        ; jwks_uri = "https://www.googleapis.com/oauth2/v3/certs"
+        }
+    ; ingress = Sol_cli_cloud_run.Public
+    ; record = None
+    }
+  in
+  let runner =
+    { Sol_cli_cloud_run.run =
+        (fun argv ->
+          Sol_cli_serverless_runner.run argv
+          |> Result.map (fun (o : Sol_cli_serverless_runner.output) ->
+            ({ Sol_cli_cloud_run.stdout = o.stdout; stderr = o.stderr }
+             : Sol_cli_cloud_run.output)))
+    ; http =
+        (fun ~url ~token ->
+          Sol_cli_serverless_runner.http ~url ~token
+          |> Result.map (fun (status, body) -> status, body))
+    }
+  in
+  Sol_cli_cloud_run.rollback runner request ~revision ~token
+  |> Result.map_error Sol_cli_cloud_run.failure_to_string
+;;

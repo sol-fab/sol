@@ -310,14 +310,150 @@ let run ~ctx ?(local = false) ?config release_id =
             release_id))
 ;;
 
+let read_token path =
+  try
+    let token = In_channel.with_open_bin path In_channel.input_all |> String.trim in
+    if token = ""
+    then Error (Sol_cli_exit.error "token file is empty")
+    else if String.exists (fun c -> c = '\n' || c = '\r') token
+    then Error (Sol_cli_exit.error "token file must contain exactly one token")
+    else Ok token
+  with
+  | Sys_error message -> Error (Sol_cli_exit.error message)
+;;
+
+let serverless_rollback ~target ~record ~to_version ~to_revision ~token_file ~service =
+  let* target =
+    Option.to_result ~none:(Sol_cli_exit.error "--target is required") target
+  in
+  let* config =
+    Sol_cli_config.load_for_target ~target
+    |> Sol_cli_exit.of_error Sol_cli_config.error_to_string
+  in
+  let target_cfg = config.target in
+  let* () =
+    match Sol_cli_config.execution_of_target target_cfg with
+    | Sol_cli_config.Serverless -> Ok ()
+    | Sol_cli_config.Kubernetes ->
+      Error (Sol_cli_exit.error "target does not select execution: serverless")
+  in
+  let* record =
+    Option.to_result ~none:(Sol_cli_exit.error "--record is required") record
+  in
+  let* service =
+    Option.to_result ~none:(Sol_cli_exit.error "--service is required") service
+  in
+  let* token_file =
+    Option.to_result ~none:(Sol_cli_exit.error "--token-file is required") token_file
+  in
+  let* token = read_token token_file in
+  let* service_decl =
+    Sol_cli_config.services config
+    |> List.find_opt (fun (s : Sol_cli_config.service) -> s.name = service)
+    |> Option.to_result
+         ~none:(Sol_cli_exit.error (Printf.sprintf "service %S is not declared" service))
+  in
+  let manifest_service =
+    { Sol_cli_manifest.domain =
+        (match
+           List.rev
+             (String.split_on_char '/' (Option.value service_decl.path ~default:service))
+         with
+         | _name :: domain :: _ -> domain
+         | _ -> config.project |> Option.value ~default:"")
+    ; name = service
+    ; primitive = Sol_cli_manifest.Svc
+    ; dir = Option.value service_decl.path ~default:service
+    }
+  in
+  let project = Option.value config.project ~default:"" in
+  match target_cfg.provider with
+  | Sol_cli_provider.Aws ->
+    let* version =
+      Option.to_result
+        ~none:(Sol_cli_exit.error "--to-version is required for AWS")
+        to_version
+    in
+    let* observed =
+      Sol_cli_aws_serverless_target.rollback
+        ~target:target_cfg
+        ~project
+        ~service:manifest_service
+        ~record
+        ~version
+        ~token
+      |> Result.map_error Sol_cli_exit.error
+    in
+    print_endline (Yojson.Safe.to_string (Sol_cli_aws_lambda.observed_json observed));
+    Ok ()
+  | Sol_cli_provider.Gcp ->
+    let* revision =
+      Option.to_result
+        ~none:(Sol_cli_exit.error "--to-revision is required for GCP")
+        to_revision
+    in
+    let* observed =
+      Sol_cli_gcp_serverless_target.rollback
+        ~target:target_cfg
+        ~project
+        ~service:manifest_service
+        ~record
+        ~revision
+        ~token
+      |> Result.map_error Sol_cli_exit.error
+    in
+    print_endline (Yojson.Safe.to_string (Sol_cli_cloud_run.observed_json observed));
+    Ok ()
+  | Sol_cli_provider.Byo ->
+    Error (Sol_cli_exit.error "serverless rollback supports AWS and GCP targets only")
+;;
+
 let release_id_arg =
   Arg.(
-    required
+    value
     & pos 0 (some Sol_cli_args.text) None
     & info
         []
         ~docv:"RELEASE_ID"
         ~doc:"The release id to restore, e.g. r-1a2b3c4d5e6f7890.")
+;;
+
+let serverless_record_arg =
+  Arg.(
+    value
+    & opt (some Sol_cli_args.text) None
+    & info [ "record" ] ~docv:"PATH" ~doc:"Serverless ownership record")
+;;
+
+let to_version_arg =
+  Arg.(
+    value
+    & opt (some Sol_cli_args.text) None
+    & info [ "to-version" ] ~docv:"VERSION" ~doc:"Lambda version to restore")
+;;
+
+let to_revision_arg =
+  Arg.(
+    value
+    & opt (some Sol_cli_args.text) None
+    & info [ "to-revision" ] ~docv:"REVISION" ~doc:"Cloud Run revision to restore")
+;;
+
+let token_file_arg =
+  Arg.(
+    value
+    & opt (some Sol_cli_args.text) None
+    & info
+        [ "token-file" ]
+        ~docv:"PATH"
+        ~doc:"Authorized token for post-rollback verification")
+;;
+
+let serverless_service_arg =
+  Arg.(
+    value
+    & opt (some Sol_cli_args.text) None
+    & info [ "service" ] ~docv:"SERVICE" ~doc:"Serverless service")
 ;;
 
 let cmd =
@@ -329,21 +465,45 @@ let cmd =
           that release, reconstructs and re-applies its workloads, moves the \
           current-release pointer, then verifies both independently.")
     Term.(
-      const (fun release_id target ->
+      const (fun release_id target record to_version to_revision token_file service ->
         let result =
-          (* 2b: the rollback's database delivery is derived from the target's **current**
-             bindings, so resolve the cluster and read that config once. A targetless rollback
-             is `sol local rollback` below, which passes no config and gets unit-scoped
-             delivery; this remote form has no target to fall back on and refuses one. *)
-          let* ctx, config =
-            Sol_cli_destination.resolve_with_config ~command:"rollback" ~target
-            |> Sol_cli_exit.of_msg
+          let* target_cfg =
+            match target with
+            | Some target ->
+              Sol_cli_config.load_for_target ~target
+              |> Sol_cli_exit.of_error Sol_cli_config.error_to_string
+            | None -> Error (Sol_cli_exit.error "--target is required")
           in
-          run ~ctx ~config release_id
+          match Sol_cli_config.execution_of_target target_cfg.target with
+          | Sol_cli_config.Serverless ->
+            serverless_rollback
+              ~target
+              ~record
+              ~to_version
+              ~to_revision
+              ~token_file
+              ~service
+          | Sol_cli_config.Kubernetes ->
+            let* release_id =
+              Option.to_result
+                ~none:
+                  (Sol_cli_exit.error "RELEASE_ID is required for Kubernetes rollback")
+                release_id
+            in
+            let* ctx, config =
+              Sol_cli_destination.resolve_with_config ~command:"rollback" ~target
+              |> Sol_cli_exit.of_msg
+            in
+            run ~ctx ~config release_id
         in
         Sol_cli_exit.exit_on result)
       $ release_id_arg
-      $ Cmd_destination.target_arg)
+      $ Cmd_destination.target_arg
+      $ serverless_record_arg
+      $ to_version_arg
+      $ to_revision_arg
+      $ token_file_arg
+      $ serverless_service_arg)
 ;;
 
 let local_cmd =
@@ -351,6 +511,14 @@ let local_cmd =
     (Cmd.info "rollback" ~doc:"Restore a recorded release boundary on the local cluster.")
     Term.(
       const (fun release_id ->
-        Sol_cli_exit.exit_on (run ~ctx:Cmd_destination.local ~local:true release_id))
+        let result =
+          let* release_id =
+            Option.to_result
+              ~none:(Sol_cli_exit.error "RELEASE_ID is required for local rollback")
+              release_id
+          in
+          run ~ctx:Cmd_destination.local ~local:true release_id
+        in
+        Sol_cli_exit.exit_on result)
       $ release_id_arg)
 ;;

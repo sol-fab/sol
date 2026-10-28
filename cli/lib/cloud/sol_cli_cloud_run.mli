@@ -80,4 +80,5 @@ val destroy
 
 val observed_json : observed -> Yojson.Safe.t
 val release_json : release -> Yojson.Safe.t
+val read_record : path:string -> (release, string) result
 val write_record : path:string -> release -> (unit, string) result
