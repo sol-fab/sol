@@ -135,7 +135,7 @@ as `"0 * * * *"`) is **required**: Sol reads the schedule from the unit's config
 generates a Kubernetes `CronJob`, and a `-fn` without one is a plan error rather than an hourly
 job. That is the whole shape — *a function is `run : unit -> result`, the trigger is
 configuration* — and the walkthrough is in
-[TUTORIAL.md § *New scheduled function*](TUTORIAL.md#new-scheduled-function).
+[tutorial.md § *New scheduled function*](tutorial.md#new-scheduled-function).
 
 A function is ephemeral, so its metrics are pushed rather than scraped; the push contract is in
 [`sol-fn`](../../framework/ocaml/sol-fn/sol-fn.md).
@@ -266,6 +266,6 @@ what the runtime guarantees and what it does not.
   [`sol-fn`](../../framework/ocaml/sol-fn/sol-fn.md),
   [`sol-jobs`](../../framework/ocaml/sol-jobs/sol-jobs.md),
   [`sol-obs`](../../framework/ocaml/sol-obs/sol-obs.md).
-- [`docs/guides/TUTORIAL.md`](TUTORIAL.md) — the same material as a walkthrough, from an empty
+- [`docs/guides/tutorial.md`](tutorial.md) — the same material as a walkthrough, from an empty
   directory to a running service.
 - [`docs/reference/cli.md`](../reference/cli.md) — every command and flag.

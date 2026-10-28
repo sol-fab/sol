@@ -12,7 +12,7 @@ This is a reusable audit template. When performing an audit, copy this file or u
 
 Sol has several root-level and package-level docs. They must agree on what Sol is, what is complete, and what is still planned.
 
-**Source locations:** `README.md` · `docs/DEVELOPER_EXPERIENCE.md` · `docs/guides/TUTORIAL.md` · package-level `*.md` specs
+**Source locations:** `README.md` · `docs/developer-experience.md` · `docs/guides/tutorial.md` · package-level `*.md` specs
 
 ### Checklist
 
@@ -28,7 +28,7 @@ Sol has several root-level and package-level docs. They must agree on what Sol i
 
 Every documented `sol` command must exist, have the documented shape, and behave close enough to the documented promise that a user is not misled.
 
-**Source locations:** `README.md` · `docs/guides/TUTORIAL.md` · `cli/bin/main.ml` · `cli/bin/cmd_*.ml`
+**Source locations:** `README.md` · `docs/guides/tutorial.md` · `cli/bin/main.ml` · `cli/bin/cmd_*.ml`
 
 ### Checklist
 
@@ -44,7 +44,7 @@ Every documented `sol` command must exist, have the documented shape, and behave
 
 The quickstart is the product's trust test. It must be executable exactly as written.
 
-**Source locations:** `README.md` · `docs/guides/TUTORIAL.md` · the generated workspace README template in `platform/shared/templates/workspace/` (written by `cli/lib/workspace/sol_cli_cmd_new.ml` via `cli/lib/base/sol_cli_scaffold_tree.ml`)
+**Source locations:** `README.md` · `docs/guides/tutorial.md` · the generated workspace README template in `platform/shared/templates/workspace/` (written by `cli/lib/workspace/sol_cli_cmd_new.ml` via `cli/lib/base/sol_cli_scaffold_tree.ml`)
 
 ### Checklist
 

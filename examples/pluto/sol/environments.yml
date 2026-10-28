@@ -97,7 +97,7 @@ dev:
     aws/us-east-1:
       cluster_name: pluto-dev
 
-# The customer-cloud environment the tutorial deploys to (docs/guides/TUTORIAL.md,
+# The customer-cloud environment the tutorial deploys to (docs/guides/tutorial.md,
 # "Ingress"). Replace the domain and contact address with your own; pass
 # `--registry` to `sol deploy`, or add `registry:` to the target.
 customer_cloud:

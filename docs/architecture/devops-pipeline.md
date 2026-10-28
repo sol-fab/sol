@@ -161,7 +161,7 @@ CI/CD deploy: skips image build. Images must already be in the registry. This is
 the customer-cloud factory path: Sol owns deployment intent and artifact
 synthesis; customer CI or a future build command owns image production. When the
 target's durable installation or environment is missing, `sol deploy` reconciles
-it in place first (see `docs/DEVELOPER_EXPERIENCE.md` §3–5), then continues into
+it in place first (see `docs/developer-experience.md` §3–5), then continues into
 the application pipeline below.
 
 Pipeline:

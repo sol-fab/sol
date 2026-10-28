@@ -146,6 +146,29 @@ lesson of an incident whose evidence is in the linked issue.
    provably unreachable, and say so in code where it is, not in your head (#1424: finding 11
    swallowed a real `make_namespace` failure behind `Error _ -> workspace`).
 
+## Naming conventions
+
+Naming is artifact-specific; do not force one case across every artifact.
+
+- **Sol identities** — service keys, unit IDs, OCaml modules/files, and Sol-authored
+  JSON/YAML fields use `snake_case`. A service is declared once in `sol.yml`; callers
+  and generated bindings reference that declaration.
+- **Provider resources** — Kubernetes and Cloud Run resource names use `kebab-case`.
+  They are derived from the declared Sol service name through
+  `Sol_cli_kubernetes_name`; never declare a second provider name. A normalized-name
+  collision must refuse before mutation.
+- **CLI** — commands and flags use `kebab-case` (`--jwks-uri`, `cloud-run`). Environment
+  variables use `SCREAMING_SNAKE_CASE`.
+- **OCaml files** — `snake_case` `.ml`/`.mli` names. Hyphens and kebab-case are not
+  valid OCaml module filenames.
+- **Markdown** — new documentation filenames use `kebab-case`; standard ecosystem names
+  such as `README.md`, `AGENTS.md`, and `SKILL.md` are exceptions. Existing legacy
+  documentation names are migrated deliberately, not copied into new files.
+
+New code and docs should follow these rules. The static naming check enforces the
+filenames that can be checked mechanically; service-key conventions remain a review
+rule until a full declaration migration is justified.
+
 ## Durable invariants
 
 - Sol owns only its declared contract boundary. Users may integrate arbitrary

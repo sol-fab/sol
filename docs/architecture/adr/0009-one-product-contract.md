@@ -7,7 +7,7 @@
   DEC-026 (production profile; provider/language scope superseded here),
   DEC-028 (worker readiness), DEC-057 (installation/environment and the OSS
   boundary), DEC-058 (deploy identity), DEC-062 (workload authorization),
-  DEC-063 (Sol-to-Sol identity), `docs/DEVELOPER_EXPERIENCE.md`,
+  DEC-063 (Sol-to-Sol identity), `docs/developer-experience.md`,
   `docs/deployment/compatibility.md`
 
 ## Context
