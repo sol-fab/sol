@@ -64,7 +64,7 @@ restores the whole recorded release boundary.
 | command | positional | flags | exit | purpose |
 |---|---|---|---|---|
 | `sol deploy` | TARGET | `--accept-unresolved`, `--await-delegation=SECONDS`, `--confirm-ecr-removal`, `--confirm-group-change`, `--dry-run`, `--emit-plan-to=FILE`, `--emit-to=DIR`, `--image-ref=[SERVICE=]REPO@sha256:DIGEST`, `--image-tag=TAG`, `--keep-releases=N`, `--loki-push-url=URL`, `--registry=URL` | documented | Reconcile a target's infrastructure, authorization and |
-| `sol destroy` | TARGET | `--accept-unreleased`, `--apply`, `--plan`, `--var=KEY=VALUE`, `--var-file=PATH` | documented | Reconcile a target toward empty: destroy its Sol-owned |
+| `sol destroy` | TARGET | `--accept-unreleased`, `--apply`, `--plan`, `--record=PATH`, `--service=SERVICE`, `--var=KEY=VALUE`, `--var-file=PATH` | documented | Reconcile a target toward empty: destroy its Sol-owned |
 | `sol grants apply` | TARGET | `--var=KEY=VALUE`, `--var-file=PATH` | documented | Reconcile the target-wide workload authorization: |
 | `sol grants plan` | TARGET | `--var=KEY=VALUE`, `--var-file=PATH` | documented | Plan the target-wide workload authorization |
 | `sol migrate apply` | TARGET | `--dir=DIR`, `--dry-run`, `--table=TABLE` | documented | Apply all pending migrations (default subcommand) |
