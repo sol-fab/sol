@@ -141,3 +141,18 @@ production:
 verified Cloud Run lifecycle. `gcp.project_id` and the target region supply the provider
 coordinates; Cloud Run creates no execution role. The same limits apply: one
 dependency-free HTTP `-svc`, apply only, and application authentication remains explicit.
+
+## Target-scoped destroy
+
+Serverless targets destroy through the same target command:
+
+```text
+sol destroy <target> --apply --service checkout_svc --record <serverless-release.json>
+```
+
+`--apply`, `--service`, and the ownership record are required. The record must match the
+target's provider, region/project, and service. Inventory failure or an ambiguous provider
+answer fails closed; absence is positively checked. `--plan` is refused for serverless
+targets rather than pretending a read-only destroy plan is authoritative. Rollback remains
+a standalone provider lifecycle command until the target release model can identify a
+previous serverless release.
