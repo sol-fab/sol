@@ -173,3 +173,25 @@ sol rollback --target <target> --record <serverless-release.json> \
 The target execution must be serverless, the record must exist, and the provider must
 match. The post-rollback check performs the same readiness and authorized/unauthorized
 request checks as deploy. Kubernetes rollback continues to require `RELEASE_ID`.
+
+## Explicitly unsupported serverless combinations
+
+These are deliberate exclusions, not missing dispatch:
+
+- **`-worker` on Cloud Run or Lambda:** the existing worker contract is Kafka/Postgres
+  delivery with explicit acknowledgement and consumer-group semantics. Neither provider
+  offers those semantics directly; SQS/Pub/Sub are not a drop-in substitute. No portable
+  queue abstraction is introduced to make the matrix symmetrical.
+- **`-fn` on Cloud Run or Lambda:** `-fn` is run-once/scheduled. Provider events and
+  scheduler triggers are a separate contract and are not inferred from the execution
+  backend.
+- **Incoming AWS-native identity:** the Lambda execution role authorizes AWS resource
+  access; incoming application authentication remains the explicit Sol workload-token
+  contract. The Google-token experiment does not establish AWS-native incoming identity.
+- **Serverless dependencies:** Kafka/Postgres bindings are not projected into serverless
+  targets yet; a service declaring `uses:` is refused by target dispatch.
+- **Serverless observability qualification:** application/provider logs exist, but no
+  Sol-managed log/metric/trace acceptance is implemented.
+
+A provider target that requests one of these combinations should fail closed rather than
+silently changing the primitive's semantics.
