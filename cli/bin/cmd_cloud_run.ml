@@ -73,8 +73,14 @@ let read_token_file path =
 let runner () =
   let run argv =
     Sol_cli_process.run (Sol_cli_process.cmd argv)
-    |> Result.map (fun output -> output.Sol_cli_process.stdout)
+    |> Result.map (fun output ->
+      { Sol_cli_cloud_run.stdout = output.Sol_cli_process.stdout
+      ; stderr = output.Sol_cli_process.stderr
+      })
     |> Result.map_error Sol_cli_process.error_to_string
+  in
+  let run_text argv =
+    run argv |> Result.map (fun output -> output.Sol_cli_cloud_run.stdout)
   in
   let http ~url ~token =
     let config = Filename.temp_file "sol-cloud-run-curl-" ".conf" in
@@ -107,7 +113,7 @@ let runner () =
           ; url
           ]
         in
-        let* body_status = run argv in
+        let* body_status = run_text argv in
         match String.rindex_opt body_status '\n' with
         | None ->
           (match int_of_string_opt (String.trim body_status) with

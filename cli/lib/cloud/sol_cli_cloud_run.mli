@@ -46,8 +46,13 @@ type failure =
 val ingress_of_string : string -> (ingress, failure) result
 val provider_service_of : string -> (string, failure) result
 
+type output =
+  { stdout : string
+  ; stderr : string
+  }
+
 type runner =
-  { run : string list -> (string, string) result
+  { run : string list -> (output, string) result
   ; http : url:string -> token:string option -> (int * string, string) result
   }
 

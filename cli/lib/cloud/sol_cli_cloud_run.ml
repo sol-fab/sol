@@ -67,8 +67,13 @@ let provider_service_of service =
             message))
 ;;
 
+type output =
+  { stdout : string
+  ; stderr : string
+  }
+
 type runner =
-  { run : string list -> (string, string) result
+  { run : string list -> (output, string) result
   ; http : url:string -> token:string option -> (int * string, string) result
   }
 
@@ -313,10 +318,17 @@ let inventory runner ~project ~region =
   match runner.run (list_argv ~project ~region) with
   | Error message -> Error message
   | Ok output ->
-    Ok
-      (String.split_on_char '\n' output
-       |> List.map String.trim
-       |> List.filter (fun name -> name <> ""))
+    if not (Sol_cli_gcp_absence.benign_empty_list_warning output.stderr)
+    then
+      Error
+        (Printf.sprintf
+           "service inventory emitted an unexpected warning: %s"
+           (String.trim output.stderr))
+    else
+      Ok
+        (String.split_on_char '\n' output.stdout
+         |> List.map String.trim
+         |> List.filter (fun name -> name <> ""))
 ;;
 
 (* A successful, scoped listing establishes absence. A failed describe cannot: the
@@ -330,8 +342,8 @@ let describe runner (request : request) =
          ~service:request.provider_service)
   with
   | Error error -> Error (`Unknown error)
-  | Ok text ->
-    (match parse_observed text with
+  | Ok output ->
+    (match parse_observed output.stdout with
      | Ok observed -> Ok observed
      | Error message -> Error (`Unknown message))
 ;;
@@ -627,14 +639,11 @@ let destroy runner ~project ~region ~service ~record =
        (match runner.run (delete_argv ~project ~region ~service:provider_service) with
         | Error message -> Error (Partial (message, None))
         | Ok _ ->
-          (match runner.run (list_argv ~project ~region) with
+          (match inventory runner ~project ~region with
            | Error message ->
              Error (Unknown ("delete returned success but inventory failed: " ^ message))
            | Ok names ->
-             if
-               List.exists
-                 (fun name -> String.trim name = provider_service)
-                 (String.split_on_char '\n' names)
+             if List.mem provider_service names
              then Error (Unknown "service remains after delete")
              else Ok ())))
 ;;
