@@ -98,3 +98,27 @@ target whose execution backend is not wired yet.
 This is a schema/refusal foundation, not target-scoped serverless deployment.
 The provider lifecycle commands remain the supported experimental path until the
 `sol deploy` dispatch is implemented.
+
+## Target-scoped AWS Lambda HTTP (stacked implementation)
+
+An AWS target can now select `execution: serverless` and deploy one HTTP `-svc` with an
+immutable `--image-ref`:
+
+```yaml
+production:
+  targets:
+    aws/us-east-1:
+      execution: serverless
+      aws:
+        profile: production
+        lambda_role_arn: arn:aws:iam::123456789012:role/sol-lambda-exec
+        serverless_callers: checkout/checkout_svc=1234567890
+```
+
+The target field names are explicit; no ECR repository, role, or IAM policy is created.
+`sol deploy production/aws/us-east-1 --image-ref checkout_svc=...@sha256:...` uses the
+verified Lambda lifecycle and writes `serverless-release.json` in the deploy run log.
+
+Current limits: exactly one HTTP `-svc`, no service dependencies, apply only (no
+dry-run/emit), AWS only, and the application token remains the Google demonstration
+identity rather than AWS-native incoming identity.
