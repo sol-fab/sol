@@ -618,11 +618,7 @@ let invoke ~event (recipe : recipe) =
   let cleanup () =
     (try Unix.close input_fd with
      | Unix.Unix_error _ -> ());
-    Option.iter
-      (fun path ->
-         try Sys.remove path with
-         | Sys_error _ -> ())
-      input_path
+    Option.iter Sol_cli_fs.remove_reporting input_path
   in
   match recipe.launch.argv with
   | [] ->
