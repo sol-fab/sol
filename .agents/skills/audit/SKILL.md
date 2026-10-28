@@ -52,7 +52,7 @@ For each checklist item in `internal/pipeline/audits/AUDIT.md`, read the relevan
 - Read `default_on_decode_error` — check for structured log line, Prometheus counter, dead-letter option
 
 **Sections 8–9 — Mission alignment and framework boundary:**
-- Read `README.md`, `docs/DEVELOPER_EXPERIENCE.md`, and `docs/guides/TUTORIAL.md` for the stated architecture and user promise
+- Read `README.md`, `docs/developer-experience.md`, and `docs/guides/tutorial.md` for the stated architecture and user promise
 - Read `cmd_new.ml` scaffold templates and the reference workspaces under `internal/fixtures/venus/` / `examples/pluto/`
 - Verify event contracts are owned under `events/<team>/` and consumers import contracts, not producer service internals
 - Verify generated names and labels preserve workspace/domain/service ownership

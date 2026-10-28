@@ -23,7 +23,7 @@ Read `internal/pipeline/audits/DOCS_AUDIT.md` in full before starting.
 
 ### 3. Verify source-of-truth docs
 
-- Read `README.md`, `docs/DEVELOPER_EXPERIENCE.md`, and `docs/guides/TUTORIAL.md`
+- Read `README.md`, `docs/developer-experience.md`, and `docs/guides/tutorial.md`
 - Check whether status claims match implementation and tests
 - Identify historical sections that could be mistaken for current product state
 - Compare product framing and terminology across docs

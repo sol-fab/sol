@@ -15,7 +15,7 @@ source in any meaningful sense.
 A hosted offering is optional, not a prerequisite for the core product. The
 developer experience this repository promises is delivered entirely from the CLI,
 the user's CI, and resources installed into the user's own cloud account —
-[`docs/DEVELOPER_EXPERIENCE.md`](../DEVELOPER_EXPERIENCE.md), and `DEC-057` §5 for
+[`docs/developer-experience.md`](../developer-experience.md), and `DEC-057` §5 for
 the boundary test a hosted component must pass.
 
 ## What used to be here
@@ -30,4 +30,4 @@ would take them for current fact.
 
 They were removed on 2026-09-29. Their content remains in git history if it is ever
 wanted as a design input, and the product-level direction that replaced them is in
-[`docs/DEVELOPER_EXPERIENCE.md`](../DEVELOPER_EXPERIENCE.md).
+[`docs/developer-experience.md`](../developer-experience.md).

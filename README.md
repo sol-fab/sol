@@ -14,7 +14,7 @@ CLI, your own CI, or resources Sol installs into your account. Setup is designed
 to happen once per account; after that, deployment is essentially
 `sol deploy <target>`. The intended experience — and what is implemented versus
 still planned — is in
-**[The Sol developer experience](docs/DEVELOPER_EXPERIENCE.md)**.
+**[The Sol developer experience](docs/developer-experience.md)**.
 
 ---
 
@@ -76,7 +76,7 @@ curl localhost:8080/health
 # ok
 ```
 
-That's a real HTTP service, backed by a Kafka worker and PostgreSQL, with logs and metrics already flowing. Continue with the **[Tutorial](docs/guides/TUTORIAL.md)** for the full walkthrough — publishing events, database migrations, Grafana dashboards, production deploys, and rollbacks.
+That's a real HTTP service, backed by a Kafka worker and PostgreSQL, with logs and metrics already flowing. Continue with the **[Tutorial](docs/guides/tutorial.md)** for the full walkthrough — publishing events, database migrations, Grafana dashboards, production deploys, and rollbacks.
 
 This is the **local** path, and it needs no cloud account. Deploying the same
 workspace to your own AWS or GCP runs `sol deploy <env>/<provider>/<region>`: the
@@ -86,7 +86,7 @@ target's deploy identity, and continues into the application. The
 **[installation and first-deploy guide](docs/guides/installation.md)** is that path
 end to end, from an empty account to a live endpoint.
 The intended first-run flow, its current status, and what stays your
-responsibility are in **[The Sol developer experience](docs/DEVELOPER_EXPERIENCE.md)**.
+responsibility are in **[The Sol developer experience](docs/developer-experience.md)**.
 
 A release is self-contained: `sol-vX.Y.Z/bin/sol` uses only the assets in
 `sol-vX.Y.Z/share/sol/vX.Y.Z/` (Terraform roots, Helm values, dashboards) and the
@@ -156,7 +156,7 @@ myapp/
 
 `-svc` is a REST API service, `-worker` is a Kafka consumer, `-fn` is a scheduled function — the three primitives every domain team builds with. Teams don't share code across domains; they publish and subscribe to typed Kafka events, enforced at the wire level by Sol's schema registry integration.
 
-See [Product Architecture](docs/architecture/PRODUCT_ARCHITECTURE.md) for the full factory model and design principles.
+See [Product Architecture](docs/architecture/product-architecture.md) for the full factory model and design principles.
 
 ### TypeScript
 
@@ -230,8 +230,8 @@ of lifecycle confusion:
   designed to leave the installation intact, so redeploying does not redo
   registrar or DNS work.
 
-See [The Sol developer experience](docs/DEVELOPER_EXPERIENCE.md) for the model,
-the [Tutorial](docs/guides/TUTORIAL.md), [Factory Pipeline](docs/architecture/devops-pipeline.md), and [deployment escape hatches](docs/deployment/escape-hatches.md) (per-service `sol.toml` overrides) for the details.
+See [The Sol developer experience](docs/developer-experience.md) for the model,
+the [Tutorial](docs/guides/tutorial.md), [Factory Pipeline](docs/architecture/devops-pipeline.md), and [deployment escape hatches](docs/deployment/escape-hatches.md) (per-service `sol.toml` overrides) for the details.
 
 ---
 
@@ -323,15 +323,15 @@ sol/
 
 ## Docs
 
-- [The Sol developer experience](docs/DEVELOPER_EXPERIENCE.md) — the product promise, the first deploy, and what is built versus planned
+- [The Sol developer experience](docs/developer-experience.md) — the product promise, the first deploy, and what is built versus planned
 - [Documentation map](docs/README.md) — what exists, who each page is for, and the documentation roadmap
-- [Tutorial](docs/guides/TUTORIAL.md) — full walkthrough, start to finish
+- [Tutorial](docs/guides/tutorial.md) — full walkthrough, start to finish
 - [Contract](docs/reference/README.md) — the language-neutral application contract
 - [TypeScript packages](https://github.com/sol-fab/sol-typescript) — the published `@sol-fab/*` packages ([`kafka`](https://github.com/loganbnielsen/sol-kafka), [`obs`](https://github.com/loganbnielsen/sol-obs), `svc`, `worker`, `fn`, `jobs`, `outbox`, `retry`), plus the [`demo_ts`](examples/pluto/app/demo_ts/README.md) showcase
-- [Product Architecture](docs/architecture/PRODUCT_ARCHITECTURE.md) — factory model, design principles, ownership lanes
+- [Product Architecture](docs/architecture/product-architecture.md) — factory model, design principles, ownership lanes
 - [Factory Pipeline](docs/architecture/devops-pipeline.md) — what each `sol` command does
 - [Deployment escape hatches](docs/deployment/escape-hatches.md) — `sol.toml` reference
-- [Developer experience](docs/DEVELOPER_EXPERIENCE.md) — current product behavior, ownership, and lifecycle
+- [Developer experience](docs/developer-experience.md) — current product behavior, ownership, and lifecycle
 - Build-from-source, running tests, and the full repo layout: [`AGENTS.md`](AGENTS.md)
 
 ## License

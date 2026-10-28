@@ -6,7 +6,7 @@ the product experience implies, so a page can be written against a stated
 audience rather than reinvented each time.
 
 The experience these pages document is defined in
-[`DEVELOPER_EXPERIENCE.md`](DEVELOPER_EXPERIENCE.md). If a page and that document
+[`developer-experience.md`](developer-experience.md). If a page and that document
 disagree on intent, that document wins; if a page and a decision record disagree,
 the decision record wins.
 
@@ -28,22 +28,22 @@ Within `docs/`, the sections are:
 | `hosted/` | Evaluators | The boundary statement for the (separate) hosted product |
 | `legal/` | Everyone | Third-party licences |
 
-`DEVELOPER_EXPERIENCE.md` sits at the top of `docs/` because it is the entry
+`developer-experience.md` sits at the top of `docs/` because it is the entry
 point for "what is Sol and what is it promising".
 
 ## The documentation set and its status
 
 | Page | Audience | Status |
 |---|---|---|
-| [`DEVELOPER_EXPERIENCE.md`](DEVELOPER_EXPERIENCE.md) | Evaluators, all users | **Published** |
-| [`guides/TUTORIAL.md`](guides/TUTORIAL.md) | New users | **Published** — local path, end to end |
+| [`developer-experience.md`](developer-experience.md) | Evaluators, all users | **Published** |
+| [`guides/tutorial.md`](guides/tutorial.md) | New users | **Published** — local path, end to end |
 | [`guides/installation.md`](guides/installation.md) | New users | **Published** — DOCS-026; installation and the first production deploy |
 | [`guides/application-authoring.md`](guides/application-authoring.md) | Application authors | **Published** — DOCS-027 |
 | [`guides/deployment.md`](guides/deployment.md) | Operators | **Published** — DOCS-028; the operator detail stays in `deployment/*` |
 | [`guides/operations.md`](guides/operations.md) | Operators | **Published** — DOCS-029 |
 | [`reference/README.md`](reference/README.md), [`reference/runtime.md`](reference/runtime.md), [`reference/substrate.md`](reference/substrate.md) | Application authors | **Published** |
 | CLI reference | All users | **Published** — [`reference/cli.md`](reference/cli.md) |
-| [`architecture/PRODUCT_ARCHITECTURE.md`](architecture/PRODUCT_ARCHITECTURE.md) and [`architecture/adr/`](architecture/adr/) | Evaluators, contributors | **Published** |
+| [`architecture/product-architecture.md`](architecture/product-architecture.md) and [`architecture/adr/`](architecture/adr/) | Evaluators, contributors | **Published** |
 | [`architecture/ownership.md`](architecture/ownership.md) | Contributors | **Published** — the ownership proof per domain; the Kubernetes UID rule lands with `#1304` milestone 2 |
 | [`hosted/README.md`](hosted/README.md) | Evaluators | **Published** — boundary only |
 
@@ -58,7 +58,7 @@ never needs a source checkout to complete the ordinary path.
   `sol` is about to do on your machine.
   [`guides/installation.md`](guides/installation.md) §1–2. *DOCS-026.*
 - **Quickstart** — local cluster to a running service in one sitting; the
-  existing [`TUTORIAL.md`](guides/TUTORIAL.md) is the reference implementation of
+  existing [`tutorial.md`](guides/tutorial.md) is the reference implementation of
   this page.
 - **First production deploy** — the guided first-run experience: detect the
   account, set up the installation, delegate DNS, reach a live endpoint.
@@ -117,7 +117,7 @@ set, rollback, diagnostics, the operational UIs, destroy, and uninstall.
 
 ### 7. Architecture
 
-- **Product architecture** — [`architecture/PRODUCT_ARCHITECTURE.md`](architecture/PRODUCT_ARCHITECTURE.md).
+- **Product architecture** — [`architecture/product-architecture.md`](architecture/product-architecture.md).
 - **Factory pipeline** — [`architecture/devops-pipeline.md`](architecture/devops-pipeline.md).
 - **Resource ownership** — [`architecture/ownership.md`](architecture/ownership.md): what proves Sol owns a resource, per domain, and where each rule is enforced.
 - **Observability design** — [`architecture/observability-design.md`](architecture/observability-design.md).
@@ -130,7 +130,7 @@ set, rollback, diagnostics, the operational UIs, destroy, and uninstall.
   runtime, substrate and source declarations instead of keeping a second copy.
 - **State the status.** A page that describes intended behaviour says so, and
   links the ticket. The status markers used in
-  [`DEVELOPER_EXPERIENCE.md`](DEVELOPER_EXPERIENCE.md) are the convention.
+  [`developer-experience.md`](developer-experience.md) are the convention.
 - **User-facing commands come first.** A documented workflow uses `sol` commands
   before repository scripts; a reader with an installed release should not need a
   source checkout for the ordinary path.

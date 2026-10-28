@@ -310,7 +310,7 @@ KAFKA_SECURITY_PROTOCOL=plaintext KAFKA_BROKERS=localhost:9092 REDPANDA_ADMIN_UR
 
 Sol's central architecture is autonomous domain teams coordinating through typed events. The framework should make that model easy to follow and deviations easy to spot.
 
-**Source locations:** `README.md` · `docs/guides/TUTORIAL.md` · `cli/lib/workspace/sol_cli_cmd_new.ml` · `cli/lib/workspace/sol_cli_workspace.ml` · workspace examples under `internal/fixtures/venus/` and `examples/pluto/`
+**Source locations:** `README.md` · `docs/guides/tutorial.md` · `cli/lib/workspace/sol_cli_cmd_new.ml` · `cli/lib/workspace/sol_cli_workspace.ml` · workspace examples under `internal/fixtures/venus/` and `examples/pluto/`
 
 ### Checklist
 
@@ -327,7 +327,7 @@ Sol's central architecture is autonomous domain teams coordinating through typed
 
 Sol is intentionally a framework at infrastructure and network boundaries, and a library inside business logic boundaries. It is also designed for AI-assisted development. The codebase should preserve predictable structure, explicit contracts, and one clear path for common tasks.
 
-**Source locations:** `README.md` · `docs/DEVELOPER_EXPERIENCE.md` · `docs/guides/TUTORIAL.md` · `cli/lib/workspace/sol_cli_cmd_new.ml` · `framework/*/lib/` · package-level `*.md` specs
+**Source locations:** `README.md` · `docs/developer-experience.md` · `docs/guides/tutorial.md` · `cli/lib/workspace/sol_cli_cmd_new.ml` · `framework/*/lib/` · package-level `*.md` specs
 
 ### Checklist
 
@@ -335,7 +335,7 @@ Sol is intentionally a framework at infrastructure and network boundaries, and a
 * [ ] **Business logic remains readable and local:** Handler modules contain business behavior and explicit dependencies, not hidden global state, implicit service discovery, or infrastructure manipulation.
 * [ ] **There is one recommended way to do common tasks:** Scaffolding, deployment, logs, migrations, rollback, schema checks, and local dev have a single documented Sol command path. Alternative low-level paths are clearly marked as advanced.
 * [ ] **Templates are agent-friendly:** Generated files compile immediately, have predictable names, use stable module shapes, avoid surprising metaprogramming, and include enough local context for an AI agent to modify them without guessing.
-* [ ] **Spec files match implementation reality:** Package-level `*.md` specs, `README.md`, `docs/DEVELOPER_EXPERIENCE.md`, and generated docs do not claim unavailable commands, incomplete guarantees, or obsolete workflows.
+* [ ] **Spec files match implementation reality:** Package-level `*.md` specs, `README.md`, `docs/developer-experience.md`, and generated docs do not claim unavailable commands, incomplete guarantees, or obsolete workflows.
 * [ ] **Escape hatches are explicit deviations:** Any override that weakens a Sol default, such as security posture, rollout behavior, resource policy, or network access, is visible in `sol.yml`/target files or command flags and can be audited.
 
 ---

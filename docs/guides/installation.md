@@ -6,7 +6,7 @@ knowledge, and it assumes **no source checkout**: everything below is the releas
 binary and your own configuration.
 
 If you would rather see Sol work before touching a cloud account, do the local
-walkthrough in [`TUTORIAL.md`](TUTORIAL.md) first — it needs no account and reaches
+walkthrough in [`tutorial.md`](tutorial.md) first — it needs no account and reaches
 a running service in one sitting. The two paths use the same workspace, the same
 manifests and the same commands; only the destination differs.
 
@@ -77,7 +77,7 @@ are asked to do by hand:
   provider-native credentials, and if you stop using Sol the environment keeps
   running. §6 is that exit path.
 
-The full statement is [`DEVELOPER_EXPERIENCE.md`](../DEVELOPER_EXPERIENCE.md) §2–3.
+The full statement is [`developer-experience.md`](../developer-experience.md) §2–3.
 
 ---
 
@@ -107,7 +107,7 @@ sol local deploy    # deploys workloads after migration
 curl localhost:8080/health
 ```
 
-[`TUTORIAL.md`](TUTORIAL.md) walks the whole thing: services, workers, migrations,
+[`tutorial.md`](tutorial.md) walks the whole thing: services, workers, migrations,
 events, Grafana, rollback. Nothing about it is a toy — it is the same rendering
 path and the same framework primitives you deploy in §4.
 
@@ -380,7 +380,7 @@ deleted by ordinary teardown or by uninstall.
 
 ## 8. Where to go next
 
-- [`TUTORIAL.md`](TUTORIAL.md) — the local loop, end to end.
+- [`tutorial.md`](tutorial.md) — the local loop, end to end.
 - [`../../examples/pluto/README.md`](../../examples/pluto/README.md) — a runnable
   reference application whose README carries the same first-run walkthrough
   against a real workspace, and which the CI smoke tests build.
@@ -393,5 +393,5 @@ deleted by ordinary teardown or by uninstall.
   target fields feed, and what the platform assumes about them.
 - [`../deployment/production-bootstrap.md`](../deployment/production-bootstrap.md)
   — the identities, the state backend, and recovery, in operator detail.
-- [`../DEVELOPER_EXPERIENCE.md`](../DEVELOPER_EXPERIENCE.md) — what Sol owns, what
+- [`../developer-experience.md`](../developer-experience.md) — what Sol owns, what
   you own, and what is still planned.
