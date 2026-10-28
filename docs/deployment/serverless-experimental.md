@@ -156,3 +156,20 @@ answer fails closed; absence is positively checked. `--plan` is refused for serv
 targets rather than pretending a read-only destroy plan is authoritative. Rollback remains
 a standalone provider lifecycle command until the target release model can identify a
 previous serverless release.
+
+## Target-scoped rollback
+
+Serverless rollback uses the target's ownership record and an explicit prior provider
+version/revision:
+
+```text
+sol rollback --target <target> --record <serverless-release.json> \
+  --service checkout_svc --to-version <lambda-version> --token-file <token>
+
+sol rollback --target <target> --record <serverless-release.json> \
+  --service checkout_svc --to-revision <cloud-run-revision> --token-file <token>
+```
+
+The target execution must be serverless, the record must exist, and the provider must
+match. The post-rollback check performs the same readiness and authorized/unauthorized
+request checks as deploy. Kubernetes rollback continues to require `RELEASE_ID`.

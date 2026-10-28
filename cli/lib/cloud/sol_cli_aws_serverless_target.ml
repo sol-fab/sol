@@ -93,3 +93,57 @@ let deploy ~target ~config ~project ~(service : Sol_cli_manifest.service) ~image
   Sol_cli_aws_lambda.deploy request
   |> Result.map_error Sol_cli_aws_lambda.failure_to_string
 ;;
+
+let rollback
+      ~target
+      ~project
+      ~(service : Sol_cli_manifest.service)
+      ~record
+      ~version
+      ~token
+  =
+  let* () =
+    if Sol_cli_config.execution_of_target target = Sol_cli_config.Serverless
+    then Ok ()
+    else Error "target does not select execution: serverless"
+  in
+  let* () =
+    if target.provider = Sol_cli_provider.Aws
+    then Ok ()
+    else Error "target-scoped serverless rollback expected an AWS target"
+  in
+  let* release = Sol_cli_aws_lambda.read_record ~path:record in
+  let* role_arn = required_field target "lambda_role_arn" in
+  let* function_name =
+    Sol_cli_aws_lambda.provider_service_of service.name
+    |> Result.map_error Sol_cli_aws_lambda.failure_to_string
+  in
+  let request =
+    { Sol_cli_aws_lambda.profile = Sol_cli_config.provider_field target "profile"
+    ; region = target.region
+    ; service = service.name
+    ; function_name
+    ; image = release.image
+    ; role_arn
+    ; identity =
+        { Sol_cli_aws_lambda.unit = unit_of_service ~project service
+        ; callers = callers target
+        ; issuer = "https://accounts.google.com"
+        ; jwks_uri = "https://www.googleapis.com/oauth2/v3/certs"
+        }
+    ; record = None
+    ; run =
+        (fun argv ->
+          Sol_cli_serverless_runner.run argv
+          |> Result.map (fun (o : Sol_cli_serverless_runner.output) ->
+            ({ Sol_cli_aws_lambda.stdout = o.stdout; stderr = o.stderr }
+             : Sol_cli_aws_lambda.output)))
+    ; http =
+        (fun ~url ~token ->
+          Sol_cli_serverless_runner.http ~url ~token
+          |> Result.map (fun (status, body) -> status, body))
+    }
+  in
+  Sol_cli_aws_lambda.rollback request ~version ~token
+  |> Result.map_error Sol_cli_aws_lambda.failure_to_string
+;;
