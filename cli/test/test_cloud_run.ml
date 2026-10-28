@@ -124,6 +124,7 @@ let test_deploy_and_verify () =
         (fun argv ->
           calls := argv :: !calls;
           match argv with
+          | "gcloud" :: "run" :: "services" :: "list" :: _ -> Ok ""
           | "gcloud" :: "run" :: "deploy" :: _ -> Ok "deployed"
           | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
             Ok (describe_json ~revision:"rev-1" ~percent:100)
@@ -257,6 +258,7 @@ let test_partial_deploy () =
     { Sol_cli_cloud_run.run =
         (fun argv ->
           match argv with
+          | "gcloud" :: "run" :: "services" :: "list" :: _ -> Ok ""
           | "gcloud" :: "run" :: "deploy" :: _ -> Error "deploy failed"
           | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
             Ok (describe_json ~revision:"rev-old" ~percent:100)
@@ -275,6 +277,7 @@ let test_deploy_requires_serving_revision () =
     { Sol_cli_cloud_run.run =
         (fun argv ->
           match argv with
+          | "gcloud" :: "run" :: "services" :: "list" :: _ -> Ok ""
           | "gcloud" :: "run" :: "deploy" :: _ -> Ok "deployed"
           | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
             Ok (describe_json ~revision:"rev-new" ~percent:0)
@@ -358,6 +361,7 @@ let test_destroy_refuses_stale_record () =
          { Sol_cli_cloud_run.run =
              (fun argv ->
                match argv with
+               | "gcloud" :: "run" :: "services" :: "list" :: _ -> Ok "sol-test"
                | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
                  Ok (describe_json ~revision:"rev-new" ~percent:100)
                | "gcloud" :: "run" :: "services" :: "delete" :: _ ->
@@ -436,6 +440,7 @@ let test_destroy_refuses_unowned_live_service () =
          { Sol_cli_cloud_run.run =
              (fun argv ->
                match argv with
+               | "gcloud" :: "run" :: "services" :: "list" :: _ -> Ok "sol-test"
                | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
                  (* A pre-existing service: matching record but no adapter labels. *)
                  Ok
@@ -522,6 +527,7 @@ let test_deploy_refuses_unowned_service () =
     { Sol_cli_cloud_run.run =
         (fun argv ->
           match argv with
+          | "gcloud" :: "run" :: "services" :: "list" :: _ -> Ok "sol-test"
           | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
             Ok
               (Yojson.Safe.to_string
@@ -667,34 +673,31 @@ let test_provider_naming () =
     (Result.is_error (Sol_cli_cloud_run.preflight mismatched))
 ;;
 
-let test_deploy_accepts_cannot_find_wording () =
-  let seen = ref 0 in
+let test_describe_error_is_not_absence () =
+  let deployed = ref false in
   let runner =
     { Sol_cli_cloud_run.run =
         (fun argv ->
           match argv with
-          | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
-            incr seen;
-            if !seen = 1
-            then Error "ERROR: Cannot find service [sol-test]"
-            else Ok (describe_json ~revision:"rev-1" ~percent:100)
-          | "gcloud" :: "run" :: "deploy" :: _ -> Ok "deployed"
+          | "gcloud" :: "run" :: "services" :: "list" :: _ ->
+            Error "ERROR: Cannot find service [sol-test]"
+          | "gcloud" :: "run" :: "deploy" :: _ ->
+            deployed := true;
+            Ok "deployed"
           | _ -> Error "unexpected")
     ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
     }
   in
-  match Sol_cli_cloud_run.deploy runner (request ()) with
-  | Ok release -> check "cannot-find wording permits create" (release.revision = "rev-1")
-  | Error e ->
-    check
-      ("cannot-find wording permits create: " ^ Sol_cli_cloud_run.failure_to_string e)
-      false
+  (match Sol_cli_cloud_run.deploy runner (request ()) with
+   | Error (Unknown _) -> check "failed inventory is unknown, not absent" true
+   | _ -> check "failed inventory is unknown, not absent" false);
+  check "failed inventory did not mutate" (not !deployed)
 ;;
 
 let () =
   test_ingress ();
   test_provider_naming ();
-  test_deploy_accepts_cannot_find_wording ();
+  test_describe_error_is_not_absence ();
   test_preflight ();
   test_deploy_argv ();
   test_deploy_and_verify ();

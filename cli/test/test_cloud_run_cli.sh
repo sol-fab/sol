@@ -26,7 +26,7 @@ case "$1 $2" in
 JSON
         ;;
       list)
-        echo "checkout-svc"
+        [[ -f "$FAKE_GCLOUD_STATE" ]] && echo "checkout-svc" || true
         ;;
       *)
         echo "unexpected gcloud: $*" >&2
