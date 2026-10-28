@@ -639,8 +639,7 @@ let invoke ~event (recipe : recipe) =
           Unix.execve program (Array.of_list argv) env
         with
         | Unix.Unix_error (error, _, _) ->
-          prerr_endline
-            (Printf.sprintf "sol local invoke: %s: %s" program (Unix.error_message error));
+          Sol_cli_report.err "sol local invoke: %s: %s" program (Unix.error_message error);
           Unix._exit 127
         | _ -> Unix._exit 127)
      | pid ->
