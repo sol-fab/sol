@@ -41,7 +41,10 @@ let http ~url ~token =
         ]
     in
     match String.rindex_opt out.stdout '\n' with
-    | None -> Error "curl returned no HTTP status"
+    | None ->
+      (match int_of_string_opt (String.trim out.stdout) with
+       | Some status -> Ok (status, "")
+       | None -> Error "curl returned no HTTP status")
     | Some at ->
       let body = String.sub out.stdout 0 at in
       let status = String.sub out.stdout (at + 1) (String.length out.stdout - at - 1) in
