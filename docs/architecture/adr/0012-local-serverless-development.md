@@ -60,9 +60,12 @@ The local runner has no function-invocation interface today; the
 
 ### 1. Local development remains first-class and provider-neutral
 
-The application artifact and application contract are the same locally and in
-production. Local development must not require a cloud deployment or provider
-credentials.
+Local development preserves the same application source and application-level
+contract as production; the local runtime and the production packaging may
+differ. OCaml runs as a native executable locally and in a production image;
+TypeScript runs through Node locally and in a production image; Cloud Run
+executes the container artifact. Local development must not require a cloud
+deployment or provider credentials.
 
 Cloud Run changes where the same HTTP application runs; it does not change how
 the developer builds, launches, or tests that application's logic. A developer
@@ -114,27 +117,38 @@ Contract:
 - Sol builds the unit using the same local build recipe as `sol local run` and
   executes it exactly once, not under the long-running supervision used for
   services and workers.
-- `--event <file>` supplies the file's raw bytes on standard input. Omitting it
-  supplies empty input. Sol does not interpret or validate a JSON schema;
-  reading and decoding an event is application-owned until a separate event
-  contract exists.
+- `--event <file>` supplies the file's exact bytes on standard input.
+  Omission supplies empty standard input. Sol does not interpret, validate or
+  require a schema; an application that needs the input is responsible for
+  reading it. Supplying bytes to stdin does not imply that every function
+  consumes them.
 - The process exit status is the invocation result: `0` success, non-zero
-  failure, and the existing interrupted status behavior. Standard output and
-  standard error are passed through with the unit label; Sol does not invent a
-  structured result envelope.
+  failure, and the existing interrupted status behavior.
+- Standard output and standard error are passed through **without unit-label
+  prefixes or a Sol result envelope**. `sol local invoke` is a one-shot,
+  scriptable command: a function's JSON or other output must remain directly
+  consumable by `jq`, CI, or another process. Any invocation metadata is
+  separate from stdout.
 - The command does not execute the unit's schedule, simulate CronJob retries, or
   invoke more than once. Those are deployment/qualification concerns.
 - Local secrets and resource endpoints follow the same declared-dependency rules
   as `sol local run`.
-- If the existing `-fn` implementation cannot accept event input, the first
-  implementation may run it with empty input and return a clear unsupported
-  result for `--event`; it must not silently drop supplied bytes.
 
-`sol local run` should not claim that its current treatment of `-fn` is
-invocation. The first implementation must make `-fn` explicit in local
-selection: either exclude it from long-running supervision or invoke it through
-the contract above. This is a local-runtime correction, not a change to
-production `-fn` semantics.
+`sol local run` remains the long-running development loop and must not claim
+that its current treatment of `-fn` is invocation:
+
+- it starts selected `-svc` and `-worker` units;
+- it does **not** automatically invoke `-fn` units;
+- when a function is explicitly selected for `sol local run` (for example by a
+  unit scope), it returns a clear error directing the developer to
+  `sol local invoke`;
+- a broad selection that includes functions starts the long-running units and
+  reports each skipped function with that direction; it must not silently
+  omit a selected unit.
+
+This is a local-runtime correction, not a change to production `-fn` semantics.
+Regression tests must cover default workspace selection and explicit function
+selection.
 
 ### 5. Messaging stays explicit
 
@@ -203,7 +217,8 @@ step is explicit and separately authorized.
 | Criterion | Evidence |
 |---|---|
 | Local HTTP | The existing demo HTTP service runs via `sol local run` and handles the same application request without cloud credentials |
-| Local `-fn` | One-shot invocation accepts optional raw event bytes, runs once, propagates exit status and output, and refuses/consistently handles unsupported event input |
+| Local `-fn` | One-shot invocation supplies exact `--event` bytes (or empty stdin), runs once, propagates exit status, and leaves stdout/stderr unmodified |
+| Local run selection | Default `sol local run` starts only long-running units and does not invoke `-fn`; explicit function selection returns an actionable error naming `sol local invoke` |
 | Worker | A Kafka worker runs against local Kafka; a Postgres jobs worker runs against local Postgres with real claim/lease semantics |
 | Messaging boundary | No in-memory queue silently replaces Kafka or Postgres; provider emulator use is explicit and documented as non-production evidence |
 | Cloud boundary | Local success is never reported as IAM, identity, networking or delivery evidence; no automatic cloud provisioning |
@@ -215,11 +230,14 @@ The smallest validation is:
 
 1. run the existing TypeScript HTTP service with `sol local run` and issue the
    same application request used by the Cloud Run experiment;
-2. invoke one `-fn` once with an empty input and one fixture file, asserting
-   exit status and output;
-3. run a Postgres jobs worker against local Postgres and a Kafka worker against
+2. verify default `sol local run` does not invoke a `-fn`, and explicit function
+   selection returns the `sol local invoke` direction;
+3. invoke one `-fn` once with empty stdin and once with exact fixture bytes,
+   asserting exit status, unmodified stdout/stderr, and scriptability;
+4. run a Postgres jobs worker against local Postgres and a Kafka worker against
    local Kafka;
-4. verify that a local pass does not claim Cloud Run identity or delivery
+5. verify that local secrets and resource dependencies are unchanged;
+6. verify that a local pass does not claim Cloud Run identity or delivery
    evidence.
 
 The first code change should be the local `-fn` invocation contract and the
