@@ -667,9 +667,34 @@ let test_provider_naming () =
     (Result.is_error (Sol_cli_cloud_run.preflight mismatched))
 ;;
 
+let test_deploy_accepts_cannot_find_wording () =
+  let seen = ref 0 in
+  let runner =
+    { Sol_cli_cloud_run.run =
+        (fun argv ->
+          match argv with
+          | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+            incr seen;
+            if !seen = 1
+            then Error "ERROR: Cannot find service [sol-test]"
+            else Ok (describe_json ~revision:"rev-1" ~percent:100)
+          | "gcloud" :: "run" :: "deploy" :: _ -> Ok "deployed"
+          | _ -> Error "unexpected")
+    ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+    }
+  in
+  match Sol_cli_cloud_run.deploy runner (request ()) with
+  | Ok release -> check "cannot-find wording permits create" (release.revision = "rev-1")
+  | Error e ->
+    check
+      ("cannot-find wording permits create: " ^ Sol_cli_cloud_run.failure_to_string e)
+      false
+;;
+
 let () =
   test_ingress ();
   test_provider_naming ();
+  test_deploy_accepts_cannot_find_wording ();
   test_preflight ();
   test_deploy_argv ();
   test_deploy_and_verify ();

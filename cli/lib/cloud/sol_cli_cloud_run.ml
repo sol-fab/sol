@@ -319,7 +319,9 @@ let contains text needle =
 
 let is_not_found text =
   let text = String.lowercase_ascii text in
-  List.exists (contains text) [ "not found"; "not_found"; "404"; "does not exist" ]
+  List.exists
+    (contains text)
+    [ "not found"; "not_found"; "404"; "does not exist"; "cannot find service" ]
 ;;
 
 let describe runner (request : request) =
