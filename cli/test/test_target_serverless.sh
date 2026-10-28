@@ -46,13 +46,26 @@ elif [[ "$args" == *"lambda delete-function-url-config"* ]]; then printf '{}\n'
 elif [[ "$args" == *"lambda delete-function"* ]]; then rm -f "$FAKE_AWS_STATE/function" "$FAKE_AWS_STATE/alias"; printf '{}\n'
 else printf '{}\n'; fi
 FAKE
-chmod +x "$work/bin/aws"
+cat > "$work/bin/curl" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+url=""; config=""
+while [[ $# -gt 0 ]]; do case "$1" in --config) config="$2"; shift 2;; --output|--write-out) shift 2;; --silent|--show-error) shift;; *) url="$1"; shift;; esac; done
+if [[ "$url" == */readyz ]]; then printf '\n200'; elif [[ -s "$config" ]]; then printf 'ok\n200'; else printf 'no\n401'; fi
+FAKE
+chmod +x "$work/bin/aws" "$work/bin/curl"
 export PATH="$work/bin:$PATH" FAKE_AWS_LOG="$work/aws.log" FAKE_AWS_STATE="$work/state" HOME="$work/home"
 cd "$work/ws"
 "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref checkout_svc=repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "$work/deploy"
 grep -q '"function_name":"checkout-svc"' "$work/deploy"
-record=$(find "$work/home/.local/share/sol/runs" -name serverless-release.json -type f | head -1)
+"$sol" deploy live/aws/us-east-1 --image-tag test --image-ref checkout_svc=repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "$work/deploy2"
+grep -q '"version":"2"' "$work/deploy2"
+record=$(find "$work/home/.local/share/sol/runs" -name serverless-release.json -type f -print | sort | tail -1)
 [[ -n "$record" ]]
+printf 'token\n' > "$work/token"
+"$sol" rollback --target live/aws/us-east-1 --record "$record" --service checkout_svc --to-version 1 --token-file "$work/token" > "$work/rollback"
+grep -q '"version":"1"' "$work/rollback"
+grep -q '"version":"1"' "$record"
 "$sol" destroy live/aws/us-east-1 --apply --service checkout_svc --record "$record" > /dev/null
 [[ ! -f "$work/state/function" ]]
-echo "target serverless deploy/destroy fake-provider test passed"
+echo "target serverless deploy/rollback/destroy fake-provider test passed"
