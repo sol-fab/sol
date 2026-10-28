@@ -7,15 +7,18 @@ part of the `production-single-region/v1` contract.
 
 | Capability | Local | Kubernetes | GCP Cloud Run | AWS Lambda |
 |---|---|---|---|---|
-| `-svc` HTTP | native `sol local run` | supported | `sol cloud-run`; live-proven | `sol lambda`; live-proven |
+| `-svc` HTTP | native `sol local run` | supported | target + standalone; live | target + standalone; live |
 | `-worker` | native run with explicit Kafka/Postgres | supported | not supported | not supported |
 | `-fn` | `sol local invoke` | CronJob | not supported | not supported |
 | Queue/trigger | explicit Kafka/Postgres only | Kafka/Postgres | none | none |
-| Secrets/dependencies | injected locally | supported | env/identity proven | env/identity proven |
-| Identity | local explicit | supported | Google workload token | Google app token; no AWS-native identity |
-| Observability | app logs/metrics | supported | app/provider logs | app/CloudWatch logs |
-| Upgrade/rollback | n/a | supported | revision/traffic | version/alias |
-| Destroy/absence | n/a | supported | live-proven | live-proven |
+| Secrets/dependencies | injected locally | supported | env/identity proven; `uses:` refused | env/identity proven; `uses:` refused |
+| Identity | local explicit | supported | Google workload token; explicit callers | Google app token; explicit callers |
+| Observability | app logs/metrics | supported | provider/app logs; no Sol acceptance | provider/CloudWatch logs; no Sol acceptance |
+| Target deploy | n/a | supported | live | live |
+| Target rollback | n/a | release based | live | live |
+| Target destroy/absence | n/a | supported | live | live |
+| Plan projection | n/a | supported | fail closed | fail closed |
+| Post-deploy execution smoke | n/a | readiness/rollout | readiness 200 + unauth 401 | readiness 200 + unauth 401 |
 
 The serverless commands are experimental provider commands. They are not yet
 target-scoped `sol deploy` execution, and no serverless production claim is made.
