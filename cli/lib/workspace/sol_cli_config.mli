@@ -1,3 +1,7 @@
+type execution =
+  | Kubernetes
+  | Serverless
+
 type target =
   { name : string
   ; env : string
@@ -34,6 +38,7 @@ and secret_authority =
       ; key : string
       }
 
+val execution_of_target : target -> execution
 val destination_of_target : target -> (Sol_cli_kube_destination.t, string) result
 
 type index =

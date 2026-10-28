@@ -78,3 +78,23 @@ experimental command, not yet a target execution backend.
 - AWS-native workload identity;
 - managed ECR/IAM/secret provisioning for the Lambda path;
 - production-profile qualification.
+
+## Target execution selection (foundation)
+
+Targets can declare execution explicitly:
+
+```yaml
+production:
+  targets:
+    aws/us-east-1:
+      execution: serverless
+```
+
+`execution: kubernetes` is the default. The value is validated and merged with
+environment/target overlays. `sol deploy` currently **fails closed** when a target
+selects `serverless`: it refuses rather than planning or mutating Kubernetes for a
+target whose execution backend is not wired yet.
+
+This is a schema/refusal foundation, not target-scoped serverless deployment.
+The provider lifecycle commands remain the supported experimental path until the
+`sol deploy` dispatch is implemented.
