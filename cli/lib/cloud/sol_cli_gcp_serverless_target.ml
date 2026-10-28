@@ -156,6 +156,20 @@ let rollback
           |> Result.map (fun (status, body) -> status, body))
     }
   in
-  Sol_cli_cloud_run.rollback runner request ~revision ~token
-  |> Result.map_error Sol_cli_cloud_run.failure_to_string
+  let* observed =
+    Sol_cli_cloud_run.rollback runner request ~revision ~token
+    |> Result.map_error Sol_cli_cloud_run.failure_to_string
+  in
+  let recorded =
+    { release with
+      revision = observed.revision
+    ; url = observed.url
+    ; image = Option.value observed.image ~default:release.image
+    }
+  in
+  let* () =
+    Sol_cli_cloud_run.write_record ~path:record recorded
+    |> Result.map_error (fun message -> "could not update release record: " ^ message)
+  in
+  Ok observed
 ;;

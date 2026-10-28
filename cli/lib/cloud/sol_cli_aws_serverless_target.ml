@@ -144,6 +144,16 @@ let rollback
           |> Result.map (fun (status, body) -> status, body))
     }
   in
-  Sol_cli_aws_lambda.rollback request ~version ~token
-  |> Result.map_error Sol_cli_aws_lambda.failure_to_string
+  let* observed =
+    Sol_cli_aws_lambda.rollback request ~version ~token
+    |> Result.map_error Sol_cli_aws_lambda.failure_to_string
+  in
+  let recorded =
+    { release with version = observed.version; alias = "live"; url = observed.url }
+  in
+  let* () =
+    Sol_cli_aws_lambda.write_record ~path:record recorded
+    |> Result.map_error (fun message -> "could not update release record: " ^ message)
+  in
+  Ok observed
 ;;
