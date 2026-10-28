@@ -92,6 +92,13 @@ let deploy ~target ~config ~project ~(service : Sol_cli_manifest.service) ~image
           |> Result.map (fun (status, body) -> status, body))
     }
   in
-  Sol_cli_cloud_run.deploy runner request
-  |> Result.map_error Sol_cli_cloud_run.failure_to_string
+  let* release =
+    Sol_cli_cloud_run.deploy runner request
+    |> Result.map_error Sol_cli_cloud_run.failure_to_string
+  in
+  let* () =
+    Sol_cli_cloud_run.write_record ~path:record release
+    |> Result.map_error (fun message -> "could not write release record: " ^ message)
+  in
+  Ok release
 ;;
