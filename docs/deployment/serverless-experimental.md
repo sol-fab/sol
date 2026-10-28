@@ -196,3 +196,9 @@ These are deliberate exclusions, not missing dispatch:
 
 A provider target that requests one of these combinations should fail closed rather than
 silently changing the primitive's semantics.
+
+## Deploy execution postcondition
+
+A successful serverless target deploy is not reported until the deployed service answers
+its public readiness probe with `200` and an unauthenticated protected request with `401`.
+Authorization with a caller token remains an explicit post-deploy verification step.

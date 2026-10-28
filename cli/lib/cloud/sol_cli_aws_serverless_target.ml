@@ -104,8 +104,37 @@ let deploy ~target ~config ~project ~(service : Sol_cli_manifest.service) ~image
           |> Result.map (fun (status, body) -> status, body))
     }
   in
-  Sol_cli_aws_lambda.deploy request
-  |> Result.map_error Sol_cli_aws_lambda.failure_to_string
+  let* release =
+    Sol_cli_aws_lambda.deploy request
+    |> Result.map_error Sol_cli_aws_lambda.failure_to_string
+  in
+  let url =
+    let rec trim value =
+      if String.length value > 0 && value.[String.length value - 1] = '/'
+      then trim (String.sub value 0 (String.length value - 1))
+      else value
+    in
+    trim release.url
+  in
+  let* ready, _ =
+    request.http ~url:(url ^ "/readyz") ~token:None
+    |> Result.map_error (fun message ->
+      "post-deploy readiness request failed: " ^ message)
+  in
+  let* () =
+    if ready = 200 then Ok () else Error (Printf.sprintf "post-deploy readiness %d" ready)
+  in
+  let* unauth, _ =
+    request.http ~url:(url ^ "/quote") ~token:None
+    |> Result.map_error (fun message ->
+      "post-deploy unauthenticated request failed: " ^ message)
+  in
+  let* () =
+    if unauth = 401
+    then Ok ()
+    else Error (Printf.sprintf "post-deploy unauthenticated /quote %d" unauth)
+  in
+  Ok release
 ;;
 
 let rollback
