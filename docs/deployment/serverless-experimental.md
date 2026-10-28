@@ -116,6 +116,7 @@ production:
 ```
 
 The target field names are explicit; no ECR repository, role, or IAM policy is created.
+`serverless_callers` is required: an empty application-authentication policy is refused.
 `sol deploy production/aws/us-east-1 --image-ref checkout_svc=...@sha256:...` uses the
 verified Lambda lifecycle and writes `serverless-release.json` in the deploy run log.
 

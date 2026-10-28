@@ -56,6 +56,13 @@ let deploy ~target ~config ~project ~(service : Sol_cli_manifest.service) ~image
     else
       Error "target-scoped serverless dispatch does not yet support service dependencies"
   in
+  let* () =
+    if callers target = []
+    then
+      Error
+        "target must declare serverless_callers for incoming application authentication"
+    else Ok ()
+  in
   let* role_arn = required_field target "lambda_role_arn" in
   let* function_name =
     Sol_cli_aws_lambda.provider_service_of service.name
@@ -68,6 +75,13 @@ let deploy ~target ~config ~project ~(service : Sol_cli_manifest.service) ~image
     ; issuer = "https://accounts.google.com"
     ; jwks_uri = "https://www.googleapis.com/oauth2/v3/certs"
     }
+  in
+  let* () =
+    if callers target = []
+    then
+      Error
+        "target must declare serverless_callers for incoming application authentication"
+    else Ok ()
   in
   let request =
     { Sol_cli_aws_lambda.profile
