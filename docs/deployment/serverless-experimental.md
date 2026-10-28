@@ -202,3 +202,7 @@ silently changing the primitive's semantics.
 A successful serverless target deploy is not reported until the deployed service answers
 its public readiness probe with `200` and an unauthenticated protected request with `401`.
 Authorization with a caller token remains an explicit post-deploy verification step.
+
+`sol plan` currently refuses `execution: serverless` targets rather than projecting them as
+Kubernetes. Use `sol deploy` (serverless dispatch), `sol rollback`, and `sol destroy` for
+the target lifecycle; the provider commands remain available for diagnostics.

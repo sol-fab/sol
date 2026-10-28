@@ -64,6 +64,16 @@ let run target_name image_refs var_file vars =
   in
   let project = Option.value cfg.project ~default:(Filename.basename (Sys.getcwd ())) in
   let target = cfg.target in
+  let* () =
+    match Sol_cli_config.execution_of_target target with
+    | Sol_cli_config.Kubernetes -> Ok ()
+    | Sol_cli_config.Serverless ->
+      Error
+        (Sol_cli_exit.error
+           "sol plan does not implement execution: serverless targets; use the provider \
+            lifecycle or sol deploy target dispatch, which fails closed on unsupported \
+            configuration")
+  in
   let resources = Sol_cli_config.resources cfg in
   let services = Sol_cli_config.services cfg in
   let* () = check_declared_units services in
