@@ -267,7 +267,7 @@ let parse_observed text =
     Sol_cli_json.string (Sol_cli_json.field [ "url" ] status)
     |> Option.to_result ~none:"describe has no status.url"
   in
-  let* revision =
+  let* latest_revision =
     Sol_cli_json.string (Sol_cli_json.field [ "latestReadyRevisionName" ] status)
     |> Option.to_result ~none:"describe has no latestReadyRevisionName"
   in
@@ -308,6 +308,13 @@ let parse_observed text =
     | Some (container :: _) ->
       Sol_cli_json.string (Sol_cli_json.field [ "image" ] container)
     | _ -> None
+  in
+  let serving = List.filter (fun (_, percent) -> percent = 100) traffic in
+  let* revision =
+    match serving with
+    | [ (revision, _) ] -> Ok revision
+    | [] -> Ok latest_revision
+    | _ -> Error "describe reports multiple revisions at 100% traffic"
   in
   if not (String.starts_with ~prefix:"https://" url)
   then Error "Cloud Run service URL is not HTTPS"

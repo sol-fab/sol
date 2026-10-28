@@ -29,7 +29,7 @@ let request ?(record = None) () =
     }
 ;;
 
-let describe_json ~revision ~percent =
+let describe_json_with_latest ~latest ~revision ~percent =
   Yojson.Safe.to_string
     (`Assoc
         [ ( "spec"
@@ -55,13 +55,17 @@ let describe_json ~revision ~percent =
         ; ( "status"
           , `Assoc
               [ "url", `String "https://service.example"
-              ; "latestReadyRevisionName", `String revision
+              ; "latestReadyRevisionName", `String latest
               ; ( "traffic"
                 , `List
                     [ `Assoc [ "revisionName", `String revision; "percent", `Int percent ]
                     ] )
               ] )
         ])
+;;
+
+let describe_json ~revision ~percent =
+  describe_json_with_latest ~latest:revision ~revision ~percent
 ;;
 
 let test_ingress () =
@@ -180,7 +184,12 @@ let test_rollback () =
         (fun argv ->
           match argv with
           | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
-            Ok (out (describe_json ~revision:!revision ~percent:100))
+            Ok
+              (out
+                 (describe_json_with_latest
+                    ~latest:(if !revision = "rev-prev" then "rev-current" else !revision)
+                    ~revision:!revision
+                    ~percent:100))
           | "gcloud" :: "run" :: "services" :: "update-traffic" :: _ ->
             revision := "rev-prev";
             Ok (out "done")
