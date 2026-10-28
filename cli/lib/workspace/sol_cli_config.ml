@@ -1,3 +1,7 @@
+type execution =
+  | Kubernetes
+  | Serverless
+
 type target =
   { name : string
   ; env : string
@@ -186,6 +190,7 @@ let service_empty name =
 ;;
 
 type target_field =
+  | Target_execution
   | Target_registry
   | Target_base_domain
   | Target_cluster_issuer
@@ -216,6 +221,7 @@ type target_key =
 
 let target_key_of_string s =
   match s with
+  | "execution" -> Target_field Target_execution
   | "registry" -> Target_field Target_registry
   | "base_domain" -> Target_field Target_base_domain
   | "cluster_issuer" -> Target_field Target_cluster_issuer
@@ -247,6 +253,7 @@ let target_key_of_string s =
 ;;
 
 let target_field_name = function
+  | Target_execution -> "execution"
   | Target_registry -> "registry"
   | Target_base_domain -> "base_domain"
   | Target_cluster_issuer -> "cluster_issuer"
@@ -506,6 +513,19 @@ let decode_layer ~path ~context ~top_level (fields : (string * Yaml.yaml) list) 
   in
   let set_field (current : target) field s =
     match field with
+    | Target_execution ->
+      (match String.lowercase_ascii s with
+       | "kubernetes" | "serverless" ->
+         let provider_fields =
+           current.provider_fields
+           |> List.filter (fun (provider, _) -> provider <> "sol")
+           |> fun fields -> fields @ [ "sol", [ "execution", String.lowercase_ascii s ] ]
+         in
+         Ok { current with provider_fields }
+       | other ->
+         Error
+           (error
+              (Printf.sprintf "execution %S is not one of kubernetes, serverless" other)))
     | Target_registry -> Ok { current with registry = Some s }
     | Target_base_domain -> Ok { current with base_domain = Some s }
     | Target_cluster_issuer -> Ok { current with cluster_issuer = Some s }
@@ -953,6 +973,17 @@ let provider_field (target : target) key =
   List.assoc_opt (Sol_cli_provider.to_string target.provider) target.provider_fields
   |> Option.value ~default:[]
   |> List.assoc_opt key
+;;
+
+let execution_of_target (target : target) =
+  match
+    List.assoc_opt "sol" target.provider_fields
+    |> Option.value ~default:[]
+    |> List.assoc_opt "execution"
+  with
+  | Some value ->
+    if String.lowercase_ascii value = "serverless" then Serverless else Kubernetes
+  | None -> Kubernetes
 ;;
 
 let secret_authority (target : target) ~unit_address ~key =

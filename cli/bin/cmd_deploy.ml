@@ -1107,6 +1107,19 @@ let run (req : Sol_cli_command_request.deploy_request) =
     |> Sol_cli_exit.of_error Sol_cli_config.error_to_string
   in
   let target_cfg = resolved_config.target in
+  let* () =
+    match Sol_cli_config.execution_of_target target_cfg with
+    | Sol_cli_config.Kubernetes -> Ok ()
+    | Sol_cli_config.Serverless ->
+      Error
+        (Sol_cli_exit.error
+           (Printf.sprintf
+              "target %S selects execution: serverless, but serverless deploy dispatch \
+               is                not implemented yet; refusing to plan or mutate \
+               Kubernetes for this target.                Use the provider lifecycle \
+               commands for diagnostics until the dispatch lands."
+              req.target))
+  in
   let* deployed =
     Sol_cli_deploy_selection.apply_target
       ~target:req.target
