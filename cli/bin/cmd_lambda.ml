@@ -21,8 +21,8 @@ let service_is_http name =
     | Some { typ = Some ("http" | "svc"); _ } -> Ok ()
     | Some _ -> Error (command_error "not an HTTP service")
   in
-  Sol_cli_lambda.provider_service_of name
-  |> Result.map_error (fun f -> command_error (Sol_cli_lambda.failure_to_string f))
+  Sol_cli_aws_lambda.provider_service_of name
+  |> Result.map_error (fun f -> command_error (Sol_cli_aws_lambda.failure_to_string f))
 ;;
 
 let read_token path =
@@ -41,11 +41,12 @@ let runner () =
   let run argv =
     Sol_cli_process.run (Sol_cli_process.cmd argv)
     |> Result.map (fun (o : Sol_cli_process.output) ->
-      ({ Sol_cli_lambda.stdout = o.stdout; stderr = o.stderr } : Sol_cli_lambda.output))
+      ({ Sol_cli_aws_lambda.stdout = o.stdout; stderr = o.stderr }
+       : Sol_cli_aws_lambda.output))
     |> Result.map_error Sol_cli_process.error_to_string
   in
   let run_text argv =
-    run argv |> Result.map (fun (o : Sol_cli_lambda.output) -> o.stdout)
+    run argv |> Result.map (fun (o : Sol_cli_aws_lambda.output) -> o.stdout)
   in
   let http ~url ~token =
     let config = Filename.temp_file "sol-lambda-curl-" ".conf" in
@@ -107,7 +108,7 @@ let request
       ~record
   =
   let run, http = runner () in
-  { Sol_cli_lambda.profile
+  { Sol_cli_aws_lambda.profile
   ; region
   ; service
   ; function_name
@@ -208,10 +209,10 @@ let deploy_run profile region service image role unit issuer jwks_uri callers re
       ~record
   in
   let* release =
-    Sol_cli_lambda.deploy r
-    |> Result.map_error (fun f -> command_error (Sol_cli_lambda.failure_to_string f))
+    Sol_cli_aws_lambda.deploy r
+    |> Result.map_error (fun f -> command_error (Sol_cli_aws_lambda.failure_to_string f))
   in
-  print_endline (Yojson.Safe.to_string (Sol_cli_lambda.release_json release));
+  print_endline (Yojson.Safe.to_string (Sol_cli_aws_lambda.release_json release));
   Ok ()
 ;;
 
@@ -279,10 +280,10 @@ let verify_run profile region service image role unit issuer jwks token_file =
       ~record:None
   in
   let* o =
-    Sol_cli_lambda.verify r ~token
-    |> Result.map_error (fun f -> command_error (Sol_cli_lambda.failure_to_string f))
+    Sol_cli_aws_lambda.verify r ~token
+    |> Result.map_error (fun f -> command_error (Sol_cli_aws_lambda.failure_to_string f))
   in
-  print_endline (Yojson.Safe.to_string (Sol_cli_lambda.observed_json o));
+  print_endline (Yojson.Safe.to_string (Sol_cli_aws_lambda.observed_json o));
   Ok ()
 ;;
 
@@ -329,10 +330,10 @@ let rollback_run profile region service image role unit issuer jwks version toke
       ~record:None
   in
   let* o =
-    Sol_cli_lambda.rollback r ~version ~token
-    |> Result.map_error (fun f -> command_error (Sol_cli_lambda.failure_to_string f))
+    Sol_cli_aws_lambda.rollback r ~version ~token
+    |> Result.map_error (fun f -> command_error (Sol_cli_aws_lambda.failure_to_string f))
   in
-  print_endline (Yojson.Safe.to_string (Sol_cli_lambda.observed_json o));
+  print_endline (Yojson.Safe.to_string (Sol_cli_aws_lambda.observed_json o));
   Ok ()
 ;;
 
@@ -371,8 +372,8 @@ let destroy_run profile region service record =
       ~callers:[]
       ~record:None
   in
-  Sol_cli_lambda.destroy r ~profile ~region ~service ~record
-  |> Result.map_error (fun f -> command_error (Sol_cli_lambda.failure_to_string f))
+  Sol_cli_aws_lambda.destroy r ~profile ~region ~service ~record
+  |> Result.map_error (fun f -> command_error (Sol_cli_aws_lambda.failure_to_string f))
 ;;
 
 let destroy_record_arg =
