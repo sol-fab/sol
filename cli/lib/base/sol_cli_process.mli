@@ -43,6 +43,7 @@ val pid : background -> int
 val stop : background -> unit
 val run_shell : ?echo:bool -> string -> (output, error) result
 val completed : exit_code:int -> stdout:string -> stderr:string -> (output, error) result
+val resolve_program : string -> string
 val apply_redactions : string list -> string -> string
 val failure_message : failure -> string
 val error_to_string : error -> string

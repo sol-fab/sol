@@ -598,6 +598,80 @@ let launch_all ~output recipes =
   go [] recipes
 ;;
 
+let invoke_with_stdin ~input_path (recipe : recipe) =
+  let input_fd =
+    try Ok (Unix.openfile input_path [ Unix.O_RDONLY ] 0) with
+    | Unix.Unix_error (error, _, _) -> Error (Unix.error_message error)
+  in
+  match input_fd with
+  | Error message -> Error (Spawn_failed { label = recipe.label; message })
+  | Ok input_fd ->
+    let close_input () =
+      try Unix.close input_fd with
+      | Unix.Unix_error _ -> ()
+    in
+    (match recipe.launch.argv with
+     | [] ->
+       close_input ();
+       Error (Spawn_failed { label = recipe.label; message = "empty invocation argv" })
+     | argv ->
+       let program = Sol_cli_process.resolve_program (List.hd argv) in
+       let env =
+         recipe.env |> List.map (fun (key, value) -> key ^ "=" ^ value) |> Array.of_list
+       in
+       let run_child () =
+         (try
+            (match recipe.launch.cwd with
+             | "" | "." -> ()
+             | cwd -> Unix.chdir cwd);
+            Unix.dup2 input_fd Unix.stdin;
+            Unix.execve program (Array.of_list argv) env
+          with
+          | Unix.Unix_error (error, _, _) ->
+            Sol_cli_report.err
+              "sol local invoke: %s: %s"
+              program
+              (Unix.error_message error)
+          | _ -> ());
+         Unix._exit 127
+       in
+       (match
+          try Ok (Unix.fork ()) with
+          | Unix.Unix_error (error, _, _) -> Error (Unix.error_message error)
+        with
+        | Error message ->
+          close_input ();
+          Error (Spawn_failed { label = recipe.label; message })
+        | Ok 0 -> run_child ()
+        | Ok pid ->
+          close_input ();
+          let rec wait () =
+            match Unix.waitpid [] pid with
+            | _, status -> status
+            | exception Unix.Unix_error (Unix.EINTR, _, _) -> wait ()
+          in
+          let status = wait () in
+          (match status with
+           | Unix.WEXITED code -> Ok code
+           | Unix.WSIGNALED signal | Unix.WSTOPPED signal ->
+             Error (Signaled { label = recipe.label; signal }))))
+;;
+
+let invoke ~event (recipe : recipe) =
+  match event with
+  | None -> invoke_with_stdin ~input_path:"/dev/null" recipe
+  | Some bytes ->
+    (match
+       Sol_cli_fs.with_temp_file
+         ~prefix:"sol-local-invoke-"
+         ~suffix:".event"
+         bytes
+         (fun path -> invoke_with_stdin ~input_path:path recipe)
+     with
+     | Ok result -> result
+     | Error message -> Error (Spawn_failed { label = recipe.label; message }))
+;;
+
 let reap_owned children =
   let rec go = function
     | [] -> None

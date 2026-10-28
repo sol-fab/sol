@@ -60,6 +60,7 @@ val launch_all
   -> recipe list
   -> (child list, child_failure) result
 
+val invoke : event:string option -> recipe -> (int, child_failure) result
 val terminate : child list -> unit
 
 val supervise
