@@ -331,5 +331,8 @@
  (alias runtest)
  (deps ../bin/main.exe test_target_serverless.sh)
  (action
-  (run bash %{dep:test_target_serverless.sh} %{dep:../bin/main.exe}
+  (run
+   bash
+   %{dep:test_target_serverless.sh}
+   %{dep:../bin/main.exe}
    %{workspace_root}/examples/pluto)))
