@@ -310,3 +310,9 @@
    %{dep:test_cloud_run_lifecycle_cli.sh}
    %{dep:../bin/main.exe}
    %{workspace_root}/examples/pluto)))
+
+(rule
+ (alias runtest)
+ (deps ../bin/main.exe test_local_invoke.sh)
+ (action
+  (run bash %{dep:test_local_invoke.sh} %{dep:../bin/main.exe})))

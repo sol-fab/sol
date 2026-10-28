@@ -1388,3 +1388,64 @@ let%test "local dependency references are validated before connection projection
             | Ok _ -> Windtrap.fail ("invalid dependency accepted: " ^ reference)))
     [ "missing_db"; "typo/app_db"; "/broken"; "/aws/app_db" ]
 ;;
+
+let test_invoke_passes_exact_stdin_and_exit_status () =
+  with_workspace []
+  @@ fun root ->
+  let script = Filename.concat root "invoke-fixture.sh" in
+  let received = Filename.concat root "received.bin" in
+  write_file script "#!/bin/sh\ncat > \"$1\"\nexit 7\n";
+  Unix.chmod script 0o755;
+  let recipe : Sol_cli_local_run.recipe =
+    { label = "checkout/checkout_fn"
+    ; language = Sol_cli_compat.Ocaml
+    ; build = None
+    ; launch = { argv = [ script; received ]; cwd = root }
+    ; artifact = script
+    ; env = []
+    }
+  in
+  let event = "line one\nline two\n" in
+  (match Sol_cli_local_run.invoke ~event:(Some event) recipe with
+   | Ok 7 -> check_bool "propagates the child exit status" true true
+   | Ok code -> Windtrap.fail (Printf.sprintf "expected exit 7, got %d" code)
+   | Error failure ->
+     Windtrap.fail ("invoke failed: " ^ Sol_cli_local_run.child_failure_to_string failure));
+  let actual = In_channel.with_open_bin received In_channel.input_all in
+  check_string "supplies exact event bytes" event actual
+;;
+
+let test_invoke_without_event_supplies_empty_stdin () =
+  with_workspace []
+  @@ fun root ->
+  let script = Filename.concat root "invoke-empty.sh" in
+  let received = Filename.concat root "received-empty.bin" in
+  write_file script "#!/bin/sh\ncat > \"$1\"\nexit 0\n";
+  Unix.chmod script 0o755;
+  let recipe : Sol_cli_local_run.recipe =
+    { label = "checkout/checkout_fn"
+    ; language = Sol_cli_compat.Ocaml
+    ; build = None
+    ; launch = { argv = [ script; received ]; cwd = root }
+    ; artifact = script
+    ; env = []
+    }
+  in
+  (match Sol_cli_local_run.invoke ~event:None recipe with
+   | Ok 0 -> check_bool "empty invocation succeeds" true true
+   | Ok code -> Windtrap.fail (Printf.sprintf "expected exit 0, got %d" code)
+   | Error failure ->
+     Windtrap.fail ("invoke failed: " ^ Sol_cli_local_run.child_failure_to_string failure));
+  check_string
+    "omitted event is empty stdin"
+    ""
+    (In_channel.with_open_bin received In_channel.input_all)
+;;
+
+let%test "local invoke: exact stdin bytes and exit status" =
+  test_invoke_passes_exact_stdin_and_exit_status ()
+;;
+
+let%test "local invoke: omitted event is empty stdin" =
+  test_invoke_without_event_supplies_empty_stdin ()
+;;

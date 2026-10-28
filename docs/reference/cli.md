@@ -121,6 +121,7 @@ No positional: the command acts on the workspace, and a target or scope is a nar
 |---|---|---|---|---|
 | `sol local deploy` | — | `--confirm-group-change`, `--dry-run`, `--keep-releases=N`, `--scope=DOMAIN[/UNIT]`, `--tag=TAG` | documented | Build images, synthesize k8s manifests, and deploy |
 | `sol local down` | — | — | documented | Stop Sol's local port-forwards. The k3d cluster and |
+| `sol local invoke` | DOMAIN/NAME | `-C`, `--event=FILE` | documented | Invoke one -fn unit once. Event bytes go to stdin; |
 | `sol local migrate` | — | `--dir=DIR`, `--dry-run`, `--table=TABLE` | documented | Apply migrations against the local cluster's |
 | `sol local releases` | — | — | documented | List the release records Sol's local cluster |
 | `sol local rollback` | RELEASE_ID | — | documented | Restore a recorded release boundary on the local |

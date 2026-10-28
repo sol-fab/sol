@@ -138,7 +138,7 @@ configuration* — and the walkthrough is in
 [tutorial.md § *New scheduled function*](tutorial.md#new-scheduled-function).
 
 A function is ephemeral, so its metrics are pushed rather than scraped; the push contract is in
-[`sol-fn`](../../framework/ocaml/sol-fn/sol-fn.md).
+[`sol-fn`](../../framework/ocaml/sol-fn/sol-fn.md). Use `sol local invoke <domain/name> [--event <file>]` to run one function once locally; `sol local run` starts only long-running services and workers.
 
 ### Choosing
 

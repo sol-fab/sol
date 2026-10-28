@@ -598,6 +598,69 @@ let launch_all ~output recipes =
   go [] recipes
 ;;
 
+let invoke ~event (recipe : recipe) =
+  let input_path =
+    match event with
+    | None -> None
+    | Some bytes ->
+      let path = Filename.temp_file "sol-local-invoke-" ".event" in
+      let channel = open_out_bin path in
+      Fun.protect
+        ~finally:(fun () -> close_out channel)
+        (fun () -> output_string channel bytes);
+      Some path
+  in
+  let input_fd =
+    match input_path with
+    | None -> Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0
+    | Some path -> Unix.openfile path [ Unix.O_RDONLY ] 0
+  in
+  let cleanup () =
+    (try Unix.close input_fd with
+     | Unix.Unix_error _ -> ());
+    Option.iter
+      (fun path ->
+         try Sys.remove path with
+         | Sys_error _ -> ())
+      input_path
+  in
+  match recipe.launch.argv with
+  | [] ->
+    cleanup ();
+    Error (Spawn_failed { label = recipe.label; message = "empty invocation argv" })
+  | argv ->
+    let program = Sol_cli_process.resolve_program (List.hd argv) in
+    let env =
+      recipe.env |> List.map (fun (key, value) -> key ^ "=" ^ value) |> Array.of_list
+    in
+    (match Unix.fork () with
+     | 0 ->
+       (try
+          (match recipe.launch.cwd with
+           | "" | "." -> ()
+           | cwd -> Unix.chdir cwd);
+          Unix.dup2 input_fd Unix.stdin;
+          Unix.execve program (Array.of_list argv) env
+        with
+        | Unix.Unix_error (error, _, _) ->
+          prerr_endline
+            (Printf.sprintf "sol local invoke: %s: %s" program (Unix.error_message error));
+          Unix._exit 127
+        | _ -> Unix._exit 127)
+     | pid ->
+       cleanup ();
+       let rec wait () =
+         match Unix.waitpid [] pid with
+         | _, status -> status
+         | exception Unix.Unix_error (Unix.EINTR, _, _) -> wait ()
+       in
+       let status = wait () in
+       (match status with
+        | Unix.WEXITED code -> Ok code
+        | Unix.WSIGNALED signal | Unix.WSTOPPED signal ->
+          Error (Signaled { label = recipe.label; signal })))
+;;
+
 let reap_owned children =
   let rec go = function
     | [] -> None
