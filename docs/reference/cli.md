@@ -99,6 +99,10 @@ No positional: the command acts on the workspace, and a target or scope is a nar
 | `sol cloud-run rollback` | — | `--caller=UNIT=SUBJECT`, `--image=IMAGE`, `--ingress=INGRESS`, `--issuer=ISSUER`, `--jwks-uri=URI`, `--project=PROJECT`, `--region=REGION`, `--revision=REVISION`, `--service=SERVICE`, `--token-file=PATH`, `--unit=UNIT` | documented | Restore a Cloud Run revision and verify its |
 | `sol cloud-run verify` | — | `--caller=UNIT=SUBJECT`, `--image=IMAGE`, `--ingress=INGRESS`, `--issuer=ISSUER`, `--jwks-uri=URI`, `--project=PROJECT`, `--record=PATH`, `--region=REGION`, `--service=SERVICE`, `--token-file=PATH`, `--unit=UNIT` | documented | Verify readiness and authorized/unauthorized |
 | `sol contract generate` | — | `--check` | documented | Generate application peer and event bindings |
+| `sol lambda deploy` | — | `--caller=UNIT=SUBJECT`, `--image=IMAGE`, `--issuer=ISSUER`, `--jwks-uri=URI`, `--profile=PROFILE`, `--record=PATH`, `--region=REGION`, `--role=ARN`, `--service=SERVICE`, `--unit=UNIT` | documented | Deploy or update an HTTP service on AWS Lambda |
+| `sol lambda destroy` | — | `--profile=PROFILE`, `--record=PATH`, `--region=REGION`, `--service=SERVICE` | documented | Delete a Lambda function and verify absence |
+| `sol lambda rollback` | — | `--image=IMAGE`, `--issuer=ISSUER`, `--jwks-uri=URI`, `--profile=PROFILE`, `--region=REGION`, `--role=ARN`, `--service=SERVICE`, `--to-version=VERSION`, `--token-file=PATH`, `--unit=UNIT` | documented | Restore a Lambda alias version |
+| `sol lambda verify` | — | `--image=IMAGE`, `--issuer=ISSUER`, `--jwks-uri=URI`, `--profile=PROFILE`, `--region=REGION`, `--role=ARN`, `--service=SERVICE`, `--token-file=PATH`, `--unit=UNIT` | documented | Verify Lambda readiness and protected route |
 | `sol migrate rollback` | — | `--dir=DIR`, `--table=TABLE` | documented | Roll back the last applied migration |
 | `sol migrate status` | — | `--dir=DIR`, `--json`, `--table=TABLE` | documented | Show per-file applied/pending status, and drift |
 | `sol new event` | TEAM/NAME | — | documented | Add a typed Kafka event contract to the current |

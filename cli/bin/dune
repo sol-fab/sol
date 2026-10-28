@@ -33,6 +33,7 @@
   cmd_deploy
   cmd_destroy
   cmd_cloud_run
+  cmd_lambda
   cmd_deploy_event
   cmd_migrate
   cmd_rollback

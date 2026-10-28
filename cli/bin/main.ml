@@ -17,6 +17,7 @@ let () =
       ; Cmd_deploy.cmd
       ; Cmd_destroy.cmd
       ; Cmd_cloud_run.cmd
+      ; Cmd_lambda.cmd
       ; Cmd_migrate.cmd
       ; Cmd_rollback.cmd
       ; Cmd_secret.cmd
