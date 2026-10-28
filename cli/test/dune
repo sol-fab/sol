@@ -316,3 +316,13 @@
  (deps ../bin/main.exe test_local_invoke.sh)
  (action
   (run bash %{dep:test_local_invoke.sh} %{dep:../bin/main.exe})))
+
+(rule
+ (alias runtest)
+ (deps ../bin/main.exe test_lambda_cli.sh)
+ (action
+  (run
+   bash
+   %{dep:test_lambda_cli.sh}
+   %{dep:../bin/main.exe}
+   %{workspace_root}/examples/pluto)))
