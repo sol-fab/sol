@@ -30,7 +30,10 @@ The resulting binary is `_build/default/internal/fixtures/task-handler/task_hand
 ctx=$(mktemp -d)
 cp _build/default/internal/fixtures/task-handler/task_handler.exe "$ctx/task_handler"
 cp internal/fixtures/task-handler/Dockerfile "$ctx/Dockerfile"
-docker build -t sol-task-handler:local "$ctx"
+# Lambda accepts a Docker v2 manifest, not an OCI image index.
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+  --output "type=image,name=<registry>/<repo>:<tag>,push=true,oci-mediatypes=false" \
+  "$ctx"
 ```
 
 Push the image to ECR or Artifact Registry and deploy it with `sol task aws` or

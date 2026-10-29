@@ -25,7 +25,7 @@ observability acceptance layer.
 | Lambda function / alias | `checkout-task` / `live` (versions 1 and 2) |
 | Source queue / DLQ | `checkout-task` / `checkout-task-dlq` (`maxReceiveCount=2`) |
 | Execution role | `arn:aws:iam::<aws-account>:role/sol-task-live-exec` (deleted after the run) |
-| Image | `876701109436.dkr.ecr.us-east-1.amazonaws.com/sol-task-live@sha256:bd5f51bdac208567fa522529789504ad984dd3ed099613e3595f50d1696fc873` (Docker v2 manifest; ECR repository deleted after the run) |
+| Image | `<ecr>/sol-task-live@sha256:bd5f51bdac208567fa522529789504ad984dd3ed099613e3595f50d1696fc873` (Docker v2 manifest; ECR repository deleted after the run) |
 | Settings | `max_attempts=2`, `visibility_timeout_s=30`, `dlq_retention_s=3600`, `concurrency=2` |
 | Event source mapping | `18d2a439-0af0-4805-a57d-9b986197a748`, alias ARN, `ReportBatchItemFailures` |
 | Evidence | `internal/qualification/records/2026-10-29-task-aws-live/` |
