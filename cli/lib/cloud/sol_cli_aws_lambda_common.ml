@@ -159,6 +159,32 @@ let put_alias (s : scope) ~function_name ~version =
     | Some _ -> "update-alias", "update"
     | None -> "create-alias", "create"
   in
+  let require_version () =
+    match alias_version s ~function_name with
+    | Ok (Some actual) when actual = version -> Ok ()
+    | Ok (Some actual) ->
+      Error
+        (Unknown
+           (Printf.sprintf
+              "%s alias did not reach version %s (observed %s)"
+              verb
+              version
+              actual))
+    | Ok None ->
+      Error
+        (Unknown
+           (Printf.sprintf
+              "%s alias did not reach version %s (the alias is absent)"
+              verb
+              version))
+    | Error failure ->
+      Error
+        (Unknown
+           (Printf.sprintf
+              "could not observe the alias after %s: %s"
+              verb
+              (failure_to_string failure)))
+  in
   match
     s.run
       (aws
@@ -174,8 +200,23 @@ let put_alias (s : scope) ~function_name ~version =
          ; version
          ])
   with
-  | Error e -> Error (Unknown (Printf.sprintf "%s alias failed: %s" verb e))
-  | Ok _ -> Ok ()
+  | Ok _ -> require_version ()
+  | Error e ->
+    (* The CLI can report an error after the provider applied the mutation. The alias is
+       the serving identity, so reconcile against what is actually serving: if it is the
+       requested version, keep the provider error as a warning and continue to the
+       caller's verification. Any other observed version is a failed mutation; an
+       unreadable alias is unknown, not success. *)
+    (match alias_version s ~function_name with
+     | Ok (Some actual) when actual = version ->
+       Sol_cli_report.warn
+         "Lambda %s-alias reported an error but the live alias is at version %s; \
+          reconciled: %s"
+         verb
+         version
+         e;
+       Ok ()
+     | Ok _ | Error _ -> Error (Unknown (Printf.sprintf "%s alias failed: %s" verb e)))
 ;;
 
 let trim_url u =

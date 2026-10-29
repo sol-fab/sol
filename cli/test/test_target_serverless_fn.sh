@@ -42,7 +42,13 @@ elif [[ "$args" == *"lambda publish-version"* ]]; then
 elif [[ "$args" == *"lambda get-alias"* ]]; then
   if [[ -f "$FAKE_AWS_STATE/alias" ]]; then printf '{"FunctionVersion":"%s"}\n' "$(cat "$FAKE_AWS_STATE/alias")"; else printf 'ResourceNotFoundException: Alias not found.\n' >&2; exit 254; fi
 elif [[ "$args" == *"lambda create-alias"* || "$args" == *"lambda update-alias"* ]]; then
+  if [[ "${FAKE_ALIAS_ERROR:-0}" == 1 && "${FAKE_ALIAS_NO_MUTATE:-0}" == 1 ]]; then
+    echo "simulated alias transport failure before mutation" >&2
+    exit 1
+  fi
+  if [[ "${FAKE_ALIAS_STALE:-0}" == 1 ]]; then printf '{}\n'; exit 0; fi
   for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "--function-version" ]]; then j=$((i+1)); echo "${!j}" > "$FAKE_AWS_STATE/alias"; fi; done
+  if [[ "${FAKE_ALIAS_ERROR:-0}" == 1 ]]; then echo "simulated alias transport failure" >&2; exit 1; fi
   printf '{}\n'
 elif [[ "$args" == *"lambda get-function"* ]]; then
   owner="${FAKE_FUNCTION_OWNER:-lambda-fn-experiment}"
@@ -103,6 +109,32 @@ grep -q '"version":"1"' "$work/rollback"
 grep -q '"invocation_status":"ok"' "$work/rollback"
 grep -q '"version":"1"' "$record"
 [[ "$(cat "$work/state/alias")" == 1 ]]
+
+# An alias update that applied but whose CLI call reported an error is reconciled
+# against the observed alias; the original error is preserved as a warning.
+FAKE_ALIAS_ERROR=1 "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/deploy-reconcile" 2>&1
+grep -q '"version":"3"' "$work/deploy-reconcile"
+grep -q 'reconciled' "$work/deploy-reconcile"
+[[ "$(cat "$work/state/alias")" == 3 ]]
+record=$(find "$work/home/.local/share/sol/runs" -name serverless-release.json -type f -print | sort | tail -1)
+grep -q '"version":"3"' "$record"
+
+# An alias command that failed before the mutation must not be recorded as applied.
+if FAKE_ALIAS_ERROR=1 FAKE_ALIAS_NO_MUTATE=1 "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/deploy-unapplied" 2>&1; then
+  echo "deploy accepted an alias error that did not apply" >&2; exit 1
+fi
+grep -q 'update alias failed' "$work/deploy-unapplied"
+[[ "$(cat "$work/state/alias")" == 3 ]]
+grep -q '"version":"3"' "$record"
+
+# A command that reports success without moving the alias must fail the serving
+# postcondition rather than record a version that is not live.
+if FAKE_ALIAS_STALE=1 "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/deploy-stale" 2>&1; then
+  echo "deploy accepted an alias that did not move" >&2; exit 1
+fi
+grep -q 'did not reach version' "$work/deploy-stale"
+[[ "$(cat "$work/state/alias")" == 3 ]]
+grep -q '"version":"3"' "$record"
 
 # A provider FunctionError must fail the lifecycle step, but only after the record
 # reflects the alias the provider actually moved.

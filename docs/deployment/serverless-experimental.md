@@ -203,10 +203,28 @@ sol rollback --target <target> --record <serverless-release.json> \
 For AWS the record's `kind` selects the rollback lifecycle and the record must match the
 target, service, and provider function name before the alias moves. The record is updated
 immediately after the alias move, before the post-rollback smoke, so a failed smoke leaves
-the record naming the version that is actually live rather than the previous version. The
-post-rollback check performs the same execution smoke as deploy: readiness plus
-authorized/unauthorized requests for `-svc`, or an invoke through `live` returning
-`{"status":"ok"}` for `-fn`. Kubernetes rollback continues to require `RELEASE_ID`.
+the record naming the version that is actually live rather than the previous version. GCP
+`-svc` follows the same rule for the serving revision. The post-rollback check performs the
+same execution smoke as deploy: readiness plus authorized/unauthorized requests for `-svc`,
+or an invoke through `live` returning `{"status":"ok"}` for `-fn`. Kubernetes rollback
+continues to require `RELEASE_ID`.
+
+### Serving mutations, records, and uncertain outcomes
+
+For serverless targets, a version or revision move is a serving-state mutation, not a
+generic provider call. The lifecycle contract is:
+
+- record the new serving identity once provider observation establishes it, and before
+  the execution smoke;
+- verify the application postcondition separately;
+- reconcile a mutation whose CLI call reported an error by observing whether the requested
+  version or revision is actually serving;
+- treat a reconciled mutation as applied, keep the original provider error as a warning,
+  and continue to verification;
+- leave the record unchanged when the mutation did not apply, and fail closed when the
+  provider state cannot be read.
+
+This is why a failed smoke does not silently leave the record naming the previous version.
 
 ## Explicitly unsupported serverless combinations
 

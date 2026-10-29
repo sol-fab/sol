@@ -137,8 +137,15 @@ let rollback
     ; record = None
     }
   in
+  let write_record release =
+    Sol_cli_cloud_run.write_record ~path:record release
+    |> Result.map_error (fun message -> "could not update release record: " ^ message)
+  in
+  (* If traffic moves but the smoke fails, the record must name what is actually serving.
+     Write it at the traffic move, then refine it from the verified state. *)
+  let on_revision_moved revision = write_record { release with revision } in
   let* observed =
-    Sol_cli_cloud_run.rollback (runner ()) request ~revision ~token
+    Sol_cli_cloud_run.rollback (runner ()) request ~revision ~token ~on_revision_moved
     |> Result.map_error Sol_cli_cloud_run.failure_to_string
   in
   let recorded =
@@ -148,10 +155,7 @@ let rollback
     ; image = Option.value observed.image ~default:release.image
     }
   in
-  let* () =
-    Sol_cli_cloud_run.write_record ~path:record recorded
-    |> Result.map_error (fun message -> "could not update release record: " ^ message)
-  in
+  let* () = write_record recorded in
   Ok observed
 ;;
 

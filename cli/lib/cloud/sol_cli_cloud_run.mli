@@ -68,6 +68,7 @@ val rollback
   -> request
   -> revision:string
   -> token:string
+  -> on_revision_moved:(string -> (unit, string) result)
   -> (observed, failure) result
 
 val destroy

@@ -3,7 +3,14 @@
     Commands resolve the target, service, image, record, and caller token; they do not
     choose a provider adapter or decide which rollback input a provider accepts. This
     module makes that choice once and hands the operation to the provider adapter, which
-    keeps provider-native identity, primitive support, and lifecycle mechanics. *)
+    keeps provider-native identity, primitive support, and lifecycle mechanics.
+
+    Provider adapters share one serving-mutation contract: once provider observation
+    establishes that a version or revision is serving, they record that identity before
+    the execution smoke, and they reconcile a mutation whose CLI call reported an error by
+    observing whether the requested state is actually serving. A reconciled mutation keeps
+    the provider error as a warning; an unreadable provider state is never treated as
+    success. *)
 
 val deploy
   :  target:Sol_cli_config.target
