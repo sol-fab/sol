@@ -56,8 +56,11 @@ let deploy ~target ~config ~project ~(service : Sol_cli_manifest.service) ~image
     ; provider_service
     ; image
     ; identity
-    ; ingress = Sol_cli_cloud_run.Public
-    ; record = Some record
+    ; ingress =
+        Sol_cli_cloud_run.Public
+        (* The target writes the ownership record below; [Sol_cli_cloud_run.deploy] does not.
+       The adapter's record field belongs to the standalone deploy+verify flow. *)
+    ; record = None
     }
   in
   let runner = runner () in
