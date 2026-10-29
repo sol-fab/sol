@@ -525,117 +525,6 @@ let read_record ~path =
     }
 ;;
 
-let deploy (r : request) =
-  let* () = validate_settings r in
-  let* () =
-    if Sol_cli_image_ref.is_digest r.image
-    then Ok ()
-    else
-      Error
-        (Sol_cli_cloud_run.Refused
-           "image must be an immutable <repo>@sha256:<digest> reference")
-  in
-  let* record =
-    r.record
-    |> Option.to_result
-         ~none:(Sol_cli_cloud_run.Refused "task deploy requires an ownership record path")
-  in
-  let* cloud_run_service, topic, subscription, dlq_topic, push_sa_name =
-    provider_names ~service:r.service
-  in
-  let push_service_account =
-    Printf.sprintf "%s@%s.iam.gserviceaccount.com" push_sa_name r.project
-  in
-  (* Ownership before any mutation, including [gcloud run deploy]. *)
-  let* existing_service = service_json r ~cloud_run_service in
-  let* () =
-    match existing_service with
-    | None -> Ok ()
-    | Some json ->
-      let labels = labels_of (json_field [ "metadata" ] json) in
-      if owns_labels ~service:cloud_run_service labels
-      then Ok ()
-      else
-        Error
-          (Sol_cli_cloud_run.Refused
-             "Cloud Run service exists without this adapter's labels")
-  in
-  let release ~cloud_run_url ~revision ~image ~push_service_account =
-    { project = r.project
-    ; region = r.region
-    ; service = r.service
-    ; image
-    ; cloud_run_service
-    ; cloud_run_url
-    ; revision
-    ; topic
-    ; subscription
-    ; dlq_topic
-    ; push_service_account
-    ; max_attempts = r.max_attempts
-    ; ack_deadline_s = r.ack_deadline_s
-    ; dlq_retention_s = r.dlq_retention_s
-    ; concurrency = r.concurrency
-    }
-  in
-  let write release =
-    write_record ~path:record release
-    |> Result.map_error (fun message -> Sol_cli_cloud_run.Provider message)
-  in
-  let* () =
-    write (release ~cloud_run_url:"" ~revision:"" ~image:r.image ~push_service_account)
-  in
-  let* () =
-    ensure_topic
-      r
-      ~topic:dlq_topic
-      ~service:cloud_run_service
-      ~retention_s:r.dlq_retention_s
-  in
-  let* () =
-    ensure_topic r ~topic ~service:cloud_run_service ~retention_s:r.dlq_retention_s
-  in
-  let* project_number = project_number r in
-  let pubsub_agent =
-    Printf.sprintf "service-%s@gcp-sa-pubsub.iam.gserviceaccount.com" project_number
-  in
-  (* Pub/Sub must be able to publish an exhausted task into its dead-letter topic. *)
-  let* () =
-    add_topic_publisher r ~topic:dlq_topic ~member:pubsub_agent
-    |> Result.map (fun _ -> ())
-    |> Result.map_error (fun message -> Sol_cli_cloud_run.Partial (message, None))
-  in
-  let* () = ensure_service_account r ~name:push_sa_name ~email:push_service_account in
-  let* () = deploy_service r ~cloud_run_service in
-  let* cloud_run_url, revision = service_details r ~cloud_run_service in
-  let* () =
-    write (release ~cloud_run_url ~revision ~image:r.image ~push_service_account)
-  in
-  let* () =
-    add_invoker r ~cloud_run_service ~member:push_service_account
-    |> Result.map (fun _ -> ())
-    |> Result.map_error (fun message -> Sol_cli_cloud_run.Partial (message, None))
-  in
-  let* () =
-    add_token_creator r ~service_account:push_service_account ~member:pubsub_agent
-    |> Result.map (fun _ -> ())
-    |> Result.map_error (fun message -> Sol_cli_cloud_run.Partial (message, None))
-  in
-  let* () =
-    ensure_subscription
-      r
-      ~subscription
-      ~topic
-      ~dlq_topic
-      ~push_url:cloud_run_url
-      ~push_service_account
-      ~service:cloud_run_service
-  in
-  let release = release ~cloud_run_url ~revision ~image:r.image ~push_service_account in
-  let* () = write release in
-  Ok release
-;;
-
 let verify (r : request) ~record =
   let* expected =
     read_record ~path:record
@@ -749,6 +638,118 @@ let verify (r : request) ~record =
            "dead-letter topic does not grant the Pub/Sub service agent publisher")
   in
   Ok expected
+;;
+
+let deploy (r : request) =
+  let* () = validate_settings r in
+  let* () =
+    if Sol_cli_image_ref.is_digest r.image
+    then Ok ()
+    else
+      Error
+        (Sol_cli_cloud_run.Refused
+           "image must be an immutable <repo>@sha256:<digest> reference")
+  in
+  let* record =
+    r.record
+    |> Option.to_result
+         ~none:(Sol_cli_cloud_run.Refused "task deploy requires an ownership record path")
+  in
+  let* cloud_run_service, topic, subscription, dlq_topic, push_sa_name =
+    provider_names ~service:r.service
+  in
+  let push_service_account =
+    Printf.sprintf "%s@%s.iam.gserviceaccount.com" push_sa_name r.project
+  in
+  (* Ownership before any mutation, including [gcloud run deploy]. *)
+  let* existing_service = service_json r ~cloud_run_service in
+  let* () =
+    match existing_service with
+    | None -> Ok ()
+    | Some json ->
+      let labels = labels_of (json_field [ "metadata" ] json) in
+      if owns_labels ~service:cloud_run_service labels
+      then Ok ()
+      else
+        Error
+          (Sol_cli_cloud_run.Refused
+             "Cloud Run service exists without this adapter's labels")
+  in
+  let release ~cloud_run_url ~revision ~image ~push_service_account =
+    { project = r.project
+    ; region = r.region
+    ; service = r.service
+    ; image
+    ; cloud_run_service
+    ; cloud_run_url
+    ; revision
+    ; topic
+    ; subscription
+    ; dlq_topic
+    ; push_service_account
+    ; max_attempts = r.max_attempts
+    ; ack_deadline_s = r.ack_deadline_s
+    ; dlq_retention_s = r.dlq_retention_s
+    ; concurrency = r.concurrency
+    }
+  in
+  let write release =
+    write_record ~path:record release
+    |> Result.map_error (fun message -> Sol_cli_cloud_run.Provider message)
+  in
+  let* () =
+    write (release ~cloud_run_url:"" ~revision:"" ~image:r.image ~push_service_account)
+  in
+  let* () =
+    ensure_topic
+      r
+      ~topic:dlq_topic
+      ~service:cloud_run_service
+      ~retention_s:r.dlq_retention_s
+  in
+  let* () =
+    ensure_topic r ~topic ~service:cloud_run_service ~retention_s:r.dlq_retention_s
+  in
+  let* project_number = project_number r in
+  let pubsub_agent =
+    Printf.sprintf "service-%s@gcp-sa-pubsub.iam.gserviceaccount.com" project_number
+  in
+  (* Pub/Sub must be able to publish an exhausted task into its dead-letter topic. *)
+  let* () =
+    add_topic_publisher r ~topic:dlq_topic ~member:pubsub_agent
+    |> Result.map (fun _ -> ())
+    |> Result.map_error (fun message -> Sol_cli_cloud_run.Partial (message, None))
+  in
+  let* () = ensure_service_account r ~name:push_sa_name ~email:push_service_account in
+  let* () = deploy_service r ~cloud_run_service in
+  let* cloud_run_url, revision = service_details r ~cloud_run_service in
+  let* () =
+    write (release ~cloud_run_url ~revision ~image:r.image ~push_service_account)
+  in
+  let* () =
+    add_invoker r ~cloud_run_service ~member:push_service_account
+    |> Result.map (fun _ -> ())
+    |> Result.map_error (fun message -> Sol_cli_cloud_run.Partial (message, None))
+  in
+  let* () =
+    add_token_creator r ~service_account:push_service_account ~member:pubsub_agent
+    |> Result.map (fun _ -> ())
+    |> Result.map_error (fun message -> Sol_cli_cloud_run.Partial (message, None))
+  in
+  let* () =
+    ensure_subscription
+      r
+      ~subscription
+      ~topic
+      ~dlq_topic
+      ~push_url:cloud_run_url
+      ~push_service_account
+      ~service:cloud_run_service
+  in
+  let release = release ~cloud_run_url ~revision ~image:r.image ~push_service_account in
+  let* () = write release in
+  let* _ = verify r ~record in
+  Ok release
 ;;
 
 let enqueue (r : request) ~record ~body =
