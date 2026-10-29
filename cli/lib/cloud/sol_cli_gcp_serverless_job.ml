@@ -299,7 +299,10 @@ let execution_image json =
   (* A JSON array path cannot be represented by [Sol_cli_json.field]; inspect the
      containers list directly for the common shape. *)
   let containers =
-    [ [ "spec"; "template"; "containers" ]; [ "template"; "containers" ] ]
+    [ [ "spec"; "template"; "spec"; "containers" ]
+    ; [ "spec"; "template"; "containers" ]
+    ; [ "template"; "containers" ]
+    ]
     |> List.find_map (fun path ->
       match Sol_cli_json.field path json with
       | `List (first :: _) ->

@@ -83,7 +83,7 @@ if [[ "$1 $2 $3 $4" == "run jobs executions describe" ]]; then
   [[ -f "$state/executions/$name.image" ]] || { echo "execution absent" >&2; exit 1; }
   image="$(cat "$state/executions/$name.image")"
   cat <<JSON
-{"job":"projects/example-project/locations/us-west1/jobs/probe-fn","spec":{"template":{"containers":[{"image":"$image"}]}},"status":{"succeededCount":1,"failedCount":0,"cancelledCount":0,"conditions":[{"type":"Completed","status":"True"}]}}
+{"job":"projects/example-project/locations/us-west1/jobs/probe-fn","spec":{"template":{"spec":{"containers":[{"image":"$image"}]}}},"status":{"succeededCount":1,"failedCount":0,"cancelledCount":0,"conditions":[{"type":"Completed","status":"True"}]}}
 JSON
   exit 0
 fi
