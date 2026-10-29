@@ -433,7 +433,12 @@ let rollback_run
       ~ingress
   in
   let* observed =
-    Sol_cli_cloud_run.rollback (runner ()) request ~revision ~token
+    Sol_cli_cloud_run.rollback
+      (runner ())
+      request
+      ~revision
+      ~token
+      ~on_revision_moved:(fun _ -> Ok ())
     |> Result.map_error (fun failure ->
       command_error (Sol_cli_cloud_run.failure_to_string failure))
   in

@@ -40,6 +40,7 @@ elif [[ "$args" == *"lambda publish-version"* ]]; then v=$(cat "$FAKE_AWS_STATE/
 elif [[ "$args" == *"lambda get-alias"* ]]; then if [[ -f "$FAKE_AWS_STATE/alias" ]]; then printf '{"FunctionVersion":"%s"}\n' "$(cat "$FAKE_AWS_STATE/alias")"; else printf 'ResourceNotFoundException: Alias not found.\n' >&2; exit 254; fi
 elif [[ "$args" == *"lambda create-alias"* || "$args" == *"lambda update-alias"* ]]; then
   for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "--function-version" ]]; then j=$((i+1)); echo "${!j}" > "$FAKE_AWS_STATE/alias"; fi; done
+  if [[ "${FAKE_ALIAS_ERROR:-0}" == 1 ]]; then echo "simulated alias transport failure" >&2; exit 1; fi
   printf '{}\n'
 elif [[ "$args" == *"lambda get-function-url-config"* ]]; then printf '{"FunctionUrl":"https://lambda.example/"}\n'
 elif [[ "$args" == *"lambda create-function-url-config"* || "$args" == *"lambda remove-permission"* || "$args" == *"lambda add-permission"* ]]; then printf '{}\n'
@@ -73,6 +74,15 @@ printf 'token\n' > "$work/token"
 "$sol" rollback --target live/aws/us-east-1 --record "$record" --service checkout_svc --to-version 1 --token-file "$work/token" > "$work/rollback"
 grep -q '"version":"1"' "$work/rollback"
 grep -q '"version":"1"' "$record"
+
+# An alias update that applied but whose CLI call reported an error is reconciled
+# against the observed alias; the original error is preserved as a warning.
+FAKE_ALIAS_ERROR=1 "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref checkout_svc=repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "$work/deploy-reconcile" 2>&1
+grep -q '"version":"3"' "$work/deploy-reconcile"
+grep -q 'reconciled' "$work/deploy-reconcile"
+[[ "$(cat "$work/state/alias")" == 3 ]]
+record=$(find "$work/home/.local/share/sol/runs" -name serverless-release.json -type f -print | sort | tail -1)
+grep -q '"version":"3"' "$record"
 
 # A failed post-rollback smoke must still leave the record naming the alias the provider
 # actually moved, not the version that is no longer live.

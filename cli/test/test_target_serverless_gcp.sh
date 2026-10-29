@@ -50,6 +50,10 @@ if [[ "$1 $2 $3" == "run services update-traffic" ]]; then
     esac
   done
   printf '%s\n' "${rev#rev-}" > "$state/revision"
+  if [[ "${FAKE_TRAFFIC_ERROR:-0}" == 1 ]]; then
+    echo "simulated update-traffic transport failure" >&2
+    exit 1
+  fi
   echo "updated"
   exit 0
 fi
@@ -110,6 +114,24 @@ record="$record_fail"
 "$sol" rollback --target live/gcp/us-west1 --record "$record" --service checkout_svc --to-revision rev-1 --token-file "$work/token" > "$work/rollback"
 grep -q '"revision":"rev-1"' "$work/rollback"
 grep -q '"revision":"rev-1"' "$record"
+
+# A traffic update that applied but whose CLI call reported an error is reconciled
+# against observed traffic; the original error is preserved as a warning.
+FAKE_TRAFFIC_ERROR=1 "$sol" rollback --target live/gcp/us-west1 --record "$record" --service checkout_svc --to-revision rev-2 --token-file "$work/token" > "$work/rollback-reconcile" 2>&1
+grep -q '"revision":"rev-2"' "$work/rollback-reconcile"
+grep -q 'reconciled' "$work/rollback-reconcile"
+[[ "$(cat "$work/state/revision")" == 2 ]]
+grep -q '"revision":"rev-2"' "$record"
+
+# A rollback whose smoke fails after traffic moved must leave the record naming the
+# revision the provider is actually serving.
+if FAKE_HTTP_FAIL=1 "$sol" rollback --target live/gcp/us-west1 --record "$record" --service checkout_svc --to-revision rev-1 --token-file "$work/token" > "$work/rollback-fail" 2>&1; then
+  echo "rollback accepted a failed post-rollback smoke" >&2; exit 1
+fi
+grep -q 'serving verification failed' "$work/rollback-fail"
+[[ "$(cat "$work/state/revision")" == 1 ]]
+grep -q '"revision":"rev-1"' "$record"
+
 "$sol" destroy live/gcp/us-west1 --apply --service checkout_svc --record "$record" > /dev/null
 [[ ! -f "$work/state/revision" ]]
 echo "target serverless GCP deploy/rollback/destroy fake-provider test passed"

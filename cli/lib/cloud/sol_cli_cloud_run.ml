@@ -546,7 +546,36 @@ let verify runner (request : request) ~token =
     Ok observed
 ;;
 
-let rollback runner (request : request) ~revision ~token =
+let serving_revision revision observed =
+  List.exists (fun (name, percent) -> name = revision && percent = 100) observed.traffic
+;;
+
+let rollback runner (request : request) ~revision ~token ~on_revision_moved =
+  let finish observed =
+    if serving_revision revision observed
+    then
+      (* The provider observation establishes that the requested revision is serving. Record
+         that serving identity before the smoke, so a failed smoke cannot leave the record
+         naming the previous revision. *)
+      let* () =
+        on_revision_moved revision
+        |> Result.map_error (fun message ->
+          Partial
+            ( "serving revision observed but release record update failed: " ^ message
+            , Some observed ))
+      in
+      match verify runner { request with record = None } ~token with
+      | Ok _ -> Ok observed
+      | Error failure ->
+        Error
+          (Partial
+             ( "rollback traffic reached the requested revision at 100%, but serving \
+                verification failed: "
+               ^ failure_to_string failure
+             , Some observed ))
+    else
+      Error (Unknown "rollback did not establish the requested revision at 100% traffic")
+  in
   match describe runner request with
   | Error (`Unknown message) -> Error (Unknown message)
   | Ok _ ->
@@ -558,29 +587,25 @@ let rollback runner (request : request) ~revision ~token =
             ~service:request.provider_service
             ~revision)
      with
-     | Error message -> Error (Partial (message, None))
      | Ok _ ->
        (match describe runner request with
         | Error (`Unknown message) ->
           Error (Unknown ("could not read rolled-back service: " ^ message))
-        | Ok observed ->
-          if
-            List.exists
-              (fun (name, percent) -> name = revision && percent = 100)
-              observed.traffic
-          then (
-            match verify runner { request with record = None } ~token with
-            | Ok _ -> Ok observed
-            | Error failure ->
-              Error
-                (Partial
-                   ( "rollback traffic reached the requested revision at 100%, \
-                      but                        serving verification failed: "
-                     ^ failure_to_string failure
-                   , Some observed )))
-          else
-            Error
-              (Unknown "rollback did not establish the requested revision at 100% traffic")))
+        | Ok observed -> finish observed)
+     | Error message ->
+       (* The CLI can report an error after the provider applied the mutation. Reconciling
+          against observed traffic distinguishes "the update actually applied" from "the
+          update did not apply"; unreadable state stays unknown. *)
+       (match describe runner request with
+        | Ok observed when serving_revision revision observed ->
+          Sol_cli_report.warn
+            "gcloud update-traffic reported an error but revision %s is serving 100%%; \
+             reconciled: %s"
+            revision
+            message;
+          finish observed
+        | Ok observed -> Error (Partial (message, Some observed))
+        | Error _ -> Error (Partial (message, None))))
 ;;
 
 let destroy runner ~project ~region ~service ~record =

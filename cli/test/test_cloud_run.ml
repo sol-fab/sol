@@ -205,7 +205,12 @@ let test_rollback () =
   in
   revision := "rev-current";
   match
-    Sol_cli_cloud_run.rollback runner (request ()) ~revision:"rev-prev" ~token:"token"
+    Sol_cli_cloud_run.rollback
+      runner
+      (request ())
+      ~revision:"rev-prev"
+      ~token:"token"
+      ~on_revision_moved:(fun _ -> Ok ())
   with
   | Ok observed ->
     check "rollback observes previous revision" (observed.revision = "rev-prev")
@@ -316,7 +321,12 @@ let test_rollback_requires_target_traffic () =
     }
   in
   match
-    Sol_cli_cloud_run.rollback runner (request ()) ~revision:"rev-wanted" ~token:"token"
+    Sol_cli_cloud_run.rollback
+      runner
+      (request ())
+      ~revision:"rev-wanted"
+      ~token:"token"
+      ~on_revision_moved:(fun _ -> Ok ())
   with
   | Error (Unknown _) -> check "rollback refuses unobserved target revision" true
   | _ -> check "rollback refuses unobserved target revision" false
@@ -395,8 +405,9 @@ let test_destroy_refuses_stale_record () =
        | _ -> check "stale record refuses destroy" false)
 ;;
 
-let test_rollback_requires_authorization () =
+let test_rollback_records_before_verification () =
   let described = ref "rev-current" in
+  let recorded = ref None in
   let runner =
     { Sol_cli_cloud_run.run =
         (fun argv ->
@@ -417,14 +428,97 @@ let test_rollback_requires_authorization () =
     }
   in
   match
-    Sol_cli_cloud_run.rollback runner (request ()) ~revision:"rev-prev" ~token:"token"
+    Sol_cli_cloud_run.rollback
+      runner
+      (request ())
+      ~revision:"rev-prev"
+      ~token:"token"
+      ~on_revision_moved:(fun revision ->
+        recorded := Some revision;
+        Ok ())
   with
   | Error (Partial (_, Some observed)) ->
     check
       ("rollback reports observed revision after verification failure: "
        ^ observed.revision)
-      (observed.revision = "rev-prev")
+      (observed.revision = "rev-prev");
+    check
+      "rollback records the moved revision before verification fails"
+      (!recorded = Some "rev-prev")
   | _ -> check "rollback refuses unauthenticated serving state" false
+;;
+
+let test_rollback_reconciles_traffic_error () =
+  let described = ref "rev-current" in
+  let recorded = ref None in
+  let runner =
+    { Sol_cli_cloud_run.run =
+        (fun argv ->
+          match argv with
+          | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+            Ok (out (describe_json ~revision:!described ~percent:100))
+          | "gcloud" :: "run" :: "services" :: "update-traffic" :: _ ->
+            (* The mutation applied, but the CLI reported a transport failure afterward. *)
+            described := "rev-prev";
+            Error "simulated transport failure"
+          | _ -> Error "unexpected")
+    ; http =
+        (fun ~url ~token ->
+          match url, token with
+          | url, None when String.ends_with ~suffix:"/readyz" url -> Ok (200, "")
+          | url, Some _ when String.ends_with ~suffix:"/quote" url -> Ok (200, "")
+          | url, None when String.ends_with ~suffix:"/quote" url -> Ok (401, "")
+          | _ -> Error "unexpected")
+    }
+  in
+  (match
+     Sol_cli_cloud_run.rollback
+       runner
+       (request ())
+       ~revision:"rev-prev"
+       ~token:"token"
+       ~on_revision_moved:(fun revision ->
+         recorded := Some revision;
+         Ok ())
+   with
+   | Ok observed ->
+     check "reconciled traffic error is successful" (observed.revision = "rev-prev")
+   | Error e ->
+     check ("reconciled traffic error " ^ Sol_cli_cloud_run.failure_to_string e) false);
+  check "reconciled traffic error records the moved revision" (!recorded = Some "rev-prev")
+;;
+
+let test_rollback_refuses_unreconciled_traffic_error () =
+  let described = ref "rev-current" in
+  let recorded = ref None in
+  let runner =
+    { Sol_cli_cloud_run.run =
+        (fun argv ->
+          match argv with
+          | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+            Ok (out (describe_json ~revision:!described ~percent:100))
+          | "gcloud" :: "run" :: "services" :: "update-traffic" :: _ ->
+            Error "simulated transport failure"
+          | _ -> Error "unexpected")
+    ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+    }
+  in
+  (match
+     Sol_cli_cloud_run.rollback
+       runner
+       (request ())
+       ~revision:"rev-prev"
+       ~token:"token"
+       ~on_revision_moved:(fun revision ->
+         recorded := Some revision;
+         Ok ())
+   with
+   | Error (Partial (_, Some observed)) ->
+     check
+       "unreconciled traffic error reports the unchanged serving revision"
+       (observed.revision = "rev-current")
+   | _ -> check "unreconciled traffic error fails" false);
+  check "unreconciled traffic error does not record" (!recorded = None)
 ;;
 
 let test_destroy_refuses_unowned_live_service () =
@@ -748,7 +842,9 @@ let () =
   test_destroy_refuses_stale_record ();
   test_destroy_refuses_provider_record_mismatch ();
   test_destroy_unreadable_inventory_is_unknown ();
-  test_rollback_requires_authorization ();
+  test_rollback_records_before_verification ();
+  test_rollback_reconciles_traffic_error ();
+  test_rollback_refuses_unreconciled_traffic_error ();
   test_verify_writes_release_record ();
   test_deploy_refuses_unowned_service ();
   Printf.printf "%d passed, %d failed\n" !passed !failed;
