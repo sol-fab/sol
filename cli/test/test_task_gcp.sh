@@ -107,7 +107,7 @@ grep -q '"topic":"checkout-task"' "$work/deploy.json"
 grep -q '"subscription":"checkout-task-sub"' "$work/deploy.json"
 grep -q '"dlq_topic":"checkout-task-dlq"' "$work/deploy.json"
 grep -q '"dlq_subscription":"checkout-task-dlq-sub"' "$work/deploy.json"
-grep -q '"push_service_account":"checkout-push@p.iam.gserviceaccount.com"' "$work/deploy.json"
+grep -Eq '"push_service_account":"checkout-push-[0-9a-f]{6}@p.iam.gserviceaccount.com"' "$work/deploy.json"
 grep -q 'run services add-iam-policy-binding' "$work/state/calls.log"
 grep -q 'iam service-accounts add-iam-policy-binding' "$work/state/calls.log"
 grep -q 'pubsub topics add-iam-policy-binding checkout-task-dlq' "$work/state/calls.log"
@@ -163,5 +163,18 @@ grep -q '"cloud_run_url":""' "$work/partial-service.json"
 [[ ! -f "$work/state/topic-checkout-task" ]]
 [[ ! -f "$work/state/topic-checkout-task-dlq" ]]
 [[ ! -f "$work/state/sa-checkout-push.description" ]]
+
+# Destroy deletes the push service account. GCP keeps that ID reserved, so a
+# redeploy using the same record must allocate a fresh push identity rather than
+# recreating the deleted one.
+old_sa=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["push_service_account"])' "$work/release.json")
+"$sol" task gcp deploy "${common[@]}" --record "$work/release.json" > "$work/redeploy.json"
+new_sa=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["push_service_account"])' "$work/redeploy.json")
+[[ "$new_sa" != "$old_sa" ]]
+grep -q 'iam service-accounts create' "$work/state/calls.log"
+"$sol" task gcp destroy --project p --region us-west1 --service checkout --record "$work/release.json" --apply > /dev/null
+[[ ! -f "$work/state/service" ]]
+[[ ! -f "$work/state/sub-checkout-task-dlq-sub" ]]
+[[ ! -f "$work/state/sa-${new_sa%%@*}.description" ]]
 
 echo "task GCP fake-provider lifecycle test passed"

@@ -128,7 +128,7 @@ let provider_names ~service =
       (Sol_cli_cloud_run.Refused
          "task Cloud Run service name is longer than 49 characters")
   else (
-    let push_service_account = truncate_to 24 provider ^ "-push" in
+    let push_service_account = truncate_to 20 provider ^ "-push" in
     Ok
       ( cloud_run_service
       , provider ^ "-task"
@@ -584,6 +584,41 @@ let read_record ~path =
     }
 ;;
 
+let local_part email =
+  match String.split_on_char '@' email with
+  | name :: _ -> name
+  | [] -> email
+;;
+
+let new_push_service_account_name prefix =
+  let suffix =
+    Printf.sprintf "%06x" (int_of_float (Unix.gettimeofday () *. 1000.) land 0xffffff)
+  in
+  prefix ^ "-" ^ suffix
+;;
+
+(* A deleted GCP service-account ID stays reserved. Reuse the recorded push
+   account while it exists, but allocate a fresh ID after a destroy (or any
+   unreadable/deleted state) instead of trying to recreate a reserved name. *)
+let reusable_push_service_account (r : request) ~record ~service =
+  if not (Sys.file_exists record)
+  then None
+  else (
+    match read_record ~path:record with
+    | Error _ -> None
+    | Ok previous ->
+      if
+        previous.project = r.project
+        && previous.region = r.region
+        && previous.service = service
+        && previous.push_service_account <> ""
+      then (
+        match service_account_json r ~email:previous.push_service_account with
+        | Ok (Some _) -> Some previous.push_service_account
+        | Ok None | Error _ -> None)
+      else None)
+;;
+
 let verify (r : request) ~record =
   let* expected =
     read_record ~path:record
@@ -727,12 +762,20 @@ let deploy (r : request) =
     |> Option.to_result
          ~none:(Sol_cli_cloud_run.Refused "task deploy requires an ownership record path")
   in
-  let* cloud_run_service, topic, subscription, dlq_topic, dlq_subscription, push_sa_name =
+  let* cloud_run_service, topic, subscription, dlq_topic, dlq_subscription, push_sa_prefix
+    =
     provider_names ~service:r.service
   in
   let push_service_account =
-    Printf.sprintf "%s@%s.iam.gserviceaccount.com" push_sa_name r.project
+    match reusable_push_service_account r ~record ~service:r.service with
+    | Some email -> email
+    | None ->
+      Printf.sprintf
+        "%s@%s.iam.gserviceaccount.com"
+        (new_push_service_account_name push_sa_prefix)
+        r.project
   in
+  let push_sa_name = local_part push_service_account in
   (* Ownership before any mutation, including [gcloud run deploy]. *)
   let* existing_service = service_json r ~cloud_run_service in
   let* () =

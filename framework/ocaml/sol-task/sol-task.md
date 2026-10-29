@@ -228,7 +228,8 @@ the incoming authentication boundary; the task runtime does not add a second
 application auth layer. Pub/Sub owns the dead-letter topic after
 `maxDeliveryAttempts`; the lifecycle also creates a pull subscription on that
 topic so exhausted tasks are inspectable rather than published into an
-unconsumed topic. The provider lifecycle is
+unconsumed topic. A later deploy allocates a fresh push service account rather
+than recreating a destroyed, provider-reserved ID. The provider lifecycle is
 `sol task gcp deploy|verify|enqueue|rollback|destroy`; it creates the topics,
 push subscription, private Cloud Run service, and push service account, and
 writes an ownership record with deterministic names before creation.

@@ -198,7 +198,9 @@ queue/topic, retry/DLQ policy, and release record for this capability.
 - **GCP:** `Sol_task_pubsub.Make(T).run` serves the Pub/Sub push endpoint
   (`200` ack, `500` retry, `400` malformed). Cloud Run IAM authenticates the
   Pub/Sub push service account; Sol creates a pull subscription on the
-  dead-letter topic so exhausted tasks are inspectable.
+  dead-letter topic so exhausted tasks are inspectable. A destroyed deployment's
+  push service account is not recreated by name; a later deploy allocates a
+  fresh identity because GCP reserves the deleted ID.
 
   ```text
   sol task gcp deploy --project <project> --region <region> \
