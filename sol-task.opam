@@ -1,0 +1,18 @@
+# Hand-written because Dune cannot generate `pin-depends`.
+# Pins target immutable commits; remove them when dependencies are published.
+opam-version: "2.0"
+synopsis: "Sol's durable task handler contract and local/cloud task runtimes"
+authors: "Logan Nielsen"
+maintainer: "Logan Nielsen <lbendtlynielsen@gmail.com>"
+license: "Apache-2.0"
+homepage: "https://github.com/sol-fab/sol"
+bug-reports: "https://github.com/sol-fab/sol/issues"
+depends: [
+  "ocaml" {>= "5.4.0"}
+  "dune" {>= "3.0"}
+  "yojson" "caqti" "eio" "pg-eio" "sol-jobs" "lambda-eio" "sol-env"
+  "cohttp-eio" "base64" "sol-runtime"
+]
+build: [
+  [ "dune" "build" "-p" name "-j" jobs "@install" "@runtest" {with-test} ]
+]

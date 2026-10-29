@@ -7,6 +7,13 @@ not a full commit log — see `git log` for that.
 
 ## Unreleased
 
+- **New:** `sol-task` defines the durable task handler contract shared by the
+  local Postgres `sol-jobs` runtime (`sol-task.local`), AWS SQS + Lambda
+  (`sol-task.lambda`), and GCP Pub/Sub push + Cloud Run (`sol-task.pubsub`).
+  Tasks have a stable `task_id`, application payload and optional idempotency
+  key, and handlers return `Ack` or `Retry`; delivery is at-least-once and
+  terminal dead-lettering is provider-managed. `sol local task enqueue` inserts
+  an envelope into the local queue for development.
 - **Behavior change:** `sol new workspace` pins the Sol framework packages in the
   generated `*.opam` to the exact revision the CLI was built from, instead of
   `github.com/sol-fab/sol.git#main`. A generated workspace is now reproducible

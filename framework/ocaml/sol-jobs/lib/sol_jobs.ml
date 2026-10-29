@@ -435,18 +435,28 @@ let validate_retention ~terminal_retention_s ~sweep_interval_s =
   | Ok () -> non_negative "sweep_interval_s" sweep_interval_s
 ;;
 
+let insert_q =
+  Caqti_request.Infix.(
+    Caqti_type.(t5 string string string float (option string)) ->. Caqti_type.unit)
+    (Printf.sprintf
+       {|INSERT INTO %s (workspace, kind, payload, run_at, dedupe_key)
+         VALUES (?, ?, ?, to_timestamp(?), ?)
+         ON CONFLICT (workspace, kind, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING|}
+       table)
+;;
+
+let enqueue_raw tx ~workspace ~kind ~payload ?run_at ?dedupe_key () =
+  let run_at = Option.value run_at ~default:(Unix.gettimeofday ()) in
+  match
+    Result.bind (validate_kinds [ kind ]) (fun () -> validate_workspace workspace)
+  with
+  | Error (`Config msg) -> Error (Pg_error.Query_error ("sol-jobs: " ^ msg))
+  | Error (`Database msg) -> Error (Pg_error.Query_error ("sol-jobs: " ^ msg))
+  | Ok () -> Pg_db.exec tx insert_q (workspace, kind, payload, run_at, dedupe_key)
+;;
+
 module Make (J : JOB) = struct
   let enqueue tx ?run_at ?dedupe_key (job : J.t) =
-    let insert_q =
-      Caqti_request.Infix.(
-        Caqti_type.(t5 string string string float (option string)) ->. Caqti_type.unit)
-        (Printf.sprintf
-           {|INSERT INTO %s (workspace, kind, payload, run_at, dedupe_key)
-             VALUES (?, ?, ?, to_timestamp(?), ?)
-             ON CONFLICT (workspace, kind, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING|}
-           table)
-    in
-    let run_at = Option.value run_at ~default:(Unix.gettimeofday ()) in
     let kind = J.kind job in
     if not (List.mem kind J.kinds)
     then
@@ -456,13 +466,18 @@ module Make (J : JOB) = struct
               "sol-jobs: kind %S is not in J.kinds; nothing would claim it"
               kind))
     else (
-      match
-        Result.bind (validate_kinds J.kinds) (fun () -> validate_workspace J.workspace)
-      with
+      match validate_kinds J.kinds with
       | Error (`Config msg) -> Error (Pg_error.Query_error ("sol-jobs: " ^ msg))
       | Error (`Database msg) -> Error (Pg_error.Query_error ("sol-jobs: " ^ msg))
       | Ok () ->
-        Pg_db.exec tx insert_q (J.workspace, kind, J.encode job, run_at, dedupe_key))
+        enqueue_raw
+          tx
+          ~workspace:J.workspace
+          ~kind
+          ~payload:(J.encode job)
+          ?run_at
+          ?dedupe_key
+          ())
   ;;
 
   let run

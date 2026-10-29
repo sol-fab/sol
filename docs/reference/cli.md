@@ -130,6 +130,7 @@ No positional: the command acts on the workspace, and a target or scope is a nar
 | `sol local releases` | — | — | documented | List the release records Sol's local cluster |
 | `sol local rollback` | RELEASE_ID | — | documented | Restore a recorded release boundary on the local |
 | `sol local run` | — | `-C`, `--scope=DOMAIN[/UNIT]` | documented | Run workspace services as native processes, with |
+| `sol local task enqueue` | — | `--idempotency-key=KEY`, `--kind=KIND`, `--payload=JSON`, `--payload-file=FILE`, `--postgres-url=URL` | documented | Enqueue one durable task in the local |
 <!-- END GENERATED: local -->
 
 ## Sources of truth

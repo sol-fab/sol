@@ -140,6 +140,14 @@ configuration* — and the walkthrough is in
 A function is ephemeral, so its metrics are pushed rather than scraped; the push contract is in
 [`sol-fn`](../../framework/ocaml/sol-fn/sol-fn.md). Use `sol local invoke <domain/name> [--event <file>]` to run one function once locally; `sol local run` starts only long-running services and workers.
 
+### Durable tasks
+
+A durable task is a library hosted by a `-worker`, not a fourth primitive. It
+uses the Postgres `sol-jobs` queue locally and the provider-native queue on AWS
+(SQS + Lambda) or GCP (Pub/Sub push + Cloud Run). Reach for it when the work must
+happen eventually but does not need Kafka ordering or replay. See
+[`task-handlers.md`](task-handlers.md).
+
 ### Choosing
 
 | When | Primitive |
@@ -265,6 +273,7 @@ what the runtime guarantees and what it does not.
   [`sol-worker`](../../framework/ocaml/sol-worker/sol-worker.md),
   [`sol-fn`](../../framework/ocaml/sol-fn/sol-fn.md),
   [`sol-jobs`](../../framework/ocaml/sol-jobs/sol-jobs.md),
+  [`sol-task`](../../framework/ocaml/sol-task/sol-task.md),
   [`sol-obs`](../../framework/ocaml/sol-obs/sol-obs.md).
 - [`docs/guides/tutorial.md`](tutorial.md) — the same material as a walkthrough, from an empty
   directory to a running service.

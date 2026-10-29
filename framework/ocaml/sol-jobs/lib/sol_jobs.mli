@@ -25,6 +25,20 @@ type run_error =
 
 val run_error_to_string : run_error -> string
 
+(** Insert one already-encoded payload into the durable queue. This is the
+    transport-level insert used by clients that carry an encoded envelope (for
+    example the task contract); it validates the same workspace and kind rules
+    as {!Make.enqueue}. *)
+val enqueue_raw
+  :  Pg_db.tx
+  -> workspace:string
+  -> kind:string
+  -> payload:string
+  -> ?run_at:float
+  -> ?dedupe_key:string
+  -> unit
+  -> (unit, Pg_error.t) result
+
 module Make (J : JOB) : sig
   val enqueue
     :  Pg_db.tx
