@@ -10,16 +10,49 @@ let is_lower_hex s =
        s
 ;;
 
+(* Docker distribution/reference's name grammar, with a required SHA-256 digest.
+   https://github.com/distribution/reference/blob/main/regexp.go. This is the one
+   image-reference rule: the deploy resolver, release-bundle assets and provider
+   adapters all use it. *)
+let image_name_pattern =
+  let alnum = "[a-z0-9]+" in
+  let component = alnum ^ "\\(\\([._]\\|__\\|-+\\)" ^ alnum ^ "\\)*" in
+  let host_component = "[a-zA-Z0-9]\\([a-zA-Z0-9-]*[a-zA-Z0-9]\\)?" in
+  let host = host_component ^ "\\(\\." ^ host_component ^ "\\)*" in
+  let ipv6 = "\\[[a-fA-F0-9:]+\\]" in
+  let registry = "\\(" ^ host ^ "\\|" ^ ipv6 ^ "\\)\\(:[0-9]+\\)?/" in
+  Str.regexp
+    ("^\\("
+     ^ registry
+     ^ "\\)?"
+     ^ component
+     ^ "\\(/"
+     ^ component
+     ^ "\\)*\\(:[a-zA-Z0-9_][a-zA-Z0-9_.-]*\\)?$")
+;;
+
 let is_digest s =
-  match String.rindex_opt s '@' with
-  | None -> false
+  match String.index_opt s '@' with
   | Some at ->
-    let repo = String.sub s 0 at in
-    let suffix = String.sub s (at + 1) (String.length s - at - 1) in
-    String.length repo > 0
-    && String.length suffix = String.length digest_prefix + digest_hex_length
-    && String.starts_with ~prefix:digest_prefix suffix
-    && is_lower_hex (String.sub suffix (String.length digest_prefix) digest_hex_length)
+    let digest = String.sub s (at + 1) (String.length s - at - 1) in
+    let name = String.sub s 0 at in
+    let tag_start =
+      match String.rindex_opt name ':' with
+      | Some colon when colon > Option.value (String.rindex_opt name '/') ~default:(-1) ->
+        Some colon
+      | _ -> None
+    in
+    let repository_length = Option.value tag_start ~default:(String.length name) in
+    repository_length <= 255
+    && (match tag_start with
+        | None -> true
+        | Some colon -> String.length name - colon - 1 <= 128)
+    && Str.string_match image_name_pattern name 0
+    && Str.match_end () = String.length name
+    && String.length digest = String.length digest_prefix + digest_hex_length
+    && String.starts_with ~prefix:digest_prefix digest
+    && is_lower_hex (String.sub digest (String.length digest_prefix) digest_hex_length)
+  | None -> false
 ;;
 
 let split_flag_value value =

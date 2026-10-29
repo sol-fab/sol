@@ -17,7 +17,8 @@ let request ?(record = None) () =
     ; region = "us-west1"
     ; service = "sol-test"
     ; provider_service = "sol-test"
-    ; image = "us-west1-docker.pkg.dev/p/r/image@sha256:abc123"
+    ; image =
+        "us-west1-docker.pkg.dev/p/r/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     ; identity =
         { unit = "checkout/checkout_svc"
         ; callers = [ "103076866099743206289", "checkout/checkout_svc" ]
@@ -39,7 +40,14 @@ let describe_json_with_latest ~latest ~revision ~percent =
                     [ ( "spec"
                       , `Assoc
                           [ ( "containers"
-                            , `List [ `Assoc [ "image", `String "repo@sha256:abc123" ] ] )
+                            , `List
+                                [ `Assoc
+                                    [ ( "image"
+                                      , `String
+                                          "repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                      )
+                                    ]
+                                ] )
                           ] )
                     ] )
               ] )
@@ -255,7 +263,10 @@ let test_destroy () =
                 ; "provider_service", `String "sol-test"
                 ; "revision", `String "rev-1"
                 ; "url", `String "https://service.example"
-                ; "image", `String "repo@sha256:abc123"
+                ; ( "image"
+                  , `String
+                      "repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  )
                 ]));
        close_out channel;
        match
@@ -376,7 +387,10 @@ let test_destroy_refuses_stale_record () =
                 ; "provider_service", `String "sol-test"
                 ; "revision", `String "rev-old"
                 ; "url", `String "https://service.example"
-                ; "image", `String "repo@sha256:abc123"
+                ; ( "image"
+                  , `String
+                      "repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  )
                 ]));
        close_out channel;
        let runner =
@@ -539,7 +553,10 @@ let test_destroy_refuses_unowned_live_service () =
                 ; "provider_service", `String "sol-test"
                 ; "revision", `String "rev-1"
                 ; "url", `String "https://service.example"
-                ; "image", `String "repo@sha256:abc123"
+                ; ( "image"
+                  , `String
+                      "repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  )
                 ]));
        close_out channel;
        let runner =
@@ -609,7 +626,8 @@ let test_verify_writes_release_record () =
          Sol_cli_cloud_run.verify
            runner
            { (request ()) with
-             image = "requested@sha256:different"
+             image =
+               "requested@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
            ; record = Some record
            }
            ~token:"token"
@@ -685,7 +703,10 @@ let test_destroy_refuses_provider_record_mismatch () =
                 ; "provider_service", `String "checkout-svc"
                 ; "revision", `String "rev-1"
                 ; "url", `String "https://service.example"
-                ; "image", `String "repo@sha256:abc123"
+                ; ( "image"
+                  , `String
+                      "repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  )
                 ]));
        close_out channel;
        let runner =
@@ -731,7 +752,10 @@ let test_destroy_unreadable_inventory_is_unknown () =
                 ; "provider_service", `String "sol-test"
                 ; "revision", `String "rev-1"
                 ; "url", `String "https://service.example"
-                ; "image", `String "repo@sha256:abc123"
+                ; ( "image"
+                  , `String
+                      "repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  )
                 ]));
        close_out channel;
        let runner =

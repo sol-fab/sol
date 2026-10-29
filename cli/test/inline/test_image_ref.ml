@@ -27,7 +27,21 @@ let test_is_digest_rejects_malformed () =
     "wrong algorithm"
     false
     (Sol_cli_image_ref.is_digest
-       ("registry.example.com/pluto/charge-svc@sha512:" ^ String.make 64 'a'))
+       ("registry.example.com/pluto/charge-svc@sha512:" ^ String.make 64 'a'));
+  check_bool
+    "space in repository"
+    false
+    (Sol_cli_image_ref.is_digest ("bad repo@sha256:" ^ String.make 64 'a'));
+  check_bool
+    "uppercase path component"
+    false
+    (Sol_cli_image_ref.is_digest
+       ("registry.example.com/Pluto/charge-svc@sha256:" ^ String.make 64 'a'));
+  check_bool
+    "tag plus digest is a valid reference"
+    true
+    (Sol_cli_image_ref.is_digest
+       ("registry.example.com/pluto/charge-svc:v1@sha256:" ^ String.make 64 'a'))
 ;;
 
 let test_split_flag_value () =

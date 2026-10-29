@@ -11,7 +11,7 @@ set -euo pipefail
 case "$1 $2 $3" in
   "run services describe")
     cat <<'JSON'
-{"spec":{"template":{"spec":{"containers":[{"image":"repo@sha256:abc123"}]}}},"metadata":{"name":"checkout-svc","labels":{"sol-owned":"cloud-run-experiment","sol-service":"checkout-svc"}},"status":{"url":"https://observed.example","latestReadyRevisionName":"rev-1","traffic":[{"revisionName":"rev-1","percent":100}]}}
+{"spec":{"template":{"spec":{"containers":[{"image":"repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}}},"metadata":{"name":"checkout-svc","labels":{"sol-owned":"cloud-run-experiment","sol-service":"checkout-svc"}},"status":{"url":"https://observed.example","latestReadyRevisionName":"rev-1","traffic":[{"revisionName":"rev-1","percent":100}]}}
 JSON
     ;;
   *)
@@ -48,7 +48,7 @@ printf 'secret-token\n' > "$work/token"
 cd "$examples"
 if ! "$sol" cloud-run verify \
   --project p --region r --service checkout_svc \
-  --image repo@sha256:abc123 \
+  --image repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --unit checkout/checkout_svc \
   --issuer https://accounts.google.com \
   --jwks-uri https://www.googleapis.com/oauth2/v3/certs \
@@ -63,7 +63,7 @@ grep -q '"revision":"rev-1"' "$work/release.json"
 printf 'first-token\nsecond-token\n' > "$work/bad-token"
 if "$sol" cloud-run verify \
   --project p --region r --service checkout_svc \
-  --image repo@sha256:abc123 \
+  --image repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --unit checkout/checkout_svc \
   --issuer https://accounts.google.com \
   --jwks-uri https://www.googleapis.com/oauth2/v3/certs \
