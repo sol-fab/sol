@@ -1,0 +1,8 @@
+{
+  "Messages": [
+    {
+      "MessageId": "b9614c73-1142-440d-be84-c419f5034570",
+      "Body": "{\"task_id\":\"batch-fail-1\",\"kind\":\"fail\",\"payload\":\"fail\",\"idempotency_key\":\"batch-fail-1\"}"
+    }
+  ]
+}

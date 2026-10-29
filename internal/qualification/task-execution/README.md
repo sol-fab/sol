@@ -10,7 +10,7 @@ observed for this capability.
 | Surface | Implementation | Automated evidence | Live evidence |
 |---|---|---|---|
 | Local Postgres | `sol-task.local` + `sol local task enqueue` | envelope/local unit tests; `sol-task local Postgres integration` (Ack, Retry→terminal, duplicate delivery + idempotent effect, idempotent enqueue); manual CLI enqueue | disposable Docker Postgres only |
-| AWS SQS + Lambda | `sol-task.lambda` + `sol task aws` | envelope/Lambda unit tests; fake-provider lifecycle (deploy, enqueue, verify, rollback, destroy, partial-create cleanup) | **mechanism-level record**: [`2026-10-29-task-aws-live.md`](../records/2026-10-29-task-aws-live.md) |
+| AWS SQS + Lambda | `sol-task.lambda` + `sol task aws` | envelope/Lambda unit tests; fake-provider lifecycle (deploy, enqueue, verify, rollback, destroy, partial-create cleanup); live mixed-batch partial-delivery exercise | **mechanism-level records**: [`2026-10-29-task-aws-live.md`](../records/2026-10-29-task-aws-live.md) and [`2026-10-29-task-aws-partial-batch.md`](../records/2026-10-29-task-aws-partial-batch.md) |
 | GCP Pub/Sub + Cloud Run | `sol-task.pubsub` + `sol task gcp` | envelope/PubSub unit tests; fake-provider lifecycle (deploy, enqueue, verify, rollback, destroy, partial-create cleanup) | **mechanism-level record**: [`2026-10-29-task-gcp-live.md`](../records/2026-10-29-task-gcp-live.md) |
 | Target-scoped `sol deploy` | not implemented | none | none |
 | Observability acceptance | logs only (task_id/kind/outcome) | unit tests assert mapping | provider logs inspected; no Sol-managed metrics/traces claim |
@@ -101,10 +101,12 @@ Then run a `-worker` hosting `Sol_task_local.Make(T).run`; the row status and
 
 ## AWS SQS + Lambda live procedure
 
-**Status: executed 2026-10-29.** The mechanism-level result is in
-[`2026-10-29-task-aws-live.md`](../records/2026-10-29-task-aws-live.md). The
-procedure below records the current sequence, including the packaging
-requirement and the failures found during that run.
+**Status: executed 2026-10-29.** The mechanism-level lifecycle result is in
+[`2026-10-29-task-aws-live.md`](../records/2026-10-29-task-aws-live.md); the
+mixed-batch result is in
+[`2026-10-29-task-aws-partial-batch.md`](../records/2026-10-29-task-aws-partial-batch.md).
+The procedure below records the current sequence, including the packaging
+requirement and the failures found during those runs.
 
 Prerequisites: AWS profile with ECR, IAM, Lambda, SQS, and CloudWatch Logs;
 an immutable image; an execution role trusted by `lambda.amazonaws.com` with
@@ -166,7 +168,14 @@ equivalent policy covering source-queue receive/delete and logs).
    `ApproximateReceiveCount`/the DLQ source count; do not call it a
    handler-attempt count.
 
-6. Deploy the same image again (version 2), then roll back:
+6. Exercise a mixed batch explicitly. Send one `ack` and one `fail` envelope in a
+   single `SendMessageBatch` request, then inspect one Lambda log stream, the
+   source queue, and the DLQ. A two-message smoke run sent as separate calls
+   does not establish the batch result; the 2026-10-29 partial-batch record
+   establishes that the Ack is handled once and the fail is retried and
+   dead-lettered while its successful batch peer is not repeated.
+
+7. Deploy the same image again (version 2), then roll back:
 
    ```sh
    sol task aws rollback --profile sol-qual --region us-east-1 \
@@ -183,7 +192,7 @@ equivalent policy covering source-queue receive/delete and logs).
    be one JSON object (the nested `RedrivePolicy` cannot use the shorthand
    form); the adapter now sends JSON.
 
-7. Destroy and clean resources the adapter does not own:
+8. Destroy and clean resources the adapter does not own:
 
    ```sh
    sol task aws destroy --profile sol-qual --region us-east-1 \
@@ -197,11 +206,13 @@ equivalent policy covering source-queue receive/delete and logs).
    aws logs delete-log-group --log-group-name /aws/lambda/checkout-task
    ```
 
-8. Independently inventory: Lambda functions, SQS queues (source + DLQ), ECR
+9. Independently inventory: Lambda functions, SQS queues (source + DLQ), ECR
    repository, role, and log group. A provider error or unreadable response is
    UNKNOWN, not absence.
 
-Failure injection for the cleanup path: the fake-provider test already covers
+After a partial destroy, SQS refuses to recreate a deleted queue name for 60
+seconds (`QueueDeletedRecently`); wait before redeploying. Failure injection for
+the cleanup path: the fake-provider test already covers
 foreign ownership refusal, mapping failure after queues/function exist, and
 source-queue failure after DLQ creation. A live failure can be produced by
 using a role without SQS receive permission; the deploy's event-source-mapping
