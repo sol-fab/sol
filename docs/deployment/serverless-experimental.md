@@ -16,7 +16,7 @@ needs and independently verifies their absence afterwards.
 | `-fn` | `sol local invoke` | CronJob | target deploy/execute/rollback/destroy; live | target deploy/invoke/rollback/destroy; fake + live |
 | Queue/trigger | explicit Kafka/Postgres only | Kafka/Postgres | none | none |
 | Secrets/dependencies | injected locally | supported | env/identity proven; `uses:` refused | env/identity proven; `uses:` refused |
-| Identity | local explicit | supported | Google workload token; explicit callers | `-svc`: Google app token, explicit callers; `-fn`: execution role only, no incoming callers |
+| Identity | local explicit | supported | `-svc`: Google workload token, explicit callers; `-fn`: execution service account only, no incoming callers | `-svc`: Google app token, explicit callers; `-fn`: execution role only, no incoming callers |
 | Observability | app logs/metrics | supported | provider/app logs; no Sol acceptance | provider/CloudWatch logs; no Sol acceptance |
 | Target deploy | n/a | supported | `-svc` and `-fn` live | `-svc` and `-fn` live |
 | Target rollback | n/a | release based | `-svc` live; `-fn` execution-history live | `-svc` and `-fn` live |
