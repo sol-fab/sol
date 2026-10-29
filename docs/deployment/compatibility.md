@@ -17,6 +17,58 @@ which cells are proven, partial or missing. A provider or language is admitted
 when its row becomes production evidence; the contract does not change when that
 happens.
 
+## v0.1 contract freeze
+
+Status: frozen for v0.1 on 2026-10-29 under ADR 0009. The profile identity and
+the supported set below are the release boundary; changing either requires a new
+profile version rather than an implicit expansion.
+
+The v0.1 **production claim** is local development plus the AWS and GCP
+production profile, in OCaml and TypeScript, for `-svc`, `-worker`, and `-fn`.
+Durable tasks are a library, not a fourth primitive. Local and Kubernetes
+`sol-task.local` handlers hosted by a `-worker` are in the application contract;
+the standalone `sol task aws` and `sol task gcp` provider lifecycles remain
+**experimental** and are not part of the production claim.
+
+The following are explicitly outside the v0.1 production claim:
+
+- target `execution: serverless` for `-svc` and `-fn`;
+- provider-native task lifecycles (`sol task aws|gcp`);
+- serverless triggers, schedules, and dependencies;
+- BYO as a production target, the hosted factory floor, a central
+  cross-environment observability plane, and an availability SLA.
+
+These surfaces may ship and are documented as experimental, but they do not
+block and cannot satisfy production qualification.
+
+### Admission and release gate
+
+A provider/language combination is production-qualified only when all of the
+following hold:
+
+- every workload cell for that combination in the README product matrix is
+  `prod`, not `live` or `partial`;
+- every lifecycle row required by the production profile has live evidence;
+- every production-profile row has live evidence, including database recovery,
+  Kafka durability, availability, alert delivery, and observability access;
+- the security and observability gates in the qualification matrix pass;
+- the installed candidate passes the AWS and GCP campaigns on the same harness
+  revision, and the release policy can read and verify the resulting records.
+
+The current non-`prod` cells in the README matrix are therefore open v0.1 gate
+items, not evidence that a lower support tier is acceptable. Release promotion
+also remains blocked independently: the release policy currently refuses before
+reading qualification assets. That is an implementation gap, not a capability
+waiver.
+
+The known blocker classes are: the AWS/GCP preflight evidence gate admits only
+AWS and OCaml today; cloud rollback, uninstall, and target Grafana/telemetry
+visibility lack live evidence; database recovery, Kafka recovery, availability,
+and alert delivery are partial or unmeasured; and the release-promotion path
+must consume and verify the qualification records. The current rows and gaps are
+generated from `internal/qualification/product-matrix.json`, and the release
+gate is in `internal/tooling/release/README.md`.
+
 ## Guarantee layers
 
 - **Functional:** the same workspace, `sol.yml`/`sol.toml` and code work
