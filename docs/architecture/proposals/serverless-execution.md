@@ -147,12 +147,12 @@ number. The tests below state what evidence exists, not what would be desirable.
 
 | Test | Evidence today |
 |---|---|
-| Enqueue and process a task | Local Postgres integration test (enqueue → handler → completed); bounded live GCP exercise (Ack logged and acknowledged); AWS fake-provider lifecycle only. |
+| Enqueue and process a task | Local Postgres integration test (enqueue → handler → completed); bounded live GCP and AWS exercises (Ack logged and acknowledged). |
 | Duplicate delivery | Local idempotent enqueue/dedupe tested. Provider redelivery with a repeated `task_id` is exercised by the live GCP Retry probe; no duplicate external side effect is asserted because the probe handler has no external effect. |
 | Crash after side effect, before ack | Not tested. Application idempotency remains the requirement. |
 | Crash before side effect | Not tested separately; provider redelivery is observed in the GCP Retry probe. |
-| Transient failure | Local `Retry` → terminal `failed` with `max_attempts=1`; GCP live `Retry` → repeated delivery → dead-letter. AWS mapping is unit/fake tested, not live. |
-| Exhaustion | Local terminal `failed` row; GCP live message in the dead-letter topic; AWS redrive settings are fake tested only. The GCP live source delivery count was 12 with `maxDeliveryAttempts=5`, so the contract does not claim an exact handler-attempt count. |
+| Transient failure | Local `Retry` → terminal `failed` with `max_attempts=1`; live GCP and AWS `Retry` → repeated delivery → dead-letter. |
+| Exhaustion | Local terminal `failed` row; live GCP message in the dead-letter topic; live AWS message in the DLQ after `maxReceiveCount=2`. The GCP live source delivery count was 12 with `maxDeliveryAttempts=5`; AWS produced two handler logs with `maxReceiveCount=2`. The contract does not claim an exact handler-attempt count. |
 | Handler timeout/cancellation | Local `sol-jobs` lease/retry behavior is covered by the existing queue package; cloud timeout/cancellation is not separately exercised. |
 | Pre-handler delivery failure | Not exposed separately in the first contract. Provider counters are not presented as handler attempts. |
 | Batch partial failure | AWS Lambda unit test: successful records are omitted from `batchItemFailures` and failed/malformed records are returned; not live. |
@@ -235,9 +235,11 @@ Implementation status:
 - **GCP:** `sol-task.pubsub` + `sol task gcp`; fake-provider lifecycle tests and
   a bounded live checkout-build exercise (Ack, Retry-to-DLQ, rollback to a prior
   Cloud Run revision, destroy, independent absence).
-- **AWS:** `sol-task.lambda` + `sol task aws`; envelope/batch unit tests and a
-  fake-provider lifecycle test. Live AWS is blocked by an expired SSO session;
-  it is not claimed.
+- **AWS:** `sol-task.lambda` + `sol task aws`; envelope/batch unit tests,
+  fake-provider lifecycle tests, and a bounded live checkout-build exercise
+  ([record](../../../internal/qualification/records/2026-10-29-task-aws-live.md)). The live run
+  found and fixed the SQS attribute encoding and the mapping `Creating` wait; it
+  also established the Docker v2 image-manifest requirement.
 - **Target-scoped integration:** not implemented. The provider commands are
   standalone experimental entry points.
 - **Release qualification:** not performed for either provider. The live GCP
@@ -298,8 +300,9 @@ without observing which revision/version is serving is not success.
 
 1. Target `execution` integration for tasks: standalone `sol task` versus a
    target-scoped trigger/runtime declaration.
-2. Live AWS qualification (currently blocked by expired SSO) and released-
-   candidate qualification for GCP.
+2. Released-candidate qualification for both providers. Bounded live
+   mechanism-level exercises exist for GCP and AWS, but neither is a release
+   verdict.
 3. Whether the release store should own the task record and provider identity,
    rather than the standalone ownership file.
 4. Dead-letter replay: provider inspection only in the first contract.

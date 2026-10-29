@@ -1,0 +1,61 @@
+{
+    "events": [
+        {
+            "logStreamName": "2026/10/29/[2]4cfa29035ee94b3e992af2e309d56fff",
+            "timestamp": 1793266074341,
+            "message": "task_handler task_id=3c75602d51eca4f292d90130690708b6 kind=ack idempotency_key=aws-ack-1\n",
+            "ingestionTime": 1793266075972,
+            "eventId": "39991169797047915244662171989507885980610894058189553665"
+        },
+        {
+            "logStreamName": "2026/10/29/[2]4cfa29035ee94b3e992af2e309d56fff",
+            "timestamp": 1793266074341,
+            "message": "sol-task: task acknowledged task_id=3c75602d51eca4f292d90130690708b6 kind=ack\n",
+            "ingestionTime": 1793266075972,
+            "eventId": "39991169797047915244662171989507885980610894058189553666"
+        },
+        {
+            "logStreamName": "2026/10/29/[2]4cfa29035ee94b3e992af2e309d56fff",
+            "timestamp": 1793266166860,
+            "message": "task_handler task_id=58c0bbb27a1f25093f42337c23826222 kind=fail idempotency_key=aws-fail-1\n",
+            "ingestionTime": 1793266175963,
+            "eventId": "39991171860290560267516894542132372027023963285942566913"
+        },
+        {
+            "logStreamName": "2026/10/29/[2]4cfa29035ee94b3e992af2e309d56fff",
+            "timestamp": 1793266166860,
+            "message": "sol-task: task requested retry task_id=58c0bbb27a1f25093f42337c23826222 kind=fail error=live failure probe\n",
+            "ingestionTime": 1793266175963,
+            "eventId": "39991171860290560267516894542132372027023963285942566914"
+        },
+        {
+            "logStreamName": "2026/10/29/[2]4cfa29035ee94b3e992af2e309d56fff",
+            "timestamp": 1793266196846,
+            "message": "task_handler task_id=58c0bbb27a1f25093f42337c23826222 kind=fail idempotency_key=aws-fail-1\n",
+            "ingestionTime": 1793266205862,
+            "eventId": "39991172529000705790656160100368309617288198421116289025"
+        },
+        {
+            "logStreamName": "2026/10/29/[2]4cfa29035ee94b3e992af2e309d56fff",
+            "timestamp": 1793266196846,
+            "message": "sol-task: task requested retry task_id=58c0bbb27a1f25093f42337c23826222 kind=fail error=live failure probe\n",
+            "ingestionTime": 1793266205862,
+            "eventId": "39991172529000705790656160100368309617288198421116289026"
+        },
+        {
+            "logStreamName": "2026/10/29/[1]d1f66229eaeb44fd92ab62ddf564105a",
+            "timestamp": 1793266282991,
+            "message": "task_handler task_id=666bdd03914999017695143efd8fe175 kind=ack idempotency_key=aws-ack-2\n",
+            "ingestionTime": 1793266285976,
+            "eventId": "39991174450098400918076690724814463753596482025164701697"
+        },
+        {
+            "logStreamName": "2026/10/29/[1]d1f66229eaeb44fd92ab62ddf564105a",
+            "timestamp": 1793266282991,
+            "message": "sol-task: task acknowledged task_id=666bdd03914999017695143efd8fe175 kind=ack\n",
+            "ingestionTime": 1793266285976,
+            "eventId": "39991174450098400918076690724814463753596482025164701698"
+        }
+    ],
+    "searchedLogStreams": []
+}

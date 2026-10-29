@@ -1,5 +1,9 @@
 # GCP durable-task vertical slice (2026-10-29)
 
+**See also:** a separate AWS SQS + Lambda live exercise on 2026-10-29 is
+recorded in [`2026-10-29-task-aws-live.md`](2026-10-29-task-aws-live.md). The
+AWS row below describes this GCP record's scope, not the later AWS run.
+
 **Verdict: the GCP Pub/Sub push + Cloud Run durable-task vertical slice is
 established at mechanism level.** A task handler image was deployed through
 `sol task gcp`, a Pub/Sub push subscription delivered a task to a private Cloud
@@ -74,7 +78,7 @@ Sol-managed observability acceptance layer.
 
 | Item | Status | Why |
 |---|---|---|
-| AWS SQS + Lambda live | NOT RUN | The qualification SSO session expired (`Token has expired and refresh failed`); no AWS resources were created. Fake-provider lifecycle tests are the only AWS evidence. |
+| AWS SQS + Lambda live in this GCP record | NOT RUN IN THIS RECORD | This record covers GCP only. A separate AWS live exercise was run later on 2026-10-29; see [`2026-10-29-task-aws-live.md`](2026-10-29-task-aws-live.md). |
 | Target-scoped `sol deploy` for tasks | NOT RUN | `sol task` is a standalone experimental lifecycle; target integration is an open design decision. |
 | Released-candidate qualification | NOT RUN | This was a checkout build, not a release candidate. |
 | Exactly-once external effects | NOT CLAIMED | The contract is at-least-once; the fixture has no external side effect. |
@@ -100,6 +104,6 @@ queueing and push delivery, Ack/Retry mapping, dead-lettering after the
 configured provider budget, revision rollback, and destroy/absence at mechanism
 level.
 
-It does not establish AWS live behavior, target-scoped lifecycle integration,
+It does not establish AWS live behavior (a separate record does), target-scoped lifecycle integration,
 release qualification, exact handler-attempt accounting, production guarantees,
 or parity with any other provider.

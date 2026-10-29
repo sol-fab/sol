@@ -1,0 +1,10 @@
+{
+    "Messages": [
+        {
+            "MessageId": "cb70225f-2155-4f33-8ab6-18fd0fdb660c",
+            "ReceiptHandle": "AQEB25XJsuC4Kj1U39Hj/ZTxhm1VXRWJUFzEzHVYGlMTGPQadokud50VdJ6c955OxqVQXMEOlEn6JufHa/lglBYkB5ii10rA90uPywH3tv/Bvjus/EST7B/3j8pjA8YuWyChc8BxuaAwhg8UdnrQeVLcsRnEpJX6fAeItrIMT9zY1NsXevc6Q/1P3hvlMn2Yf0wr4E8rDArxGwI1vSYNpb7N9PxarpZg+nxXTpfb9tE93MFV9oK5hI9r0O6AciVaU0fmzAEQEqc/8FYJ5gaspGktCOh0Q1tgnpl+Gos6ik19HgVah4KW7phIQf0jvFTQrSIode39S3ru68KTJWQ1PNgI4dvcLmn1TBlkIl2mA0p1MyVnJAYiLojlNwAt8m33TCZWti32druzRsJRBc7pKGzxgA==",
+            "MD5OfBody": "b451f64fe8d9706f680164b13b528764",
+            "Body": "{\"task_id\":\"58c0bbb27a1f25093f42337c23826222\",\"kind\":\"fail\",\"payload\":\"fail\",\"idempotency_key\":\"aws-fail-1\"}"
+        }
+    ]
+}

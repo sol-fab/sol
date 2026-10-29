@@ -10,7 +10,7 @@ observed for this capability.
 | Surface | Implementation | Automated evidence | Live evidence |
 |---|---|---|---|
 | Local Postgres | `sol-task.local` + `sol local task enqueue` | envelope/local unit tests; `sol-task local Postgres integration` (Ack, Retry→terminal, idempotent enqueue); manual CLI enqueue | disposable Docker Postgres only |
-| AWS SQS + Lambda | `sol-task.lambda` + `sol task aws` | envelope/Lambda unit tests; fake-provider lifecycle (deploy, enqueue, verify, rollback, destroy, partial-create cleanup) | **not run**: qualification SSO expired; no AWS resources created |
+| AWS SQS + Lambda | `sol-task.lambda` + `sol task aws` | envelope/Lambda unit tests; fake-provider lifecycle (deploy, enqueue, verify, rollback, destroy, partial-create cleanup) | **mechanism-level record**: [`2026-10-29-task-aws-live.md`](../records/2026-10-29-task-aws-live.md) |
 | GCP Pub/Sub + Cloud Run | `sol-task.pubsub` + `sol task gcp` | envelope/PubSub unit tests; fake-provider lifecycle (deploy, enqueue, verify, rollback, destroy, partial-create cleanup) | **mechanism-level record**: [`2026-10-29-task-gcp-live.md`](../records/2026-10-29-task-gcp-live.md) |
 | Target-scoped `sol deploy` | not implemented | none | none |
 | Observability acceptance | logs only (task_id/kind/outcome) | unit tests assert mapping | provider logs inspected; no Sol-managed metrics/traces claim |
@@ -60,22 +60,27 @@ Then run a `-worker` hosting `Sol_task_local.Make(T).run`; the row status and
 
 ## AWS SQS + Lambda live procedure
 
-**Status: not run.** The qualification SSO session expired
-(`Token has expired and refresh failed`). Do not treat this procedure as
-evidence until it is executed. Re-authenticate `sol-qual` first.
+**Status: executed 2026-10-29.** The mechanism-level result is in
+[`2026-10-29-task-aws-live.md`](../records/2026-10-29-task-aws-live.md). The
+procedure below records the current sequence, including the packaging
+requirement and the failures found during that run.
 
 Prerequisites: AWS profile with ECR, IAM, Lambda, SQS, and CloudWatch Logs;
 an immutable image; an execution role trusted by `lambda.amazonaws.com` with
 `AWSLambdaBasicExecutionRole` and `AWSLambdaSQSQueueExecutionRole` (or an
 equivalent policy covering source-queue receive/delete and logs).
 
-1. Push the fixture image to ECR and record the digest.
+1. Push the fixture image to ECR and record the digest. **Lambda requires a
+   Docker v2 manifest, not an OCI image index.** The live run initially pushed
+   an OCI index and `CreateFunction` rejected it; build with
+   `oci-mediatypes=false`:
 
    ```sh
    aws ecr create-repository --repository-name sol-task-live
    aws ecr get-login-password | docker login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com
-   docker tag sol-task-handler:local <ecr>/sol-task-live:live
-   docker push <ecr>/sol-task-live:live
+   docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+     --output "type=image,name=<ecr>/sol-task-live:live,push=true,oci-mediatypes=false" \
+     "$ctx"
    aws ecr describe-images --repository-name sol-task-live --image-ids imageTag=live \
      --query 'imageDetails[0].imageDigest' --output text
    ```
@@ -129,7 +134,13 @@ equivalent policy covering source-queue receive/delete and logs).
    ```
 
    Expected: alias version 1, event source mapping still enabled and reporting
-   `ReportBatchItemFailures`.
+   `ReportBatchItemFailures`. A post-rollback Ack should appear in a log stream
+   whose version segment is `[1]`.
+
+   The live run also found that an event source mapping is `Creating` before it
+   is `Enabled`; the adapter now polls it. SQS `create-queue --attributes` must
+   be one JSON object (the nested `RedrivePolicy` cannot use the shorthand
+   form); the adapter now sends JSON.
 
 7. Destroy and clean resources the adapter does not own:
 
@@ -137,7 +148,11 @@ equivalent policy covering source-queue receive/delete and logs).
    sol task aws destroy --profile sol-qual --region us-east-1 \
      --service checkout --record ./aws-task-release.json --apply
    aws ecr delete-repository --repository-name sol-task-live --force
-   aws iam delete-role --role-name sol-task-live-exec   # after detaching policies
+   for p in arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole \
+            arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole; do
+     aws iam detach-role-policy --role-name sol-task-live-exec --policy-arn "$p"
+   done
+   aws iam delete-role --role-name sol-task-live-exec
    aws logs delete-log-group --log-group-name /aws/lambda/checkout-task
    ```
 
@@ -184,6 +199,8 @@ grants and verifies it. The live run observed repeated redelivery without it.
 - No exactly-once external side effect, no application-selected immediate
   dead-letter, and no handler-attempt number.
 - No production-profile, SLO, cost, or security-review claim.
-- No AWS live, target-scoped `sol deploy`, or released-candidate qualification.
+- No released-candidate qualification. AWS and GCP each have a bounded live
+  mechanism-level record, not a release verdict.
+- No target-scoped `sol deploy` for tasks.
 - No Sol-managed task metrics/traces acceptance; the runtimes emit logs and the
   local `sol-jobs` package exposes its own metrics.
