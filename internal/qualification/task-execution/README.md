@@ -55,6 +55,34 @@ that the handler never ran. Correlate the provider message identity with the
 handler `task_id` and the provider delivery counters, keeping the provider-count
 caveat above in mind.
 
+## Released-candidate path
+
+The AWS/GCP records above are mechanism-level exercises from checkout builds.
+A release-candidate qualification is a separate, operator-authorized run against
+the installed candidate:
+
+1. Download the draft release's `candidate.json` and its recorded bundle. Extract
+   the bundle and set `SOL_INSTALL` to the extracted `sol-<version>` prefix and
+   `SOL_CANDIDATE` to the candidate document. Run
+   `source internal/qualification/sol-under-test.sh`; it verifies the installed
+   version, revision, runner image, and every installed file against the
+   candidate bundle before anything is provisioned.
+2. Bind the handler build to the candidate revision with
+   `internal/qualification/candidate-binding.sh`: build the fixture context from
+   the candidate revision, not from the working tree. Build the image as a
+   Docker v2 manifest for AWS.
+3. Use the candidate's `bin/sol` for `sol task aws`/`sol task gcp` deploy,
+   verify, enqueue, rollback, and destroy. Record the candidate version,
+   revision, and bundle hash in the evidence directory with the provider
+   observations.
+4. Run the provider procedures below for both supported providers against that
+   same candidate and the same harness revision. A provider result from a
+   checkout build, or from a prefix that is not the candidate bundle, is not a
+   candidate qualification.
+
+The task capability has no release candidate recorded yet. The earlier
+`v0.1.0-prealpha.3` draft predates the task implementation.
+
 ## Shared procedure
 
 Build the handler fixture once:
