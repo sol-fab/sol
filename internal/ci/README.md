@@ -6,6 +6,29 @@ where the current model still has limits. The workflow itself is
 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml); suite membership is
 declared by the `dune` files, not by this page.
 
+## Audit findings (2026-10-29)
+
+- The execution boundaries are broadly coherent: application runtime packages
+  depend on shared contracts/plumbing, not on the CLI; provider adapters sit
+  below deployment policy; task core and provider runtimes are separate
+  libraries. No package split was justified by a dependency cycle or a failed
+  isolation test.
+- The concrete boundary defect was `sol-task` missing from
+  `prepare-framework-deps.sh`; a checkout switch could not install the public
+  package. Fixed.
+- Only `test` is required. The golden-path, example-Dockerfile and TypeScript
+  jobs are advisory; making them required is a branch-protection decision.
+- The required `test` job ran static/format checks after the product suites and
+  the stubbed qualification harnesses. Moved them ahead of the product suites
+  so a cheap failure is diagnosed first.
+- The verification-tooling step repeated the preceding root dependency
+  install; removed.
+- Long test/qualification/setup steps lacked step timeouts; added bounded
+  timeouts. The qualification harness was the longest unbounded step.
+- Support-package pinning and per-job environment setup are the largest
+  remaining setup costs; the support-pin cache shortcut was not taken because a
+  stale pin could undermine the exact-commit guarantee.
+
 ## Required path
 
 Branch protection for `main` requires **`test` only**. `classify` is not a

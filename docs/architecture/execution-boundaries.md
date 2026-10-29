@@ -113,6 +113,12 @@ universal execution abstraction is introduced merely to make the map tidier.
   dependency direction or testability failure has justified splitting it into
   multiple libraries. A split would be a broad, cross-cutting refactor and is
   not made merely to match this map.
+- `sol_cli_base` is broader than its name: it also carries migration execution,
+  scaffold templates, provider/credential types and process helpers. No split is
+  made here; it has no dependency cycle, and the command-boundary tests cover
+  its consumers. Moving migration execution into the deploy layer is a
+  cross-cutting change that should be justified by a concrete failure, not by
+  the map alone.
 - Target-scoped serverless dispatch covers `-svc` and, on AWS, `-fn`; it does not
   cover `-worker` or the standalone task lifecycle. A task queue/trigger is not
   created by `sol deploy`.
