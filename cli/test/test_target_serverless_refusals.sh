@@ -33,24 +33,6 @@ workspace() {
   } > "$dir/sol.yml"
 }
 
-# GCP serverless -fn is refused, without invoking gcloud.
-ws="$work/gcp-fn"
-workspace "$ws" checkout_fn fn no
-cat > "$ws/sol/environments.yml" <<'YAML'
-live:
-  targets:
-    gcp/us-west1:
-      execution: serverless
-      gcp:
-        project_id: example-project
-YAML
-cd "$ws"
-if "$sol" deploy live/gcp/us-west1 --image-tag test --image-ref "checkout_fn=$image" > "$work/gcp-fn.out" 2>&1; then
-  echo "GCP serverless -fn deploy was accepted" >&2; exit 1
-fi
-grep -q 'not implemented for GCP' "$work/gcp-fn.out"
-[[ ! -s "$work/provider.log" ]]
-
 # GCP serverless -worker is refused, without invoking gcloud.
 ws="$work/gcp-worker"
 workspace "$ws" checkout_worker worker no

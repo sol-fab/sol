@@ -8,7 +8,7 @@ val deploy
   -> service:Sol_cli_manifest.service
   -> image:string
   -> record:string
-  -> (Sol_cli_cloud_run.release, string) result
+  -> (Yojson.Safe.t, string) result
 
 val rollback
   :  target:Sol_cli_config.target
@@ -17,7 +17,7 @@ val rollback
   -> record:string
   -> revision:string
   -> token:string
-  -> (Sol_cli_cloud_run.observed, string) result
+  -> (Yojson.Safe.t, string) result
 
 val destroy
   :  target:Sol_cli_config.target

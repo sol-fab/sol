@@ -343,15 +343,25 @@ let serverless_rollback ~target ~record ~to_version ~to_revision ~token_file ~se
   let* service =
     Option.to_result ~none:(Sol_cli_exit.error "--service is required") service
   in
-  let* token_file =
-    Option.to_result ~none:(Sol_cli_exit.error "--token-file is required") token_file
-  in
-  let* token = read_token token_file in
   let* service_decl =
     Sol_cli_config.services config
     |> List.find_opt (fun (s : Sol_cli_config.service) -> s.name = service)
     |> Option.to_result
          ~none:(Sol_cli_exit.error (Printf.sprintf "service %S is not declared" service))
+  in
+  let primitive =
+    match service_decl.typ with
+    | Some "fn" -> Sol_cli_manifest.Fn
+    | Some "worker" -> Sol_cli_manifest.Worker
+    | _ -> Sol_cli_manifest.Svc
+  in
+  let* token =
+    match token_file with
+    | Some path -> read_token path
+    | None ->
+      if primitive = Sol_cli_manifest.Svc
+      then Error (Sol_cli_exit.error "--token-file is required for a serverless -svc")
+      else Ok ""
   in
   let manifest_service =
     { Sol_cli_manifest.domain =
@@ -362,7 +372,7 @@ let serverless_rollback ~target ~record ~to_version ~to_revision ~token_file ~se
          | _name :: domain :: _ -> domain
          | _ -> config.project |> Option.value ~default:"")
     ; name = service
-    ; primitive = Sol_cli_manifest.Svc
+    ; primitive
     ; dir = Option.value service_decl.path ~default:service
     }
   in
