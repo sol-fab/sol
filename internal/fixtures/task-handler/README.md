@@ -29,7 +29,7 @@ The resulting binary is `_build/default/internal/fixtures/task-handler/task_hand
 ```sh
 ctx=$(mktemp -d)
 cp _build/default/internal/fixtures/task-handler/task_handler.exe "$ctx/task_handler"
-cp internal/fixtures/task-handler/Dockerfile "$ctx/Dockerfile"
+cp internal/fixtures/task-handler/Dockerfile.template "$ctx/Dockerfile"
 # Lambda accepts a Docker v2 manifest, not an OCI image index.
 docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
   --output "type=image,name=<registry>/<repo>:<tag>,push=true,oci-mediatypes=false" \

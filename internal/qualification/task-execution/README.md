@@ -64,7 +64,7 @@ eval "$(opam env)"
 dune build internal/fixtures/task-handler/task_handler.exe
 ctx=$(mktemp -d)
 cp _build/default/internal/fixtures/task-handler/task_handler.exe "$ctx/task_handler"
-cp internal/fixtures/task-handler/Dockerfile "$ctx/Dockerfile"
+cp internal/fixtures/task-handler/Dockerfile.template "$ctx/Dockerfile"
 docker build -t sol-task-handler:local "$ctx"
 ```
 
