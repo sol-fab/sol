@@ -1,7 +1,7 @@
 # Audit: Cloud Run Jobs as a GCP `-fn` execution backend
 
-- **Status:** implemented for target-scoped GCP `-fn`; fake-provider tested, live
-  pending operator approval.
+- **Status:** implemented and live-qualified for target-scoped GCP `-fn` on
+  2026-10-29 in `sol-qualification`/`us-west1`; fake and live lifecycle evidence.
 - **Date:** 2026-10-28
 - **Related:** ADR 0009 (`-fn` contract), ADR 0010 (target-scoped execution),
   `docs/deployment/serverless-experimental.md`, PR #1779 (AWS Lambda `-fn` slice)

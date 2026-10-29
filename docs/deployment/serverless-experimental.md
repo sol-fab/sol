@@ -13,14 +13,14 @@ needs and independently verifies their absence afterwards.
 |---|---|---|---|---|
 | `-svc` HTTP | native `sol local run` | supported | target + standalone; live | target + standalone; live |
 | `-worker` | native run with explicit Kafka/Postgres | supported | not supported | not supported |
-| `-fn` | `sol local invoke` | CronJob | target deploy/execute/rollback/destroy; fake | target deploy/invoke/rollback/destroy; fake + live |
+| `-fn` | `sol local invoke` | CronJob | target deploy/execute/rollback/destroy; live | target deploy/invoke/rollback/destroy; fake + live |
 | Queue/trigger | explicit Kafka/Postgres only | Kafka/Postgres | none | none |
 | Secrets/dependencies | injected locally | supported | env/identity proven; `uses:` refused | env/identity proven; `uses:` refused |
 | Identity | local explicit | supported | Google workload token; explicit callers | `-svc`: Google app token, explicit callers; `-fn`: execution role only, no incoming callers |
 | Observability | app logs/metrics | supported | provider/app logs; no Sol acceptance | provider/CloudWatch logs; no Sol acceptance |
-| Target deploy | n/a | supported | `-svc` live; `-fn` fake | `-svc` and `-fn` live |
-| Target rollback | n/a | release based | `-svc` live; `-fn` execution-history | `-svc` and `-fn` live |
-| Target destroy/absence | n/a | supported | `-svc` live; `-fn` fake | `-svc` and `-fn` live |
+| Target deploy | n/a | supported | `-svc` and `-fn` live | `-svc` and `-fn` live |
+| Target rollback | n/a | release based | `-svc` live; `-fn` execution-history live | `-svc` and `-fn` live |
+| Target destroy/absence | n/a | supported | `-svc` and `-fn` live | `-svc` and `-fn` live |
 | Plan projection | n/a | supported | fail closed | fail closed |
 | Post-deploy execution smoke | n/a | readiness/rollout | `-svc`: readiness 200 + unauth 401; `-fn`: one completed Cloud Run Job execution | `-svc`: readiness 200 + unauth 401; `-fn`: invoke through the live alias returns `{"status":"ok"}` |
 
@@ -211,9 +211,13 @@ Job with no retained prior execution cannot be rolled back. Partial creates rema
 destroyable because the intended record is written before the Job mutation, and a failed
 execution is recorded before the command fails.
 
-This path is implemented and fake-provider tested. Live GCP evidence is pending
-operator authorization. The OCaml and TypeScript probes run unchanged: without a Lambda
-runtime API they execute their run-once path and exit; with one they use Lambda.
+This path is live-qualified on 2026-10-29 in `sol-qualification`/`us-west1`. Both probes
+deployed through the target lifecycle, their Cloud Run Job executions exited 0 with the
+probe log, execution-history rollback restored the first image and started a new successful
+execution, and destroy left no Jobs or executions. The OCaml and TypeScript probes run
+unchanged: without a Lambda runtime API they execute their run-once path and exit; with
+one they use Lambda. No concurrency, timeout, or throughput measurement was made; the
+600-second timeout is configured, not measured.
 
 ## Target-scoped destroy
 
