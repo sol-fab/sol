@@ -1,0 +1,49 @@
+(test
+ (name test_sol_task)
+ (modules test_sol_task)
+ (libraries sol_task windtrap unix))
+
+(test
+ (name test_sol_task_local)
+ (modules test_sol_task_local)
+ (libraries sol_task sol_task_local windtrap unix))
+
+(alias
+ (name ci-unit)
+ (deps
+  (alias_rec runtest)))
+
+(test
+ (name test_sol_task_lambda)
+ (modules test_sol_task_lambda)
+ (libraries sol_task sol_task_lambda windtrap yojson unix))
+
+(test
+ (name test_sol_task_pubsub)
+ (modules test_sol_task_pubsub)
+ (libraries sol_task sol_task_pubsub windtrap yojson base64 unix))
+
+(executable
+ (name test_sol_task_local_pg)
+ (modules test_sol_task_local_pg)
+ (libraries
+  sol_task
+  sol_task_local
+  sol_jobs
+  pg-eio
+  caqti
+  caqti-eio
+  eio_main
+  unix))
+
+(rule
+ (alias runtest-integration)
+ (action
+  (run
+   ./test_sol_task_local_pg.exe
+   "postgresql://postgres:dev@localhost:5432/sol_dev")))
+
+(alias
+ (name ci-integration-pg)
+ (deps
+  (alias_rec runtest-integration)))

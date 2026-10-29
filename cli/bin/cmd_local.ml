@@ -354,5 +354,6 @@ let cmd =
     ; Cmd_releases.local_cmd
     ; run_subcmd
     ; invoke_subcmd
+    ; Cmd_local_task.cmd
     ]
 ;;

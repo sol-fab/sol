@@ -3,7 +3,7 @@
 First-party implementations of Sol's [application contract](../docs/reference/).
 
 - [`ocaml/`](ocaml/) — the OCaml framework packages ([`sol-svc-core`](ocaml/sol-svc-core/sol-svc-core.md), `sol-svc`, `sol-worker`,
-  `sol-fn`, `sol-jobs`, `sol-obs`, plus the internal `sol-runtime`/`sol-env`
+  `sol-fn`, `sol-jobs`, `sol-task`, `sol-obs`, plus the internal `sol-runtime`/`sol-env`
   plumbing and `kafka-eio-service`). These are the supported application-facing
   API; each package's `.md` next to its `lib/` is its spec.
 - [`typescript/`](typescript/README.md) — the TypeScript framework packages

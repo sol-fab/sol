@@ -89,6 +89,23 @@
   sol-runtime))
 
 (package
+ (name sol-task)
+ (synopsis "Sol's durable task handler contract and local/cloud task runtimes")
+ (depends
+  (ocaml (>= 5.4.0))
+  (dune (>= 3.0))
+  base64
+  caqti
+  cohttp-eio
+  eio
+  lambda-eio
+  pg-eio
+  sol-env
+  sol-jobs
+  sol-runtime
+  yojson))
+
+(package
  (name sol-outbox)
  (synopsis "Sol's Postgres transactional outbox: atomic state change and publication intent")
  (depends

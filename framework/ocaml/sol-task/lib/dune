@@ -1,0 +1,27 @@
+(library
+ (name sol_task)
+ (public_name sol-task)
+ (wrapped false)
+ (modules sol_task)
+ (libraries unix threads.posix yojson))
+
+(library
+ (name sol_task_local)
+ (public_name sol-task.local)
+ (wrapped false)
+ (modules sol_task_local)
+ (libraries sol_task sol_jobs pg-eio caqti eio))
+
+(library
+ (name sol_task_lambda)
+ (public_name sol-task.lambda)
+ (wrapped false)
+ (modules sol_task_lambda)
+ (libraries sol_task lambda-eio eio sol_env yojson))
+
+(library
+ (name sol_task_pubsub)
+ (public_name sol-task.pubsub)
+ (wrapped false)
+ (modules sol_task_pubsub)
+ (libraries sol_task cohttp-eio base64 eio sol_env sol_runtime yojson))
