@@ -11,7 +11,7 @@ printf '%s\n' "$*" >> "$state/calls.log"
 args="$*"
 
 if [[ "$args" == *"run deploy checkout-task"* ]]; then
-  [[ "$args" == *"--no-allow-unauthenticated"* && "$args" == *"--concurrency 1"* && "$args" == *"--max-instances 7"* ]] || { echo "run deploy lost settings" >&2; exit 1; }
+  [[ "$args" == *"--no-allow-unauthenticated"* && "$args" == *"--concurrency 1"* && "$args" == *"--max-instances 7"* && "$args" == *"--timeout 60"* ]] || { echo "run deploy lost settings" >&2; exit 1; }
   [[ "$args" == *"SOL_TASK_RUNTIME=pubsub"* ]] || { echo "run deploy lost runtime env" >&2; exit 1; }
   if [[ "${FAKE_RUN_DEPLOY_FAIL:-0}" == 1 ]]; then echo "simulated run deploy failure" >&2; exit 1; fi
   v=$(cat "$state/revision" 2>/dev/null || echo 0); v=$((v+1)); echo "$v" > "$state/revision"

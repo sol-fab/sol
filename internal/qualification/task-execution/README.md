@@ -218,6 +218,10 @@ procedure is:
 2. Deploy with `sol task gcp deploy --project ... --region ... --service checkout
    --image ... --max-attempts 5 --ack-deadline 30 --dlq-retention 3600
    --concurrency 2 --record ./gcp-task-release.json`; run `sol task gcp verify`.
+   Cloud Run's request timeout is set to the subscription ack deadline, so a
+   handler that exceeds the delivery window is terminated rather than continuing
+   to Cloud Run's much longer default while Pub/Sub has already redelivered. The
+   2026-10-29 live record predates this setting.
 3. Enqueue `ack`; read Cloud Run logs for `task_handler` and `task acknowledged`.
    Enqueue `fail`; wait for repeated retries, then create a temporary pull
    subscription on the DLQ topic and pull the dead-lettered envelope. Delete
