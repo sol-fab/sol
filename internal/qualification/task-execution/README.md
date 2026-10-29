@@ -9,7 +9,7 @@ observed for this capability.
 
 | Surface | Implementation | Automated evidence | Live evidence |
 |---|---|---|---|
-| Local Postgres | `sol-task.local` + `sol local task enqueue` | envelope/local unit tests; `sol-task local Postgres integration` (Ack, Retry→terminal, idempotent enqueue); manual CLI enqueue | disposable Docker Postgres only |
+| Local Postgres | `sol-task.local` + `sol local task enqueue` | envelope/local unit tests; `sol-task local Postgres integration` (Ack, Retry→terminal, duplicate delivery + idempotent effect, idempotent enqueue); manual CLI enqueue | disposable Docker Postgres only |
 | AWS SQS + Lambda | `sol-task.lambda` + `sol task aws` | envelope/Lambda unit tests; fake-provider lifecycle (deploy, enqueue, verify, rollback, destroy, partial-create cleanup) | **mechanism-level record**: [`2026-10-29-task-aws-live.md`](../records/2026-10-29-task-aws-live.md) |
 | GCP Pub/Sub + Cloud Run | `sol-task.pubsub` + `sol task gcp` | envelope/PubSub unit tests; fake-provider lifecycle (deploy, enqueue, verify, rollback, destroy, partial-create cleanup) | **mechanism-level record**: [`2026-10-29-task-gcp-live.md`](../records/2026-10-29-task-gcp-live.md) |
 | Target-scoped `sol deploy` | not implemented | none | none |
@@ -61,8 +61,13 @@ _build/default/framework/ocaml/sol-task/test/test_sol_task_local_pg.exe \
   'postgresql://postgres:dev@localhost:55432/sol_dev'
 ```
 
-It asserts Ack→completed, Retry with `max_attempts=1`→failed, and idempotent
-enqueue. For the CLI path, create the `sol_jobs` table from
+It asserts Ack→completed, Retry with `max_attempts=1`→failed, idempotent
+enqueue, and the duplicate-delivery case: the first delivery of a flaky task
+commits an idempotent effect keyed by `task_id` and returns `Retry`; the
+redelivery sees the same `task_id`, does not reapply the effect, and returns
+`Ack`. The test asserts two handler entries, one `task_id`, one effect, and a
+completed row after two attempts. For the CLI path, create the `sol_jobs` table
+from
 [`sol-task.md`](../../../framework/ocaml/sol-task/sol-task.md) and run:
 
 ```sh
