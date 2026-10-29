@@ -53,7 +53,13 @@ val provider_service_of : string -> (string, failure) result
 val preflight : request -> (unit, failure) result
 val deploy : request -> (release, failure) result
 val verify : request -> token:string -> (observed, failure) result
-val rollback : request -> version:string -> token:string -> (observed, failure) result
+
+val rollback
+  :  request
+  -> version:string
+  -> token:string
+  -> on_alias_moved:(string -> (unit, string) result)
+  -> (observed, failure) result
 
 val destroy
   :  request

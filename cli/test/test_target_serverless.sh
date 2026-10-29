@@ -30,7 +30,9 @@ set -euo pipefail
 printf '%s\n' "$*" >> "$FAKE_AWS_LOG"
 args="$*"
 if [[ "$args" == *"lambda list-functions"* ]]; then
-  if [[ -f "$FAKE_AWS_STATE/function" ]]; then printf '{"Functions":[{"FunctionName":"checkout-svc"}]}\n'; else printf '{"Functions":[]}\n'; fi
+  if [[ "${FAKE_LIST_MALFORMED:-0}" == 1 ]]; then printf '{}\n'
+  elif [[ -f "$FAKE_AWS_STATE/function" ]]; then printf '{"Functions":[{"FunctionName":"checkout-svc"}]}\n'
+  else printf '{"Functions":[]}\n'; fi
 elif [[ "$args" == *"lambda create-function"* ]]; then touch "$FAKE_AWS_STATE/function"; printf '{}\n'
 elif [[ "$args" == *"lambda update-function-code"* || "$args" == *"lambda update-function-configuration"* ]]; then printf '{}\n'
 elif [[ "$args" == *"lambda wait function-updated"* ]]; then printf '{}\n'
@@ -51,7 +53,10 @@ cat > "$work/bin/curl" <<'FAKE'
 set -euo pipefail
 url=""; config=""
 while [[ $# -gt 0 ]]; do case "$1" in --config) config="$2"; shift 2;; --output|--write-out) shift 2;; --silent|--show-error) shift;; *) url="$1"; shift;; esac; done
-if [[ "$url" == */readyz ]]; then printf '\n200'; elif [[ -s "$config" ]]; then printf 'ok\n200'; else printf 'no\n401'; fi
+if [[ "${FAKE_HTTP_FAIL:-0}" == 1 ]]; then printf '\n500'
+elif [[ "$url" == */readyz ]]; then printf '\n200'
+elif [[ -s "$config" ]]; then printf 'ok\n200'
+else printf 'no\n401'; fi
 FAKE
 chmod +x "$work/bin/aws" "$work/bin/curl"
 unset XDG_DATA_HOME
@@ -68,6 +73,23 @@ printf 'token\n' > "$work/token"
 "$sol" rollback --target live/aws/us-east-1 --record "$record" --service checkout_svc --to-version 1 --token-file "$work/token" > "$work/rollback"
 grep -q '"version":"1"' "$work/rollback"
 grep -q '"version":"1"' "$record"
+
+# A failed post-rollback smoke must still leave the record naming the alias the provider
+# actually moved, not the version that is no longer live.
+if FAKE_HTTP_FAIL=1 "$sol" rollback --target live/aws/us-east-1 --record "$record" --service checkout_svc --to-version 2 --token-file "$work/token" > "$work/rollback-fail" 2>&1; then
+  echo "rollback accepted a failed post-rollback smoke" >&2; exit 1
+fi
+grep -q 'readiness 500' "$work/rollback-fail"
+[[ "$(cat "$work/state/alias")" == 2 ]]
+grep -q '"version":"2"' "$record"
+
+# An unreadable inventory must not be treated as absence by destroy.
+if FAKE_LIST_MALFORMED=1 "$sol" destroy live/aws/us-east-1 --apply --service checkout_svc --record "$record" > "$work/destroy-malformed" 2>&1; then
+  echo "destroy accepted a malformed list-functions response" >&2; exit 1
+fi
+grep -q 'Functions array' "$work/destroy-malformed"
+[[ -f "$work/state/function" ]]
+
 "$sol" destroy live/aws/us-east-1 --apply --service checkout_svc --record "$record" > /dev/null
 [[ ! -f "$work/state/function" ]]
 echo "target serverless deploy/rollback/destroy fake-provider test passed"

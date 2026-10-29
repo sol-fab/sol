@@ -331,7 +331,6 @@ let deploy (r : request) =
   let* () =
     Sol_cli_aws_lambda_common.put_alias (scope r) ~function_name:r.function_name ~version
   in
-  let* () = invoke r ~qualifier:"live" |> Result.map (fun _ -> ()) in
   let release =
     { region = r.region
     ; service = r.service
@@ -342,15 +341,19 @@ let deploy (r : request) =
     ; role_arn = r.role_arn
     }
   in
+  (* Record the alias that is now live before invoking it. A first deploy whose
+     invocation fails must still leave an ownership record, and an update must not leave
+     the previous version recorded while the provider serves the new one. *)
   let* () =
     match r.record with
     | None -> Ok ()
     | Some path -> write_record ~path release |> Result.map_error (fun m -> Provider m)
   in
+  let* () = invoke r ~qualifier:"live" |> Result.map (fun _ -> ()) in
   Ok release
 ;;
 
-let rollback (r : request) ~version =
+let rollback (r : request) ~version ~on_alias_moved =
   let* () =
     if String.trim version = ""
     then Error (Refused "rollback version is required")
@@ -360,6 +363,13 @@ let rollback (r : request) ~version =
   let* _, tags = describe_owned r in
   let* () =
     Sol_cli_aws_lambda_common.put_alias (scope r) ~function_name:r.function_name ~version
+  in
+  (* The alias has moved. Record that provider state before the invocation, so a failed
+     FunctionError check cannot leave the release record naming the old version. *)
+  let* () =
+    on_alias_moved version
+    |> Result.map_error (fun m ->
+      Partial ("alias moved but release record update failed: " ^ m))
   in
   let* invocation_status = invoke r ~qualifier:"live" in
   Ok { function_name = r.function_name; version; alias = "live"; tags; invocation_status }

@@ -98,9 +98,11 @@ and incoming application identity remain separate contracts.
 The lifecycle is:
 
 - **deploy** creates or updates the function, publishes an immutable version,
-  moves the `live` alias, invokes `{}` through `live`, and requires the response
-  body `{"status":"ok"}`. A provider `FunctionError`, a non-200 `StatusCode`, or
-  a different body fails the deploy. The ownership record carries `"kind":"fn"`.
+  moves the `live` alias, writes the ownership record, invokes `{}` through
+  `live`, and requires the response body `{"status":"ok"}`. A provider
+  `FunctionError`, a non-200 `StatusCode`, or a different body fails the deploy,
+  but the record still names the alias that is live so the resource remains
+  destroyable. The ownership record carries `"kind":"fn"`.
 - **rollback** checks ownership, moves `live` to the requested version, invokes
   again, and rewrites the record from the observed version.
 - **destroy** reads the record, requires kind `fn`, checks the target region,
@@ -197,8 +199,10 @@ sol rollback --target <target> --record <serverless-release.json> \
 ```
 
 For AWS the record's `kind` selects the rollback lifecycle and the record must match the
-target, service, and provider function name before the alias moves. The post-rollback
-check performs the same execution smoke as deploy: readiness plus
+target, service, and provider function name before the alias moves. The record is updated
+immediately after the alias move, before the post-rollback smoke, so a failed smoke leaves
+the record naming the version that is actually live rather than the previous version. The
+post-rollback check performs the same execution smoke as deploy: readiness plus
 authorized/unauthorized requests for `-svc`, or an invoke through `live` returning
 `{"status":"ok"}` for `-fn`. Kubernetes rollback continues to require `RELEASE_ID`.
 

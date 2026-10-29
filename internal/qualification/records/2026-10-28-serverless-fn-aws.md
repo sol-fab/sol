@@ -43,6 +43,7 @@ experiment. It has no Function URL and no event source mapping.
 | No trigger or event source mapping | PASS | `event-sources-1.json`: `[]` |
 | Second deploy publishes a new immutable version | PASS | `deploy-2.log`: `"version":"2"`; `versions-2.json`: `$LATEST`, `1`, `2`; alias moved to `2` |
 | Target rollback moves `live` and re-invokes | PASS | `rollback.log`: observed `"version":"1"`, `"invocation_status":"ok"`; `alias-after-rollback.txt`: `1`; `invoke-body-after-rollback.txt`: `{"status":"ok"}` |
+| First deploy invocation failure still leaves an ownership record | PASS (fake) | `test_target_serverless_fn.sh` injects a `FunctionError` on a fresh deploy, asserts the record exists at version 1, and destroys it |
 | Rollback rewrites the ownership record | PASS | `release-after-rollback.json` has `"version":"1"`; `release-before-rollback.json` had `"version":"2"` |
 | Target destroy deletes the function and verifies absence | PASS | `destroy.log` exit 0; `functions-after-destroy.json`: `[]`; `get-function-after-destroy.txt`: `ResourceNotFoundException` |
 | Sol does not delete the ECR repository or execution role | PASS | both remained after `sol destroy` and were deleted by the explicit experiment cleanup |
@@ -66,7 +67,7 @@ experiment. It has no Function URL and no event source mapping.
 
 | Item | Status | Why |
 |---|---|---|
-| `FunctionError` rejection against a live failing handler | NOT RUN LIVE | The fake-provider lifecycle regression `test_target_serverless_fn.sh` exercises a provider `FunctionError` on rollback and asserts the record is unchanged. No live failing-handler image was built for this bounded run. |
+| `FunctionError` rejection against a live failing handler | NOT RUN LIVE | The fake-provider lifecycle regression `test_target_serverless_fn.sh` exercises a provider `FunctionError` on rollback, asserts the command fails, and asserts the record names the alias the provider moved (version 2) while the alias stays on that version. No live failing-handler image was built for this bounded run. |
 | GCP `-fn` (Cloud Run Jobs) | NOT RUN | Not implemented; no parity is assumed. |
 | Triggers, schedules, event sources | NOT RUN | Deliberately out of contract for this slice. |
 | AWS-native incoming identity for `-svc` | NOT RUN | The `-fn` slice has no incoming callers; `-svc` remains the Google-token experiment. |

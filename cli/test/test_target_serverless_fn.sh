@@ -28,7 +28,10 @@ set -euo pipefail
 printf '%s\n' "$*" >> "$FAKE_AWS_LOG"
 args="$*"
 if [[ "$args" == *"lambda list-functions"* ]]; then
-  if [[ -f "$FAKE_AWS_STATE/function" ]]; then printf '{"Functions":[{"FunctionName":"checkout-fn"}]}\n'; else printf '{"Functions":[]}\n'; fi
+  if [[ "${FAKE_LIST_MALFORMED:-0}" == 1 ]]; then printf '{}\n'
+  elif [[ "${FAKE_LIST_MALFORMED:-0}" == 2 ]]; then printf '{"Functions":[{}]}\n'
+  elif [[ -f "$FAKE_AWS_STATE/function" ]]; then printf '{"Functions":[{"FunctionName":"checkout-fn"}]}\n'
+  else printf '{"Functions":[]}\n'; fi
 elif [[ "$args" == *"lambda create-function"* ]]; then
   [[ "$args" == *"sol-owned=lambda-fn-experiment"* ]] || { echo "create-function lost the fn ownership tag" >&2; exit 1; }
   touch "$FAKE_AWS_STATE/function"; echo 0 > "$FAKE_AWS_STATE/version"; printf '{}\n'
@@ -101,12 +104,14 @@ grep -q '"invocation_status":"ok"' "$work/rollback"
 grep -q '"version":"1"' "$record"
 [[ "$(cat "$work/state/alias")" == 1 ]]
 
-# A provider FunctionError must fail the lifecycle step and leave the record unchanged.
+# A provider FunctionError must fail the lifecycle step, but only after the record
+# reflects the alias the provider actually moved.
 if FAKE_INVOKE_FAIL=1 "$sol" rollback --target live/aws/us-east-1 --record "$record" --service checkout_fn --to-version 2 --token-file "$work/token" > "$work/invoke-fail" 2>&1; then
   echo "rollback accepted a Lambda FunctionError" >&2; exit 1
 fi
 grep -q 'FunctionError' "$work/invoke-fail"
-grep -q '"version":"1"' "$record"
+[[ "$(cat "$work/state/alias")" == 2 ]]
+grep -q '"version":"2"' "$record"
 
 # Destroy refuses a function that no longer carries the adapter's tags.
 FAKE_FUNCTION_OWNER=foreign "$sol" destroy live/aws/us-east-1 --apply --service checkout_fn --record "$record" > "$work/destroy-foreign" 2>&1 && {
@@ -117,4 +122,32 @@ FAKE_FUNCTION_OWNER=foreign "$sol" destroy live/aws/us-east-1 --apply --service 
 "$sol" destroy live/aws/us-east-1 --apply --service checkout_fn --record "$record" > /dev/null
 [[ ! -f "$work/state/function" ]]
 grep -q 'delete-function-url-config' "$FAKE_AWS_LOG" && { echo "fn destroy deleted a Function URL" >&2; exit 1; }
+
+# A malformed inventory is not evidence of absence, and must not trigger a create.
+if FAKE_LIST_MALFORMED=1 "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/malformed" 2>&1; then
+  echo "deploy accepted a malformed list-functions response" >&2; exit 1
+fi
+grep -q 'Functions array' "$work/malformed"
+[[ ! -f "$work/state/function" ]]
+
+# A malformed entry must not be silently dropped from the inventory either.
+if FAKE_LIST_MALFORMED=2 "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/malformed-entry" 2>&1; then
+  echo "deploy accepted a list-functions entry without FunctionName" >&2; exit 1
+fi
+grep -q 'entry 1 has no FunctionName' "$work/malformed-entry"
+[[ ! -f "$work/state/function" ]]
+
+# A first deploy whose invocation fails must still leave an ownership record, so the
+# provider resource can be destroyed rather than becoming untracked.
+if FAKE_INVOKE_FAIL=1 "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/first-deploy-fail" 2>&1; then
+  echo "first deploy accepted a Lambda FunctionError" >&2; exit 1
+fi
+grep -q 'FunctionError' "$work/first-deploy-fail"
+[[ -f "$work/state/function" ]]
+[[ "$(cat "$work/state/alias")" == 1 ]]
+record_fail=$(find "$work/home/.local/share/sol/runs" -name serverless-release.json -type f -print | sort | tail -1)
+grep -q '"kind":"fn"' "$record_fail"
+grep -q '"version":"1"' "$record_fail"
+"$sol" destroy live/aws/us-east-1 --apply --service checkout_fn --record "$record_fail" > /dev/null
+[[ ! -f "$work/state/function" ]]
 echo "target serverless fn deploy/invoke/rollback/destroy fake-provider test passed"
