@@ -52,9 +52,13 @@ for raw in open(log):
         continue
     if args[:2] == ["pin", "add"]:
         # pin add -y --kind=path <package> <path>
+        if args[2:4] != ["-y", "--kind=path"]:
+            raise SystemExit(f"pin lost its path-pinning semantics: {args}")
         pin.append(args[4])
     elif args[0] == "install":
         # install -y <package>...
+        if args[1:2] != ["-y"]:
+            raise SystemExit(f"install lost its non-interactive flag: {args}")
         install.extend(args[2:])
 
 expected = {"kafka-eio-service", "sol-svc", "sol-task", "sol-extra"}
