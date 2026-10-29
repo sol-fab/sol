@@ -126,8 +126,8 @@ sol task aws enqueue --profile <aws-profile> --region us-east-1 \
 ```
 
 That record is retried to the configured budget and dead-lettered. The OCaml
-consumer acknowledges the same synthetic payload; use the provider record and
-the log to distinguish the two demos.
+consumer now also treats the `fail` payload as `Retry`, so both consumers have
+the same synthetic retry path; the task id remains stable across redelivery.
 
 Destroy both task lifecycles when finished:
 
@@ -137,6 +137,55 @@ sol task aws destroy --profile <aws-profile> --region us-east-1 \
 sol task aws destroy --profile <aws-profile> --region us-east-1 \
   --service pluto-tasks-ts --record ./pluto-task-ts.json --apply
 ```
+
+### GCP Pub/Sub consumers
+
+The same OCaml consumer image selects `sol-task.pubsub` when
+`SOL_TASK_RUNTIME=pubsub` (the GCP task adapter sets it); the AWS adapter sets
+`lambda`. The TypeScript consumer has a GCP HTTP entrypoint in
+`serverless/task_consumer_ts_gcp/Dockerfile`.
+
+```sh
+# OCaml: same image, Pub/Sub runtime selected by the GCP adapter
+sol task gcp deploy --project <project> --region us-west1 \
+  --service pluto-tasks-gcp \
+  --image <region>-docker.pkg.dev/<project>/<repo>/task-consumer@sha256:<digest> \
+  --max-attempts 5 --ack-deadline 30 --dlq-retention 3600 --concurrency 2 \
+  --record ./pluto-task-gcp-ocaml.json
+
+# TypeScript: Pub/Sub push HTTP server
+sol task gcp deploy --project <project> --region us-west1 \
+  --service pluto-tasks-gcp-ts \
+  --image <region>-docker.pkg.dev/<project>/<repo>/task-consumer-ts@sha256:<digest> \
+  --max-attempts 5 --ack-deadline 30 --dlq-retention 3600 --concurrency 2 \
+  --record ./pluto-task-gcp-ts.json
+```
+
+Pub/Sub push delivers one message per HTTP request; there is no SQS-style
+partial-batch response. The TypeScript handler maps a successful task to 200,
+`Retry` to 500, and a malformed push/envelope to 400. Pub/Sub's configured
+delivery budget and dead-letter topic provide terminal failure; malformed
+messages are bounded by that same provider policy rather than retried forever.
+The OCaml `sol-task.pubsub` runtime uses the same status mapping. Application
+idempotency remains mandatory; duplicate delivery is at-least-once.
+
+Enqueue and inspect logs:
+
+```sh
+sol task gcp enqueue --project <project> --region us-west1 \
+  --service pluto-tasks-gcp --record ./pluto-task-gcp-ocaml.json \
+  --kind send_welcome --payload '{"kind":"send_welcome","user_id":"u-1"}' \
+  --idempotency-key welcome-u-1
+
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="pluto-tasks-gcp" AND textPayload:"task_consumer"' \
+  --project <project> --limit 20 --freshness 1d
+```
+
+Use `sol task gcp rollback --to-revision <prior-revision>` for the provider's
+supported service rollback, and `sol task gcp destroy ... --apply` for cleanup.
+The GCP task path is fake-tested and has a bounded mechanism-level live record;
+live qualification of these demo consumers is pending operator approval.
 
 ## Local checks
 
@@ -152,7 +201,10 @@ dune build app/ops/probe_fn/bin/main.exe serverless/task_consumer_ocaml/bin/main
 sol check
 ```
 
-The probes are also runnable as local Kubernetes CronJobs: the OCaml probe
+The GCP Pub/Sub consumers are tested locally with their HTTP runtimes:
+`sol-task.pubsub` returns 200/500/400 for Ack/Retry/malformed, and the
+TypeScript test suite covers the same mapping plus duplicate delivery. The
+probes are also runnable as local Kubernetes CronJobs: the OCaml probe
 selects the `Cron` trigger when `AWS_LAMBDA_RUNTIME_API` is absent, and the
 TypeScript image entrypoint runs `index.js` once when that API is absent. Create
 a local test Job from each CronJob to exercise it without AWS. No live AWS
