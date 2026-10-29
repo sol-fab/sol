@@ -1,4 +1,4 @@
 [
     "2",
-    "arn:aws:lambda:us-east-1:876701109436:function:checkout-task:live"
+    "arn:aws:lambda:us-east-1:<aws-account>:function:checkout-task:live"
 ]

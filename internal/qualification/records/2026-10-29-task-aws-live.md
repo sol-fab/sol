@@ -90,7 +90,9 @@ packaging requirement, not an adapter behavior.
 
 ## Evidence manifest
 
-`manifest.txt` contains the SHA-256 of each file. The files include the deploy
+`manifest.txt` contains the SHA-256 of each file. The committed provider evidence
+replaces the account ID with `<aws-account>`; the ARNs and resource names are
+otherwise the observed values. The files include the deploy
 records (including the failed attempts that drove the fixes), function and
 mapping descriptions, queue attributes, enqueue outputs, CloudWatch log
 excerpts, the DLQ message, rollback records, destroy results, and the final

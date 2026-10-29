@@ -2,7 +2,7 @@
     "Active",
     "Image",
     null,
-    "arn:aws:iam::876701109436:role/sol-task-live-exec",
+    "arn:aws:iam::<aws-account>:role/sol-task-live-exec",
     25,
     {
         "SOL_TASK_RUNTIME": "lambda"
