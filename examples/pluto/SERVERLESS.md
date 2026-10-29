@@ -213,7 +213,7 @@ sol task gcp enqueue --project <project> --region us-west1 \
   --idempotency-key welcome-u-1
 
 gcloud logging read \
-  'resource.type="cloud_run_revision" AND resource.labels.service_name="pluto-tasks-gcp" AND textPayload:"task_consumer"' \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="pluto-tasks-gcp-task" AND textPayload:"task_consumer"' \
   --project <project> --limit 20 --freshness 1d
 ```
 
