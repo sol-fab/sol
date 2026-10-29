@@ -51,15 +51,21 @@ elif [[ "$args" == *"lambda create-event-source-mapping"* ]]; then
   [[ "$args" == *"ReportBatchItemFailures"* ]] || { echo "mapping lost ReportBatchItemFailures" >&2; exit 1; }
   [[ "$args" == *"MaximumConcurrency=7"* ]] || { echo "mapping lost MaximumConcurrency" >&2; exit 1; }
   if [[ "${FAKE_MAPPING_FAIL:-0}" == 1 ]]; then echo "simulated mapping failure" >&2; exit 1; fi
+  rm -f "$state/mapping-ready"
   echo "mapping-1" > "$state/mapping"; printf '{"UUID":"mapping-1"}\n'
 elif [[ "$args" == *"lambda update-event-source-mapping"* ]]; then
   printf '{"UUID":"mapping-1"}\n'
 elif [[ "$args" == *"lambda get-event-source-mapping"* ]]; then
-  printf '{"UUID":"%s","State":"Enabled","FunctionResponseTypes":["ReportBatchItemFailures"]}\n' "$(cat "$state/mapping")"
+  if [[ "${FAKE_MAPPING_CREATING:-0}" == 1 && ! -f "$state/mapping-ready" ]]; then
+    touch "$state/mapping-ready"
+    printf '{"UUID":"%s","State":"Creating","FunctionResponseTypes":["ReportBatchItemFailures"]}\n' "$(cat "$state/mapping")"
+  else
+    printf '{"UUID":"%s","State":"Enabled","FunctionResponseTypes":["ReportBatchItemFailures"]}\n' "$(cat "$state/mapping")"
+  fi
 elif [[ "$args" == *"lambda delete-event-source-mapping"* ]]; then
-  rm -f "$state/mapping"; printf '{}\n'
+  rm -f "$state/mapping" "$state/mapping-ready"; printf '{}\n'
 elif [[ "$args" == *"lambda delete-function"* ]]; then
-  rm -f "$state/function" "$state/alias" "$state/version"; printf '{}\n'
+  rm -f "$state/function" "$state/alias" "$state/version" "$state/mapping-ready"; printf '{}\n'
 elif [[ "$args" == *"sqs get-queue-url"* ]]; then
   name=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "--queue-name" ]]; then j=$((i+1)); name="${!j}"; fi; done
   if [[ -f "$state/queue-$name" ]]; then printf '{"QueueUrl":"https://sqs.us-east-1.amazonaws.com/123/%s"}\n' "$name"; else printf 'An error occurred (AWS.SimpleQueueService.NonExistentQueue) when calling the GetQueueUrl operation\n' >&2; exit 1; fi
@@ -166,5 +172,13 @@ grep -q '"queue_url":""' "$work/partial-queue.json"
 "$sol" task aws destroy --profile test --region us-east-1 --service checkout --record "$work/partial-queue.json" --apply > /dev/null
 [[ ! -f "$work/state/queue-checkout-task-dlq" ]]
 [[ ! -f "$work/state/queue-checkout-task" ]]
+
+# A newly created mapping is Creating before it is Enabled. The deploy must wait
+# and verify the final state rather than failing on the first observation.
+FAKE_MAPPING_CREATING=1 "$sol" task aws deploy "${common[@]}" --record "$work/creating.json" > "$work/creating.out"
+grep -q '"mapping_uuid":"mapping-1"' "$work/creating.json"
+[[ "$(grep -c 'lambda get-event-source-mapping' "$work/state/calls.log")" -ge 2 ]]
+"$sol" task aws destroy --profile test --region us-east-1 --service checkout --record "$work/creating.json" --apply > /dev/null
+[[ ! -f "$work/state/function" ]]
 
 echo "task AWS fake-provider lifecycle test passed"
