@@ -46,9 +46,23 @@ export PATH="$work/bin:$PATH"
 export FAKE_GCLOUD_LOG="$work/gcloud.log"
 export FAKE_GCLOUD_STATE="$work/deployed"
 cd "$examples"
-if ! "$sol" cloud-run deploy \
+# A short/invalid digest must be refused at the Cloud Run boundary, before any
+# provider call, using the same immutable-reference rule as the other adapters.
+if "$sol" cloud-run deploy \
   --project p --region r --service checkout_svc \
   --image repo@sha256:abc123 \
+  --unit checkout/checkout_svc \
+  --issuer https://accounts.google.com \
+  --jwks-uri https://www.googleapis.com/oauth2/v3/certs \
+  --caller checkout/checkout_svc=103076866099743206289 \
+  --ingress public > "$work/bad-image.out" 2> "$work/bad-image.err"; then
+  echo "short image digest was accepted" >&2
+  exit 1
+fi
+grep -q 'immutable' "$work/bad-image.err"
+if ! "$sol" cloud-run deploy \
+  --project p --region r --service checkout_svc \
+  --image repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --unit checkout/checkout_svc \
   --issuer https://accounts.google.com \
   --jwks-uri https://www.googleapis.com/oauth2/v3/certs \
@@ -67,7 +81,7 @@ fi
 grep -q 'SOL_WORKLOAD_SUBJECT_SCHEME=google_oidc_service_account' "$FAKE_GCLOUD_LOG"
 if "$sol" cloud-run deploy \
   --project p --region r --service checkout_svc \
-  --image repo@sha256:abc123 \
+  --image repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --unit checkout/checkout_svc \
   --issuer https://accounts.google.com \
   --jwks-uri https://www.googleapis.com/oauth2/v3/certs \
@@ -90,7 +104,7 @@ YAML
 cd "$work/collision"
 if "$sol" cloud-run deploy \
   --project p --region r --service checkout_svc \
-  --image repo@sha256:abc123 \
+  --image repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --unit checkout/checkout_svc \
   --issuer https://accounts.google.com \
   --jwks-uri https://www.googleapis.com/oauth2/v3/certs \

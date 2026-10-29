@@ -97,13 +97,13 @@ let nonempty name value =
 ;;
 
 let valid_image image =
-  match String.index_opt image '@' with
-  | None -> Error (Refused "image must be an immutable @sha256: reference")
-  | Some at ->
-    let digest = String.sub image (at + 1) (String.length image - at - 1) in
-    if String.starts_with ~prefix:"sha256:" digest && String.length digest > 7
-    then Ok image
-    else Error (Refused "image must be an immutable @sha256: reference")
+  if Sol_cli_image_ref.is_digest image
+  then Ok image
+  else
+    Error
+      (Refused
+         "image must be an immutable <repo>@sha256:<64 lowercase hexadecimal digits> \
+          reference")
 ;;
 
 let valid_caller (subject, unit) =
