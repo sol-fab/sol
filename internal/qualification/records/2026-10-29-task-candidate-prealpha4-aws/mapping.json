@@ -1,0 +1,17 @@
+{
+    "UUID": "d8bd60e0-07d0-407d-bb29-fc039aacece5",
+    "BatchSize": 10,
+    "MaximumBatchingWindowInSeconds": 0,
+    "EventSourceArn": "arn:aws:sqs:us-east-1:<aws-account>:checkout-task",
+    "ScalingConfig": {
+        "MaximumConcurrency": 2
+    },
+    "FunctionArn": "arn:aws:lambda:us-east-1:<aws-account>:function:checkout-task:live",
+    "LastModified": "2026-10-29T08:47:52.719000-06:00",
+    "State": "Enabled",
+    "StateTransitionReason": "USER_INITIATED",
+    "FunctionResponseTypes": [
+        "ReportBatchItemFailures"
+    ],
+    "EventSourceMappingArn": "arn:aws:lambda:us-east-1:<aws-account>:event-source-mapping:d8bd60e0-07d0-407d-bb29-fc039aacece5"
+}

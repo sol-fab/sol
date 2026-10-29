@@ -1,0 +1,8 @@
+lambda functions:
+sqs queues:
+None
+ecr repos:
+role:
+
+aws: [ERROR]: An error occurred (NoSuchEntity) when calling the GetRole operation: The role with name sol-task-live-exec cannot be found.
+log group:

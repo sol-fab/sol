@@ -1,0 +1,110 @@
+{
+    "events": [
+        {
+            "logStreamName": "2026/10/29/[4]db2fb8530d614f2786cc99928389c43a",
+            "timestamp": 1793285056408,
+            "message": "START RequestId: 7bf42c7e-1aae-508e-88b7-4f23475e0b0b Version: 4\n",
+            "ingestionTime": 1793285064655,
+            "eventId": "39991593111287423681252219326904026792465147436289949696"
+        },
+        {
+            "logStreamName": "2026/10/29/[4]db2fb8530d614f2786cc99928389c43a",
+            "timestamp": 1793285056408,
+            "message": "task_handler task_id=7a2cf6a9370fdb6a83269868f38bfd20 kind=fail idempotency_key=candidate-fail-1\n",
+            "ingestionTime": 1793285064655,
+            "eventId": "39991593111287423681252219326904026792465147436289949697"
+        },
+        {
+            "logStreamName": "2026/10/29/[4]db2fb8530d614f2786cc99928389c43a",
+            "timestamp": 1793285056408,
+            "message": "sol-task: task requested retry task_id=7a2cf6a9370fdb6a83269868f38bfd20 kind=fail error=live failure probe\n",
+            "ingestionTime": 1793285064655,
+            "eventId": "39991593111287423681252219326904026792465147436289949698"
+        },
+        {
+            "logStreamName": "2026/10/29/[4]db2fb8530d614f2786cc99928389c43a",
+            "timestamp": 1793285056410,
+            "message": "END RequestId: 7bf42c7e-1aae-508e-88b7-4f23475e0b0b\n",
+            "ingestionTime": 1793285064655,
+            "eventId": "39991593111332025171649280573187098229010444159301910531"
+        },
+        {
+            "logStreamName": "2026/10/29/[4]db2fb8530d614f2786cc99928389c43a",
+            "timestamp": 1793285056410,
+            "message": "REPORT RequestId: 7bf42c7e-1aae-508e-88b7-4f23475e0b0b\tDuration: 2.22 ms\tBilled Duration: 137 ms\tMemory Size: 512 MB\tMax Memory Used: 18 MB\tInit Duration: 134.60 ms\t\n",
+            "ingestionTime": 1793285064655,
+            "eventId": "39991593111332025171649280573187098229010444159301910532"
+        },
+        {
+            "logStreamName": "2026/10/29/[4]2b77c2d2bcae48e8a6ee820f18140420",
+            "timestamp": 1793285056655,
+            "message": "START RequestId: 9b1bee98-f3da-589d-a5dc-8dc5ae2a660a Version: 4\n",
+            "ingestionTime": 1793285057533,
+            "eventId": "39991593116795707745289283234253677397902743347949404160"
+        },
+        {
+            "logStreamName": "2026/10/29/[4]2b77c2d2bcae48e8a6ee820f18140420",
+            "timestamp": 1793285056655,
+            "message": "task_handler task_id=eaf5f7af6e1378df77a80bcb6fcc0d71 kind=ack idempotency_key=candidate-ack-1\n",
+            "ingestionTime": 1793285057533,
+            "eventId": "39991593116795707745289283234253677397902743347949404161"
+        },
+        {
+            "logStreamName": "2026/10/29/[4]2b77c2d2bcae48e8a6ee820f18140420",
+            "timestamp": 1793285056655,
+            "message": "sol-task: task acknowledged task_id=eaf5f7af6e1378df77a80bcb6fcc0d71 kind=ack\n",
+            "ingestionTime": 1793285057533,
+            "eventId": "39991593116795707745289283234253677397902743347949404162"
+        },
+        {
+            "logStreamName": "2026/10/29/[4]2b77c2d2bcae48e8a6ee820f18140420",
+            "timestamp": 1793285056657,
+            "message": "END RequestId: 9b1bee98-f3da-589d-a5dc-8dc5ae2a660a\n",
+            "ingestionTime": 1793285057533,
+            "eventId": "39991593116840309235686344480536748834448040070961364995"
+        },
+        {
+            "logStreamName": "2026/10/29/[4]2b77c2d2bcae48e8a6ee820f18140420",
+            "timestamp": 1793285056657,
+            "message": "REPORT RequestId: 9b1bee98-f3da-589d-a5dc-8dc5ae2a660a\tDuration: 2.17 ms\tBilled Duration: 1483 ms\tMemory Size: 512 MB\tMax Memory Used: 18 MB\tInit Duration: 1480.06 ms\t\n",
+            "ingestionTime": 1793285057533,
+            "eventId": "39991593116840309235686344480536748834448040070961364996"
+        },
+        {
+            "logStreamName": "2026/10/29/[4]2b77c2d2bcae48e8a6ee820f18140420",
+            "timestamp": 1793285085747,
+            "message": "START RequestId: 51e98c50-91f1-5b57-8216-ef0dcfe490d2 Version: 4\n",
+            "ingestionTime": 1793285094763,
+            "eventId": "39991593765568987060942171712818611003828837169877614592"
+        },
+        {
+            "logStreamName": "2026/10/29/[4]2b77c2d2bcae48e8a6ee820f18140420",
+            "timestamp": 1793285085748,
+            "message": "task_handler task_id=7a2cf6a9370fdb6a83269868f38bfd20 kind=fail idempotency_key=candidate-fail-1\n",
+            "ingestionTime": 1793285094763,
+            "eventId": "39991593765591287806140702335960146722101485531383595009"
+        },
+        {
+            "logStreamName": "2026/10/29/[4]2b77c2d2bcae48e8a6ee820f18140420",
+            "timestamp": 1793285085748,
+            "message": "sol-task: task requested retry task_id=7a2cf6a9370fdb6a83269868f38bfd20 kind=fail error=live failure probe\n",
+            "ingestionTime": 1793285094763,
+            "eventId": "39991593765591287806140702335960146722101485531383595010"
+        },
+        {
+            "logStreamName": "2026/10/29/[4]2b77c2d2bcae48e8a6ee820f18140420",
+            "timestamp": 1793285085750,
+            "message": "END RequestId: 51e98c50-91f1-5b57-8216-ef0dcfe490d2\n",
+            "ingestionTime": 1793285094763,
+            "eventId": "39991593765635889296537763582243218158646782254395555843"
+        },
+        {
+            "logStreamName": "2026/10/29/[4]2b77c2d2bcae48e8a6ee820f18140420",
+            "timestamp": 1793285085750,
+            "message": "REPORT RequestId: 51e98c50-91f1-5b57-8216-ef0dcfe490d2\tDuration: 2.09 ms\tBilled Duration: 3 ms\tMemory Size: 512 MB\tMax Memory Used: 18 MB\t\n",
+            "ingestionTime": 1793285094763,
+            "eventId": "39991593765635889296537763582243218158646782254395555844"
+        }
+    ],
+    "searchedLogStreams": []
+}

@@ -1,0 +1,17 @@
+{
+    "Attributes": {
+        "QueueArn": "arn:aws:sqs:us-east-1:<aws-account>:checkout-task",
+        "ApproximateNumberOfMessages": "0",
+        "ApproximateNumberOfMessagesNotVisible": "0",
+        "ApproximateNumberOfMessagesDelayed": "0",
+        "CreatedTimestamp": "1793285005",
+        "LastModifiedTimestamp": "1793285005",
+        "VisibilityTimeout": "30",
+        "MaximumMessageSize": "1048576",
+        "MessageRetentionPeriod": "3600",
+        "DelaySeconds": "0",
+        "RedrivePolicy": "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:<aws-account>:checkout-task-dlq\",\"maxReceiveCount\":2}",
+        "ReceiveMessageWaitTimeSeconds": "0",
+        "SqsManagedSseEnabled": "true"
+    }
+}
