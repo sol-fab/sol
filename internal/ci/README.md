@@ -51,8 +51,8 @@ The `test` job runs, in this order:
 The static/format checks run before the product suites so a format or source
 invariant failure fails the required check without first spending time on the
 unit, lifecycle, integration and E2E suites. The 2026-10-29 reorder keeps the
-same 33 test steps; only their order, step timeouts, and one redundant command
-changed.
+same 33 test steps; only their order, step timeouts, one redundant command, and
+the integration-diagnostics outcome guard changed.
 
 ## Suite map
 
