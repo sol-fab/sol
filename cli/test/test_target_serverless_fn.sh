@@ -136,4 +136,18 @@ if FAKE_LIST_MALFORMED=2 "$sol" deploy live/aws/us-east-1 --image-tag test --ima
 fi
 grep -q 'entry 1 has no FunctionName' "$work/malformed-entry"
 [[ ! -f "$work/state/function" ]]
+
+# A first deploy whose invocation fails must still leave an ownership record, so the
+# provider resource can be destroyed rather than becoming untracked.
+if FAKE_INVOKE_FAIL=1 "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/first-deploy-fail" 2>&1; then
+  echo "first deploy accepted a Lambda FunctionError" >&2; exit 1
+fi
+grep -q 'FunctionError' "$work/first-deploy-fail"
+[[ -f "$work/state/function" ]]
+[[ "$(cat "$work/state/alias")" == 1 ]]
+record_fail=$(find "$work/home/.local/share/sol/runs" -name serverless-release.json -type f -print | sort | tail -1)
+grep -q '"kind":"fn"' "$record_fail"
+grep -q '"version":"1"' "$record_fail"
+"$sol" destroy live/aws/us-east-1 --apply --service checkout_fn --record "$record_fail" > /dev/null
+[[ ! -f "$work/state/function" ]]
 echo "target serverless fn deploy/invoke/rollback/destroy fake-provider test passed"

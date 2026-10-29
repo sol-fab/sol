@@ -98,9 +98,11 @@ and incoming application identity remain separate contracts.
 The lifecycle is:
 
 - **deploy** creates or updates the function, publishes an immutable version,
-  moves the `live` alias, invokes `{}` through `live`, and requires the response
-  body `{"status":"ok"}`. A provider `FunctionError`, a non-200 `StatusCode`, or
-  a different body fails the deploy. The ownership record carries `"kind":"fn"`.
+  moves the `live` alias, writes the ownership record, invokes `{}` through
+  `live`, and requires the response body `{"status":"ok"}`. A provider
+  `FunctionError`, a non-200 `StatusCode`, or a different body fails the deploy,
+  but the record still names the alias that is live so the resource remains
+  destroyable. The ownership record carries `"kind":"fn"`.
 - **rollback** checks ownership, moves `live` to the requested version, invokes
   again, and rewrites the record from the observed version.
 - **destroy** reads the record, requires kind `fn`, checks the target region,

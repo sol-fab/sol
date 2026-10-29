@@ -331,7 +331,6 @@ let deploy (r : request) =
   let* () =
     Sol_cli_aws_lambda_common.put_alias (scope r) ~function_name:r.function_name ~version
   in
-  let* () = invoke r ~qualifier:"live" |> Result.map (fun _ -> ()) in
   let release =
     { region = r.region
     ; service = r.service
@@ -342,11 +341,15 @@ let deploy (r : request) =
     ; role_arn = r.role_arn
     }
   in
+  (* Record the alias that is now live before invoking it. A first deploy whose
+     invocation fails must still leave an ownership record, and an update must not leave
+     the previous version recorded while the provider serves the new one. *)
   let* () =
     match r.record with
     | None -> Ok ()
     | Some path -> write_record ~path release |> Result.map_error (fun m -> Provider m)
   in
+  let* () = invoke r ~qualifier:"live" |> Result.map (fun _ -> ()) in
   Ok release
 ;;
 
