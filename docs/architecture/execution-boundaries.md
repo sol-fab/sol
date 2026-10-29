@@ -15,7 +15,7 @@ and how Sol runs it. They are not interchangeable.
 |---|---|---|---|
 | `-svc` | HTTP request/response, `/readyz`, identity-checked routes | Deployment + Service | AWS Lambda through the request adapter (target `execution: serverless`); GCP Cloud Run |
 | `-worker` | Long-running Kafka consumer group, `Ack`/`Fail`, drain on SIGTERM | Deployment | **No managed mapping.** SQS/Pub/Sub are not substituted for Kafka semantics |
-| `-fn` | Run-to-completion; scheduled locally | CronJob | AWS Lambda run-once; GCP Cloud Run Jobs (target dispatch, pending live) |
+| `-fn` | Run-to-completion; scheduled locally | CronJob | AWS Lambda run-once; GCP Cloud Run Jobs (target dispatch, live) |
 | `-jobs` (`sol-jobs`) | Durable leased Postgres jobs; retry/backoff, terminal failure, retention | Hosted by a `-worker` | No separate provider mapping; a cloud worker hosts the same loop |
 | `-task` (`sol-task`) | Durable task handler: stable `task_id`, `Ack`/`Retry`, at-least-once, provider-managed terminal delivery | Hosted by a `-worker` over `sol-jobs` (`sol-task.local`) | AWS SQS + Lambda (`sol-task.lambda`); GCP Pub/Sub + Cloud Run (`sol-task.pubsub`) |
 

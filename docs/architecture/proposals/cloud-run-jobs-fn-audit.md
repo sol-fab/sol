@@ -1,7 +1,7 @@
 # Audit: Cloud Run Jobs as a GCP `-fn` execution backend
 
-- **Status:** implemented for target-scoped GCP `-fn`; fake-provider tested, live
-  pending operator approval.
+- **Status:** implemented and live-qualified for target-scoped GCP `-fn` on
+  2026-10-29 in `sol-qualification`/`us-west1`; fake and live lifecycle evidence.
 - **Date:** 2026-10-28
 - **Related:** ADR 0009 (`-fn` contract), ADR 0010 (target-scoped execution),
   `docs/deployment/serverless-experimental.md`, PR #1779 (AWS Lambda `-fn` slice)
@@ -15,9 +15,8 @@ No parity can be assumed. The implementation is deliberately narrower than the A
 Lambda path: deploys execute one Cloud Run Job execution, success is the execution
 counter/terminal condition, and rollback patches the Job to the image of a named prior
 execution rather than moving an alias. It creates no schedule, trigger, or input event.
-
- Cloud Run Jobs is a credible run-to-completion
-execution backend, but it does not supply three things the AWS slice relies on:
+Cloud Run Jobs is a credible run-to-completion execution backend, but it does not supply
+three things the AWS slice relies on:
 
 1. a provider-native version/alias pointer that rollback can move atomically;
 2. an event/stdin input contract comparable to `sol local invoke` or the Lambda
@@ -26,8 +25,9 @@ execution backend, but it does not supply three things the AWS slice relies on:
 
 It also adds execution-level task counts and per-task retries that change what
 "succeeded once" means. A GCP `-fn` adapter is therefore a separate design
-decision, not a translation of the Lambda adapter. The current refusal in
-`sol deploy` is the correct behavior until that decision exists.
+decision, not a translation of the Lambda adapter. The target-scoped adapter now
+implements that decision with one task and zero task retries; the 2026-10-29 live
+run exercised deploy, execution, execution-history rollback, and destroy.
 
 ## The Sol `-fn` contract being compared
 

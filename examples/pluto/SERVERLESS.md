@@ -108,8 +108,10 @@ sol destroy serverless_gcp/gcp/us-west1 --apply \
 ```
 
 A Job with no retained prior execution cannot be rolled back. There is no
-schedule, input event, or trigger. The GCP path is fake-provider tested; live
-GCP evidence is pending operator approval.
+schedule, input event, or trigger. The GCP `-fn` path is live-qualified on
+2026-10-29 in `sol-qualification`/`us-west1`: both probes exited 0, rollback
+restored the prior image and started a successful execution, and destroy left
+no Jobs or executions. No concurrency/timeout measurement was made.
 
 ## Queue consumption
 
@@ -211,14 +213,20 @@ sol task gcp enqueue --project <project> --region us-west1 \
   --idempotency-key welcome-u-1
 
 gcloud logging read \
-  'resource.type="cloud_run_revision" AND resource.labels.service_name="pluto-tasks-gcp" AND textPayload:"task_consumer"' \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="pluto-tasks-gcp-task" AND textPayload:"task_consumer"' \
   --project <project> --limit 20 --freshness 1d
 ```
 
 Use `sol task gcp rollback --to-revision <prior-revision>` for the provider's
 supported service rollback, and `sol task gcp destroy ... --apply` for cleanup.
-The GCP task path is fake-tested and has a bounded mechanism-level live record;
-live qualification of these demo consumers is pending operator approval.
+The GCP task path is live-qualified on 2026-10-29 in
+`sol-qualification`/`us-west1`: both consumers acknowledged, retried the `fail`
+payload, exhausted into the dead-letter topic (verified with a temporary pull
+subscription), rolled back a Cloud Run revision, and destroyed without leaving
+services, topics, subscriptions, or push service accounts. No concurrency or
+throughput measurement was made. Sol does not create a DLQ subscription; the
+dead-letter topic is the terminal provider destination, and inspection requires
+a provider subscription.
 
 ## Local checks
 

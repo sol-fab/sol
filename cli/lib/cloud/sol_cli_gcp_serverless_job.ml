@@ -120,7 +120,7 @@ let is_not_found message =
     let rec go i = i + n <= m && (String.sub message i n = needle || go (i + 1)) in
     go 0
   in
-  contains "not found" || contains "not_found" || contains "404"
+  contains "not found" || contains "not_found" || contains "cannot find" || contains "404"
 ;;
 
 let not_found message = is_not_found message
@@ -299,7 +299,10 @@ let execution_image json =
   (* A JSON array path cannot be represented by [Sol_cli_json.field]; inspect the
      containers list directly for the common shape. *)
   let containers =
-    [ [ "spec"; "template"; "containers" ]; [ "template"; "containers" ] ]
+    [ [ "spec"; "template"; "spec"; "containers" ]
+    ; [ "spec"; "template"; "containers" ]
+    ; [ "template"; "containers" ]
+    ]
     |> List.find_map (fun path ->
       match Sol_cli_json.field path json with
       | `List (first :: _) ->
