@@ -53,9 +53,10 @@ observability acceptance layer.
 | The event source mapping was `Creating`, and deploy failed immediately with `event source mapping is Creating`. | Poll the mapping for a bounded time until `Enabled` (or `Failed`/timeout), then verify `ReportBatchItemFailures`. |
 | Recreating a deleted queue immediately returned `QueueDeletedRecently`. | Operator/test sequencing: wait 60 seconds after deleting a queue with the same name. No code change. |
 
-The first two failures are exactly the provider operations the fake test could not
-observe; the live run is what established them. The mapping wait and SQS
-attribute fixes are covered by the fake-provider regression.
+The SQS attribute and mapping-wait failures are exactly the provider operations
+the fake test could not observe; the live run is what established them. Both
+now have fake-provider regression coverage. The Docker v2 manifest is a
+packaging requirement, not an adapter behavior.
 
 ## Provider-observation notes
 
