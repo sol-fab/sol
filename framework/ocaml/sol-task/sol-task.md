@@ -226,12 +226,27 @@ application auth layer. Pub/Sub owns the dead-letter topic after
 push subscription, private Cloud Run service, and push service account, and
 writes an ownership record with deterministic names before creation.
 
-## Observability
+## Observability and diagnosis
 
-The runtimes log structured `task_id`, `kind`, and outcome lines. Locally,
-`sol-jobs` supplies handler metrics, backlog gauges, and logs. Lambda emits to
-CloudWatch; Cloud Run emits to Cloud Logging. Sol does not yet claim a managed
-task metric/trace acceptance layer for the cloud runtimes.
+The runtimes emit a line for each handler outcome with the stable `task_id`,
+`kind`, and `task acknowledged` / `task requested retry`. Query by `task_id` in
+the provider log store:
+
+- Lambda / SQS: CloudWatch Logs `/aws/lambda/<function>`; SQS queue depth and
+  DLQ depth are provider metrics. Lambda invocation, error, and duration metrics
+  are provider metrics.
+- Cloud Run / Pub/Sub: Cloud Logging `cloud_run_revision` for the service;
+  Pub/Sub undelivered/ack metrics and Cloud Run request/instance metrics are
+  provider metrics.
+
+Locally, `sol-jobs` supplies handler metrics, backlog gauges, and logs; the task
+runtime adds the same `task_id`/`kind`/outcome line.
+
+These are **provider-native** signals, not a Sol-managed task metrics layer.
+There is no task-specific counter in this package, and the envelope does not
+carry W3C trace context, so no distributed trace claim is made. Dead-letter
+inspection is provider-native (SQS DLQ, Pub/Sub dead-letter topic, local
+`failed` row); there is no replay command.
 
 ## Non-goals
 

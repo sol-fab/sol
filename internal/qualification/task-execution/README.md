@@ -19,6 +19,20 @@ Runs are evidence only for the rows they exercise. A fake-provider test is not
 live evidence; a checkout-build live exercise is not a released-candidate
 qualification.
 
+## Observability and diagnosis
+
+| Surface | Signals | What is not claimed |
+|---|---|---|
+| Local | `sol-jobs` metrics/backlog/logs plus `task_id`/`kind`/outcome lines | no separate task metric; no trace context |
+| AWS | CloudWatch Logs `/aws/lambda/checkout-task`; SQS source/DLQ depth; Lambda invocation/error/duration | provider-native only; no Sol task metric or trace |
+| GCP | Cloud Logging `cloud_run_revision`; Pub/Sub undelivered/ack; Cloud Run request/instance | provider-native only; no Sol task metric or trace |
+
+Diagnosis starts from the `task_id` printed by enqueue and the provider log
+store. Dead-letter inspection is provider-native; there is no replay command in
+this contract. The local `sol_jobs_failed`/retry metrics are the local analogue
+of the provider DLQ. A provider unreadable/timeout result is UNKNOWN, not
+absence.
+
 ## Shared procedure
 
 Build the handler fixture once:
