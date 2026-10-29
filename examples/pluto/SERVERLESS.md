@@ -209,3 +209,29 @@ selects the `Cron` trigger when `AWS_LAMBDA_RUNTIME_API` is absent, and the
 TypeScript image entrypoint runs `index.js` once when that API is absent. Create
 a local test Job from each CronJob to exercise it without AWS. No live AWS
 resources are created by these local commands.
+
+## Troubleshooting
+
+- **A local deploy refuses Postgres because port 5432 is in use.** Set
+  `SOL_LOCAL_POSTGRES_PORT` to a free port before `sol local deploy`,
+  `sol local migrate`, and `sol local deploy` again. The default remains 5432.
+- **GCP reports that Cloud Run Admin API is disabled.** Nothing was deployed.
+  Enabling `run.googleapis.com` is a project mutation; request authorization
+  and enable it before retrying. Do not treat the API error as proof that the
+  adapter refused correctly.
+- **GCP reports `iam.serviceAccounts.get` or a push-service-account error.**
+  The task lifecycle creates and inspects a dedicated push service account.
+  Report the exact principal, project, and resource; do not substitute a
+  broader role or a second service account just to make the demo pass.
+- **GCP `-fn` rollback cannot find an image.** The named execution must still
+  exist and must expose its immutable container template. Cloud Run Jobs has no
+  alias; if the execution or image is gone, there is no deployable prior state.
+- **A malformed Pub/Sub message keeps redelivering.** The TypeScript adapter
+  returns 400 for malformed/unsupported envelopes, and the OCaml
+  `sol-task.pubsub` runtime does the same. Redelivery is bounded by the
+  subscription's max-delivery-attempts/dead-letter policy; inspect the DLQ
+  rather than changing a malformed message into an implicit Ack.
+- **The AWS TypeScript Lambda image cannot find `task.js`.** The Lambda image
+  must copy the whole `dist` directory, not only `index.js`. The demo Dockerfile
+  now does this and the CI package check imports the built handler from the
+  image.
