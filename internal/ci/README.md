@@ -27,7 +27,9 @@ The `test` job runs, in this order:
 
 The static/format checks run before the product suites so a format or source
 invariant failure fails the required check without first spending time on the
-unit, lifecycle, integration and E2E suites.
+unit, lifecycle, integration and E2E suites. The 2026-10-29 reorder keeps the
+same 33 test steps; only their order, step timeouts, and one redundant command
+changed.
 
 ## Suite map
 
@@ -97,6 +99,30 @@ The reorder also removes a redundant `opam install --deps-only --with-test` from
 the verification-tooling step (the preceding dependency step already installs the
 same test dependencies), and adds bounded step timeouts so a hung harness fails
 at its own step with a clear name instead of consuming the job timeout.
+
+## Cost opportunities not taken
+
+- **Support-package pinning** (114 s measured) runs `opam pin` on every job.
+  The switch cache restores packages, but the pin action still re-runs. A
+  skip-if-already-at-`support-refs.txt` shortcut is not added: a stale pin that
+  silently matched the restored switch would undermine the exact-commit
+  guarantee, and the existing drift guard is a check, not a cache key.
+- **Formatter install** (24 s) is a separate opam invocation. It could be folded
+  into the dependency-install step, but that step has its own retry/diagnostics
+  behavior and the saving is small.
+- **Example Dockerfile builds** use `--no-cache` deliberately (FRIC-014);
+  removing that would hide scaffold drift. The matrix jobs already run in
+  parallel.
+- **`test` is monolithic** because it is the only required check. Splitting it
+  into parallel required checks would change branch-protection status names;
+  that is an operator decision, not a workflow-only edit.
+- **Qualification harnesses are serial.** They use independent `mktemp` trees,
+  but a parallel wrapper would interleave their output and weaken per-step
+  failure diagnosis. The measured long step (207 s) has a bounded timeout now.
+- **Per-job environment setup** is repeated across `test`, `golden-path-smoke`
+  and the TypeScript jobs; each can reuse the opam download/switch caches but
+  they are separate runners. No cross-job build artifact is shared because the
+  jobs target different workspaces.
 
 ## Limits of the current model
 

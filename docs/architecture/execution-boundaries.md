@@ -96,6 +96,16 @@ Within `sol_cli_cloud`:
 - Ownership proof: `docs/architecture/ownership.md`; provider adapters must
   refuse foreign resources and establish absence independently.
 
+## Why this map does not introduce a package split
+
+The audit found the existing package/library split meaningful: framework
+runtimes depend on shared contracts and plumbing, not on the CLI; provider
+adapters sit below deployment policy; and the task core/provider runtimes are
+separate libraries. The concrete defect found was not a package boundary but a
+missing development dependency (`sol-task` was absent from
+`prepare-framework-deps.sh`); that is fixed. No new package, repository or
+universal execution abstraction is introduced merely to make the map tidier.
+
 ## Known limitations (current revision)
 
 - `sol_cli_cloud` is one Dune library containing both shared lifecycle policy and
