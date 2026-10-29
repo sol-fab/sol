@@ -37,6 +37,8 @@
   cmd_destroy
   cmd_cloud_run
   cmd_lambda
+  cmd_task
+  sol_cli_aws_task_cmd
   cmd_deploy_event
   cmd_migrate
   cmd_rollback

@@ -149,7 +149,12 @@ partially successful batch retries only its failed records. SQS owns the
 dead-letter queue after `maxReceiveCount`.
 
 The Lambda execution role authorizes SQS; there is no Function URL and no
-incoming application authentication.
+incoming application authentication. The provider lifecycle is
+`sol task aws deploy|verify|enqueue|rollback|destroy`; it creates the source
+queue, dead-letter queue, function/version/alias, and event source mapping, and
+writes an ownership record before resource creation so a partial create remains
+destroyable. The execution role is operator-supplied and must grant the
+function SQS receive/delete, dead-letter send, and CloudWatch Logs access.
 
 ## GCP Pub/Sub runtime
 

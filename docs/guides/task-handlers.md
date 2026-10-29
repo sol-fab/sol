@@ -151,9 +151,10 @@ enqueue command.
 
 ::: status
 The Lambda and Pub/Sub **runtime handlers** are implemented and unit-tested by
-this package. The target-scoped provider deploy/verify/destroy lifecycle for
-tasks is being implemented next; do not treat the runtime entrypoint as a
-supported cloud deployment workflow yet.
+this package. The AWS SQS + Lambda deploy/verify/enqueue/rollback/destroy
+lifecycle is implemented and fake-provider tested. The GCP Pub/Sub + Cloud Run
+lifecycle and live qualification follow; do not treat both cloud workflows as
+equally qualified yet.
 :::
 
 The handler module and `Sol_task.TASK` contract are unchanged in the cloud.
@@ -162,6 +163,30 @@ The runtime is selected by the deployment, not by the application code:
 - **AWS:** `Sol_task_lambda.Make(T).run` handles SQS records and returns
   `batchItemFailures`; the event source mapping must enable
   `ReportBatchItemFailures`. SQS owns the dead-letter queue.
+
+  ```text
+  sol task aws deploy --profile <profile> --region <region> \
+    --service checkout --image <ecr>@sha256:<digest> \
+    --role <lambda-execution-role-arn> \
+    --max-attempts 5 --visibility-timeout 60 \
+    --dlq-retention 604800 --concurrency 10 \
+    --record ./task-release.json
+
+  sol task aws enqueue --profile <profile> --region <region> \
+    --service checkout --record ./task-release.json \
+    --kind send_welcome_email --payload '{"user_id":"u-1"}'
+
+  sol task aws verify ... --record ./task-release.json
+  sol task aws rollback ... --to-version <lambda-version>
+  sol task aws destroy ... --apply
+  ```
+
+  The execution role must allow the function to receive and delete from the
+  source queue, send to the dead-letter queue, and write its logs. The adapter
+  creates the queues, function/version/alias, and mapping; it does not create
+  the role. The record is written with deterministic resource names before
+  creation and updated after each stage, so a partial create remains
+  destroyable.
 - **GCP:** `Sol_task_pubsub.Make(T).run` serves the Pub/Sub push endpoint
   (`200` ack, `500` retry, `400` malformed). Cloud Run IAM authenticates the
   Pub/Sub push service account; Pub/Sub owns the dead-letter topic.

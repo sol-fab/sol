@@ -223,11 +223,7 @@ let invoke (r : request) ~qualifier =
     | Error message -> Error (Unknown message))
 ;;
 
-let environment (r : request) =
-  `Assoc
-    [ "Variables", `Assoc [ "SOL_UNIT", `String r.unit; "SOL_PRIMITIVE", `String "fn" ] ]
-  |> Yojson.Safe.to_string
-;;
+let environment (r : request) = [ "SOL_UNIT", r.unit; "SOL_PRIMITIVE", "fn" ]
 
 let deploy (r : request) =
   let* () = preflight r in
@@ -241,92 +237,19 @@ let deploy (r : request) =
       Ok true
     else Ok false
   in
-  let env = environment r in
   let* () =
-    if existing
-    then
-      let* () =
-        r.run
-          (aws
-             r
-             [ "lambda"
-             ; "update-function-code"
-             ; "--function-name"
-             ; r.function_name
-             ; "--image-uri"
-             ; r.image
-             ])
-        |> Result.map (fun _ -> ())
-        |> Result.map_error (fun m -> Partial m)
-      in
-      let* () =
-        r.run
-          (aws
-             r
-             [ "lambda"; "wait"; "function-updated"; "--function-name"; r.function_name ])
-        |> Result.map (fun _ -> ())
-        |> Result.map_error (fun m -> Unknown ("wait after code update: " ^ m))
-      in
-      r.run
-        (aws
-           r
-           [ "lambda"
-           ; "update-function-configuration"
-           ; "--function-name"
-           ; r.function_name
-           ; "--role"
-           ; r.role_arn
-           ; "--environment"
-           ; env
-           ])
-      |> Result.map (fun _ -> ())
-      |> Result.map_error (fun m -> Partial m)
-    else
-      r.run
-        (aws
-           r
-           [ "lambda"
-           ; "create-function"
-           ; "--function-name"
-           ; r.function_name
-           ; "--package-type"
-           ; "Image"
-           ; "--code"
-           ; "ImageUri=" ^ r.image
-           ; "--role"
-           ; r.role_arn
-           ; "--timeout"
-           ; "30"
-           ; "--memory-size"
-           ; "512"
-           ; "--architectures"
-           ; "x86_64"
-           ; "--environment"
-           ; env
-           ; "--tags"
-           ; "sol-owned=" ^ ownership_tag ^ ",sol-service=" ^ r.function_name
-           ])
-      |> Result.map (fun _ -> ())
-      |> Result.map_error (fun m -> Partial m)
-  in
-  let* () =
-    r.run
-      (aws r [ "lambda"; "wait"; "function-updated"; "--function-name"; r.function_name ])
-    |> Result.map (fun _ -> ())
-    |> Result.map_error (fun m -> Unknown ("wait failed: " ^ m))
+    Sol_cli_aws_lambda_common.ensure_function
+      (scope r)
+      ~function_name:r.function_name
+      ~image:r.image
+      ~role_arn:r.role_arn
+      ~environment:(environment r)
+      ~tags:[ "sol-owned", ownership_tag; "sol-service", r.function_name ]
+      ~existing
+      ()
   in
   let* version =
-    match
-      r.run (aws r [ "lambda"; "publish-version"; "--function-name"; r.function_name ])
-    with
-    | Error e -> Error (Unknown ("publish failed: " ^ e))
-    | Ok o ->
-      (match Sol_cli_json.decode ~what:"Lambda publish-version" o.stdout with
-       | Error m -> Error (Unknown m)
-       | Ok json ->
-         Sol_cli_json.string (Sol_cli_json.field [ "Version" ] json)
-         |> Option.to_result ~none:"publish returned no version"
-         |> Result.map_error (fun m -> Unknown m))
+    Sol_cli_aws_lambda_common.publish_version (scope r) ~function_name:r.function_name
   in
   let* () =
     Sol_cli_aws_lambda_common.put_alias (scope r) ~function_name:r.function_name ~version
