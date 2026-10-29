@@ -51,6 +51,24 @@ fi
 grep -q 'not implemented for GCP' "$work/gcp-fn.out"
 [[ ! -s "$work/provider.log" ]]
 
+# GCP serverless -worker is refused, without invoking gcloud.
+ws="$work/gcp-worker"
+workspace "$ws" checkout_worker worker no
+cat > "$ws/sol/environments.yml" <<'YAML'
+live:
+  targets:
+    gcp/us-west1:
+      execution: serverless
+      gcp:
+        project_id: example-project
+YAML
+cd "$ws"
+if "$sol" deploy live/gcp/us-west1 --image-tag test --image-ref "checkout_worker=$image" > "$work/gcp-worker.out" 2>&1; then
+  echo "GCP serverless -worker deploy was accepted" >&2; exit 1
+fi
+grep -q 'does not support -worker on GCP' "$work/gcp-worker.out"
+[[ ! -s "$work/provider.log" ]]
+
 # AWS serverless -worker is refused, without invoking aws.
 ws="$work/aws-worker"
 workspace "$ws" checkout_worker worker no

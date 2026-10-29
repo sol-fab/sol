@@ -1,34 +1,5 @@
 open Result.Syntax
 
-let required_field (target : Sol_cli_config.target) name =
-  match Sol_cli_config.provider_field target name with
-  | Some value when String.trim value <> "" -> Ok value
-  | _ -> Error (Printf.sprintf "target must declare aws.%s for serverless execution" name)
-;;
-
-let callers (target : Sol_cli_config.target) =
-  match Sol_cli_config.provider_field target "serverless_callers" with
-  | None | Some "" -> []
-  | Some text ->
-    String.split_on_char ',' text
-    |> List.filter_map (fun entry ->
-      match String.index_opt entry '=' with
-      | None -> None
-      | Some at ->
-        let unit = String.sub entry 0 at |> String.trim in
-        let subject =
-          String.sub entry (at + 1) (String.length entry - at - 1) |> String.trim
-        in
-        if unit = "" || subject = "" then None else Some (subject, unit))
-;;
-
-let unit_of_service ~project (service : Sol_cli_manifest.service) =
-  match String.split_on_char '/' service.dir |> List.rev with
-  | name :: domain :: _ when name = service.name && domain <> "" && domain <> "." ->
-    domain ^ "/" ^ service.name
-  | _ -> project ^ "/" ^ service.name
-;;
-
 let runner argv =
   Sol_cli_serverless_runner.run argv
   |> Result.map (fun (o : Sol_cli_serverless_runner.output) ->
@@ -46,27 +17,10 @@ let provider_name (service : Sol_cli_manifest.service) =
   |> Result.map_error Sol_cli_aws_lambda.failure_to_string
 ;;
 
-let ensure_serverless (target : Sol_cli_config.target) =
-  if Sol_cli_config.execution_of_target target = Sol_cli_config.Serverless
-  then Ok ()
-  else Error "target does not select execution: serverless"
-;;
-
 let ensure_aws (target : Sol_cli_config.target) =
   if target.provider = Sol_cli_provider.Aws
   then Ok ()
   else Error "target-scoped serverless dispatch currently supports AWS Lambda only"
-;;
-
-let declared_uses config (service : Sol_cli_manifest.service) =
-  let* declared =
-    Sol_cli_config.services config
-    |> List.find_opt (fun (s : Sol_cli_config.service) -> s.name = service.name)
-    |> Option.to_result ~none:"service is not declared in sol.yml"
-  in
-  if declared.uses = []
-  then Ok ()
-  else Error "target-scoped serverless dispatch does not yet support service dependencies"
 ;;
 
 let check_record
@@ -94,19 +48,19 @@ let deploy_svc
       ~image
       ~record
   =
-  let* () = declared_uses config service in
-  let* () =
-    if callers target = []
-    then
-      Error
-        "target must declare serverless_callers for incoming application authentication"
-    else Ok ()
+  let* () = Sol_cli_serverless_target_common.declared_uses config service in
+  let* () = Sol_cli_serverless_target_common.require_http_callers target in
+  let* role_arn =
+    Sol_cli_serverless_target_common.required_field
+      target
+      ~provider:"aws"
+      "lambda_role_arn"
   in
-  let* role_arn = required_field target "lambda_role_arn" in
   let* function_name = provider_name service in
   let identity =
-    { Sol_cli_aws_lambda.unit = unit_of_service ~project service
-    ; callers = callers target
+    { Sol_cli_aws_lambda.unit =
+        Sol_cli_serverless_target_common.unit_of_service ~project service
+    ; callers = Sol_cli_serverless_target_common.callers target
     ; issuer = "https://accounts.google.com"
     ; jwks_uri = "https://www.googleapis.com/oauth2/v3/certs"
     }
@@ -165,11 +119,16 @@ let deploy_fn
       ~image
       ~record
   =
-  let* () = declared_uses config service in
+  let* () = Sol_cli_serverless_target_common.declared_uses config service in
   (* There is deliberately no serverless_callers requirement here: a run-once function
      has no incoming HTTP request, and triggers/incoming identity are a separate
      contract. *)
-  let* role_arn = required_field target "lambda_role_arn" in
+  let* role_arn =
+    Sol_cli_serverless_target_common.required_field
+      target
+      ~provider:"aws"
+      "lambda_role_arn"
+  in
   let* function_name = provider_name service in
   let request =
     { Sol_cli_aws_lambda_fn.profile = Sol_cli_config.provider_field target "profile"
@@ -178,7 +137,7 @@ let deploy_fn
     ; function_name
     ; image
     ; role_arn
-    ; unit = unit_of_service ~project service
+    ; unit = Sol_cli_serverless_target_common.unit_of_service ~project service
     ; record = Some record
     ; run = runner
     }
@@ -198,7 +157,6 @@ let deploy
       ~image
       ~record
   =
-  let* () = ensure_serverless target in
   let* () = ensure_aws target in
   match service.primitive with
   | Sol_cli_manifest.Svc -> deploy_svc ~target ~config ~project ~service ~image ~record
@@ -234,8 +192,9 @@ let rollback_svc
     ; image = release.image
     ; role_arn = release.role_arn
     ; identity =
-        { Sol_cli_aws_lambda.unit = unit_of_service ~project service
-        ; callers = callers target
+        { Sol_cli_aws_lambda.unit =
+            Sol_cli_serverless_target_common.unit_of_service ~project service
+        ; callers = Sol_cli_serverless_target_common.callers target
         ; issuer = "https://accounts.google.com"
         ; jwks_uri = "https://www.googleapis.com/oauth2/v3/certs"
         }
@@ -285,7 +244,7 @@ let rollback_fn
     ; function_name
     ; image = release.image
     ; role_arn = release.role_arn
-    ; unit = unit_of_service ~project service
+    ; unit = Sol_cli_serverless_target_common.unit_of_service ~project service
     ; record = None
     ; run = runner
     }
@@ -312,7 +271,6 @@ let rollback
       ~version
       ~token
   =
-  let* () = ensure_serverless target in
   let* () = ensure_aws target in
   let* kind =
     Sol_cli_aws_lambda_common.record_kind ~path:record
@@ -332,7 +290,6 @@ let rollback
 ;;
 
 let destroy ~(target : Sol_cli_config.target) ~service ~record =
-  let* () = ensure_serverless target in
   let* () = ensure_aws target in
   let* kind =
     Sol_cli_aws_lambda_common.record_kind ~path:record

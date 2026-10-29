@@ -58,50 +58,18 @@ let run_serverless
               service.name))
   in
   let record = Filename.concat (Sol_cli_run_log.dir run_log) "serverless-release.json" in
-  match target_cfg.provider with
-  | Sol_cli_provider.Aws ->
-    let* release =
-      Sol_cli_aws_serverless_target.deploy
-        ~target:target_cfg
-        ~config:resolved_config
-        ~project
-        ~service
-        ~image
-        ~record
-      |> Result.map_error Sol_cli_exit.error
-    in
-    print_endline (Yojson.Safe.to_string release);
-    Ok ()
-  | Sol_cli_provider.Gcp ->
-    let* () =
-      match service.primitive with
-      | Sol_cli_manifest.Svc -> Ok ()
-      | Sol_cli_manifest.Fn ->
-        Error
-          (Sol_cli_exit.error
-             "target-scoped serverless -fn dispatch is not implemented for GCP; only AWS \
-              Lambda -fn is supported")
-      | Sol_cli_manifest.Worker ->
-        Error
-          (Sol_cli_exit.error
-             "target-scoped serverless dispatch does not support -worker on GCP")
-    in
-    let* release =
-      Sol_cli_gcp_serverless_target.deploy
-        ~target:target_cfg
-        ~config:resolved_config
-        ~project
-        ~service
-        ~image
-        ~record
-      |> Result.map_error Sol_cli_exit.error
-    in
-    print_endline (Yojson.Safe.to_string (Sol_cli_cloud_run.release_json release));
-    Ok ()
-  | Sol_cli_provider.Byo ->
-    Error
-      (Sol_cli_exit.error
-         "target-scoped serverless dispatch currently supports AWS and GCP only")
+  let* release =
+    Sol_cli_serverless_lifecycle.deploy
+      ~target:target_cfg
+      ~config:resolved_config
+      ~project
+      ~service
+      ~image
+      ~record
+    |> Result.map_error Sol_cli_exit.error
+  in
+  print_endline (Yojson.Safe.to_string release);
+  Ok ()
 ;;
 
 let build_plan
