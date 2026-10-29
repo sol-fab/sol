@@ -263,6 +263,7 @@ jobs:
       # gives up. The broker steps keep their own gate: `rpk cluster health`, and
       # `rpk topic list` in `create-topics.sh`, which fail loudly.
       - name: Framework integration tests (broker and database backed)
+        id: integration
         if: needs.classify.outputs.kind != 'docs-only'
         timeout-minutes: 20
         run: |
@@ -275,7 +276,7 @@ jobs:
       # to have died. Capture that distinction in the log of the failing run,
       # instead of leaving the next reader to guess from a re-run.
       - name: Integration failure diagnostics
-        if: failure() && needs.classify.outputs.kind != 'docs-only'
+        if: failure() && steps.integration.outcome == 'failure' && needs.classify.outputs.kind != 'docs-only'
         run: |
           echo "=== containers ==="
           docker ps -a || true
