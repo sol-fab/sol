@@ -3,7 +3,8 @@
     The application image contains a [Sol_task.TASK] handler and selects
     [Sol_task_pubsub] with [SOL_TASK_RUNTIME=pubsub]. This adapter owns the
     provider resources around it: a Pub/Sub topic, a push subscription with a
-    dead-letter topic and delivery budget, a private Cloud Run service, and a
+    dead-letter topic and delivery budget, a pull subscription on that
+    dead-letter topic for inspection, a private Cloud Run service, and a
     dedicated Pub/Sub push service account with only the invoker and token
     creator grants it needs.
 
@@ -34,6 +35,7 @@ type release =
   ; topic : string
   ; subscription : string
   ; dlq_topic : string
+  ; dlq_subscription : string
   ; push_service_account : string
   ; max_attempts : int
   ; ack_deadline_s : int
@@ -41,10 +43,13 @@ type release =
   ; concurrency : int
   }
 
-(** [(cloud_run_service, topic, subscription, dlq_topic, push_service_account_name)]. *)
+(** [(cloud_run_service, topic, subscription, dlq_topic, dlq_subscription,
+       push_service_account_name)]. *)
 val provider_names
   :  service:string
-  -> (string * string * string * string * string, Sol_cli_cloud_run.failure) result
+  -> ( string * string * string * string * string * string
+       , Sol_cli_cloud_run.failure )
+       result
 
 val deploy : request -> (release, Sol_cli_cloud_run.failure) result
 val verify : request -> record:string -> (release, Sol_cli_cloud_run.failure) result

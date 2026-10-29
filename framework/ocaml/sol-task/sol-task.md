@@ -53,7 +53,7 @@ destination:
 |---|---|---|
 | Local `sol-jobs` | `retry_policy.max_attempts` | `status = 'failed'` row, retained |
 | AWS SQS | source queue `maxReceiveCount` | SQS dead-letter queue |
-| GCP Pub/Sub | subscription `maxDeliveryAttempts` | dead-letter topic |
+| GCP Pub/Sub | subscription `maxDeliveryAttempts` | dead-letter topic (Sol also creates a pull subscription for inspection) |
 
 The handler receives the stable `task_id`, not a delivery-attempt number.
 Provider delivery counters are not application handler counters and are not part
@@ -226,7 +226,9 @@ The service is deployed without public invoker access and grants
 `roles/run.invoker` only to the Pub/Sub push service account. Cloud Run IAM is
 the incoming authentication boundary; the task runtime does not add a second
 application auth layer. Pub/Sub owns the dead-letter topic after
-`maxDeliveryAttempts`. The provider lifecycle is
+`maxDeliveryAttempts`; the lifecycle also creates a pull subscription on that
+topic so exhausted tasks are inspectable rather than published into an
+unconsumed topic. The provider lifecycle is
 `sol task gcp deploy|verify|enqueue|rollback|destroy`; it creates the topics,
 push subscription, private Cloud Run service, and push service account, and
 writes an ownership record with deterministic names before creation.

@@ -24,6 +24,7 @@ type release =
   ; topic : string
   ; subscription : string
   ; dlq_topic : string
+  ; dlq_subscription : string
   ; push_service_account : string
   ; max_attempts : int
   ; ack_deadline_s : int
@@ -133,6 +134,7 @@ let provider_names ~service =
       , provider ^ "-task"
       , provider ^ "-task-sub"
       , provider ^ "-task-dlq"
+      , provider ^ "-task-dlq-sub"
       , push_service_account ))
 ;;
 
@@ -423,6 +425,58 @@ let ensure_subscription
      | Error message -> Error (Sol_cli_cloud_run.Partial (message, None)))
 ;;
 
+let ensure_dlq_subscription (r : request) ~subscription ~topic ~service =
+  let* existing = subscription_json r ~subscription in
+  let common =
+    [ "--ack-deadline=10"
+    ; "--message-retention-duration=" ^ string_of_int r.dlq_retention_s ^ "s"
+    ; "--expiration-period=never"
+    ]
+    @ project_argv r
+  in
+  let labels_arg = labels_string (own_labels ~service) in
+  match existing with
+  | Some json ->
+    let labels = labels_of json in
+    if owns_labels ~service labels
+    then (
+      match
+        gcloud
+          r
+          ([ "pubsub"
+           ; "subscriptions"
+           ; "update"
+           ; subscription
+           ; "--update-labels=" ^ labels_arg
+           ]
+           @ common)
+      with
+      | Ok _ -> Ok ()
+      | Error message -> Error (Sol_cli_cloud_run.Partial (message, None)))
+    else
+      Error
+        (Sol_cli_cloud_run.Refused
+           (Printf.sprintf
+              "dead-letter subscription %s exists without this adapter's labels"
+              subscription))
+  | None ->
+    (match
+       gcloud
+         r
+         ([ "pubsub"
+          ; "subscriptions"
+          ; "create"
+          ; subscription
+          ; "--topic"
+          ; topic
+          ; "--labels=" ^ labels_arg
+          ]
+          @ common)
+     with
+     | Ok _ -> Ok ()
+     | Error message -> Error (Sol_cli_cloud_run.Partial (message, None)))
+;;
+
 let add_topic_publisher (r : request) ~topic ~member =
   gcloud
     r
@@ -464,6 +518,7 @@ let release_json (r : release) =
     ; "topic", `String r.topic
     ; "subscription", `String r.subscription
     ; "dlq_topic", `String r.dlq_topic
+    ; "dlq_subscription", `String r.dlq_subscription
     ; "push_service_account", `String r.push_service_account
     ; "max_attempts", `Int r.max_attempts
     ; "ack_deadline_s", `Int r.ack_deadline_s
@@ -503,6 +558,7 @@ let read_record ~path =
   let* topic = field "topic" in
   let* subscription = field "subscription" in
   let* dlq_topic = field "dlq_topic" in
+  let* dlq_subscription = field "dlq_subscription" in
   let* push_service_account = field "push_service_account" in
   let* max_attempts = int_field "max_attempts" in
   let* ack_deadline_s = int_field "ack_deadline_s" in
@@ -519,6 +575,7 @@ let read_record ~path =
     ; topic
     ; subscription
     ; dlq_topic
+    ; dlq_subscription
     ; push_service_account
     ; max_attempts
     ; ack_deadline_s
@@ -602,6 +659,19 @@ let verify (r : request) ~record =
         (Sol_cli_cloud_run.Unknown
            "subscription has no dead-letter delivery-attempt limit")
   in
+  let* dlq_sub =
+    match subscription_json r ~subscription:expected.dlq_subscription with
+    | Ok (Some json) -> Ok json
+    | Ok None -> Error (Sol_cli_cloud_run.Unknown "dead-letter subscription is absent")
+    | Error failure -> Error failure
+  in
+  let* () =
+    if owns_labels ~service:expected.cloud_run_service (labels_of dlq_sub)
+    then Ok ()
+    else
+      Error
+        (Sol_cli_cloud_run.Refused "dead-letter subscription lacks this adapter's labels")
+  in
   let* project_number = project_number r in
   let pubsub_agent =
     Printf.sprintf "service-%s@gcp-sa-pubsub.iam.gserviceaccount.com" project_number
@@ -657,7 +727,7 @@ let deploy (r : request) =
     |> Option.to_result
          ~none:(Sol_cli_cloud_run.Refused "task deploy requires an ownership record path")
   in
-  let* cloud_run_service, topic, subscription, dlq_topic, push_sa_name =
+  let* cloud_run_service, topic, subscription, dlq_topic, dlq_subscription, push_sa_name =
     provider_names ~service:r.service
   in
   let push_service_account =
@@ -688,6 +758,7 @@ let deploy (r : request) =
     ; topic
     ; subscription
     ; dlq_topic
+    ; dlq_subscription
     ; push_service_account
     ; max_attempts = r.max_attempts
     ; ack_deadline_s = r.ack_deadline_s
@@ -708,6 +779,13 @@ let deploy (r : request) =
       ~topic:dlq_topic
       ~service:cloud_run_service
       ~retention_s:r.dlq_retention_s
+  in
+  let* () =
+    ensure_dlq_subscription
+      r
+      ~subscription:dlq_subscription
+      ~topic:dlq_topic
+      ~service:cloud_run_service
   in
   let* () =
     ensure_topic r ~topic ~service:cloud_run_service ~retention_s:r.dlq_retention_s
@@ -890,6 +968,19 @@ let destroy (r : request) ~record =
       else
         Error (Sol_cli_cloud_run.Refused "task subscription lacks this adapter's labels")
   in
+  let* dlq_subscription = subscription_json r ~subscription:expected.dlq_subscription in
+  let* dlq_subscription_owned =
+    match dlq_subscription with
+    | None -> Ok false
+    | Some json ->
+      let labels = labels_of json in
+      if owns_labels ~service:expected.cloud_run_service labels
+      then Ok true
+      else
+        Error
+          (Sol_cli_cloud_run.Refused
+             "dead-letter subscription lacks this adapter's labels")
+  in
   let* topic = topic_json r ~topic:expected.topic in
   let* topic_owned =
     match topic with
@@ -917,6 +1008,19 @@ let destroy (r : request) ~record =
         gcloud
           r
           ([ "pubsub"; "subscriptions"; "delete"; expected.subscription ] @ project_argv r)
+      with
+      | Ok _ -> Ok ()
+      | Error message -> Error (Sol_cli_cloud_run.Partial (message, None)))
+    else Ok ()
+  in
+  let* () =
+    if dlq_subscription_owned
+    then (
+      match
+        gcloud
+          r
+          ([ "pubsub"; "subscriptions"; "delete"; expected.dlq_subscription ]
+           @ project_argv r)
       with
       | Ok _ -> Ok ()
       | Error message -> Error (Sol_cli_cloud_run.Partial (message, None)))
@@ -1008,6 +1112,13 @@ let destroy (r : request) ~record =
     | Ok None -> Ok ()
     | Ok (Some _) ->
       Error (Sol_cli_cloud_run.Unknown "task subscription remains after delete")
+    | Error failure -> Error failure
+  in
+  let* () =
+    match subscription_json r ~subscription:expected.dlq_subscription with
+    | Ok None -> Ok ()
+    | Ok (Some _) ->
+      Error (Sol_cli_cloud_run.Unknown "dead-letter subscription remains after delete")
     | Error failure -> Error failure
   in
   let* () =

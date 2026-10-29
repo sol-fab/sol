@@ -253,9 +253,9 @@ The GCP task path is live-qualified on 2026-10-29 in
 payload, exhausted into the dead-letter topic (verified with a temporary pull
 subscription), rolled back a Cloud Run revision, and destroyed without leaving
 services, topics, subscriptions, or push service accounts. No concurrency or
-throughput measurement was made. Sol does not create a DLQ subscription; the
-dead-letter topic is the terminal provider destination, and inspection requires
-a provider subscription.
+throughput measurement was made. Sol creates a pull subscription on the
+dead-letter topic, so exhausted tasks remain inspectable without an operator
+creating another subscription.
 
 ## Verification scope and remaining gaps
 
@@ -266,7 +266,7 @@ a provider subscription.
 | AWS `-fn` | Lambda invoke/rollback/destroy | no event input or Sol-created schedule |
 | AWS tasks | SQS-triggered Lambda Ack/Retry/DLQ; Lambda-to-SQS producer is **not** a Sol-managed contract | enqueue with `sol task aws enqueue` or application code; SQS-backed `-worker` is not supported |
 | GCP `-fn` | Cloud Run Jobs execute/rollback/destroy | no alias, event payload, schedule, or response body |
-| GCP tasks | Pub/Sub push Ack/Retry/DLQ, revision rollback, destroy | Cloud Run service, not a `-worker`; no DLQ subscription created by Sol |
+| GCP tasks | Pub/Sub push Ack/Retry/DLQ, revision rollback, destroy | Cloud Run service, not a `-worker`; Sol owns the DLQ pull subscription |
 | Concurrency/timeouts | not measured | documented configuration only |
 
 The SQS and Pub/Sub consumers are task handlers, not `-worker` equivalents.

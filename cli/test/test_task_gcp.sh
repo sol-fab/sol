@@ -68,7 +68,11 @@ elif [[ "$args" == *"pubsub subscriptions describe"* ]]; then
   name=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "describe" ]]; then j=$((i+1)); name="${!j}"; fi; done
   [[ -f "$state/sub-$name" ]] || { echo "NOT_FOUND: subscription" >&2; exit 1; }
   endpoint="$(sed -n 1p "$state/sub-$name")"; attempts="$(sed -n 2p "$state/sub-$name")"
-  printf '{"labels":{"sol-owned":"cloud-run-task-experiment","sol-service":"checkout-task"},"pushConfig":{"pushEndpoint":"%s"},"deadLetterPolicy":{"maxDeliveryAttempts":%s},"ackDeadlineSeconds":60}\n' "$endpoint" "$attempts"
+  if [[ -z "$endpoint" ]]; then
+    printf '{"labels":{"sol-owned":"cloud-run-task-experiment","sol-service":"checkout-task"},"ackDeadlineSeconds":10}\n'
+  else
+    printf '{"labels":{"sol-owned":"cloud-run-task-experiment","sol-service":"checkout-task"},"pushConfig":{"pushEndpoint":"%s"},"deadLetterPolicy":{"maxDeliveryAttempts":%s},"ackDeadlineSeconds":60}\n' "$endpoint" "$attempts"
+  fi
 elif [[ "$args" == *"pubsub subscriptions update"* ]]; then
   name=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "update" ]]; then j=$((i+1)); name="${!j}"; fi; done
   endpoint=""; attempts=""; for arg in "$@"; do case "$arg" in --push-endpoint=*) endpoint="${arg#--push-endpoint=}";; --max-delivery-attempts=*) attempts="${arg#--max-delivery-attempts=}";; esac; done
@@ -102,6 +106,7 @@ grep -q '"cloud_run_service":"checkout-task"' "$work/deploy.json"
 grep -q '"topic":"checkout-task"' "$work/deploy.json"
 grep -q '"subscription":"checkout-task-sub"' "$work/deploy.json"
 grep -q '"dlq_topic":"checkout-task-dlq"' "$work/deploy.json"
+grep -q '"dlq_subscription":"checkout-task-dlq-sub"' "$work/deploy.json"
 grep -q '"push_service_account":"checkout-push@p.iam.gserviceaccount.com"' "$work/deploy.json"
 grep -q 'run services add-iam-policy-binding' "$work/state/calls.log"
 grep -q 'iam service-accounts add-iam-policy-binding' "$work/state/calls.log"
@@ -130,6 +135,7 @@ grep -q 'requires --apply' "$work/destroy.out"
 [[ ! -f "$work/state/topic-checkout-task" ]]
 [[ ! -f "$work/state/topic-checkout-task-dlq" ]]
 [[ ! -f "$work/state/sub-checkout-task-sub" ]]
+[[ ! -f "$work/state/sub-checkout-task-dlq-sub" ]]
 [[ ! -f "$work/state/sa-checkout-push.description" ]]
 
 # A failure after topics/SA/service exist must leave a record that can clean them up.
@@ -138,10 +144,12 @@ FAKE_SUBSCRIPTION_FAIL=1 "$sol" task gcp deploy "${common[@]}" --record "$work/p
 }
 [[ -f "$work/partial.json" ]]
 grep -q '"subscription":"checkout-task-sub"' "$work/partial.json"
+grep -q '"dlq_subscription":"checkout-task-dlq-sub"' "$work/partial.json"
 "$sol" task gcp destroy --project p --region us-west1 --service checkout --record "$work/partial.json" --apply > /dev/null
 [[ ! -f "$work/state/service" ]]
 [[ ! -f "$work/state/topic-checkout-task" ]]
 [[ ! -f "$work/state/topic-checkout-task-dlq" ]]
+[[ ! -f "$work/state/sub-checkout-task-dlq-sub" ]]
 [[ ! -f "$work/state/sa-checkout-push.description" ]]
 
 # A failure at Cloud Run deploy must leave the record and be destroyable even

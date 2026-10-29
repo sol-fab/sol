@@ -197,7 +197,8 @@ queue/topic, retry/DLQ policy, and release record for this capability.
   destroyable.
 - **GCP:** `Sol_task_pubsub.Make(T).run` serves the Pub/Sub push endpoint
   (`200` ack, `500` retry, `400` malformed). Cloud Run IAM authenticates the
-  Pub/Sub push service account; Pub/Sub owns the dead-letter topic.
+  Pub/Sub push service account; Sol creates a pull subscription on the
+  dead-letter topic so exhausted tasks are inspectable.
 
   ```text
   sol task gcp deploy --project <project> --region <region> \
@@ -215,7 +216,8 @@ queue/topic, retry/DLQ policy, and release record for this capability.
   sol task gcp destroy ... --apply
   ```
 
-  The adapter creates the topic, dead-letter topic, push subscription, private
+  The adapter creates the topic, dead-letter topic, a pull subscription on that
+  dead-letter topic, the push subscription, private
   Cloud Run service, and a dedicated push service account with only
   `roles/run.invoker` and `roles/iam.serviceAccountTokenCreator`. The ownership
   record is written with deterministic names before creation and updated after
