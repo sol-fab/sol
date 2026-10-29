@@ -152,9 +152,10 @@ enqueue command.
 ::: status
 The Lambda and Pub/Sub **runtime handlers** are implemented and unit-tested by
 this package. The AWS SQS + Lambda and GCP Pub/Sub + Cloud Run
-deploy/verify/enqueue/rollback/destroy lifecycles are implemented and
-fake-provider tested. Bounded live qualification for both providers follows; do
-not treat the cloud workflows as live-qualified yet.
+deploy/verify/enqueue/rollback/destroy lifecycles are implemented, fake-provider
+tested, and exercised in bounded live checkout builds on both providers. They
+are **not** released-candidate qualified; provider differences and the
+qualified limits are recorded in the task-execution procedure.
 :::
 
 The handler module and `Sol_task.TASK` contract are unchanged in the cloud.
