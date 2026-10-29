@@ -44,8 +44,10 @@ let setup = [ "DROP SCHEMA IF EXISTS " ^ schema ^ " CASCADE"; "CREATE SCHEMA " ^
 type task =
   | Ok of string
   | Retry of string
+  | Flaky of string
 
 let seen = ref []
+let effects : (string, unit) Hashtbl.t = Hashtbl.create 8
 
 module T = struct
   type t = task
@@ -55,13 +57,15 @@ module T = struct
   let kind = function
     | Ok _ -> "ok"
     | Retry _ -> "retry"
+    | Flaky _ -> "flaky"
   ;;
 
-  let kinds = [ "ok"; "retry" ]
+  let kinds = [ "ok"; "retry"; "flaky" ]
 
   let encode = function
     | Ok value -> "ok:" ^ value
     | Retry value -> "retry:" ^ value
+    | Flaky value -> "flaky:" ^ value
   ;;
 
   let decode text =
@@ -73,6 +77,7 @@ module T = struct
       (match prefix with
        | "ok" -> Ok (Ok value)
        | "retry" -> Ok (Retry value)
+       | "flaky" -> Ok (Flaky value)
        | _ -> Error ("unknown kind " ^ prefix))
   ;;
 
@@ -81,6 +86,14 @@ module T = struct
     match task with
     | Ok _ -> Sol_task.Ack
     | Retry message -> Sol_task.Retry message
+    | Flaky _ ->
+      (* The side effect is idempotent on the stable task_id. The first delivery
+         commits it and asks for a retry; the redelivery sees it and acknowledges. *)
+      if Hashtbl.mem effects task_id
+      then Sol_task.Ack
+      else (
+        Hashtbl.replace effects task_id ();
+        Sol_task.Retry "first delivery")
   ;;
 end
 
@@ -89,6 +102,8 @@ module Runtime = Sol_task_local.Make (T)
 let retry_once =
   { Sol_jobs.base_delay_s = 0.0; max_delay_s = 0.0; max_attempts = 1; jitter_ratio = 0.0 }
 ;;
+
+let retry_twice = { retry_once with max_attempts = 2 }
 
 let row pool =
   match
@@ -104,16 +119,9 @@ let row pool =
   | Error error -> failwith ("select: " ^ Pg_error.to_string error)
 ;;
 
-let run_one env pool =
+let run_one ?(retry_policy = retry_once) env pool =
   match
-    Runtime.run
-      ~env
-      ~pool
-      ~retry_policy:retry_once
-      ~poll_interval_s:0.01
-      ~lease_s:5.0
-      ~max_jobs:1
-      ()
+    Runtime.run ~env ~pool ~retry_policy ~poll_interval_s:0.01 ~lease_s:5.0 ~max_jobs:1 ()
   with
   | Ok () -> ()
   | Error error -> failwith (Sol_jobs.run_error_to_string error)
@@ -162,6 +170,38 @@ let () =
             status
             attempts
             (Option.value error ~default:"")));
+    (* Duplicate delivery: the handler sees the same task_id on the retry, and its
+       side effect is applied once because it is keyed by that stable identity. *)
+    (match Pg_db.transaction pool (fun tx -> Runtime.enqueue tx (Flaky "once")) with
+     | Ok () -> ()
+     | Error error -> failwith (Pg_error.to_string error));
+    run_one ~retry_policy:retry_twice env pool;
+    (match row pool with
+     | "completed", 2, _, _ -> ()
+     | status, attempts, error, _ ->
+       failwith
+         (Printf.sprintf
+            "flaky task: status=%s attempts=%d error=%s"
+            status
+            attempts
+            (Option.value error ~default:"")));
+    (match Hashtbl.length effects with
+     | 1 -> ()
+     | count -> failwith (Printf.sprintf "expected one idempotent effect, got %d" count));
+    let flaky_attempts =
+      !seen
+      |> List.filter_map (fun (task_id, _, task) ->
+        match task with
+        | Flaky _ -> Some task_id
+        | _ -> None)
+    in
+    (match flaky_attempts with
+     | [ first; second ] when String.equal first second -> ()
+     | _ ->
+       failwith
+         (Printf.sprintf
+            "expected two deliveries with one task_id, got [%s]"
+            (String.concat ", " flaky_attempts)));
     (* Idempotent enqueue: the same key inserts once, even across calls. *)
     (match
        Pg_db.transaction pool (fun tx ->
@@ -177,8 +217,8 @@ let () =
             "SELECT count(*)::int FROM sol_jobs WHERE workspace = ?")
          T.workspace
      with
-     | Ok (Some 3) -> ()
-     | Ok (Some count) -> failwith (Printf.sprintf "expected 3 rows, got %d" count)
+     | Ok (Some 4) -> ()
+     | Ok (Some count) -> failwith (Printf.sprintf "expected 4 rows, got %d" count)
      | Ok None -> failwith "no count row"
      | Error error -> failwith (Pg_error.to_string error));
     ignore !seen;
