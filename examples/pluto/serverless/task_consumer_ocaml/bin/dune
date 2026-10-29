@@ -4,5 +4,10 @@
   pluto_ops_task_consumer
   sol-task
   sol-task.lambda
+  sol-task.local
   sol-task.pubsub
+  pg-eio
+  caqti-eio
+  caqti-eio.unix
+  caqti-driver-postgresql
   eio_main))
