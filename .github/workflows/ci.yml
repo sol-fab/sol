@@ -164,16 +164,22 @@ jobs:
         # developer's switch already has the framework pinned to their checkout.
         run: bash platform/local/scripts/prepare-framework-deps.sh
 
+      - name: Install formatter
+        if: needs.classify.outputs.kind != 'docs-only'
+        timeout-minutes: 10
+        run: opam install ocamlformat.0.29.0 -y
+
       - name: Build
         if: needs.classify.outputs.kind != 'docs-only'
+        timeout-minutes: 20
         run: opam exec -- dune build
 
       # The static class reads the built CLI and provider-printer binaries.
       - name: Tooling for the verification classes (BUG-064)
         if: needs.classify.outputs.kind != 'docs-only'
         timeout-minutes: 20
+        # The dependency install above already used --with-test; do not repeat it here.
         run: |
-          opam install --deps-only --with-test -y ./sol.opam
           opam exec -- dune build \
             cli/bin/main.exe \
             cli/test/print_providers.exe
@@ -193,6 +199,21 @@ jobs:
         if: needs.classify.outputs.kind != 'docs-only'
         run: bash internal/tooling/scripts/ci-toolchain.sh kubectl
 
+      # The static class runs before the test suites so a source/format failure
+      # fails the required check without running the 5+ minute product suites.
+      - name: "Verification class: static (source paths)"
+        if: needs.classify.outputs.kind != 'docs-only'
+        timeout-minutes: 10
+        run: bash internal/tooling/scripts/verify.sh static
+
+      # The class runner is the gate's own mechanism, so its fail-closed contract
+      # is pinned here: an empty class, a missing result and an unknown class each
+      # stop the run rather than passing.
+      - name: Verification runner contract
+        if: needs.classify.outputs.kind != 'docs-only'
+        timeout-minutes: 5
+        run: bash internal/ci/verify_test.sh
+
       # Each package declares its own membership as `ci-unit` in its `test/dune`,
       # so this step names one class and cannot drift from the packages. A
       # package that needs infrastructure keeps its offline suite in `ci-unit`
@@ -203,10 +224,12 @@ jobs:
       # example-dockerfile-smoke job instead.
       - name: Unit tests (no broker/Postgres/Loki required)
         if: needs.classify.outputs.kind != 'docs-only'
+        timeout-minutes: 10
         run: opam exec -- dune build @ci-unit
 
       - name: Offline cloud lifecycle (cli/test runtest-lifecycle)
         if: needs.classify.outputs.kind != 'docs-only'
+        timeout-minutes: 10
         run: opam exec -- dune build @ci-lifecycle
 
       # The other half of the same invariant: a framework suite that needs
@@ -300,24 +323,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Install formatter
-        if: needs.classify.outputs.kind != 'docs-only'
-        run: opam install ocamlformat.0.29.0 -y
-
-      # The product, source and config invariants and their mutation self-tests,
-      # as one class. Membership is internal/ci/, so adding a guard is one file
-      # and no edit to this workflow; a class with no members is an error.
-      - name: "Verification class: static (source paths)"
-        if: needs.classify.outputs.kind != 'docs-only'
-        run: bash internal/tooling/scripts/verify.sh static
-
-      # The class runner is the gate's own mechanism, so its fail-closed contract
-      # is pinned here: an empty class, a missing result and an unknown class each
-      # stop the run rather than passing.
-      - name: Verification runner contract
-        if: needs.classify.outputs.kind != 'docs-only'
-        run: bash internal/ci/verify_test.sh
-
       # The harness is part of the qualification system, not a script beside it: it
       # constructs part of the effective configuration handed to Sol/Terraform and it owns
       # teardown. Its defects -- an override that contradicted the var-file, a teardown
@@ -326,6 +331,7 @@ jobs:
       # and spends nothing.
       - name: Qualification harness state-machine test
         if: needs.classify.outputs.kind != 'docs-only'
+        timeout-minutes: 10
         run: internal/qualification/gcp/stubbed-qual-test.sh
 
       - name: Kafka authority/delivery observer test
@@ -334,6 +340,7 @@ jobs:
 
       - name: AWS row harness test
         if: needs.classify.outputs.kind != 'docs-only'
+        timeout-minutes: 5
         run: internal/qualification/aws/stubbed-qual-test.sh
 
       # The application a live run exercises must be built from the candidate
@@ -393,6 +400,7 @@ jobs:
 
       - name: Installed-release smoke (FEAT-101)
         if: needs.classify.outputs.kind != 'docs-only'
+        timeout-minutes: 5
         run: |
           cp _build/default/cli/bin/main.exe "$RUNNER_TEMP/sol-dev"
           runner="ghcr.io/example/sol-migration-runner@sha256:$(printf '0%.0s' $(seq 64))"

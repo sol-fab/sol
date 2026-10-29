@@ -6,7 +6,7 @@
 - **Decision owner:** operator
 - **Related:** ADR 0009 (one product contract), ADR 0011 (provider-native workload identity), DEC-022 (language parity),
   DEC-026 (production profile), DEC-047 (configuration placement),
-  `docs/deployment/compatibility.md`
+  `docs/deployment/compatibility.md`, [execution boundaries](../execution-boundaries.md)
 
 ## Context
 
