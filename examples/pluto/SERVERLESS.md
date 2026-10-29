@@ -173,6 +173,27 @@ sol task aws destroy --profile <aws-profile> --region us-east-1 \
   --service pluto-tasks-ts --record ./pluto-task-ts.json --apply
 ```
 
+### Local Postgres task consumer
+
+The same OCaml handler also supports the local `sol-jobs` runtime. With a local
+Postgres that has the `sol_jobs` migration applied, enqueue through the local
+CLI and run the consumer with `SOL_TASK_RUNTIME=local`:
+
+```sh
+sol local task enqueue --kind send_welcome \
+  --payload '{"kind":"send_welcome","user_id":"u-local"}' \
+  --idempotency-key local-welcome --postgres-url "$POSTGRES_URL"
+
+SOL_TASK_RUNTIME=local POSTGRES_URL="$POSTGRES_URL" \
+  dune exec serverless/task_consumer_ocaml/bin/main.exe
+```
+
+`Ack` leaves the row `completed`; `Retry` uses the existing `sol-jobs` backoff
+and leaves a retained `failed` row after the retry budget. A repeated
+`--idempotency-key` enqueue is a no-op. This is the same handler module used by
+Lambda and Pub/Sub; it is a local test harness, not a provider-emulated SQS or
+Pub/Sub service.
+
 ### GCP Pub/Sub consumers
 
 The same OCaml consumer image selects `sol-task.pubsub` when
@@ -227,6 +248,24 @@ services, topics, subscriptions, or push service accounts. No concurrency or
 throughput measurement was made. Sol does not create a DLQ subscription; the
 dead-letter topic is the terminal provider destination, and inspection requires
 a provider subscription.
+
+## Verification scope and remaining gaps
+
+| Surface | Verified | Boundary |
+|---|---|---|
+| Local `-svc`/`-worker`/`-fn` | order flows, Kafka/Postgres workers, local probe Jobs | no local AWS/GCP provider emulation |
+| Local tasks | `sol-task.local` via `SOL_TASK_RUNTIME=local`: Ack/completed, duplicate no-op, Retry/failed row | no local SQS/Pub/Sub emulation |
+| AWS `-fn` | Lambda invoke/rollback/destroy | no event input or Sol-created schedule |
+| AWS tasks | SQS-triggered Lambda Ack/Retry/DLQ; Lambda-to-SQS producer is **not** a Sol-managed contract | enqueue with `sol task aws enqueue` or application code; SQS-backed `-worker` is not supported |
+| GCP `-fn` | Cloud Run Jobs execute/rollback/destroy | no alias, event payload, schedule, or response body |
+| GCP tasks | Pub/Sub push Ack/Retry/DLQ, revision rollback, destroy | Cloud Run service, not a `-worker`; no DLQ subscription created by Sol |
+| Concurrency/timeouts | not measured | documented configuration only |
+
+The SQS and Pub/Sub consumers are task handlers, not `-worker` equivalents.
+Kafka `-worker` semantics and ordering remain the worker contract; no portable
+queue abstraction is introduced. Lambda publishing to SQS would be ordinary
+application code plus an execution-role permission, not a Sol lifecycle claim,
+and is not verified here.
 
 ## Local checks
 

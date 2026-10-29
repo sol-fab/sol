@@ -9,7 +9,7 @@ type t =
   | Send_welcome of { user_id : string }
   | Fail
 
-let workspace = "pluto.tasks"
+let workspace = "pluto"
 
 let kind = function
   | Send_welcome _ | Fail -> "send_welcome"
