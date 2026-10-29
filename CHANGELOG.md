@@ -7,6 +7,12 @@ not a full commit log — see `git log` for that.
 
 ## Unreleased
 
+- **Behavior change:** image references use one validator,
+  `Sol_cli_image_ref.is_digest`, which enforces Docker's repository-name grammar
+  and a lowercase `sha256:<64 hex>` digest. Cloud Run now refuses short or
+  malformed digests that its earlier suffix check accepted, and release-bundle
+  image validation delegates to the same rule instead of carrying a second
+  implementation.
 - **New:** `sol-task` defines the durable task handler contract shared by the
   local Postgres `sol-jobs` runtime (`sol-task.local`), AWS SQS + Lambda
   (`sol-task.lambda`), and GCP Pub/Sub push + Cloud Run (`sol-task.pubsub`).
