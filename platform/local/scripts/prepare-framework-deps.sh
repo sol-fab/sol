@@ -16,6 +16,7 @@ FRAMEWORK_PACKAGES=(
   sol-fn
   sol-retry
   sol-jobs
+  sol-task
   sol-outbox
 )
 
@@ -31,7 +32,7 @@ for pkg in "${FRAMEWORK_PACKAGES[@]}"; do
 done
 
 echo "  installing framework (this compiles it into the switch)"
-opam install -y sol-svc sol-worker sol-fn sol-retry sol-jobs sol-outbox
+opam install -y sol-svc sol-worker sol-fn sol-retry sol-jobs sol-task sol-outbox
 
 echo
 echo "Done. The framework is installed into the current opam switch:"

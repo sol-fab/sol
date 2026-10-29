@@ -121,6 +121,10 @@ a little more, and none of it is covered by `dune build` alone:
   `opam install --deps-only --with-test .`.
 - **Build:** `dune build cli/bin/main.exe`; the binary lands at
   `_build/default/cli/bin/main.exe`.
+- **Verification map:** [`internal/ci/README.md`](internal/ci/README.md) records
+  the required check, suite memberships, change-category coverage and CI costs.
+- **Execution boundaries:** [`docs/architecture/execution-boundaries.md`](docs/architecture/execution-boundaries.md)
+  maps workload kinds, local/managed runtimes and provider adapters.
 
 **[`internal/pipeline/dogfood/DOGFOOD.md`](internal/pipeline/dogfood/DOGFOOD.md)** has the full
 local-substrate walkthrough, including the exact dependency commands.

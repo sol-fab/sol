@@ -103,8 +103,11 @@ cheap repository checks:
 bash internal/ci/run_fast_checks.sh
 ```
 
-Required GitHub CI is authoritative for merge. Live cloud qualification is separate from
-ordinary development; follow `internal/qualification/README.md` when a claim requires it.
+Required GitHub CI is authoritative for merge. The suite map, required check,
+change-to-suite mapping and measured CI costs are in `internal/ci/README.md`; the
+execution-boundary map is `docs/architecture/execution-boundaries.md`. Live cloud
+qualification is separate from ordinary development; follow
+`internal/qualification/README.md` when a claim requires it.
 Releases are the deliberate path in `internal/tooling/release/README.md`: a merge never
 creates or publishes one, and a published release is the exact artifact that passed
 qualification.
