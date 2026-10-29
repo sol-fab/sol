@@ -244,17 +244,21 @@ let rollback_svc
     ; http
     }
   in
+  let write_record release =
+    Sol_cli_aws_lambda.write_record ~path:record release
+    |> Result.map_error (fun message -> "could not update release record: " ^ message)
+  in
+  (* If the alias move succeeds but the smoke fails, the record must name what is
+     actually live. Write it at the alias move, then refine it from the verified state. *)
+  let on_alias_moved version = write_record { release with version; alias = "live" } in
   let* observed =
-    Sol_cli_aws_lambda.rollback request ~version ~token
+    Sol_cli_aws_lambda.rollback request ~version ~token ~on_alias_moved
     |> Result.map_error Sol_cli_aws_lambda.failure_to_string
   in
   let recorded =
     { release with version = observed.version; alias = "live"; url = observed.url }
   in
-  let* () =
-    Sol_cli_aws_lambda.write_record ~path:record recorded
-    |> Result.map_error (fun message -> "could not update release record: " ^ message)
-  in
+  let* () = write_record recorded in
   Ok (Sol_cli_aws_lambda.observed_json observed)
 ;;
 
@@ -286,15 +290,17 @@ let rollback_fn
     ; run = runner
     }
   in
+  let write_record release =
+    Sol_cli_aws_lambda_fn.write_record ~path:record release
+    |> Result.map_error (fun message -> "could not update release record: " ^ message)
+  in
+  let on_alias_moved version = write_record { release with version; alias = "live" } in
   let* observed =
-    Sol_cli_aws_lambda_fn.rollback request ~version
+    Sol_cli_aws_lambda_fn.rollback request ~version ~on_alias_moved
     |> Result.map_error Sol_cli_aws_lambda_fn.failure_to_string
   in
   let recorded = { release with version = observed.version; alias = "live" } in
-  let* () =
-    Sol_cli_aws_lambda_fn.write_record ~path:record recorded
-    |> Result.map_error (fun message -> "could not update release record: " ^ message)
-  in
+  let* () = write_record recorded in
   Ok (Sol_cli_aws_lambda_fn.observed_json observed)
 ;;
 

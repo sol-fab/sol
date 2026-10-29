@@ -330,7 +330,7 @@ let rollback_run profile region service image role unit issuer jwks version toke
       ~record:None
   in
   let* o =
-    Sol_cli_aws_lambda.rollback r ~version ~token
+    Sol_cli_aws_lambda.rollback r ~version ~token ~on_alias_moved:(fun _ -> Ok ())
     |> Result.map_error (fun f -> command_error (Sol_cli_aws_lambda.failure_to_string f))
   in
   print_endline (Yojson.Safe.to_string (Sol_cli_aws_lambda.observed_json o));

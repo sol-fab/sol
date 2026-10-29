@@ -468,7 +468,7 @@ let verify (r : request) ~token =
     Ok o
 ;;
 
-let rollback (r : request) ~version ~token : (observed, failure) result =
+let rollback (r : request) ~version ~token ~on_alias_moved : (observed, failure) result =
   let* () =
     if String.trim version = ""
     then Error (Refused "rollback version is required")
@@ -499,6 +499,13 @@ let rollback (r : request) ~version ~token : (observed, failure) result =
          ])
     |> Result.map (fun _ -> ())
     |> Result.map_error (fun m -> Partial m)
+  in
+  (* The alias has moved. Record that provider state before the smoke test, so a failed
+     smoke cannot leave the release record naming the version that is no longer live. *)
+  let* () =
+    on_alias_moved version
+    |> Result.map_error (fun m ->
+      Partial ("alias moved but release record update failed: " ^ m))
   in
   verify r ~token |> Result.map (fun (o : observed) -> ({ o with version } : observed))
 ;;

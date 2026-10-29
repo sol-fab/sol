@@ -49,13 +49,27 @@ let valid_image image =
 
 let parse_function_names text =
   let* json = Sol_cli_json.decode ~what:"Lambda list-functions" text in
-  match Sol_cli_json.list (Sol_cli_json.field [ "Functions" ] json) with
-  | None -> Ok []
-  | Some functions ->
-    Ok
-      (List.filter_map
-         (fun f -> Sol_cli_json.string (Sol_cli_json.field [ "FunctionName" ] f))
-         functions)
+  let* functions =
+    match Sol_cli_json.list (Sol_cli_json.field [ "Functions" ] json) with
+    | Some functions -> Ok functions
+    | None ->
+      Error
+        "Lambda list-functions response has no Functions array; refusing to infer \
+         absence from an unreadable inventory"
+  in
+  let rec collect index acc = function
+    | [] -> Ok (List.rev acc)
+    | entry :: rest ->
+      (match Sol_cli_json.string (Sol_cli_json.field [ "FunctionName" ] entry) with
+       | Some name -> collect (index + 1) (name :: acc) rest
+       | None ->
+         Error
+           (Printf.sprintf
+              "Lambda list-functions entry %d has no FunctionName; refusing to infer \
+               absence from a partial inventory"
+              index))
+  in
+  collect 1 [] functions
 ;;
 
 let inventory (s : scope) =

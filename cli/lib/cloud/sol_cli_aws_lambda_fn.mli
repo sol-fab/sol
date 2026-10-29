@@ -57,7 +57,11 @@ val invoke : request -> qualifier:string -> (string, failure) result
 
 (** Move [live] to [version], then invoke and require the same acknowledgement. The
     caller owns rewriting the release record from the observed state. *)
-val rollback : request -> version:string -> (observed, failure) result
+val rollback
+  :  request
+  -> version:string
+  -> on_alias_moved:(string -> (unit, string) result)
+  -> (observed, failure) result
 
 val destroy
   :  request

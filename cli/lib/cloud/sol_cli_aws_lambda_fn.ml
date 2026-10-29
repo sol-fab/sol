@@ -350,7 +350,7 @@ let deploy (r : request) =
   Ok release
 ;;
 
-let rollback (r : request) ~version =
+let rollback (r : request) ~version ~on_alias_moved =
   let* () =
     if String.trim version = ""
     then Error (Refused "rollback version is required")
@@ -360,6 +360,13 @@ let rollback (r : request) ~version =
   let* _, tags = describe_owned r in
   let* () =
     Sol_cli_aws_lambda_common.put_alias (scope r) ~function_name:r.function_name ~version
+  in
+  (* The alias has moved. Record that provider state before the invocation, so a failed
+     FunctionError check cannot leave the release record naming the old version. *)
+  let* () =
+    on_alias_moved version
+    |> Result.map_error (fun m ->
+      Partial ("alias moved but release record update failed: " ^ m))
   in
   let* invocation_status = invoke r ~qualifier:"live" in
   Ok { function_name = r.function_name; version; alias = "live"; tags; invocation_status }

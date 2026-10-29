@@ -66,7 +66,7 @@ experiment. It has no Function URL and no event source mapping.
 
 | Item | Status | Why |
 |---|---|---|
-| `FunctionError` rejection against a live failing handler | NOT RUN LIVE | The fake-provider lifecycle regression `test_target_serverless_fn.sh` exercises a provider `FunctionError` on rollback and asserts the record is unchanged. No live failing-handler image was built for this bounded run. |
+| `FunctionError` rejection against a live failing handler | NOT RUN LIVE | The fake-provider lifecycle regression `test_target_serverless_fn.sh` exercises a provider `FunctionError` on rollback, asserts the command fails, and asserts the record names the alias the provider moved (version 2) while the alias stays on that version. No live failing-handler image was built for this bounded run. |
 | GCP `-fn` (Cloud Run Jobs) | NOT RUN | Not implemented; no parity is assumed. |
 | Triggers, schedules, event sources | NOT RUN | Deliberately out of contract for this slice. |
 | AWS-native incoming identity for `-svc` | NOT RUN | The `-fn` slice has no incoming callers; `-svc` remains the Google-token experiment. |
