@@ -1,3 +1,8 @@
 (executable
  (name main)
- (libraries pluto_ops_task_consumer sol-task sol-task.lambda eio_main))
+ (libraries
+  pluto_ops_task_consumer
+  sol-task
+  sol-task.lambda
+  sol-task.pubsub
+  eio_main))

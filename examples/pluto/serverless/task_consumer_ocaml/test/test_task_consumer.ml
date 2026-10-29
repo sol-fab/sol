@@ -3,7 +3,14 @@ let () =
   assert (Task_consumer.kind task = "send_welcome");
   assert (Task_consumer.decode {|{"kind":"send_welcome","user_id":"u-1"}|} = Ok task);
   assert (Result.is_error (Task_consumer.decode {|{"kind":"send_welcome"}|}));
+  assert (Task_consumer.decode "fail" = Ok Task_consumer.Fail);
   assert (
     Task_consumer.handle ~task_id:"task-1" ~idempotency_key:"welcome-u-1" task
-    = Sol_task.Ack)
+    = Sol_task.Ack);
+  assert (
+    Task_consumer.handle ~task_id:"task-1" ~idempotency_key:"welcome-u-1" task
+    = Sol_task.Ack);
+  assert (
+    Task_consumer.handle ~task_id:"task-2" Task_consumer.Fail
+    = Sol_task.Retry "synthetic failure")
 ;;

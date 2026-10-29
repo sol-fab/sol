@@ -7,5 +7,5 @@ RUN npm run build
 
 FROM public.ecr.aws/lambda/nodejs:22
 WORKDIR ${LAMBDA_TASK_ROOT}
-COPY --from=build /src/dist/index.js ./index.js
+COPY --from=build /src/dist ./
 CMD ["index.handler"]

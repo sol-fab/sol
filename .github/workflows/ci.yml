@@ -749,6 +749,16 @@ jobs:
           REQUIRE_NODE: "1"
         run: bash cli/test/test_node_ca_trust.sh
 
+      - name: Standalone task-consumer adapter tests (AWS SQS + GCP Pub/Sub)
+        working-directory: examples/pluto/serverless/task_consumer_ts
+        run: npm install --no-audit --no-fund && npm run build && npm test
+
+      - name: Package-check the Lambda task-consumer image
+        working-directory: examples/pluto
+        run: |
+          docker build -q -f serverless/task_consumer_ts/Dockerfile -t sol-task-consumer-ts .
+          docker run --rm --entrypoint node sol-task-consumer-ts -e "require('/var/task/index.js')"
+
       - name: Dependency advisories (AUDIT-068)
         # Fail on high-severity production advisories; ignore development dependencies.
         working-directory: examples/pluto/app/demo_ts
