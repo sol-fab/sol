@@ -24,7 +24,23 @@ elif [[ "$args" == *"run services update-traffic checkout-task"* ]]; then
   rev=""; for arg in "$@"; do case "$arg" in --to-revisions=*) rev="${arg#--to-revisions=}"; rev="${rev%=100}";; esac; done
   echo "${rev#rev-}" > "$state/revision"; printf 'updated\n'
 elif [[ "$args" == *"run services delete checkout-task"* ]]; then rm -f "$state/service"; printf 'deleted\n'
-elif [[ "$args" == *"run services add-iam-policy-binding"* || "$args" == *"run services remove-iam-policy-binding"* || "$args" == *"iam service-accounts add-iam-policy-binding"* || "$args" == *"iam service-accounts remove-iam-policy-binding"* ]]; then printf '{}\n'
+elif [[ "$args" == *"run services add-iam-policy-binding"* || "$args" == *"run services remove-iam-policy-binding"* || "$args" == *"iam service-accounts add-iam-policy-binding"* || "$args" == *"iam service-accounts remove-iam-policy-binding"* ]]; then
+  member=""; for arg in "$@"; do case "$arg" in --member=serviceAccount:*) member="${arg#--member=serviceAccount:}";; esac; done
+  if [[ "$args" == *"run services add-iam-policy-binding"* ]]; then printf '%s\n' "$member" > "$state/run-invoker"; fi
+  if [[ "$args" == *"iam service-accounts add-iam-policy-binding"* ]]; then touch "$state/sa-token-creator"; fi
+  printf '{}\n'
+elif [[ "$args" == *"run services get-iam-policy"* ]]; then
+  if [[ -f "$state/run-invoker" ]]; then
+    printf '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:%s"]}]}\n' "$(cat "$state/run-invoker")"
+  else
+    printf '{"bindings":[]}\n'
+  fi
+elif [[ "$args" == *"iam service-accounts get-iam-policy"* ]]; then
+  if [[ -f "$state/sa-token-creator" ]]; then
+    printf '{"bindings":[{"role":"roles/iam.serviceAccountTokenCreator","members":["serviceAccount:service-123@gcp-sa-pubsub.iam.gserviceaccount.com"]}]}\n'
+  else
+    printf '{"bindings":[]}\n'
+  fi
 elif [[ "$args" == *"iam service-accounts create"* ]]; then
   for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "--description=sol-owned=cloud-run-task-experiment" ]]; then :; fi; done
   name=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "create" ]]; then j=$((i+1)); name="${!j}"; fi; done

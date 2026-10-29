@@ -711,6 +711,60 @@ let verify (r : request) ~record =
   let pubsub_agent =
     Printf.sprintf "service-%s@gcp-sa-pubsub.iam.gserviceaccount.com" project_number
   in
+  let member_role ~role ~member json =
+    match Sol_cli_json.list (json_field [ "bindings" ] json) with
+    | None -> false
+    | Some bindings ->
+      List.exists
+        (fun binding ->
+           Sol_cli_json.string (json_field [ "role" ] binding) = Some role
+           &&
+           match Sol_cli_json.list (json_field [ "members" ] binding) with
+           | None -> false
+           | Some members ->
+             List.exists
+               (fun candidate ->
+                  Sol_cli_json.string candidate = Some ("serviceAccount:" ^ member))
+               members)
+        bindings
+  in
+  let* run_policy =
+    gcloud_json
+      r
+      ([ "run"; "services"; "get-iam-policy"; expected.cloud_run_service ]
+       @ project_argv r
+       @ region_argv r)
+  in
+  let* () =
+    if
+      member_role
+        ~role:"roles/run.invoker"
+        ~member:expected.push_service_account
+        run_policy
+    then Ok ()
+    else
+      Error
+        (Sol_cli_cloud_run.Unknown
+           "Cloud Run service does not grant the push identity invoker")
+  in
+  let* sa_policy =
+    gcloud_json
+      r
+      ([ "iam"; "service-accounts"; "get-iam-policy"; expected.push_service_account ]
+       @ project_argv r)
+  in
+  let* () =
+    if
+      member_role
+        ~role:"roles/iam.serviceAccountTokenCreator"
+        ~member:pubsub_agent
+        sa_policy
+    then Ok ()
+    else
+      Error
+        (Sol_cli_cloud_run.Unknown
+           "push identity does not grant the Pub/Sub agent token creation")
+  in
   let* policy =
     gcloud_json
       r
