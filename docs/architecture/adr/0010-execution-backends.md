@@ -187,7 +187,10 @@ state is observed, not merely when an API call returns success.
   serverless is implemented.
 - The existing Kubernetes executor and release model stay authoritative until a
   second adapter is proven.
-- `Fn.Lambda` remains experimental and does not become the meaning of `-fn`.
+- `-fn` remains a run-once primitive. Its provider mapping is selected by target
+  execution: Kubernetes uses a CronJob, and the experimental AWS serverless
+  adapter uses a Lambda function with no trigger. `Fn.Lambda` is the runtime
+  contract for that AWS mapping; it does not redefine `-fn` as an event handler.
 - The task-queue contract and provider mapping are a separate decision; this ADR
   only records that Kafka stays Kafka and no generic queue is created here.
 - The storage campaign proceeds independently; its measurements inform the

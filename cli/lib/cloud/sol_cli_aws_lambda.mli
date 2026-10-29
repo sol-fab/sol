@@ -5,7 +5,7 @@ type identity =
   ; jwks_uri : string
   }
 
-type output =
+type output = Sol_cli_aws_lambda_common.output =
   { stdout : string
   ; stderr : string
   }
@@ -42,10 +42,10 @@ type release =
   ; role_arn : string
   }
 
-type failure =
+type failure = Sol_cli_aws_lambda_common.failure =
   | Refused of string
   | Provider of string
-  | Partial of string * observed option
+  | Partial of string
   | Unknown of string
 
 val failure_to_string : failure -> string

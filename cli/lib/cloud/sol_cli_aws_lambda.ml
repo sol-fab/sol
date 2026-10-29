@@ -5,7 +5,7 @@ type identity =
   ; jwks_uri : string
   }
 
-type output =
+type output = Sol_cli_aws_lambda_common.output =
   { stdout : string
   ; stderr : string
   }
@@ -42,49 +42,26 @@ type release =
   ; role_arn : string
   }
 
-type failure =
+type failure = Sol_cli_aws_lambda_common.failure =
   | Refused of string
   | Provider of string
-  | Partial of string * observed option
+  | Partial of string
   | Unknown of string
 
 open Result.Syntax
 
-let failure_to_string = function
-  | Refused m -> "refused: " ^ m
-  | Provider m -> "provider failure: " ^ m
-  | Partial (m, Some o) ->
-    Printf.sprintf "partial: %s (observed version %s at %s)" m o.version o.url
-  | Partial (m, None) -> "partial: " ^ m ^ " (state unknown)"
-  | Unknown m -> "unknown: " ^ m
-;;
+let failure_to_string = Sol_cli_aws_lambda_common.failure_to_string
+let provider_service_of = Sol_cli_aws_lambda_common.provider_service_of
 
-let provider_service_of service =
-  match Sol_cli_kubernetes_name.k8s_name_of_source service with
-  | Ok name -> Ok (Sol_cli_kubernetes_name.k8s_name_to_string name)
-  | Error message ->
-    Error
-      (Refused
-         (Printf.sprintf "Sol service %S has no valid Lambda name: %s" service message))
+let scope (r : request) : Sol_cli_aws_lambda_common.scope =
+  { profile = r.profile; region = r.region; run = r.run }
 ;;
 
 let aws (r : request) args =
-  [ "aws"; "--region"; r.region; "--output"; "json" ]
-  @ (match r.profile with
-     | None -> []
-     | Some p -> [ "--profile"; p ])
-  @ args
+  Sol_cli_aws_lambda_common.aws ~profile:r.profile ~region:r.region args
 ;;
 
-let valid_image image =
-  match String.index_opt image '@' with
-  | Some at when String.length image - at - 1 > 7 ->
-    let digest = String.sub image (at + 1) (String.length image - at - 1) in
-    if String.starts_with ~prefix:"sha256:" digest
-    then Ok ()
-    else Error (Refused "image must be immutable")
-  | _ -> Error (Refused "image must be an immutable @sha256: reference")
-;;
+let valid_image = Sol_cli_aws_lambda_common.valid_image
 
 let preflight (r : request) =
   let* () =
@@ -117,62 +94,14 @@ let preflight (r : request) =
   else Ok ()
 ;;
 
-let parse_function_names text =
-  let* json = Sol_cli_json.decode ~what:"Lambda list-functions" text in
-  match Sol_cli_json.list (Sol_cli_json.field [ "Functions" ] json) with
-  | None -> Ok []
-  | Some functions ->
-    Ok
-      (List.filter_map
-         (fun f -> Sol_cli_json.string (Sol_cli_json.field [ "FunctionName" ] f))
-         functions)
-;;
-
-let inventory (r : request) =
-  match r.run (aws r [ "lambda"; "list-functions" ]) with
-  | Error e -> Error e
-  | Ok o -> parse_function_names o.stdout
-;;
+let inventory (r : request) = Sol_cli_aws_lambda_common.inventory (scope r)
 
 let describe (r : request) =
-  match
-    r.run (aws r [ "lambda"; "get-function"; "--function-name"; r.function_name ])
-  with
-  | Error e -> Error (`Provider e)
-  | Ok o ->
-    (match Sol_cli_json.decode ~what:"Lambda get-function" o.stdout with
-     | Error m -> Error (`Unknown m)
-     | Ok json ->
-       let config = Sol_cli_json.field [ "Configuration" ] json in
-       let* version =
-         Sol_cli_json.string (Sol_cli_json.field [ "Version" ] config)
-         |> Option.to_result ~none:"get-function has no Version"
-         |> Result.map_error (fun m -> `Unknown m)
-       in
-       let tags =
-         match Sol_cli_json.assoc (Sol_cli_json.field [ "Tags" ] json) with
-         | None -> []
-         | Some fields ->
-           List.filter_map
-             (fun (key, value) ->
-                Option.map (fun value -> key, value) (Sol_cli_json.string value))
-             fields
-       in
-       Ok (`Present (version, tags)))
+  Sol_cli_aws_lambda_common.describe (scope r) ~function_name:r.function_name
 ;;
 
 let alias_version (r : request) =
-  match
-    r.run
-      (aws
-         r
-         [ "lambda"; "get-alias"; "--function-name"; r.function_name; "--name"; "live" ])
-  with
-  | Error _ -> Ok None
-  | Ok o ->
-    (match Sol_cli_json.decode ~what:"Lambda alias" o.stdout with
-     | Error _ -> Ok None
-     | Ok json -> Ok (Sol_cli_json.string (Sol_cli_json.field [ "FunctionVersion" ] json)))
+  Sol_cli_aws_lambda_common.alias_version (scope r) ~function_name:r.function_name
 ;;
 
 let url (r : request) =
@@ -197,17 +126,10 @@ let url (r : request) =
        |> Option.to_result ~none:"function URL missing")
 ;;
 
-let trim_url u =
-  let rec trim s =
-    if String.length s > 0 && s.[String.length s - 1] = '/'
-    then trim (String.sub s 0 (String.length s - 1))
-    else s
-  in
-  trim (String.trim u)
-;;
+let trim_url = Sol_cli_aws_lambda_common.trim_url
 
 let observed (r : request) version tags =
-  let* u = url r in
+  let* u = url r |> Result.map_error (fun m -> Unknown m) in
   let* av = alias_version r in
   Ok
     { function_name = r.function_name
@@ -218,14 +140,15 @@ let observed (r : request) version tags =
     }
 ;;
 
-let owns service o =
-  List.assoc_opt "sol-owned" o.tags = Some "lambda-experiment"
-  && List.assoc_opt "sol-service" o.tags = Some service
+let owns ~function_name tags =
+  List.assoc_opt "sol-owned" tags = Some "lambda-experiment"
+  && List.assoc_opt "sol-service" tags = Some function_name
 ;;
 
 let release_json (r : release) =
   `Assoc
-    [ "region", `String r.region
+    [ "kind", `String "svc"
+    ; "region", `String r.region
     ; "service", `String r.service
     ; "function_name", `String r.function_name
     ; "version", `String r.version
@@ -238,7 +161,8 @@ let release_json (r : release) =
 
 let observed_json (o : observed) =
   `Assoc
-    [ "function_name", `String o.function_name
+    [ "kind", `String "svc"
+    ; "function_name", `String o.function_name
     ; "version", `String o.version
     ; "alias", `String o.alias
     ; "url", `String o.url
@@ -246,16 +170,23 @@ let observed_json (o : observed) =
     ]
 ;;
 
-let write_record ~path r =
-  Sol_cli_fs.write_atomic ~perm:0o600 path (Yojson.Safe.to_string (release_json r) ^ "\n")
-;;
+let write_record ~path r = Sol_cli_aws_lambda_common.write_json ~path (release_json r)
 
 let read_record ~path =
-  let* text = Sol_cli_fs.read_file path in
-  let* json = Sol_cli_json.decode ~what:"Lambda release" text in
+  let* json = Sol_cli_aws_lambda_common.read_json ~path in
   let field name =
     Sol_cli_json.string (Sol_cli_json.field [ name ] json)
     |> Option.to_result ~none:(name ^ " missing")
+  in
+  let* kind = field "kind" in
+  let* () =
+    if kind = "svc"
+    then Ok ()
+    else
+      Error
+        (Printf.sprintf
+           "release record kind %S is not an AWS Lambda HTTP service record"
+           kind)
   in
   let* region = field "region" in
   let* service = field "service" in
@@ -277,20 +208,19 @@ let deploy (r : request) =
       match describe r with
       | Error (`Provider m) -> Error (Unknown m)
       | Error (`Unknown m) -> Error (Unknown m)
-      | Ok (`Present (version, tags)) ->
-        let o =
-          { function_name = r.function_name; version; alias = "live"; url = ""; tags }
-        in
-        if owns r.function_name o
+      | Ok (`Present (_, tags)) ->
+        if owns ~function_name:r.function_name tags
         then Ok true
-        else
+        else (
+          let tags_json =
+            Yojson.Safe.to_string (`Assoc (List.map (fun (k, v) -> k, `String v) tags))
+          in
           Error
             (Refused
                (Printf.sprintf
                   "Lambda function exists without adapter ownership tags (fn=%s tags=%s)"
                   r.function_name
-                  (Yojson.Safe.to_string
-                     (`Assoc (List.map (fun (k, v) -> k, `String v) o.tags))))))
+                  tags_json))))
     else Ok false
   in
   let env =
@@ -326,7 +256,7 @@ let deploy (r : request) =
              ; r.image
              ])
         |> Result.map (fun _ -> ())
-        |> Result.map_error (fun m -> Partial (m, None))
+        |> Result.map_error (fun m -> Partial m)
       in
       let* () =
         r.run
@@ -349,7 +279,7 @@ let deploy (r : request) =
            ; env
            ])
       |> Result.map (fun _ -> ())
-      |> Result.map_error (fun m -> Partial (m, None))
+      |> Result.map_error (fun m -> Partial m)
     else
       r.run
         (aws
@@ -376,7 +306,7 @@ let deploy (r : request) =
            ; "sol-owned=lambda-experiment,sol-service=" ^ r.function_name
            ])
       |> Result.map (fun _ -> ())
-      |> Result.map_error (fun m -> Partial (m, None))
+      |> Result.map_error (fun m -> Partial m)
   in
   let* () =
     r.run
@@ -398,37 +328,7 @@ let deploy (r : request) =
          |> Result.map_error (fun m -> Unknown m))
   in
   let* () =
-    match alias_version r with
-    | Ok (Some _) ->
-      r.run
-        (aws
-           r
-           [ "lambda"
-           ; "update-alias"
-           ; "--function-name"
-           ; r.function_name
-           ; "--name"
-           ; "live"
-           ; "--function-version"
-           ; version
-           ])
-      |> Result.map (fun _ -> ())
-      |> Result.map_error (fun m -> Unknown m)
-    | _ ->
-      r.run
-        (aws
-           r
-           [ "lambda"
-           ; "create-alias"
-           ; "--function-name"
-           ; r.function_name
-           ; "--name"
-           ; "live"
-           ; "--function-version"
-           ; version
-           ])
-      |> Result.map (fun _ -> ())
-      |> Result.map_error (fun m -> Unknown m)
+    Sol_cli_aws_lambda_common.put_alias (scope r) ~function_name:r.function_name ~version
   in
   let* () =
     match url r with
@@ -517,7 +417,7 @@ let deploy (r : request) =
     |> Result.map (fun _ -> ())
     |> Result.map_error (fun m -> Provider ("invoke permission: " ^ m))
   in
-  let* o = observed r version [] |> Result.map_error (fun m -> Unknown m) in
+  let* o = observed r version [] in
   let release =
     { region = r.region
     ; service = r.service
@@ -538,7 +438,7 @@ let deploy (r : request) =
 ;;
 
 let verify (r : request) ~token =
-  let* o = observed r "unknown" [] |> Result.map_error (fun m -> Unknown m) in
+  let* o = observed r "unknown" [] in
   if token = ""
   then Error (Refused "authorized token is required")
   else
@@ -570,6 +470,21 @@ let verify (r : request) ~token =
 
 let rollback (r : request) ~version ~token : (observed, failure) result =
   let* () =
+    if String.trim version = ""
+    then Error (Refused "rollback version is required")
+    else Ok ()
+  in
+  (* A rollback moves the live alias, so it must establish that the function is this
+     adapter's before mutating provider state. *)
+  let* () =
+    match describe r with
+    | Error (`Provider m) | Error (`Unknown m) -> Error (Unknown m)
+    | Ok (`Present (_, tags)) ->
+      if owns ~function_name:r.function_name tags
+      then Ok ()
+      else Error (Refused "live function lacks this adapter's ownership tags")
+  in
+  let* () =
     r.run
       (aws
          r
@@ -583,17 +498,28 @@ let rollback (r : request) ~version ~token : (observed, failure) result =
          ; version
          ])
     |> Result.map (fun _ -> ())
-    |> Result.map_error (fun m -> Partial (m, None))
+    |> Result.map_error (fun m -> Partial m)
   in
   verify r ~token |> Result.map (fun (o : observed) -> ({ o with version } : observed))
 ;;
 
 let destroy (r : request) ~profile ~region ~service ~record =
   let* expected = read_record ~path:record |> Result.map_error (fun m -> Refused m) in
+  let* function_name =
+    provider_service_of service
+    |> Result.map_error (fun failure -> Refused (failure_to_string failure))
+  in
   let* () =
-    if expected.region = region && expected.service = service
+    if
+      expected.region = region
+      && expected.service = service
+      && expected.function_name = function_name
     then Ok ()
-    else Error (Refused "release record does not match")
+    else
+      Error
+        (Refused
+           "release record does not match the target region, service, and provider \
+            function name")
   in
   let* names =
     inventory { r with profile; region } |> Result.map_error (fun m -> Unknown m)
@@ -608,15 +534,7 @@ let destroy (r : request) ~profile ~region ~service ~record =
       match describe owned_request with
       | Error (`Provider m) | Error (`Unknown m) -> Error (Unknown m)
       | Ok (`Present (_, tags)) ->
-        let observed =
-          { function_name = expected.function_name
-          ; version = expected.version
-          ; alias = "live"
-          ; url = expected.url
-          ; tags
-          }
-        in
-        if owns expected.function_name observed
+        if owns ~function_name:expected.function_name tags
         then Ok ()
         else Error (Refused "live function lacks this adapter's ownership tags")
     in
@@ -632,7 +550,7 @@ let destroy (r : request) ~profile ~region ~service ~record =
            ; "live"
            ])
       |> Result.map (fun _ -> ())
-      |> Result.map_error (fun m -> Partial (m, None))
+      |> Result.map_error (fun m -> Partial m)
     in
     let* () =
       r.run
@@ -640,7 +558,7 @@ let destroy (r : request) ~profile ~region ~service ~record =
            { r with profile; region }
            [ "lambda"; "delete-function"; "--function-name"; expected.function_name ])
       |> Result.map (fun _ -> ())
-      |> Result.map_error (fun m -> Partial (m, None))
+      |> Result.map_error (fun m -> Partial m)
     in
     let* names =
       inventory { r with profile; region } |> Result.map_error (fun m -> Unknown m)

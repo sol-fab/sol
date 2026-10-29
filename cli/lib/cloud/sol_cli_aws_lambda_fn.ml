@@ -1,0 +1,410 @@
+open Result.Syntax
+
+type request =
+  { profile : string option
+  ; region : string
+  ; service : string
+  ; function_name : string
+  ; image : string
+  ; role_arn : string
+  ; unit : string
+  ; record : string option
+  ; run : string list -> (Sol_cli_aws_lambda_common.output, string) result
+  }
+
+type observed =
+  { function_name : string
+  ; version : string
+  ; alias : string
+  ; tags : (string * string) list
+  ; invocation_status : string
+  }
+
+type release =
+  { region : string
+  ; service : string
+  ; function_name : string
+  ; version : string
+  ; alias : string
+  ; image : string
+  ; role_arn : string
+  }
+
+type failure = Sol_cli_aws_lambda_common.failure =
+  | Refused of string
+  | Provider of string
+  | Partial of string
+  | Unknown of string
+
+let failure_to_string = Sol_cli_aws_lambda_common.failure_to_string
+
+(* This tag value is the function adapter's ownership class. It is deliberately distinct
+   from the HTTP adapter's, so neither lifecycle can adopt or delete the other's
+   function even when the Sol service name normalizes to the same Lambda name. *)
+let ownership_tag = "lambda-fn-experiment"
+
+let scope (r : request) : Sol_cli_aws_lambda_common.scope =
+  { profile = r.profile; region = r.region; run = r.run }
+;;
+
+let aws (r : request) args =
+  Sol_cli_aws_lambda_common.aws ~profile:r.profile ~region:r.region args
+;;
+
+let owns ~function_name tags =
+  List.assoc_opt "sol-owned" tags = Some ownership_tag
+  && List.assoc_opt "sol-service" tags = Some function_name
+;;
+
+let preflight (r : request) =
+  let* () =
+    if String.trim r.region = "" then Error (Refused "region is empty") else Ok ()
+  in
+  let* () =
+    if String.trim r.service = "" then Error (Refused "service is empty") else Ok ()
+  in
+  let* () =
+    if String.trim r.function_name = ""
+    then Error (Refused "function name is empty")
+    else Ok ()
+  in
+  let* () =
+    if String.trim r.role_arn = "" then Error (Refused "role ARN is required") else Ok ()
+  in
+  let* () =
+    if String.trim r.unit = "" then Error (Refused "unit is required") else Ok ()
+  in
+  Sol_cli_aws_lambda_common.valid_image r.image
+;;
+
+let release_json (r : release) =
+  `Assoc
+    [ "kind", `String "fn"
+    ; "region", `String r.region
+    ; "service", `String r.service
+    ; "function_name", `String r.function_name
+    ; "version", `String r.version
+    ; "alias", `String r.alias
+    ; "image", `String r.image
+    ; "role_arn", `String r.role_arn
+    ]
+;;
+
+let observed_json (o : observed) =
+  `Assoc
+    [ "kind", `String "fn"
+    ; "function_name", `String o.function_name
+    ; "version", `String o.version
+    ; "alias", `String o.alias
+    ; "invocation_status", `String o.invocation_status
+    ; "tags", `Assoc (List.map (fun (k, v) -> k, `String v) o.tags)
+    ]
+;;
+
+let write_record ~path r = Sol_cli_aws_lambda_common.write_json ~path (release_json r)
+
+let read_record ~path =
+  let* json = Sol_cli_aws_lambda_common.read_json ~path in
+  let field name =
+    Sol_cli_json.string (Sol_cli_json.field [ name ] json)
+    |> Option.to_result ~none:(name ^ " missing")
+  in
+  let* kind = field "kind" in
+  let* () =
+    if kind = "fn"
+    then Ok ()
+    else
+      Error
+        (Printf.sprintf
+           "release record kind %S is not an AWS Lambda run-once function record"
+           kind)
+  in
+  let* region = field "region" in
+  let* service = field "service" in
+  let* function_name = field "function_name" in
+  let* version = field "version" in
+  let* alias = field "alias" in
+  let* image = field "image" in
+  let* role_arn = field "role_arn" in
+  Ok { region; service; function_name; version; alias; image; role_arn }
+;;
+
+(* The observed state is read back from the provider: the alias is the serving identity,
+   and the tags are the ownership proof destroy will require later. *)
+let describe_owned (r : request) =
+  match Sol_cli_aws_lambda_common.describe (scope r) ~function_name:r.function_name with
+  | Error (`Provider m) | Error (`Unknown m) -> Error (Unknown m)
+  | Ok (`Present (version, tags)) ->
+    if owns ~function_name:r.function_name tags
+    then Ok (version, tags)
+    else
+      Error
+        (Refused
+           (Printf.sprintf
+              "Lambda function exists without this adapter's ownership tags (fn=%s \
+               tags=%s)"
+              r.function_name
+              (Yojson.Safe.to_string
+                 (`Assoc (List.map (fun (k, v) -> k, `String v) tags)))))
+;;
+
+let invoke (r : request) ~qualifier =
+  if String.trim qualifier = ""
+  then Error (Refused "invoke qualifier is required")
+  else (
+    let invocation path =
+      match
+        r.run
+          (aws
+             r
+             [ "lambda"
+             ; "invoke"
+             ; "--function-name"
+             ; r.function_name
+             ; "--qualifier"
+             ; qualifier
+             ; "--cli-binary-format"
+             ; "raw-in-base64-out"
+             ; "--payload"
+             ; "{}"
+             ; path
+             ])
+      with
+      | Error e -> Error (Provider e)
+      | Ok o ->
+        let* metadata =
+          Sol_cli_json.decode ~what:"Lambda invoke" o.stdout
+          |> Result.map_error (fun m -> Unknown m)
+        in
+        (* FunctionError is how a synchronous invocation reports a handler failure even
+           when the transport itself returned 200. It must fail the lifecycle step. *)
+        let* () =
+          match Sol_cli_json.string (Sol_cli_json.field [ "FunctionError" ] metadata) with
+          | Some error when error <> "" ->
+            Error (Provider (Printf.sprintf "Lambda invocation FunctionError: %s" error))
+          | _ -> Ok ()
+        in
+        let* status_code =
+          Sol_cli_json.int (Sol_cli_json.field [ "StatusCode" ] metadata)
+          |> Option.to_result ~none:"Lambda invoke returned no StatusCode"
+          |> Result.map_error (fun m -> Unknown m)
+        in
+        let* () =
+          if status_code = 200
+          then Ok ()
+          else Error (Provider (Printf.sprintf "Lambda invocation status %d" status_code))
+        in
+        let* body = Sol_cli_fs.read_file path |> Result.map_error (fun m -> Unknown m) in
+        let* response =
+          Sol_cli_json.decode ~what:"Lambda invoke response" body
+          |> Result.map_error (fun m -> Unknown m)
+        in
+        (match Sol_cli_json.string (Sol_cli_json.field [ "status" ] response) with
+         | Some "ok" -> Ok "ok"
+         | Some status ->
+           Error
+             (Provider
+                (Printf.sprintf
+                   "Lambda function returned status %S; expected {status:\"ok\"}"
+                   status))
+         | None ->
+           Error
+             (Provider
+                "Lambda function response has no status field; expected {status:\"ok\"}"))
+    in
+    match
+      Sol_cli_fs.with_temp_file
+        ~prefix:"sol-lambda-fn-invoke-"
+        ~suffix:".json"
+        ""
+        invocation
+    with
+    | Ok result -> result
+    | Error message -> Error (Unknown message))
+;;
+
+let environment (r : request) =
+  `Assoc
+    [ "Variables", `Assoc [ "SOL_UNIT", `String r.unit; "SOL_PRIMITIVE", `String "fn" ] ]
+  |> Yojson.Safe.to_string
+;;
+
+let deploy (r : request) =
+  let* () = preflight r in
+  let* names =
+    Sol_cli_aws_lambda_common.inventory (scope r) |> Result.map_error (fun m -> Unknown m)
+  in
+  let* existing =
+    if List.mem r.function_name names
+    then
+      let* _ = describe_owned r in
+      Ok true
+    else Ok false
+  in
+  let env = environment r in
+  let* () =
+    if existing
+    then
+      let* () =
+        r.run
+          (aws
+             r
+             [ "lambda"
+             ; "update-function-code"
+             ; "--function-name"
+             ; r.function_name
+             ; "--image-uri"
+             ; r.image
+             ])
+        |> Result.map (fun _ -> ())
+        |> Result.map_error (fun m -> Partial m)
+      in
+      let* () =
+        r.run
+          (aws
+             r
+             [ "lambda"; "wait"; "function-updated"; "--function-name"; r.function_name ])
+        |> Result.map (fun _ -> ())
+        |> Result.map_error (fun m -> Unknown ("wait after code update: " ^ m))
+      in
+      r.run
+        (aws
+           r
+           [ "lambda"
+           ; "update-function-configuration"
+           ; "--function-name"
+           ; r.function_name
+           ; "--role"
+           ; r.role_arn
+           ; "--environment"
+           ; env
+           ])
+      |> Result.map (fun _ -> ())
+      |> Result.map_error (fun m -> Partial m)
+    else
+      r.run
+        (aws
+           r
+           [ "lambda"
+           ; "create-function"
+           ; "--function-name"
+           ; r.function_name
+           ; "--package-type"
+           ; "Image"
+           ; "--code"
+           ; "ImageUri=" ^ r.image
+           ; "--role"
+           ; r.role_arn
+           ; "--timeout"
+           ; "30"
+           ; "--memory-size"
+           ; "512"
+           ; "--architectures"
+           ; "x86_64"
+           ; "--environment"
+           ; env
+           ; "--tags"
+           ; "sol-owned=" ^ ownership_tag ^ ",sol-service=" ^ r.function_name
+           ])
+      |> Result.map (fun _ -> ())
+      |> Result.map_error (fun m -> Partial m)
+  in
+  let* () =
+    r.run
+      (aws r [ "lambda"; "wait"; "function-updated"; "--function-name"; r.function_name ])
+    |> Result.map (fun _ -> ())
+    |> Result.map_error (fun m -> Unknown ("wait failed: " ^ m))
+  in
+  let* version =
+    match
+      r.run (aws r [ "lambda"; "publish-version"; "--function-name"; r.function_name ])
+    with
+    | Error e -> Error (Unknown ("publish failed: " ^ e))
+    | Ok o ->
+      (match Sol_cli_json.decode ~what:"Lambda publish-version" o.stdout with
+       | Error m -> Error (Unknown m)
+       | Ok json ->
+         Sol_cli_json.string (Sol_cli_json.field [ "Version" ] json)
+         |> Option.to_result ~none:"publish returned no version"
+         |> Result.map_error (fun m -> Unknown m))
+  in
+  let* () =
+    Sol_cli_aws_lambda_common.put_alias (scope r) ~function_name:r.function_name ~version
+  in
+  let* () = invoke r ~qualifier:"live" |> Result.map (fun _ -> ()) in
+  let release =
+    { region = r.region
+    ; service = r.service
+    ; function_name = r.function_name
+    ; version
+    ; alias = "live"
+    ; image = r.image
+    ; role_arn = r.role_arn
+    }
+  in
+  let* () =
+    match r.record with
+    | None -> Ok ()
+    | Some path -> write_record ~path release |> Result.map_error (fun m -> Provider m)
+  in
+  Ok release
+;;
+
+let rollback (r : request) ~version =
+  let* () =
+    if String.trim version = ""
+    then Error (Refused "rollback version is required")
+    else Ok ()
+  in
+  (* A rollback moves the live alias, so it establishes ownership before mutating. *)
+  let* _, tags = describe_owned r in
+  let* () =
+    Sol_cli_aws_lambda_common.put_alias (scope r) ~function_name:r.function_name ~version
+  in
+  let* invocation_status = invoke r ~qualifier:"live" in
+  Ok { function_name = r.function_name; version; alias = "live"; tags; invocation_status }
+;;
+
+let destroy (r : request) ~profile ~region ~service ~record =
+  let* expected = read_record ~path:record |> Result.map_error (fun m -> Refused m) in
+  let* function_name =
+    Sol_cli_aws_lambda_common.provider_service_of service
+    |> Result.map_error (fun failure -> Refused (failure_to_string failure))
+  in
+  let* () =
+    if
+      expected.region = region
+      && expected.service = service
+      && expected.function_name = function_name
+    then Ok ()
+    else
+      Error
+        (Refused
+           "release record does not match the target region, service, and provider \
+            function name")
+  in
+  let s = { r with profile; region } in
+  let* names =
+    Sol_cli_aws_lambda_common.inventory (scope s) |> Result.map_error (fun m -> Unknown m)
+  in
+  if not (List.mem expected.function_name names)
+  then Ok ()
+  else (
+    let owned = { s with function_name = expected.function_name } in
+    let* () = describe_owned owned |> Result.map (fun _ -> ()) in
+    (* Deleting the function also deletes its versions and the live alias. There is no
+       Function URL to remove, and no event source mapping is created by this adapter. *)
+    let* () =
+      s.run
+        (aws s [ "lambda"; "delete-function"; "--function-name"; expected.function_name ])
+      |> Result.map (fun _ -> ())
+      |> Result.map_error (fun m -> Partial m)
+    in
+    let* names =
+      Sol_cli_aws_lambda_common.inventory (scope s)
+      |> Result.map_error (fun m -> Unknown m)
+    in
+    if List.mem expected.function_name names
+    then Error (Unknown "function remains after delete")
+    else Ok ())
+;;

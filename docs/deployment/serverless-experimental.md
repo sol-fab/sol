@@ -5,23 +5,27 @@ part of the `production-single-region/v1` contract.
 
 ## Support matrix
 
+Evidence columns name what actually exists: a fake-provider lifecycle regression,
+a bounded live run, or an explicit gap. A live run creates only the resources it
+needs and independently verifies their absence afterwards.
+
 | Capability | Local | Kubernetes | GCP Cloud Run | AWS Lambda |
 |---|---|---|---|---|
 | `-svc` HTTP | native `sol local run` | supported | target + standalone; live | target + standalone; live |
 | `-worker` | native run with explicit Kafka/Postgres | supported | not supported | not supported |
-| `-fn` | `sol local invoke` | CronJob | not supported | not supported |
+| `-fn` | `sol local invoke` | CronJob | not supported | target deploy/invoke/rollback/destroy; fake + live |
 | Queue/trigger | explicit Kafka/Postgres only | Kafka/Postgres | none | none |
 | Secrets/dependencies | injected locally | supported | env/identity proven; `uses:` refused | env/identity proven; `uses:` refused |
-| Identity | local explicit | supported | Google workload token; explicit callers | Google app token; explicit callers |
+| Identity | local explicit | supported | Google workload token; explicit callers | `-svc`: Google app token, explicit callers; `-fn`: execution role only, no incoming callers |
 | Observability | app logs/metrics | supported | provider/app logs; no Sol acceptance | provider/CloudWatch logs; no Sol acceptance |
-| Target deploy | n/a | supported | live | live |
-| Target rollback | n/a | release based | live | live |
-| Target destroy/absence | n/a | supported | live | live |
+| Target deploy | n/a | supported | `-svc` live | `-svc` and `-fn` live |
+| Target rollback | n/a | release based | `-svc` live | `-svc` and `-fn` live |
+| Target destroy/absence | n/a | supported | `-svc` live | `-svc` and `-fn` live |
 | Plan projection | n/a | supported | fail closed | fail closed |
-| Post-deploy execution smoke | n/a | readiness/rollout | readiness 200 + unauth 401 | readiness 200 + unauth 401 |
+| Post-deploy execution smoke | n/a | readiness/rollout | readiness 200 + unauth 401 | `-svc`: readiness 200 + unauth 401; `-fn`: invoke through the live alias returns `{"status":"ok"}` |
 
-The serverless commands are experimental provider commands. They are not yet
-target-scoped `sol deploy` execution, and no serverless production claim is made.
+No serverless production claim is made. The `-fn` row covers the run-once
+contract only; no scheduler or event trigger is created by any serverless target.
 
 ## AWS Lambda HTTP
 
@@ -65,46 +69,60 @@ tags, deletes the URL/function, and verifies absence by listing functions.
 The web-adapter deployment preserves the HTTP application contract; the Lambda
 event model and AWS-native workload identity are not yet part of Sol's contract.
 
-## GCP Cloud Run HTTP
+## AWS Lambda `-fn`
 
-The Cloud Run lifecycle uses the same application container and a Google OIDC
-application-audience token; its deploy/verify/rollback/destroy behavior is
-covered by the provider CLI and prior bounded live evidence. It uses the same application container and a
-Google OIDC application-audience token. Cloud Run is also a standalone
-experimental command, not yet a target execution backend.
-
-## Not implemented
-
-- serverless `-worker` or queue delivery;
-- serverless `-fn` or cron/event triggers;
-- target-scoped `execution` selection;
-- AWS-native workload identity;
-- managed ECR/IAM/secret provisioning for the Lambda path;
-- production-profile qualification.
-
-## Target execution selection (foundation)
-
-Targets can declare execution explicitly:
+The `-fn` container uses the framework's `Fn.Lambda` runtime contract: it serves
+the Lambda runtime API and answers each invocation with `{"status":"ok"}` on a
+successful run. The image must be an immutable ECR digest and the execution role
+must already exist. Sol creates neither the ECR repository nor the role.
 
 ```yaml
 production:
   targets:
     aws/us-east-1:
       execution: serverless
+      aws:
+        profile: production
+        lambda_role_arn: arn:aws:iam::123456789012:role/sol-lambda-fn-exec
 ```
 
-`execution: kubernetes` is the default. The value is validated and merged with
-environment/target overlays. `sol deploy` currently **fails closed** when a target
-selects `serverless`: it refuses rather than planning or mutating Kubernetes for a
-target whose execution backend is not wired yet.
+```text
+sol deploy production/aws/us-east-1 \
+  --image-ref checkout_fn=<ecr-repo>@sha256:<digest>
+```
 
-This is a schema/refusal foundation, not target-scoped serverless deployment.
-The provider lifecycle commands remain the supported experimental path until the
-`sol deploy` dispatch is implemented.
+There is no `serverless_callers` requirement for a `-fn`: it has no incoming HTTP
+request. The execution role authorizes AWS resource access; triggers, schedules,
+and incoming application identity remain separate contracts.
 
-## Target-scoped AWS Lambda HTTP (stacked implementation)
+The lifecycle is:
 
-An AWS target can now select `execution: serverless` and deploy one HTTP `-svc` with an
+- **deploy** creates or updates the function, publishes an immutable version,
+  moves the `live` alias, invokes `{}` through `live`, and requires the response
+  body `{"status":"ok"}`. A provider `FunctionError`, a non-200 `StatusCode`, or
+  a different body fails the deploy. The ownership record carries `"kind":"fn"`.
+- **rollback** checks ownership, moves `live` to the requested version, invokes
+  again, and rewrites the record from the observed version.
+- **destroy** reads the record, requires kind `fn`, checks the target region,
+  service, provider function name, and ownership tags, deletes the function, and
+  verifies absence by listing functions. Sol does not delete the ECR repository
+  or execution role; live cleanup treats those as operator-owned experiment
+  resources.
+
+No Function URL is created, and no HTTP authentication smoke is claimed. The
+record deliberately has no `url` field, so it cannot be mistaken for the HTTP
+lifecycle.
+
+## GCP Cloud Run HTTP
+
+The Cloud Run lifecycle uses the same application container and a Google OIDC
+application-audience token; its deploy/verify/rollback/destroy behavior is
+covered by the provider CLI and prior bounded live evidence. Cloud Run is also a
+standalone experimental command and a target execution backend for `-svc`.
+
+## Target-scoped AWS Lambda HTTP
+
+An AWS target can select `execution: serverless` and deploy one HTTP `-svc` with an
 immutable `--image-ref`:
 
 ```yaml
@@ -119,13 +137,15 @@ production:
 ```
 
 The target field names are explicit; no ECR repository, role, or IAM policy is created.
-`serverless_callers` is required: an empty application-authentication policy is refused.
-`sol deploy production/aws/us-east-1 --image-ref checkout_svc=...@sha256:...` uses the
-verified Lambda lifecycle and writes `serverless-release.json` in the deploy run log.
+`serverless_callers` is required for a `-svc`: an empty application-authentication
+policy is refused. `sol deploy production/aws/us-east-1 --image-ref
+checkout_svc=...@sha256:...` uses the verified Lambda lifecycle and writes
+`serverless-release.json` in the deploy run log with `"kind":"svc"`.
 
-Current limits: exactly one HTTP `-svc`, no service dependencies, apply only (no
-dry-run/emit), and the application token remains the Google demonstration identity
-rather than AWS-native incoming identity.
+Current limits: exactly one `-svc` or `-fn` per target deploy, no mixed-primitive
+deploy, no service dependencies, apply only (no dry-run/emit), and the application
+token for `-svc` remains the Google demonstration identity rather than AWS-native
+incoming identity.
 
 ## Target-scoped GCP Cloud Run HTTP
 
@@ -145,21 +165,23 @@ production:
 verified Cloud Run lifecycle. `gcp.project_id` and the target region supply the provider
 coordinates; Cloud Run creates no execution role. The same limits apply: one
 dependency-free HTTP `-svc`, apply only, and application authentication remains explicit.
+A GCP serverless target with a `-fn` fails closed: Cloud Run Jobs is not implemented
+and is not assumed to have AWS Lambda parity.
 
 ## Target-scoped destroy
 
 Serverless targets destroy through the same target command:
 
 ```text
-sol destroy <target> --apply --service checkout_svc --record <serverless-release.json>
+sol destroy <target> --apply --service checkout_fn --record <serverless-release.json>
 ```
 
 `--apply`, `--service`, and the ownership record are required. The record must match the
-target's provider, region/project, and service. Inventory failure or an ambiguous provider
-answer fails closed; absence is positively checked. `--plan` is refused for serverless
-targets rather than pretending a read-only destroy plan is authoritative. Rollback remains
-a standalone provider lifecycle command until the target release model can identify a
-previous serverless release.
+target's provider, region/project, service, and provider function name. For AWS the
+record's `kind` selects the HTTP or run-once lifecycle; a missing or unknown kind fails
+closed. Inventory failure or an ambiguous provider answer fails closed; absence is
+positively checked. `--plan` is refused for serverless targets rather than pretending a
+read-only destroy plan is authoritative.
 
 ## Target-scoped rollback
 
@@ -174,9 +196,11 @@ sol rollback --target <target> --record <serverless-release.json> \
   --service checkout_svc --to-revision <cloud-run-revision> --token-file <token>
 ```
 
-The target execution must be serverless, the record must exist, and the provider must
-match. The post-rollback check performs the same readiness and authorized/unauthorized
-request checks as deploy. Kubernetes rollback continues to require `RELEASE_ID`.
+For AWS the record's `kind` selects the rollback lifecycle and the record must match the
+target, service, and provider function name before the alias moves. The post-rollback
+check performs the same execution smoke as deploy: readiness plus
+authorized/unauthorized requests for `-svc`, or an invoke through `live` returning
+`{"status":"ok"}` for `-fn`. Kubernetes rollback continues to require `RELEASE_ID`.
 
 ## Explicitly unsupported serverless combinations
 
@@ -186,25 +210,34 @@ These are deliberate exclusions, not missing dispatch:
   delivery with explicit acknowledgement and consumer-group semantics. Neither provider
   offers those semantics directly; SQS/Pub/Sub are not a drop-in substitute. No portable
   queue abstraction is introduced to make the matrix symmetrical.
-- **`-fn` on Cloud Run or Lambda:** `-fn` is run-once/scheduled. Provider events and
-  scheduler triggers are a separate contract and are not inferred from the execution
-  backend.
-- **Incoming AWS-native identity:** the Lambda execution role authorizes AWS resource
-  access; incoming application authentication remains the explicit Sol workload-token
-  contract. The Google-token experiment does not establish AWS-native incoming identity.
+- **`-fn` on Cloud Run:** a GCP serverless target refuses `-fn`. Cloud Run Jobs is a
+  different execution model and is not assumed to match the verified AWS Lambda
+  function lifecycle; it requires its own audit and implementation.
+- **Triggers and schedules for serverless `-fn`:** Sol deploys the run-once function and
+  verifies a direct invocation. Event sources, schedules, and their identity are a
+  separate contract and are not inferred from the execution backend.
+- **Incoming AWS-native identity for `-svc`:** the Lambda execution role authorizes AWS
+  resource access; incoming application authentication remains the explicit Sol
+  workload-token contract. The Google-token experiment does not establish AWS-native
+  incoming identity.
 - **Serverless dependencies:** Kafka/Postgres bindings are not projected into serverless
   targets yet; a service declaring `uses:` is refused by target dispatch.
 - **Serverless observability qualification:** application/provider logs exist, but no
   Sol-managed log/metric/trace acceptance is implemented.
+- **Managed ECR/IAM/role provisioning:** the adapters consume an existing repository and
+  execution role; they do not create or delete account resources outside the function.
 
-A provider target that requests one of these combinations should fail closed rather than
+A provider target that requests one of these combinations fails closed rather than
 silently changing the primitive's semantics.
 
 ## Deploy execution postcondition
 
-A successful serverless target deploy is not reported until the deployed service answers
-its public readiness probe with `200` and an unauthenticated protected request with `401`.
-Authorization with a caller token remains an explicit post-deploy verification step.
+A successful serverless HTTP target deploy is not reported until the deployed service
+answers its public readiness probe with `200` and an unauthenticated protected request
+with `401`. A successful serverless `-fn` target deploy is not reported until an
+invocation through the `live` alias returns `{"status":"ok"}` with no `FunctionError`.
+Authorization with a caller token for `-svc` remains an explicit post-deploy
+verification step.
 
 `sol plan` currently refuses `execution: serverless` targets rather than projecting them as
 Kubernetes. Use `sol deploy` (serverless dispatch), `sol rollback`, and `sol destroy` for

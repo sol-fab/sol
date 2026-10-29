@@ -35,7 +35,7 @@ elif [[ "$args" == *"lambda create-function"* ]]; then touch "$FAKE_AWS_STATE/fu
 elif [[ "$args" == *"lambda update-function-code"* || "$args" == *"lambda update-function-configuration"* ]]; then printf '{}\n'
 elif [[ "$args" == *"lambda wait function-updated"* ]]; then printf '{}\n'
 elif [[ "$args" == *"lambda publish-version"* ]]; then v=$(cat "$FAKE_AWS_STATE/version" 2>/dev/null || echo 0); v=$((v+1)); echo "$v" > "$FAKE_AWS_STATE/version"; printf '{"Version":"%s"}\n' "$v"
-elif [[ "$args" == *"lambda get-alias"* ]]; then if [[ -f "$FAKE_AWS_STATE/alias" ]]; then printf '{"FunctionVersion":"%s"}\n' "$(cat "$FAKE_AWS_STATE/alias")"; else exit 254; fi
+elif [[ "$args" == *"lambda get-alias"* ]]; then if [[ -f "$FAKE_AWS_STATE/alias" ]]; then printf '{"FunctionVersion":"%s"}\n' "$(cat "$FAKE_AWS_STATE/alias")"; else printf 'ResourceNotFoundException: Alias not found.\n' >&2; exit 254; fi
 elif [[ "$args" == *"lambda create-alias"* || "$args" == *"lambda update-alias"* ]]; then
   for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "--function-version" ]]; then j=$((i+1)); echo "${!j}" > "$FAKE_AWS_STATE/alias"; fi; done
   printf '{}\n'
@@ -58,6 +58,7 @@ unset XDG_DATA_HOME
 export PATH="$work/bin:$PATH" FAKE_AWS_LOG="$work/aws.log" FAKE_AWS_STATE="$work/state" HOME="$work/home"
 cd "$work/ws"
 "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref checkout_svc=repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "$work/deploy"
+grep -q '"kind":"svc"' "$work/deploy"
 grep -q '"function_name":"checkout-svc"' "$work/deploy"
 "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref checkout_svc=repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "$work/deploy2"
 grep -q '"version":"2"' "$work/deploy2"

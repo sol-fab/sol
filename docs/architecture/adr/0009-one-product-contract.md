@@ -83,9 +83,12 @@ HTTP server and no Kafka consumer-group lifecycle. It exposes exit codes
 and traces. The same contract applies to OCaml and TypeScript, on local, AWS and
 GCP.
 
-`Fn.Lambda` is framework-only/experimental. It is not a Sol deployment mode and
-is not part of the contract. If a serverless deployment mode is ever added, it is
-a separate, explicitly provider-specific mode, not the meaning of `-fn`.
+A target may select `execution: serverless`. On an AWS serverless target, `-fn`
+is mapped to a provider-native run-once Lambda function using the `Fn.Lambda`
+runtime contract; it remains a run-once primitive, and Sol creates no trigger,
+schedule, or HTTP endpoint for it. The mapping is provider-specific and
+experimental, not part of the production profile. GCP `-fn` has no accepted
+serverless mapping yet.
 
 ### 5. Observability access
 
