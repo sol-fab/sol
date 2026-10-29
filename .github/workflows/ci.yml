@@ -99,10 +99,12 @@ jobs:
       # Only an uncertain classification takes the full source path.
       - name: Install system dependencies
         if: needs.classify.outputs.kind != 'docs-only'
+        timeout-minutes: 5
         run: sudo apt-get install -y librdkafka-dev libpq-dev libpq5
 
       - name: Set up OCaml
         if: needs.classify.outputs.kind != 'docs-only'
+        timeout-minutes: 15
         uses: ocaml/setup-ocaml@v3
         with:
           # Quoted per the action's guidance. The cache prefix is bumped because a
@@ -130,6 +132,7 @@ jobs:
 
       - name: Pin extracted opam packages
         if: needs.classify.outputs.kind != 'docs-only'
+        timeout-minutes: 20
         uses: ./.github/actions/pin-opam-packages
 
       - name: Install OCaml dependencies
