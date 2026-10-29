@@ -114,6 +114,11 @@ No positional: the command acts on the workspace, and a target or scope is a nar
 | `sol secret delete` | — | — | documented | Delete an unused Sol-owned unit secret |
 | `sol secret set` | — | `--from-file=PATH`, `--from-stdin` | documented | Create or update a Sol-owned unit secret |
 | `sol secret status` | — | — | documented | Show secret owners and delivery readiness for a |
+| `sol task aws deploy` | — | `--concurrency=N`, `--dlq-retention=SECONDS`, `--image=IMAGE`, `--max-attempts=N`, `--profile=PROFILE`, `--record=PATH`, `--region=REGION`, `--role=ARN`, `--service=SERVICE`, `--visibility-timeout=SECONDS` | documented | Deploy an SQS queue, dead-letter queue, Lambda |
+| `sol task aws destroy` | — | `--apply`, `--profile=PROFILE`, `--record=PATH`, `--region=REGION`, `--service=SERVICE` | documented | Delete the task mapping, function, source |
+| `sol task aws enqueue` | — | `--idempotency-key=KEY`, `--kind=KIND`, `--payload=JSON`, `--payload-file=FILE`, `--profile=PROFILE`, `--record=PATH`, `--region=REGION`, `--service=SERVICE` | documented | Send one task envelope to the deployed SQS |
+| `sol task aws rollback` | — | `--profile=PROFILE`, `--record=PATH`, `--region=REGION`, `--service=SERVICE`, `--to-version=VERSION` | documented | Move the Lambda task alias to a prior version |
+| `sol task aws verify` | — | `--profile=PROFILE`, `--record=PATH`, `--region=REGION`, `--service=SERVICE` | documented | Verify the task queue, mapping, and Lambda alias |
 <!-- END GENERATED: workspace -->
 
 ## Local commands

@@ -49,6 +49,26 @@ val describe
 val alias_version : scope -> function_name:string -> (string option, failure) result
 
 val put_alias : scope -> function_name:string -> version:string -> (unit, failure) result
+
+(** Create or update a Lambda function from an immutable image, wait for the
+    update, and leave the function ready to publish. The caller has already
+    established ownership for an existing function. [timeout_s] and [memory_mb]
+    are updated only when supplied; creation uses 30 seconds and 512 MB by
+    default. *)
+val ensure_function
+  :  scope
+  -> function_name:string
+  -> image:string
+  -> role_arn:string
+  -> environment:(string * string) list
+  -> tags:(string * string) list
+  -> ?timeout_s:int
+  -> ?memory_mb:int
+  -> existing:bool
+  -> unit
+  -> (unit, failure) result
+
+val publish_version : scope -> function_name:string -> (string, failure) result
 val trim_url : string -> string
 val record_kind : path:string -> (string option, string) result
 val read_json : path:string -> (Yojson.Safe.t, string) result
