@@ -1,0 +1,8 @@
+{
+  "Messages": [
+    {
+      "MessageId": "63c56bc3-70a4-46d5-ac48-7a67f34ee758",
+      "Body": "{\"task_id\":\"candbatch-fail-1\",\"kind\":\"fail\",\"payload\":\"fail\",\"idempotency_key\":\"candbatch-fail-1\"}"
+    }
+  ]
+}

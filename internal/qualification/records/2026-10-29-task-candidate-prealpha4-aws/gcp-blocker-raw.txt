@@ -1,0 +1,6 @@
+error: provider failure: exited with code 1: ERROR: (gcloud.iam.service-accounts.describe) PERMISSION_DENIED: Permission 'iam.serviceAccounts.get' denied on resource (or it may not exist). This command is authenticated as <gcp-account> which is the active account specified by the [core/account] property.
+- '@type': type.googleapis.com/google.rpc.ErrorInfo
+  domain: iam.googleapis.com
+  metadata:
+    permission: iam.serviceAccounts.get
+  reason: IAM_PERMISSION_DENIED

@@ -1,0 +1,7 @@
+[
+    "checkout-task",
+    "$LATEST",
+    25,
+    512,
+    "arn:aws:iam::<aws-account>:role/sol-task-live-exec"
+]

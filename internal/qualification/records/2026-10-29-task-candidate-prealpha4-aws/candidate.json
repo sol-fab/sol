@@ -1,0 +1,7 @@
+{
+  "bundle": "sol-v0.1.0-prealpha.4-linux-x86_64.tar.gz",
+  "bundle_sha256": "12a73da823bfef77f50f7e452bf6a4c48121887d32aa2c81ebaa80db9054ad87",
+  "revision": "70b191f49951b2e8d550bab9ea1b8ce75ab362b7",
+  "runner_image": "ghcr.io/sol-fab/sol-migration-runner@sha256:61be1fb844c7f216d5807a8f31dc4085b94be2b3b166e7b7d1cea2445d0f8c1c",
+  "version": "v0.1.0-prealpha.4"
+}

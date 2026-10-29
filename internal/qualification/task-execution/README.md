@@ -10,8 +10,8 @@ observed for this capability.
 | Surface | Implementation | Automated evidence | Live evidence |
 |---|---|---|---|
 | Local Postgres | `sol-task.local` + `sol local task enqueue` | envelope/local unit tests; `sol-task local Postgres integration` (Ack, Retry→terminal, duplicate delivery + idempotent effect, idempotent enqueue); manual CLI enqueue | disposable Docker Postgres only |
-| AWS SQS + Lambda | `sol-task.lambda` + `sol task aws` | envelope/Lambda unit tests; fake-provider lifecycle (deploy, enqueue, verify, rollback, destroy, partial-create cleanup); live mixed-batch partial-delivery exercise | **mechanism-level records**: [`2026-10-29-task-aws-live.md`](../records/2026-10-29-task-aws-live.md) and [`2026-10-29-task-aws-partial-batch.md`](../records/2026-10-29-task-aws-partial-batch.md) |
-| GCP Pub/Sub + Cloud Run | `sol-task.pubsub` + `sol task gcp` | envelope/PubSub unit tests; fake-provider lifecycle (deploy, enqueue, verify, rollback, destroy, partial-create cleanup) | **mechanism-level record**: [`2026-10-29-task-gcp-live.md`](../records/2026-10-29-task-gcp-live.md) |
+| AWS SQS + Lambda | `sol-task.lambda` + `sol task aws` | envelope/Lambda unit tests; fake-provider lifecycle; live mixed-batch exercise; **candidate v0.1.0-prealpha.4 completed** | **candidate record**: [`2026-10-29-task-candidate-prealpha4-aws.md`](../records/2026-10-29-task-candidate-prealpha4-aws.md); mechanism records: [`2026-10-29-task-aws-live.md`](../records/2026-10-29-task-aws-live.md), [`2026-10-29-task-aws-partial-batch.md`](../records/2026-10-29-task-aws-partial-batch.md) |
+| GCP Pub/Sub + Cloud Run | `sol-task.pubsub` + `sol task gcp` | envelope/PubSub unit tests; fake-provider lifecycle | **mechanism-level record**: [`2026-10-29-task-gcp-live.md`](../records/2026-10-29-task-gcp-live.md); **candidate blocked by IAM** (`iam.serviceAccounts.get`) |
 | Target-scoped `sol deploy` | **excluded by design**; use `sol task aws` or `sol task gcp` | standalone provider lifecycle tests; task guide/boundary decision | provider lifecycle records above |
 | Observability acceptance | logs only (task_id/kind/outcome) | unit tests assert mapping | provider logs inspected; no Sol-managed metrics/traces claim |
 
@@ -285,8 +285,10 @@ grants and verifies it. The live run observed repeated redelivery without it.
 - No exactly-once external side effect, no application-selected immediate
   dead-letter, and no handler-attempt number.
 - No production-profile, SLO, cost, or security-review claim.
-- No released-candidate qualification. AWS and GCP each have a bounded live
-  mechanism-level record, not a release verdict.
+- AWS candidate `v0.1.0-prealpha.4` is qualified for the lifecycle and mixed-batch
+  behavior in its candidate record. GCP is **not** candidate-qualified: the
+  bounded attempt is blocked by `iam.serviceAccounts.get` on the qualification
+  identity, and no GCP task resources were left running.
 - Target-scoped `sol deploy` for tasks is explicitly out of scope. The supported
   workflow is the standalone `sol task aws`/`sol task gcp` lifecycle; `-worker`
   is Kafka and `sol-task` is a library, so target-scoped task dispatch would be
