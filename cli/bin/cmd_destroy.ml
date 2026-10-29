@@ -13,19 +13,104 @@ open Result.Syntax
    confirmation. Destroy deliberately does not borrow `sol deploy`'s apply-by-default
    posture: deploy is convergent and idempotent, destroy is destructive and not
    recoverable if mistaken, so the destructive confirmation stays explicit. *)
-let run ~target ~var_file ~vars ~action ~accept_unreleased () =
+let serverless_destroy ~target_cfg ~action ~record ~service =
+  let* () =
+    match action with
+    | Cmd_cloud_tf.Plan ->
+      Error
+        (Sol_cli_exit.error
+           "serverless destroy requires --apply; plan does not mutate and the ownership \
+            record is the deletion authority")
+    | Cmd_cloud_tf.Apply -> Ok ()
+  in
+  let* service =
+    Option.to_result
+      ~none:(Sol_cli_exit.error "serverless destroy requires --service")
+      service
+  in
+  let* record =
+    Option.to_result
+      ~none:(Sol_cli_exit.error "serverless destroy requires --record")
+      record
+  in
+  match target_cfg.Sol_cli_config.provider with
+  | Sol_cli_provider.Aws ->
+    let profile = Sol_cli_config.provider_field target_cfg "profile" in
+    let request =
+      { Sol_cli_aws_lambda.profile
+      ; region = target_cfg.region
+      ; service
+      ; function_name = ""
+      ; image = ""
+      ; role_arn = ""
+      ; identity = { unit = ""; callers = []; issuer = ""; jwks_uri = "" }
+      ; record = None
+      ; run =
+          (fun argv ->
+            Sol_cli_serverless_runner.run argv
+            |> Result.map (fun (o : Sol_cli_serverless_runner.output) ->
+              ({ Sol_cli_aws_lambda.stdout = o.stdout; stderr = o.stderr }
+               : Sol_cli_aws_lambda.output)))
+      ; http =
+          (fun ~url ~token ->
+            Sol_cli_serverless_runner.http ~url ~token
+            |> Result.map (fun (status, body) -> status, body))
+      }
+    in
+    Sol_cli_aws_lambda.destroy request ~profile ~region:target_cfg.region ~service ~record
+    |> Result.map_error (fun failure ->
+      Sol_cli_exit.error (Sol_cli_aws_lambda.failure_to_string failure))
+  | Sol_cli_provider.Gcp ->
+    let* project =
+      match Sol_cli_config.provider_field target_cfg "project_id" with
+      | Some project when String.trim project <> "" -> Ok project
+      | _ -> Error (Sol_cli_exit.error "serverless GCP destroy requires gcp.project_id")
+    in
+    let runner =
+      { Sol_cli_cloud_run.run =
+          (fun argv ->
+            Sol_cli_serverless_runner.run argv
+            |> Result.map (fun (o : Sol_cli_serverless_runner.output) ->
+              ({ Sol_cli_cloud_run.stdout = o.stdout; stderr = o.stderr }
+               : Sol_cli_cloud_run.output)))
+      ; http =
+          (fun ~url ~token ->
+            Sol_cli_serverless_runner.http ~url ~token
+            |> Result.map (fun (status, body) -> status, body))
+      }
+    in
+    Sol_cli_cloud_run.destroy runner ~project ~region:target_cfg.region ~service ~record
+    |> Result.map_error (fun failure ->
+      Sol_cli_exit.error (Sol_cli_cloud_run.failure_to_string failure))
+  | Sol_cli_provider.Byo ->
+    Error (Sol_cli_exit.error "serverless destroy supports AWS and GCP targets only")
+;;
+
+let run ~target ~var_file ~vars ~action ~accept_unreleased ~record ~service () =
   let* resolved_config =
     Sol_cli_config.load_for_target ~target
     |> Sol_cli_exit.of_error Sol_cli_config.error_to_string
   in
-  Cmd_cloud_tf.cloud_destroy
-    ~target
-    ~resolved_config
-    ~var_file
-    ~vars
-    ~action
-    ~accept_unreleased
-    ()
+  match Sol_cli_config.execution_of_target resolved_config.target with
+  | Sol_cli_config.Serverless ->
+    serverless_destroy ~target_cfg:resolved_config.target ~action ~record ~service
+  | Sol_cli_config.Kubernetes ->
+    let* () =
+      if record = None && service = None
+      then Ok ()
+      else
+        Error
+          (Sol_cli_exit.error
+             "--record/--service are only valid for execution: serverless targets")
+    in
+    Cmd_cloud_tf.cloud_destroy
+      ~target
+      ~resolved_config
+      ~var_file
+      ~vars
+      ~action
+      ~accept_unreleased
+      ()
 ;;
 
 let doc =
@@ -94,15 +179,35 @@ let man =
   ]
 ;;
 
+let serverless_record_arg =
+  Arg.(
+    value
+    & opt (some Sol_cli_args.text) None
+    & info
+        [ "record" ]
+        ~docv:"PATH"
+        ~doc:"Serverless ownership record written by target deploy")
+;;
+
+let serverless_service_arg =
+  Arg.(
+    value
+    & opt (some Sol_cli_args.text) None
+    & info [ "service" ] ~docv:"SERVICE" ~doc:"Serverless Sol service name to destroy")
+;;
+
 let cmd =
   Cmd.v
     (Cmd.info "destroy" ~doc ~man)
     Term.(
-      const (fun target var_file vars action accept_unreleased ->
-        Sol_cli_exit.exit_on (run ~target ~var_file ~vars ~action ~accept_unreleased ()))
+      const (fun target var_file vars action accept_unreleased record service ->
+        Sol_cli_exit.exit_on
+          (run ~target ~var_file ~vars ~action ~accept_unreleased ~record ~service ()))
       $ Cmd_cloud_tf.target_arg
       $ Cmd_cloud_tf.var_file_arg
       $ Cmd_cloud_tf.var_arg
       $ Cmd_cloud_tf.action_term
-      $ Cmd_cloud_tf.accept_unreleased_flag)
+      $ Cmd_cloud_tf.accept_unreleased_flag
+      $ serverless_record_arg
+      $ serverless_service_arg)
 ;;

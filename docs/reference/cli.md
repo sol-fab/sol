@@ -64,7 +64,7 @@ restores the whole recorded release boundary.
 | command | positional | flags | exit | purpose |
 |---|---|---|---|---|
 | `sol deploy` | TARGET | `--accept-unresolved`, `--await-delegation=SECONDS`, `--confirm-ecr-removal`, `--confirm-group-change`, `--dry-run`, `--emit-plan-to=FILE`, `--emit-to=DIR`, `--image-ref=[SERVICE=]REPO@sha256:DIGEST`, `--image-tag=TAG`, `--keep-releases=N`, `--loki-push-url=URL`, `--registry=URL` | documented | Reconcile a target's infrastructure, authorization and |
-| `sol destroy` | TARGET | `--accept-unreleased`, `--apply`, `--plan`, `--var=KEY=VALUE`, `--var-file=PATH` | documented | Reconcile a target toward empty: destroy its Sol-owned |
+| `sol destroy` | TARGET | `--accept-unreleased`, `--apply`, `--plan`, `--record=PATH`, `--service=SERVICE`, `--var=KEY=VALUE`, `--var-file=PATH` | documented | Reconcile a target toward empty: destroy its Sol-owned |
 | `sol grants apply` | TARGET | `--var=KEY=VALUE`, `--var-file=PATH` | documented | Reconcile the target-wide workload authorization: |
 | `sol grants plan` | TARGET | `--var=KEY=VALUE`, `--var-file=PATH` | documented | Plan the target-wide workload authorization |
 | `sol migrate apply` | TARGET | `--dir=DIR`, `--dry-run`, `--table=TABLE` | documented | Apply all pending migrations (default subcommand) |
@@ -110,7 +110,7 @@ No positional: the command acts on the workspace, and a target or scope is a nar
 | `sol new svc` | DOMAIN/NAME | `--language=LANGUAGE` | documented | Add an HTTP service to the current workspace |
 | `sol new worker` | DOMAIN/NAME | `--language=LANGUAGE` | documented | Add a Kafka consumer worker to the current workspace |
 | `sol new workspace` | NAME | — | documented | Scaffold a new Sol workspace with a working |
-| `sol rollback` | RELEASE_ID | `--target=ENV/PROVIDER/REGION` | documented | Restore a recorded release boundary. Refuses on a |
+| `sol rollback` | RELEASE_ID | `--record=PATH`, `--service=SERVICE`, `--target=ENV/PROVIDER/REGION`, `--to-revision=REVISION`, `--to-version=VERSION`, `--token-file=PATH` | documented | Restore a recorded release boundary. Refuses on a |
 | `sol secret delete` | — | — | documented | Delete an unused Sol-owned unit secret |
 | `sol secret set` | — | `--from-file=PATH`, `--from-stdin` | documented | Create or update a Sol-owned unit secret |
 | `sol secret status` | — | — | documented | Show secret owners and delivery readiness for a |

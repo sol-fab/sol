@@ -24,6 +24,77 @@ let print_header ~workspace ~sha ?mode_line () =
   Printf.printf "\n%!"
 ;;
 
+let run_serverless
+      ~(resolved_config : Sol_cli_config.t)
+      ~(target_cfg : Sol_cli_config.target)
+      ~(deployed : Sol_cli_deploy_selection.deployed)
+      ~(selection : Sol_cli_deploy_selection.selection)
+      ~run_log
+  =
+  let http_services =
+    List.filter
+      (fun (service : Sol_cli_manifest.service) ->
+         service.primitive = Sol_cli_manifest.Svc)
+      deployed.services
+  in
+  let* service =
+    match http_services with
+    | [ service ] -> Ok service
+    | [] -> Error (Sol_cli_exit.error "serverless deployment requires one HTTP -svc")
+    | _ ->
+      Error
+        (Sol_cli_exit.error
+           "serverless deployment currently supports exactly one HTTP -svc per target")
+  in
+  let* project =
+    match resolved_config.project with
+    | Some project when String.trim project <> "" -> Ok project
+    | _ -> Error (Sol_cli_exit.error "serverless deployment requires sol.yml project")
+  in
+  let* image =
+    match List.assoc_opt service.name selection.Sol_cli_deploy_selection.image_refs with
+    | Some image -> Ok image
+    | None ->
+      Error
+        (Sol_cli_exit.error
+           (Printf.sprintf
+              "serverless deployment requires --image-ref %s=REPO@sha256:DIGEST"
+              service.name))
+  in
+  let record = Filename.concat (Sol_cli_run_log.dir run_log) "serverless-release.json" in
+  match target_cfg.provider with
+  | Sol_cli_provider.Aws ->
+    let* release =
+      Sol_cli_aws_serverless_target.deploy
+        ~target:target_cfg
+        ~config:resolved_config
+        ~project
+        ~service
+        ~image
+        ~record
+      |> Result.map_error Sol_cli_exit.error
+    in
+    print_endline (Yojson.Safe.to_string (Sol_cli_aws_lambda.release_json release));
+    Ok ()
+  | Sol_cli_provider.Gcp ->
+    let* release =
+      Sol_cli_gcp_serverless_target.deploy
+        ~target:target_cfg
+        ~config:resolved_config
+        ~project
+        ~service
+        ~image
+        ~record
+      |> Result.map_error Sol_cli_exit.error
+    in
+    print_endline (Yojson.Safe.to_string (Sol_cli_cloud_run.release_json release));
+    Ok ()
+  | Sol_cli_provider.Byo ->
+    Error
+      (Sol_cli_exit.error
+         "target-scoped serverless dispatch currently supports AWS and GCP only")
+;;
+
 let build_plan
       ?(evaluation = Sol_cli_profile_preflight.All)
       (input : Sol_cli_deploy_selection.Target_plan_input.t)
@@ -1107,19 +1178,6 @@ let run (req : Sol_cli_command_request.deploy_request) =
     |> Sol_cli_exit.of_error Sol_cli_config.error_to_string
   in
   let target_cfg = resolved_config.target in
-  let* () =
-    match Sol_cli_config.execution_of_target target_cfg with
-    | Sol_cli_config.Kubernetes -> Ok ()
-    | Sol_cli_config.Serverless ->
-      Error
-        (Sol_cli_exit.error
-           (Printf.sprintf
-              "target %S selects execution: serverless, but serverless deploy dispatch \
-               is                not implemented yet; refusing to plan or mutate \
-               Kubernetes for this target.                Use the provider lifecycle \
-               commands for diagnostics until the dispatch lands."
-              req.target))
-  in
   let* deployed =
     Sol_cli_deploy_selection.apply_target
       ~target:req.target
@@ -1143,6 +1201,20 @@ let run (req : Sol_cli_command_request.deploy_request) =
     "\nRun: %s\n  log: %s/\n"
     (Sol_cli_run_log.run_id run_log)
     (Sol_cli_run_log.dir run_log);
+  (match Sol_cli_config.execution_of_target target_cfg with
+   | Sol_cli_config.Serverless ->
+     (match req.action with
+      | Sol_cli_command_request.Deploy_apply ->
+        Sol_cli_exit.exit_on
+          (run_serverless ~resolved_config ~target_cfg ~deployed ~selection ~run_log);
+        Stdlib.exit 0
+      | Deploy_dry_run _ | Deploy_emit_to _ ->
+        Sol_cli_exit.exit_on
+          (Error
+             (Sol_cli_exit.error
+                "serverless target dispatch supports apply only; dry-run/emit are not \
+                 implemented for this execution backend")))
+   | Sol_cli_config.Kubernetes -> ());
   let emit_intent =
     match req.action with
     | Sol_cli_command_request.Deploy_dry_run { emit_to } -> emit_to

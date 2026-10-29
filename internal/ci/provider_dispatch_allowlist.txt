@@ -2,3 +2,8 @@
 #   dispatch  occurrences of Sol_cli_provider.Aws|Gcp and Aws_outputs|Gcp_outputs
 #   wildcard  `| _` arms in a match whose other arms are provider constructors
 dispatch cli/lib/workspace/sol_cli_config.ml 1 target_empty's placeholder provider for a partial, not-yet-resolved target record; resolved_target always overwrites it with the provider named by the target path
+dispatch cli/lib/cloud/sol_cli_aws_serverless_target.ml 2 AWS-target dispatch identifies the AWS provider before invoking the AWS Lambda adapter
+dispatch cli/bin/cmd_deploy.ml 2 target serverless dispatch selects the provider-specific adapter for AWS and GCP
+dispatch cli/lib/cloud/sol_cli_gcp_serverless_target.ml 2 GCP-target dispatch identifies the GCP provider before invoking the Cloud Run adapter
+dispatch cli/bin/cmd_destroy.ml 2 serverless destroy selects the provider-specific ownership-record destroy adapter for AWS and GCP
+dispatch cli/bin/cmd_rollback.ml 2 serverless rollback selects the provider-specific target rollback adapter for AWS and GCP

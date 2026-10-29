@@ -7,15 +7,18 @@ part of the `production-single-region/v1` contract.
 
 | Capability | Local | Kubernetes | GCP Cloud Run | AWS Lambda |
 |---|---|---|---|---|
-| `-svc` HTTP | native `sol local run` | supported | `sol cloud-run`; live-proven | `sol lambda`; live-proven |
+| `-svc` HTTP | native `sol local run` | supported | target + standalone; live | target + standalone; live |
 | `-worker` | native run with explicit Kafka/Postgres | supported | not supported | not supported |
 | `-fn` | `sol local invoke` | CronJob | not supported | not supported |
 | Queue/trigger | explicit Kafka/Postgres only | Kafka/Postgres | none | none |
-| Secrets/dependencies | injected locally | supported | env/identity proven | env/identity proven |
-| Identity | local explicit | supported | Google workload token | Google app token; no AWS-native identity |
-| Observability | app logs/metrics | supported | app/provider logs | app/CloudWatch logs |
-| Upgrade/rollback | n/a | supported | revision/traffic | version/alias |
-| Destroy/absence | n/a | supported | live-proven | live-proven |
+| Secrets/dependencies | injected locally | supported | env/identity proven; `uses:` refused | env/identity proven; `uses:` refused |
+| Identity | local explicit | supported | Google workload token; explicit callers | Google app token; explicit callers |
+| Observability | app logs/metrics | supported | provider/app logs; no Sol acceptance | provider/CloudWatch logs; no Sol acceptance |
+| Target deploy | n/a | supported | live | live |
+| Target rollback | n/a | release based | live | live |
+| Target destroy/absence | n/a | supported | live | live |
+| Plan projection | n/a | supported | fail closed | fail closed |
+| Post-deploy execution smoke | n/a | readiness/rollout | readiness 200 + unauth 401 | readiness 200 + unauth 401 |
 
 The serverless commands are experimental provider commands. They are not yet
 target-scoped `sol deploy` execution, and no serverless production claim is made.
@@ -98,3 +101,111 @@ target whose execution backend is not wired yet.
 This is a schema/refusal foundation, not target-scoped serverless deployment.
 The provider lifecycle commands remain the supported experimental path until the
 `sol deploy` dispatch is implemented.
+
+## Target-scoped AWS Lambda HTTP (stacked implementation)
+
+An AWS target can now select `execution: serverless` and deploy one HTTP `-svc` with an
+immutable `--image-ref`:
+
+```yaml
+production:
+  targets:
+    aws/us-east-1:
+      execution: serverless
+      aws:
+        profile: production
+        lambda_role_arn: arn:aws:iam::123456789012:role/sol-lambda-exec
+        serverless_callers: checkout/checkout_svc=1234567890
+```
+
+The target field names are explicit; no ECR repository, role, or IAM policy is created.
+`serverless_callers` is required: an empty application-authentication policy is refused.
+`sol deploy production/aws/us-east-1 --image-ref checkout_svc=...@sha256:...` uses the
+verified Lambda lifecycle and writes `serverless-release.json` in the deploy run log.
+
+Current limits: exactly one HTTP `-svc`, no service dependencies, apply only (no
+dry-run/emit), and the application token remains the Google demonstration identity
+rather than AWS-native incoming identity.
+
+## Target-scoped GCP Cloud Run HTTP
+
+GCP follows the same target contract:
+
+```yaml
+production:
+  targets:
+    gcp/us-west1:
+      execution: serverless
+      gcp:
+        project_id: example-project
+        serverless_callers: checkout/checkout_svc=1234567890
+```
+
+`sol deploy production/gcp/us-west1 --image-ref checkout_svc=...@sha256:...` uses the
+verified Cloud Run lifecycle. `gcp.project_id` and the target region supply the provider
+coordinates; Cloud Run creates no execution role. The same limits apply: one
+dependency-free HTTP `-svc`, apply only, and application authentication remains explicit.
+
+## Target-scoped destroy
+
+Serverless targets destroy through the same target command:
+
+```text
+sol destroy <target> --apply --service checkout_svc --record <serverless-release.json>
+```
+
+`--apply`, `--service`, and the ownership record are required. The record must match the
+target's provider, region/project, and service. Inventory failure or an ambiguous provider
+answer fails closed; absence is positively checked. `--plan` is refused for serverless
+targets rather than pretending a read-only destroy plan is authoritative. Rollback remains
+a standalone provider lifecycle command until the target release model can identify a
+previous serverless release.
+
+## Target-scoped rollback
+
+Serverless rollback uses the target's ownership record and an explicit prior provider
+version/revision:
+
+```text
+sol rollback --target <target> --record <serverless-release.json> \
+  --service checkout_svc --to-version <lambda-version> --token-file <token>
+
+sol rollback --target <target> --record <serverless-release.json> \
+  --service checkout_svc --to-revision <cloud-run-revision> --token-file <token>
+```
+
+The target execution must be serverless, the record must exist, and the provider must
+match. The post-rollback check performs the same readiness and authorized/unauthorized
+request checks as deploy. Kubernetes rollback continues to require `RELEASE_ID`.
+
+## Explicitly unsupported serverless combinations
+
+These are deliberate exclusions, not missing dispatch:
+
+- **`-worker` on Cloud Run or Lambda:** the existing worker contract is Kafka/Postgres
+  delivery with explicit acknowledgement and consumer-group semantics. Neither provider
+  offers those semantics directly; SQS/Pub/Sub are not a drop-in substitute. No portable
+  queue abstraction is introduced to make the matrix symmetrical.
+- **`-fn` on Cloud Run or Lambda:** `-fn` is run-once/scheduled. Provider events and
+  scheduler triggers are a separate contract and are not inferred from the execution
+  backend.
+- **Incoming AWS-native identity:** the Lambda execution role authorizes AWS resource
+  access; incoming application authentication remains the explicit Sol workload-token
+  contract. The Google-token experiment does not establish AWS-native incoming identity.
+- **Serverless dependencies:** Kafka/Postgres bindings are not projected into serverless
+  targets yet; a service declaring `uses:` is refused by target dispatch.
+- **Serverless observability qualification:** application/provider logs exist, but no
+  Sol-managed log/metric/trace acceptance is implemented.
+
+A provider target that requests one of these combinations should fail closed rather than
+silently changing the primitive's semantics.
+
+## Deploy execution postcondition
+
+A successful serverless target deploy is not reported until the deployed service answers
+its public readiness probe with `200` and an unauthenticated protected request with `401`.
+Authorization with a caller token remains an explicit post-deploy verification step.
+
+`sol plan` currently refuses `execution: serverless` targets rather than projecting them as
+Kubernetes. Use `sol deploy` (serverless dispatch), `sol rollback`, and `sol destroy` for
+the target lifecycle; the provider commands remain available for diagnostics.
