@@ -39,8 +39,11 @@ type outcome =
 
 An exception is a `Retry`. Delivery is **at-least-once**; the application must be
 idempotent. Sol does not claim exactly-once external side effects. The local
-integration test exercises one `task_id` across a redelivery with an idempotent
-effect applied once; the live AWS and GCP records observe provider redelivery.
+integration test commits a durable Postgres idempotency effect, crashes the
+handler before acknowledgement, and proves the redelivery sees the committed
+effect and applies it once; the live AWS and GCP records observe provider
+redelivery. The framework does not make an application's external effect and
+acknowledgement atomic; that idempotency write belongs to the handler.
 
 There is deliberately **no application-selected dead-letter outcome** in this
 first contract. Each provider moves an exhausted task to its own dead-letter

@@ -36,6 +36,8 @@ let ddl =
        finished_at  TIMESTAMPTZ)|}
   ; "CREATE UNIQUE INDEX sol_jobs_dedupe_idx ON sol_jobs (workspace, kind, dedupe_key) \
      WHERE dedupe_key IS NOT NULL"
+  ; {|CREATE TABLE sol_task_effects (
+       task_id TEXT PRIMARY KEY)|}
   ]
 ;;
 
@@ -47,7 +49,7 @@ type task =
   | Flaky of string
 
 let seen = ref []
-let effects : (string, unit) Hashtbl.t = Hashtbl.create 8
+let effect_pool_ref : Pg_db.pool option ref = ref None
 
 module T = struct
   type t = task
@@ -81,19 +83,52 @@ module T = struct
        | _ -> Error ("unknown kind " ^ prefix))
   ;;
 
+  let effect_connection () =
+    match !effect_pool_ref with
+    | Some pool -> pool
+    | None -> failwith "test effect pool is not initialized"
+  ;;
+
+  let effect_exists task_id =
+    let pool = effect_connection () in
+    let query =
+      Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.int)
+        (Printf.sprintf "SELECT 1 FROM %s.sol_task_effects WHERE task_id = ?" schema)
+    in
+    match Pg_db.find pool query task_id with
+    | Ok (Some _) -> true
+    | Ok None -> false
+    | Error error -> failwith ("effect lookup: " ^ Pg_error.to_string error)
+  ;;
+
+  let record_effect task_id =
+    let pool = effect_connection () in
+    let insert =
+      Caqti_request.Infix.(Caqti_type.string ->. Caqti_type.unit)
+        (Printf.sprintf
+           "INSERT INTO %s.sol_task_effects (task_id) VALUES (?) ON CONFLICT DO NOTHING"
+           schema)
+    in
+    match Pg_db.exec pool insert task_id with
+    | Ok () -> ()
+    | Error error -> failwith ("effect insert: " ^ Pg_error.to_string error)
+  ;;
+
   let handle ~task_id ?idempotency_key task =
     seen := (task_id, idempotency_key, task) :: !seen;
     match task with
     | Ok _ -> Sol_task.Ack
     | Retry message -> Sol_task.Retry message
     | Flaky _ ->
-      (* The side effect is idempotent on the stable task_id. The first delivery
-         commits it and asks for a retry; the redelivery sees it and acknowledges. *)
-      if Hashtbl.mem effects task_id
+      (* The effect is durable in Postgres, not process memory. Commit it and
+         then crash before acknowledging; the redelivery sees the committed
+         effect and acknowledges. The framework does not make this atomic for the
+         application; the handler owns the idempotency write. *)
+      if effect_exists task_id
       then Sol_task.Ack
       else (
-        Hashtbl.replace effects task_id ();
-        Sol_task.Retry "first delivery")
+        record_effect task_id;
+        failwith "simulated crash after committing the durable effect")
   ;;
 end
 
@@ -144,6 +179,21 @@ let () =
   | Ok pool ->
     List.iter (exec_sql pool) setup;
     List.iter (exec_sql pool) ddl;
+    (* A second pool keeps the handler's idempotency write off the pool that the
+       job runtime uses for its lease/claim operations. *)
+    let effect_pool =
+      match
+        Pg_db.create_pool
+          ~url:postgres_url
+          ~pool_size:1
+          ~sw
+          ~stdenv:(env :> Caqti_eio.stdenv)
+          ()
+      with
+      | Error error -> failwith (Pg_error.to_string error)
+      | Ok pool -> pool
+    in
+    effect_pool_ref := Some effect_pool;
     (match Pg_db.transaction pool (fun tx -> Runtime.enqueue tx (Ok "one")) with
      | Ok () -> ()
      | Error error -> failwith (Pg_error.to_string error));
@@ -185,9 +235,18 @@ let () =
             status
             attempts
             (Option.value error ~default:"")));
-    (match Hashtbl.length effects with
-     | 1 -> ()
-     | count -> failwith (Printf.sprintf "expected one idempotent effect, got %d" count));
+    (match
+       Pg_db.find
+         effect_pool
+         (Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int)
+            (Printf.sprintf "SELECT count(*)::int FROM %s.sol_task_effects" schema))
+         ()
+     with
+     | Ok (Some 1) -> ()
+     | Ok (Some count) ->
+       failwith (Printf.sprintf "expected one idempotent effect, got %d" count)
+     | Ok None -> failwith "no effect count row"
+     | Error error -> failwith ("effect count: " ^ Pg_error.to_string error));
     let flaky_attempts =
       !seen
       |> List.filter_map (fun (task_id, _, task) ->
