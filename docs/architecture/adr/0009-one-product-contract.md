@@ -1,6 +1,7 @@
 # ADR 0009: one product contract across clouds and languages
 
-- **Status:** Accepted
+- **Status:** Accepted; serverless and provider-task scope superseded by
+  [ADR 0011](0011-production-serverless-and-tasks.md)
 - **Date:** 2026-10-23
 - **Source:** operator decision (pre-alpha product contract review)
 - **Related:** DEC-022 (language parity), DEC-025 (framework distribution),

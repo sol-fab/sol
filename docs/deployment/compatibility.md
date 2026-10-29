@@ -2,8 +2,11 @@
 
 This is the exact supported set for the one product contract described in
 [ADR 0009](../architecture/adr/0009-one-product-contract.md). It covers local
-development and the AWS and GCP production targets, in OCaml and TypeScript, for
-`-svc`, `-worker` and `-fn`.
+development, the AWS and GCP Kubernetes production targets, and the AWS and GCP
+target-scoped serverless execution modes, in OCaml and TypeScript, for `-svc`,
+`-worker`, `-fn`, and the durable-task library. ADR 0011 places serverless and
+the provider task lifecycles inside the v0.1 production scope; their evidence
+gates are recorded below.
 
 **The contract applies to every combination.** A target that selects the profile
 and resolves outside the set below fails preflight before anything is mutated;
@@ -16,6 +19,71 @@ That refusal is an **evidence gate, not a support tier**: the README's
 which cells are proven, partial or missing. A provider or language is admitted
 when its row becomes production evidence; the contract does not change when that
 happens.
+
+## v0.1 contract freeze
+
+Status: frozen for v0.1 on 2026-10-29 under ADR 0009 and
+[ADR 0011](../architecture/adr/0011-production-serverless-and-tasks.md). The
+profile identity and the supported set are the release boundary; changing
+either requires a new profile version rather than an implicit expansion.
+
+The v0.1 **production claim** is local development plus the AWS and GCP
+production profile, in OCaml and TypeScript, for `-svc`, `-worker`, and `-fn`,
+plus:
+
+- AWS and GCP target `execution: serverless` for `-svc` and `-fn`;
+- durable tasks through `sol-task.local` hosted by a `-worker`, and through the
+  standalone `sol task aws` and `sol task gcp` lifecycles.
+
+`-worker` remains the Kafka/Postgres primitive. There is no serverless
+`-worker` mapping: SQS/Pub/Sub are task delivery mechanisms, not Kafka
+substitutes. Target-scoped `sol deploy` still creates no task queues or
+triggers; task resources remain owned by the standalone task lifecycle.
+
+The following are **not implied** by the production scope; they are explicit
+v0.1 limitations, not deferred primitive support:
+
+- serverless triggers, schedules, event sources, and `uses:` dependencies;
+- a target-scoped task lifecycle or a universal queue abstraction;
+- a serverless `-worker` mapping.
+
+BYO as a production target, the hosted factory floor, a central
+cross-environment observability plane, and an availability SLA remain outside
+v0.1.
+
+### Admission and release gate
+
+A provider/language/execution combination is production-qualified only when all
+of the following hold:
+
+- the README product matrix has a `prod` cell for every workload and execution
+  mode in that combination, not `live` or `partial`;
+- the execution-mode and task rows are represented in the matrix and provider
+  qualification matrices, not only in demo documentation;
+- every lifecycle row required by the production profile has live evidence,
+  including deploy, execution/invocation, rollback, uninstall, destruction, and
+  independently verified absence;
+- every production-profile row has live evidence, including database recovery,
+  Kafka durability, availability, alert delivery, and observability access;
+- the security and observability gates in the qualification matrix pass for
+  serverless and provider task resources, including execution roles, push
+  identities, resource ownership, log acceptance, and dead-letter inspection;
+- the installed candidate passes the AWS and GCP campaigns on the same harness
+  revision, and the release policy can read and verify the resulting records.
+
+The current non-`prod` cells in the README matrix are open v0.1 gate items, not
+evidence that a lower support tier is acceptable. The matrix currently covers
+only the Kubernetes/local primitive cells; adding serverless and task execution
+rows is a required part of this freeze. Release promotion is blocked
+independently: the policy currently refuses before reading qualification assets.
+
+Known blocker classes include the AWS/GCP preflight evidence gate (it admits only
+AWS and OCaml today), missing serverless/task matrix rows and preflight
+admission, cloud rollback/uninstall/observability evidence, database and Kafka
+recovery, availability and alert delivery, the missing TypeScript local task
+runtime, the Pub/Sub dead-letter subscription gap, and release promotion. The
+evidence rows are generated from `internal/qualification/product-matrix.json`;
+the release gate is in `internal/tooling/release/README.md`.
 
 ## Guarantee layers
 
@@ -43,16 +111,19 @@ measure.
 | AWS (`aws/<region>` target) | `-svc`, `-worker`, `-fn` | `-svc`, `-worker`, `-fn` once the TypeScript packages are published and the generated-workspace/live evidence lands |
 | GCP (`gcp/<region>` target) | `-svc`, `-worker`, `-fn` | `-svc`, `-worker`, `-fn` once the TypeScript packages are published and the generated-workspace/live evidence lands |
 
-Local is development by design. AWS and GCP are both contracted at the production
-profile. BYO is a development/experimental driver, not a production target.
+Local is development by design. AWS and GCP Kubernetes targets and both
+serverless execution modes are contracted at the production profile. BYO is a
+development/experimental driver, not a production target.
 
 `-fn` is a run-once execution primitive. On a Kubernetes target it is a CronJob
 that can run on a schedule or be invoked manually as a Job created from the
 CronJob. On an AWS target with `execution: serverless` it is a Lambda function
-invoked on demand, using the `Fn.Lambda` runtime contract; Sol does not create a
-trigger or schedule for it. It is not a Kafka worker. Provider-native serverless
-execution is an experimental slice documented in
-`docs/deployment/serverless-experimental.md`, not part of the production profile.
+invoked on demand, using the `Fn.Lambda` runtime contract; on GCP it is a Cloud
+Run Job execution. Sol does not create a trigger or schedule for either
+serverless mapping. It is not a Kafka worker. The serverless execution modes are
+part of the v0.1 production scope under ADR 0011; their evidence and remaining
+gates are recorded in
+[`serverless.md`](serverless.md).
 
 A target's observability is one Grafana, reachable at a TLS-protected URL and
 gated by OIDC. Anonymous access is disabled; Google OIDC is the default and any

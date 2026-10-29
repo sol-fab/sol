@@ -1,7 +1,10 @@
-# Experimental serverless execution
+# Serverless execution
 
-This page records the current, deliberately narrow serverless slice. It is not
-part of the `production-single-region/v1` contract.
+This page records the serverless execution modes inside the v0.1
+`production-single-region/v1` contract. Inclusion in the contract is not a
+qualification claim: the matrix below records evidence, and the production gate
+in [`compatibility.md`](compatibility.md) remains open where a cell is not
+`prod`.
 
 ## Support matrix
 
@@ -24,8 +27,11 @@ needs and independently verifies their absence afterwards.
 | Plan projection | n/a | supported | fail closed | fail closed |
 | Post-deploy execution smoke | n/a | readiness/rollout | `-svc`: readiness 200 + unauth 401; `-fn`: one completed Cloud Run Job execution | `-svc`: readiness 200 + unauth 401; `-fn`: invoke through the live alias returns `{"status":"ok"}` |
 
-No serverless production claim is made. The `-fn` row covers the run-once
-contract only; no scheduler or event trigger is created by any serverless target.
+The `-fn` row covers the run-once contract only; no scheduler, event trigger, or
+`uses:` dependency is created by any serverless target. Those are explicit v0.1
+limits, not an implied capability. Serverless observability is provider-native
+today; Sol acceptance of provider logs/metrics is an open production gate, not
+a claim.
 
 ## AWS Lambda HTTP
 
@@ -121,7 +127,7 @@ and SQS task consumers, is in [`examples/pluto/SERVERLESS.md`](../../examples/pl
 The Cloud Run lifecycle uses the same application container and a Google OIDC
 application-audience token; its deploy/verify/rollback/destroy behavior is
 covered by the provider CLI and prior bounded live evidence. Cloud Run is also a
-standalone experimental command and a target execution backend for `-svc`.
+standalone command and a target execution backend for `-svc`.
 
 ## Target-scoped AWS Lambda HTTP
 

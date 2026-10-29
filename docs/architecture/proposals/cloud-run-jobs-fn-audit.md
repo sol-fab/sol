@@ -4,7 +4,7 @@
   2026-10-29 in `sol-qualification`/`us-west1`; fake and live lifecycle evidence.
 - **Date:** 2026-10-28
 - **Related:** ADR 0009 (`-fn` contract), ADR 0010 (target-scoped execution),
-  `docs/deployment/serverless-experimental.md`, PR #1779 (AWS Lambda `-fn` slice)
+  `docs/deployment/serverless.md`, PR #1779 (AWS Lambda `-fn` slice)
 - **Question:** can Cloud Run Jobs implement the Sol `-fn` contract with the same
   lifecycle semantics as the verified AWS Lambda slice, or does it require a
   different, explicitly provider-specific contract?
@@ -137,13 +137,12 @@ Kubernetes `-fn` and from a Lambda synchronous invocation. A GCP adapter must
 write these explicitly from the declared contract rather than inherit a
 provider default that changes failure behavior.
 
-## Recommendation
+## Recommendation (historical; superseded)
 
-Keep GCP serverless `-fn` explicitly refused (the current target dispatch does
-this). Do not copy the Lambda adapter.
-
-If a Cloud Run Jobs `-fn` backend is wanted, open a separate design decision that
-accepts, at minimum:
+The audit recommended keeping GCP serverless `-fn` refused. That recommendation
+was superseded by the separate implementation decision and live qualification;
+the target now deploys Cloud Run Jobs. The historical conditions below were the
+ones the implementation had to accept:
 
 - whether `-fn` on this backend has an input contract or none;
 - the success definition over task counters/terminal condition and retries;
@@ -153,8 +152,12 @@ accepts, at minimum:
 - triggers/schedules as a separate contract;
 - live evidence for deploy, invoke, rollback, destroy, and independent cleanup.
 
-Until those are accepted, "GCP `-fn` is unsupported" is the accurate support
-matrix cell.
+The implementation accepts them: no input event, execution-counter success,
+a full Job/execution release record, execution-history rollback, Job and
+execution absence checks, no trigger, and live deploy/execute/rollback/destroy
+evidence. See the support matrix in
+`docs/deployment/serverless.md`; under ADR 0011 target `execution: serverless`
+is in the v0.1 production scope, with the production gate still open.
 
 ## References
 

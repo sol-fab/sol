@@ -297,6 +297,12 @@ The table is generated from
 dates or history here: Git history is the history, and the qualification records
 are the evidence. "Implemented" is not a synonym for "qualified".
 
+Target-scoped `execution: serverless` evidence is tracked separately in
+[serverless.md](docs/deployment/serverless.md). It is part of the v0.1 production
+scope under ADR 0011, but the production cells above cover the Kubernetes/local
+workloads; serverless and task execution rows are still being added to the
+evidence matrix. Inclusion is not a qualification claim.
+
 Sol is pre-alpha and not yet production-stable for the full contract. The typed
 qualification core remains offline MECHANISM-only; the live rows and their
 evidence are under `internal/qualification/`. Cloud infrastructure provisioning
