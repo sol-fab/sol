@@ -38,7 +38,9 @@ type outcome =
 ```
 
 An exception is a `Retry`. Delivery is **at-least-once**; the application must be
-idempotent. Sol does not claim exactly-once external side effects.
+idempotent. Sol does not claim exactly-once external side effects. The local
+integration test exercises one `task_id` across a redelivery with an idempotent
+effect applied once; the live AWS and GCP records observe provider redelivery.
 
 There is deliberately **no application-selected dead-letter outcome** in this
 first contract. Each provider moves an exhausted task to its own dead-letter
@@ -54,6 +56,59 @@ The handler receives the stable `task_id`, not a delivery-attempt number.
 Provider delivery counters are not application handler counters and are not part
 of the contract. Applications that need attempt-aware behavior should use their
 own durable state and idempotency key.
+
+## Semantics by environment
+
+The contract is shared; the delivery mechanics are provider-native.
+
+| Concern | Local `sol-jobs` | AWS SQS + Lambda | GCP Pub/Sub push + Cloud Run |
+|---|---|---|---|
+| Task identity | Envelope `task_id` in the job payload | Envelope `task_id` | Envelope `task_id` |
+| Ack | `Ack` completes the row | `Ack` omits the record from `batchItemFailures` | `200` response |
+| Retry | `Retry` uses `sol-jobs` backoff | `Retry` returns a batch item failure | `500` response |
+| Terminal | `max_attempts` → retained `failed` row | `maxReceiveCount` → SQS DLQ | `maxDeliveryAttempts` → Pub/Sub DLQ topic |
+| Attempt number | Not exposed | Not exposed | Not exposed |
+| Payload | 256 KiB envelope cap | 256 KiB envelope cap | 256 KiB envelope cap (Pub/Sub's own limit is larger) |
+| Ordering | None | None for a standard queue | None promised |
+| Concurrency | One claim loop per worker process | Event source mapping `MaximumConcurrency` | Cloud Run max instances; container concurrency 1 |
+| Incoming auth | Database credentials | Lambda execution role; no inbound endpoint | Cloud Run IAM + Pub/Sub OIDC push identity |
+| Enqueue | Application transaction or CLI | `sol task aws enqueue` | `sol task gcp enqueue` |
+| Rollback | Redeploy the worker image | Move the Lambda alias to a prior version | Move Cloud Run traffic to a prior revision |
+| Delivery window | `sol-jobs` lease | SQS visibility timeout | Pub/Sub ack deadline |
+
+Provider delivery counters are **not** handler-attempt counters. In a bounded
+live GCP exercise with `maxDeliveryAttempts=5` and a handler that returned
+`Retry`, Pub/Sub dead-lettered the task but its
+`CloudPubSubDeadLetterSourceDeliveryCount` was 12. The contract therefore
+promises eventual provider-managed terminal delivery after the configured
+budget, not an exact number of handler invocations. The same caution applies to
+SQS `ApproximateReceiveCount` and Lambda batch retries.
+
+## Adding a task kind
+
+1. Add a variant to the handler's `t`.
+2. Add its wire name to `kind` and `kinds`.
+3. Extend `encode`/`decode`; decoding returns an error for an unknown payload.
+4. Handle the variant with `Ack` or `Retry`; make the side effect idempotent.
+5. Add round-trip, ack, and retry tests.
+6. No provider or lifecycle change is needed: the new kind flows through the
+   same envelope and the same runtime.
+
+## Adding a provider
+
+1. Implement a `Make(T)` runtime that validates the envelope, calls
+   `T.handle ~task_id ?idempotency_key`, and maps `Ack`/`Retry` to the
+   provider's acknowledge/nack response.
+2. Make malformed input a non-retryable response where the provider supports
+   one; otherwise let it exhaust into the provider dead-letter destination.
+3. Add a lifecycle adapter that owns the queue/topic, runtime, trigger, auth,
+   dead-letter destination, ownership record, rollback, and destroy/absence.
+4. Write the ownership record with deterministic resource names before creating
+   anything, verify ownership before mutation, and update the record after each
+   stage.
+5. Add fake-provider lifecycle tests for foreign ownership, deploy, enqueue,
+   retry/dead-letter, rollback, destroy, and partial-create cleanup, then a
+   bounded live exercise. Do not claim live qualification from the fake tests.
 
 ## Package structure
 
@@ -168,14 +223,32 @@ The service is deployed without public invoker access and grants
 `roles/run.invoker` only to the Pub/Sub push service account. Cloud Run IAM is
 the incoming authentication boundary; the task runtime does not add a second
 application auth layer. Pub/Sub owns the dead-letter topic after
-`maxDeliveryAttempts`.
+`maxDeliveryAttempts`. The provider lifecycle is
+`sol task gcp deploy|verify|enqueue|rollback|destroy`; it creates the topics,
+push subscription, private Cloud Run service, and push service account, and
+writes an ownership record with deterministic names before creation.
 
-## Observability
+## Observability and diagnosis
 
-The runtimes log structured `task_id`, `kind`, and outcome lines. Locally,
-`sol-jobs` supplies handler metrics, backlog gauges, and logs. Lambda emits to
-CloudWatch; Cloud Run emits to Cloud Logging. Sol does not yet claim a managed
-task metric/trace acceptance layer for the cloud runtimes.
+The runtimes emit a line for each handler outcome with the stable `task_id`,
+`kind`, and `task acknowledged` / `task requested retry`. Query by `task_id` in
+the provider log store:
+
+- Lambda / SQS: CloudWatch Logs `/aws/lambda/<function>`; SQS queue depth and
+  DLQ depth are provider metrics. Lambda invocation, error, and duration metrics
+  are provider metrics.
+- Cloud Run / Pub/Sub: Cloud Logging `cloud_run_revision` for the service;
+  Pub/Sub undelivered/ack metrics and Cloud Run request/instance metrics are
+  provider metrics.
+
+Locally, `sol-jobs` supplies handler metrics, backlog gauges, and logs; the task
+runtime adds the same `task_id`/`kind`/outcome line.
+
+These are **provider-native** signals, not a Sol-managed task metrics layer.
+There is no task-specific counter in this package, and the envelope does not
+carry W3C trace context, so no distributed trace claim is made. Dead-letter
+inspection is provider-native (SQS DLQ, Pub/Sub dead-letter topic, local
+`failed` row); there is no replay command.
 
 ## Non-goals
 

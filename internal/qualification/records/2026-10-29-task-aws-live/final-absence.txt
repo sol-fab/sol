@@ -1,0 +1,25 @@
+Independent inventory after sol task aws destroy --apply and explicit cleanup:
+
+aws lambda get-function --function-name checkout-task:
+
+aws: [ERROR]: An error occurred (ResourceNotFoundException) when calling the GetFunction operation: Function not found: arn:aws:lambda:us-east-1:<aws-account>:function:checkout-task
+rc=254
+
+aws sqs get-queue-url --queue-name checkout-task:
+
+aws: [ERROR]: An error occurred (AWS.SimpleQueueService.NonExistentQueue) when calling the GetQueueUrl operation: The specified queue does not exist.
+rc=254
+
+aws sqs get-queue-url --queue-name checkout-task-dlq:
+
+aws: [ERROR]: An error occurred (AWS.SimpleQueueService.NonExistentQueue) when calling the GetQueueUrl operation: The specified queue does not exist.
+rc=254
+
+aws ecr describe-repositories:
+
+aws iam get-role --role-name sol-task-live-exec:
+
+aws: [ERROR]: An error occurred (NoSuchEntity) when calling the GetRole operation: The role with name sol-task-live-exec cannot be found.
+rc=254
+
+aws logs describe-log-groups --log-group-name-prefix /aws/lambda/checkout-task:

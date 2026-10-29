@@ -1,6 +1,6 @@
 # Proposal: minimal serverless execution boundary and task-queue contract
 
-Status: **proposal for design review — no implementation authorized.**
+Status: **partially implemented — the shared durable-task contract, local runtime, and AWS/GCP runtimes and provider lifecycles exist. Target-scoped integration and full live qualification remain open.**
 
 This proposal accompanies [ADR 0010](../adr/0010-execution-backends.md). It
 turns the two unresolved design questions into testable contracts, using the
@@ -69,72 +69,65 @@ not Kafka.
 
 ### 2.3 Handler outcome
 
-The queue-handler runtime distinguishes:
+The implemented runtime distinguishes exactly two outcomes:
 
-- **Ack** — side effect committed; acknowledge.
-- **Retry** — transient failure; redeliver under the retry policy.
-- **Dead-letter** — permanent/declared failure; move to the dead-letter
-  destination without further ordinary retries.
+- **Ack** — the side effect committed; acknowledge.
+- **Retry** — transient failure; leave the task eligible for redelivery.
 
-An uncaught failure is treated as **Retry**, not as Ack. The application may
-choose a different policy only where the provider can honor it explicitly.
+An uncaught failure or exception is **Retry**. There is deliberately **no
+application-selected immediate dead-letter outcome** in this contract. A
+handler that wants to stop retrying uses its own durable state; terminal
+delivery belongs to the provider after the configured budget. This narrowing
+avoids an application API whose meaning would differ between `sol-jobs`,
+SQS, and Pub/Sub.
 
 ### 2.4 Retry, exhaustion and dead-lettering
 
 #### What counts as an attempt
 
-Sol counts **handler attempts**, not provider deliveries:
+The original hypothesis required Sol-owned handler-attempt counters, a stable
+attempt number in the handler metadata, and an application-selected dead-letter
+outcome. Implementation and provider behavior forced a deliberate narrowing:
 
-> An attempt begins when the queue runtime has validated the task envelope and
-> invokes the application handler for one task. It includes handler timeouts,
-> cancellation, crashes and abnormal exits. It does not include a delivery or
-> transport failure that occurs before the handler is entered.
+- The handler receives stable `task_id`, `kind`, `payload`, and optional
+  `idempotency_key`; it does **not** receive a delivery-attempt or
+  handler-attempt number.
+- Provider delivery counters (`ApproximateReceiveCount`,
+  `maxReceiveCount`, `maxDeliveryAttempts`,
+  `CloudPubSubDeadLetterSourceDeliveryCount`) are not handler-attempt counters
+  and are not exposed as one.
+- Sol does not maintain a second durable delivery-attempt record. Doing so
+  would duplicate the provider's delivery state and still not make the external
+  side effect exactly-once.
+- At-least-once delivery plus application idempotency remains the contract.
 
-This definition matters because providers may count deliveries differently. The
-adapter must expose both counters separately:
-
-- **delivery failures** — provider delivery/transport failures before handler
-  entry;
-- **handler attempts** — handler invocations, including failures, timeouts and
-  cancellation.
-
-Rules:
-
-- A batch is not an attempt. Each task in a batch has its own attempt count.
-- A malformed task envelope that never enters the handler is a delivery/task
-  failure, not a handler attempt; it is dead-lettered without silently
-  acknowledging a valid task.
-- A handler that times out or is cancelled still consumed its attempt.
-- An infrastructure failure before the handler starts does not consume a
-  handler attempt; it must be reported as a delivery failure.
-- If a handler succeeds but acknowledgement fails, that success does not erase
-  the task's history. If the task is redelivered, the next handler invocation is
-  a new attempt; the ack failure is recorded separately.
-- The attempt number is stable in the task metadata and does not reset on
-  redelivery.
-
-The initial budget is **5 handler attempts**, provisional. Provider mappings must
-either permit at least that many handler entries before dead-lettering or report
-a capability difference/refuse. A provider setting that counts all deliveries
-(for example `maxReceiveCount`/`maxDeliveryAttempts`) must be tested against
-pre-handler delivery failures; it is not assumed to equal Sol's handler budget.
+This is not a claim that attempt accounting is unimportant; it is a statement
+that the portable contract cannot promise it without provider-specific
+behavior that the first implementation does not own.
 
 #### Exhaustion and dead-lettering
 
-- Retry uses bounded backoff supplied by the adapter; the contract does not
-  promise identical timing across providers.
-- When the handler-attempt budget is exhausted, the adapter moves the task to a
-  provider-owned dead-letter destination.
-- Dead-letter retention: **at least 7 days**, configurable within provider
-  bounds; the actual retention is recorded in evidence.
-- Dead-letter publishing follows the same acknowledgement invariant as the
-  original task: do not acknowledge the source until the dead-letter write
-  succeeds.
-- **Reprocessing dead-lettered tasks is out of scope for the first proof.**
-  Operators may inspect them through the provider; an automated replay command
-  is a later contract decision.
-- Exhaustion, dead-letter publishing failure and retention are observable and
-  recorded; none is reported as success.
+- Retry uses provider-native backoff; the contract does not promise identical
+  timing across providers.
+- When the provider's configured delivery budget is exhausted, the **provider**
+  moves the task to its dead-letter destination:
+  - local `sol-jobs` → a retained terminal `status = 'failed'` row;
+  - SQS → the queue's dead-letter queue (`maxReceiveCount`);
+  - Pub/Sub → the subscription's dead-letter topic (`maxDeliveryAttempts`).
+- The lifecycle must establish any provider permission the dead-letter path
+  needs. In particular, Pub/Sub requires the Pub/Sub service agent to have
+  `roles/pubsub.publisher` on the dead-letter topic; the GCP adapter grants and
+  verifies it. Without that grant the subscription cannot move an exhausted
+  task and keeps redelivering.
+- Dead-letter retention is provider-owned and recorded in the release record;
+  the first implementation defaults to 7 days where the provider permits it.
+- Reprocessing dead-lettered tasks is out of scope for the first contract.
+  Operators inspect them through the provider.
+- Exhaustion and dead-letter publishing are observable through the provider,
+  but the exact number of handler invocations is **not** promised. A bounded
+  live GCP exercise with `maxDeliveryAttempts=5` observed a dead-letter
+  source delivery count of 12 under rapid `Retry` responses; the task reached
+  the DLQ, but the provider count did not equal the number of handler entries.
 
 ### 2.5 Concurrency and timeouts
 
@@ -145,164 +138,177 @@ pre-handler delivery failures; it is not assumed to equal Sol's handler budget.
 - Visibility/lease and ack-deadline extensions are adapter responsibilities,
   not application APIs.
 
-### 2.6 Provider acceptance tests
+### 2.6 Evidence and acceptance tests
 
-These are behavioral tests, not configuration comparisons. Both providers must
-pass the same tests before `task_queue` is accepted.
+The original table tested a contract with Sol-owned handler-attempt counters and
+an application-selected dead-letter outcome. The implemented contract is
+narrower: `Ack | Retry`, provider-managed terminal delivery, no handler-attempt
+number. The tests below state what evidence exists, not what would be desirable.
 
-| Test | Expected result |
+| Test | Evidence today |
 |---|---|
-| Enqueue and process a task | Handler runs once successfully; task acknowledged; no duplicate effect. |
-| Duplicate delivery | Second delivery sees the same `task_id`; application idempotency prevents a second effect; second delivery acknowledges. |
-| Crash after side effect, before ack | Task is redelivered; handler's idempotency prevents a duplicate; eventual ack. |
-| Crash before side effect | Task is retried and succeeds. |
-| Transient failure | Retries until success, within the handler-attempt budget. |
-| Exhausted handler attempts | After exactly five handler entries, the task appears in the dead-letter destination; source is not silently lost. |
-| Handler timeout/cancellation | Counts as an attempt; five such outcomes exhaust the budget. |
-| Pre-handler delivery failure | Reported as a delivery failure and does not consume a handler attempt; the adapter must expose the distinction. |
-| Batch partial failure | Each failed task in the batch has its own attempt count; successful tasks are not retried. |
-| Ack failure after success | Task may be redelivered; the next handler invocation is a new attempt; ack failure is recorded separately. |
-| Permanent handler failure | Task is dead-lettered without exhausting ordinary retries. |
-| Dead-letter publish failure | Source is not acknowledged; failure is exposed. |
-| Payload over 256 KiB | Enqueue is refused with a clear error. |
-| Concurrency limit | Observed concurrent handlers do not exceed the declared bound, or the adapter reports a capability difference. |
-| No ordering assumption | The contract makes no ordering promise; a handler that requires ordering is rejected by design review, not silently serialized. |
-| Partial batch accounting | In a batch, a failed task is retried/DLQ'd independently; successfully processed tasks are not retried, and each task's handler-attempt count is reported correctly. |
-| Pre-handler failure accounting | A delivered-but-never-handled task does not consume a handler attempt; the adapter reports it as a delivery failure, not as a handler attempt. |
-| Durable attempt identity | The attempt number is stable across redelivery. The spike establishes whether provider-native counters suffice or Sol-managed durable state is required, including duplicate-invocation/concurrency implications. |
+| Enqueue and process a task | Local Postgres integration test (enqueue → handler → completed); bounded live GCP and AWS exercises (Ack logged and acknowledged). |
+| Duplicate delivery | Local idempotent enqueue/dedupe tested. Provider redelivery with a repeated `task_id` is exercised by the live GCP Retry probe; no duplicate external side effect is asserted because the probe handler has no external effect. |
+| Crash after side effect, before ack | Not tested. Application idempotency remains the requirement. |
+| Crash before side effect | Not tested separately; provider redelivery is observed in the GCP Retry probe. |
+| Transient failure | Local `Retry` → terminal `failed` with `max_attempts=1`; live GCP and AWS `Retry` → repeated delivery → dead-letter. |
+| Exhaustion | Local terminal `failed` row; live GCP message in the dead-letter topic; live AWS message in the DLQ after `maxReceiveCount=2`. The GCP live source delivery count was 12 with `maxDeliveryAttempts=5`; AWS produced two handler logs with `maxReceiveCount=2`. The contract does not claim an exact handler-attempt count. |
+| Handler timeout/cancellation | Local `sol-jobs` lease/retry behavior is covered by the existing queue package; cloud timeout/cancellation is not separately exercised. |
+| Pre-handler delivery failure | Not exposed separately in the first contract. Provider counters are not presented as handler attempts. |
+| Batch partial failure | AWS Lambda unit test: successful records are omitted from `batchItemFailures` and failed/malformed records are returned; not live. |
+| Ack failure after success | Provider-owned; not separately tested. |
+| Permanent handler failure | No application-selected immediate dead-letter outcome. Provider budget is the only terminal mechanism. |
+| Dead-letter publish failure | GCP live exercise observed the failure mode: without `roles/pubsub.publisher` on the dead-letter topic, Pub/Sub kept redelivering. The adapter now grants and verifies the binding. AWS DLQ permissions are operator-supplied and not live tested. |
+| Payload over 256 KiB | Envelope unit tests refuse it. |
+| Concurrency limit | Settings are set in both lifecycles (SQS `MaximumConcurrency`, Cloud Run max instances + container concurrency 1); concurrent-handler measurement is not yet evidence. |
+| No ordering assumption | The contract makes no ordering promise. |
+| Partial batch accounting | AWS unit test covers independent item failures; no per-task handler-attempt count exists. |
+| Attempt accounting | Deliberately not exposed. The GCP live provider counter (12) versus configured budget (5) is recorded as the reason provider counters are not handler attempts. |
+
+Evidence classes in this table:
+
+- **automated local/fake-provider:** reproducible in CI or the fake-provider
+  lifecycle tests;
+- **bounded live checkout-build exercise:** the GCP run recorded below, not a
+  release qualification;
+- **not tested:** no behavioral claim.
+
+The live GCP exercise was run from a checkout build, not a released candidate.
+It is evidence that the provider path can work; it is not a qualification row
+under [`internal/qualification/README.md`](../../../internal/qualification/README.md).
 
 ### 2.7 Provider mapping status
 
-| Requirement | SQS | Pub/Sub | Cloud Tasks |
+| Requirement | SQS + Lambda | Pub/Sub push + Cloud Run | Cloud Tasks |
 |---|---|---|---|
 | Durable enqueue | Yes | Yes | Yes |
 | At-least-once | Yes | Yes | Yes |
-| Ack after handler success | Lambda success/batch response | HTTP 2xx | HTTP 2xx |
+| Ack after handler success | Lambda success; batch-item-failure response | HTTP 200 | HTTP 2xx |
 | Native dead-letter | Redrive/DLQ | Dead-letter topic | No native equivalent established |
-| Retry budget | `maxReceiveCount` | Delivery-attempt limit | Retry config/max attempts |
-| Concurrency bound | Reserved concurrency | Flow control / Cloud Run max instances | Queue rate/HTTP target |
-| Fit for first contract | Candidate | Candidate | Not first mapping |
+| Retry budget | `maxReceiveCount` | `maxDeliveryAttempts` (5–100) | Retry config/max attempts |
+| Concurrency bound | Event source mapping `MaximumConcurrency` | Cloud Run max instances; container concurrency 1 | Queue rate/HTTP target |
+| Push/trigger auth | Lambda execution role; no inbound endpoint | Cloud Run IAM + OIDC push service account | Depends on target |
+| Runtime | `sol-task.lambda`, `ReportBatchItemFailures` | `sol-task.pubsub`, 200/500/400 | Not implemented |
+| Lifecycle | `sol task aws` (fake-provider evidence) | `sol task gcp` (fake + bounded live exercise) | Not used |
 
-The first cross-provider proof should test **SQS + Lambda** and
-**Pub/Sub push + Cloud Run**. Cloud Tasks remains a candidate for a separate
-HTTP task-dispatch contract; it is not assumed equivalent. Pub/Sub is used with
-one work subscription, not as a general event bus. These are hypotheses to be
-validated by the acceptance tests, not accepted mappings.
+Cloud Tasks remains a candidate for a separate HTTP task-dispatch contract; it
+is not assumed equivalent and is not part of the first provider mapping.
+Pub/Sub is used with one work subscription, not as a general event bus.
 
-**Hard spike gate:** per-task accounting under partial failures, distinguishing
-pre-handler delivery failures from handler attempts, and stable attempt numbers
-across redelivery must be demonstrated on both adapters. If a provider cannot
-enforce these without unacceptable provider-specific behavior, the adapter must
-refuse qualification rather than claim equivalence. Provider-native delivery
-counters are not assumed sufficient; the spike determines whether Sol-managed
-durable state is needed and what that means for duplicate invocations and
-concurrency.
+**Resolved spike gate:** the original gate demanded per-task accounting under
+partial failures, a pre-handler/handler-attempt distinction, and stable attempt
+numbers. The spike resolved it by **narrowing the contract**, not by claiming
+equivalence: the handler receives a stable task identity and no attempt number;
+terminal delivery is provider-owned; provider counters are not exposed. The
+remaining gate is live qualification of both providers against a released
+candidate and the target-scoped lifecycle integration.
 
-## 3. Runtime semantics: `-worker`, `-fn`, and queue handlers
+## 3. Runtime semantics: `-worker`, `-fn`, and durable tasks
 
-The current meanings remain:
+The existing meanings remain unchanged:
 
 - `-worker` is the long-running Kafka consumer (`Worker.Make`, consumer groups,
   offset commits, `Ack`/`Fail`, SIGTERM/drain).
 - `-fn` is run-once and scheduled (`sol.toml` schedule, CronJob).
 
-A queue-triggered handler is a **distinct runtime contract**, even if it shares
-business logic. The existing Kafka `Ack`/`Fail` vocabulary does not map directly
-to queue acknowledgement and retries.
+A durable task handler is a **library**, `sol-task`, not a fourth primitive.
+Locally and on Kubernetes it is hosted by a `-worker` binary over the existing
+`sol-jobs` queue; in the cloud the same `TASK` module is hosted by the Lambda
+SQS runtime or the Cloud Run Pub/Sub runtime. The Kafka `Ack`/`Fail` vocabulary
+is not remapped: task `Ack`/`Retry` is a distinct contract with a distinct
+queue.
 
-The product decision is deferred until the task-queue contract is accepted:
-either
-
-- an explicit trigger/runtime field on `-worker`/`-fn`, with the queue runtime
-  implemented as a different adapter; or
-- a new primitive for queue handlers.
-
-Until then, `execution=serverless` must refuse a Kafka `-worker` and must not
-silently reinterpret `-fn`. The convenience of a Lambda mapping must not decide
-the application model.
+The standalone `sol task` lifecycle does not yet participate in the target
+`execution` field. A serverless target must continue to refuse a Kafka
+`-worker` and must not silently reinterpret `-fn`. The convenience of a Lambda
+mapping does not decide the application model.
 
 ## 4. First experimental slice
 
-One HTTP `-svc`, managed PostgreSQL, one task queue, and one queue handler. No
+One HTTP `-svc`, managed PostgreSQL, one task queue, and one task handler. No
 Kafka in the first slice.
 
-**Provider order:** Cloud Run first for the HTTP experimental slice; Lambda
-second. The HTTP spike showed that Cloud Run can reuse the existing container,
-while Lambda requires a request adapter. This is a scoped implementation order,
-not a production or queue qualification.
+Implementation status:
 
-- GCP first: Cloud Run HTTP + Cloud SQL; queue follows after the identity and
-  HTTP lifecycle proof.
-- AWS second: API Gateway/Lambda HTTP + RDS; SQS follows the same queue gate.
-
-Before implementation, define the identity contract (unit/audience, trusted
-issuer, caller set, token projection, local development) and prove a protected
-route, not just `/readyz`.
-
-Acceptance:
-
-- HTTP request and database transaction work;
-- enqueue/process/ack works with duplicate-delivery idempotency;
-- retry, exhaustion, dead-letter and ack-failure behavior pass the tests above;
-- identity, secrets, logs, metrics and traces identify the workload;
-- deploy, update, rollback, destroy, and independent absence work;
-- unsupported combinations refuse before mutation;
-- no production-profile claim until separately qualified.
+- **Local:** `sol-task.local` + `sol-jobs`; Postgres integration test covers
+  enqueue, Ack, Retry-to-terminal, and idempotent enqueue.
+- **GCP:** `sol-task.pubsub` + `sol task gcp`; fake-provider lifecycle tests and
+  a bounded live checkout-build exercise (Ack, Retry-to-DLQ, rollback to a prior
+  Cloud Run revision, destroy, independent absence).
+- **AWS:** `sol-task.lambda` + `sol task aws`; envelope/batch unit tests,
+  fake-provider lifecycle tests, and a bounded live checkout-build exercise
+  ([record](../../../internal/qualification/records/2026-10-29-task-aws-live.md)). The live run
+  found and fixed the SQS attribute encoding and the mapping `Creating` wait; it
+  also established the Docker v2 image-manifest requirement.
+- **Target-scoped integration:** not implemented. The provider commands are
+  standalone experimental entry points.
+- **Release qualification:** not performed for either provider. The live GCP
+  exercise is not a released-candidate qualification.
 
 ## 5. Provider-order decision
 
-The bounded HTTP spike answered the ordering question:
+The bounded HTTP spike established Cloud Run first and Lambda second for the
+HTTP experimental slice:
 
 - **Cloud Run first.** The existing `sol-svc` checkout container ran after the
   target identity inputs were supplied; `/readyz` returned 200 and
   revision/traffic rollback worked.
 - **Lambda second.** Lambda required a separate HTTP handler; the existing
   listener was not reusable. Function URL policy and path handling were
-  provider-specific. Lambda remains the second adapter and the proof that the
-  lifecycle seam generalizes.
+  provider-specific.
 
-This is an HTTP-only experimental order. It does not approve queue support,
-worker mapping, or production profile conformance.
+That order is an HTTP-slice decision. The task capability now has both runtime
+adapters; the live task exercise happened on GCP first because credentials were
+available, not because GCP is the permanent primary. Neither ordering qualifies
+queue support for production.
 
-## 6. Identity contract (prerequisite for the Cloud Run slice)
+## 6. Identity contract (HTTP prerequisite; task push identity separate)
 
-The spike proved the existing container starts only when the target supplies:
-
-- `SOL_UNIT` — the workload's own unit/audience;
-- `SOL_TRUSTED_WORKLOAD_ISSUER` — the trusted issuer for projected tokens;
-- `SOL_CALLED_BY` — the caller set, when the unit has declared callers.
-
+The HTTP spike proved the existing container starts only when the target
+supplies `SOL_UNIT`, `SOL_TRUSTED_WORKLOAD_ISSUER`, and `SOL_CALLED_BY`.
 `/quote` remained 401 without a token, so a healthy `/readyz` is not sufficient
-evidence of an integrated workload. The implementation must establish:
+evidence of an integrated workload.
 
-- which Sol component supplies the unit/audience, caller set and issuer;
-- which provider-native identity issues the projected token on Cloud Run;
-- how the application validates issuer, audience and caller identity;
-- how missing/malformed identity fails before readiness or deployment;
-- the local-development equivalent without using the production issuer.
+For durable tasks, the incoming identity boundary is different and is
+implemented:
 
-Do not make these environment-variable names a provider-neutral API merely
-because the current runtime reads them. Define the Sol identity intent; let each
-adapter project it natively.
+- GCP: the Cloud Run service is private; the Pub/Sub push subscription uses a
+  dedicated service account with `roles/run.invoker`; the Pub/Sub service agent
+  can mint its OIDC token; the dead-letter topic grants the agent publisher.
+- AWS: there is no inbound HTTP endpoint; the Lambda execution role authorizes
+  SQS receive/delete and logs. The event source mapping invokes the function.
+- Local: the worker's Postgres credentials and the `sol_jobs` workspace boundary.
+
+The HTTP identity contract remains open and is not replaced by the task push
+identity.
 
 ## 7. Lifecycle identity convention
 
 A release records the provider-native identity, not a Kubernetes-shaped object:
 
 - Cloud Run: service, revision, traffic allocation, URL;
-- Lambda: function, version/alias, URL.
+- Lambda: function, version/alias, URL;
+- Task AWS: queue URL/ARN, dead-letter queue, function/version/alias, event
+  source mapping UUID;
+- Task GCP: Cloud Run service/URL/revision, topic, subscription, dead-letter
+  topic, push service account.
 
 Verification and rollback require observed post-operation state. An API `200`
 without observing which revision/version is serving is not success.
 
-## 8. Open decisions
+## 8. Remaining decisions
 
-1. Target `execution` field shape and exact refusal messages.
-2. Whether the queue runtime is a trigger on an existing primitive or a new
-   primitive.
-3. Confirmation of the 5-handler-attempt/7-day/256-KiB defaults, the
-   delivery-vs-handler-attempt mapping, and DLQ replay scope.
-4. Whether release identity can remain provider-neutral without a plan refactor.
-5. Serverless profile evidence and refusal criteria.
-6. Cloud Run-first provider decision is recorded; Lambda remains the second
-   adapter.
+1. Target `execution` integration for tasks: standalone `sol task` versus a
+   target-scoped trigger/runtime declaration.
+2. Released-candidate qualification for both providers. Bounded live
+   mechanism-level exercises exist for GCP and AWS, but neither is a release
+   verdict.
+3. Whether the release store should own the task record and provider identity,
+   rather than the standalone ownership file.
+4. Dead-letter replay: provider inspection only in the first contract.
+5. The exact provider budget defaults. The shared envelope cap is 256 KiB and
+   retention defaults to 7 days where the provider permits; local and SQS
+   budgets are configurable, while Pub/Sub requires 5–100. The contract does
+   not promise a common handler-attempt count.
+6. Whether `sol new worker` should scaffold a task handler module and migration,
+   or whether the package guide remains the integration path.

@@ -1,0 +1,10 @@
+{
+    "repository": {
+        "repositoryArn": "arn:aws:ecr:us-east-1:<aws-account>:repository/sol-task-live",
+        "registryId": "<aws-account>",
+        "repositoryName": "sol-task-live",
+        "repositoryUri": "<aws-account>.dkr.ecr.us-east-1.amazonaws.com/sol-task-live",
+        "createdAt": "2026-10-29T03:22:08.857000-06:00",
+        "imageTagMutability": "MUTABLE"
+    }
+}

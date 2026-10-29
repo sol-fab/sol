@@ -1,0 +1,10 @@
+[
+    "Active",
+    "Image",
+    null,
+    "arn:aws:iam::<aws-account>:role/sol-task-live-exec",
+    25,
+    {
+        "SOL_TASK_RUNTIME": "lambda"
+    }
+]

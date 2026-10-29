@@ -1,0 +1,19 @@
+{
+    "events": [
+        {
+            "logStreamName": "2026/10/29/[2]4cfa29035ee94b3e992af2e309d56fff",
+            "timestamp": 1793266074341,
+            "message": "task_handler task_id=3c75602d51eca4f292d90130690708b6 kind=ack idempotency_key=aws-ack-1\n",
+            "ingestionTime": 1793266075972,
+            "eventId": "39991169797047915244662171989507885980610894058189553665"
+        },
+        {
+            "logStreamName": "2026/10/29/[2]4cfa29035ee94b3e992af2e309d56fff",
+            "timestamp": 1793266074341,
+            "message": "sol-task: task acknowledged task_id=3c75602d51eca4f292d90130690708b6 kind=ack\n",
+            "ingestionTime": 1793266075972,
+            "eventId": "39991169797047915244662171989507885980610894058189553666"
+        }
+    ],
+    "searchedLogStreams": []
+}

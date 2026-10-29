@@ -39,6 +39,7 @@
   cmd_lambda
   cmd_task
   sol_cli_aws_task_cmd
+  sol_cli_gcp_task_cmd
   cmd_deploy_event
   cmd_migrate
   cmd_rollback

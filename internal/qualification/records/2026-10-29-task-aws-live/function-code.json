@@ -1,0 +1,5 @@
+{
+    "RepositoryType": "ECR",
+    "ImageUri": "<aws-account>.dkr.ecr.us-east-1.amazonaws.com/sol-task-live@sha256:bd5f51bdac208567fa522529789504ad984dd3ed099613e3595f50d1696fc873",
+    "ResolvedImageUri": "<aws-account>.dkr.ecr.us-east-1.amazonaws.com/sol-task-live@sha256:bd5f51bdac208567fa522529789504ad984dd3ed099613e3595f50d1696fc873"
+}

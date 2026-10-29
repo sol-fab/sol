@@ -151,10 +151,11 @@ enqueue command.
 
 ::: status
 The Lambda and Pub/Sub **runtime handlers** are implemented and unit-tested by
-this package. The AWS SQS + Lambda deploy/verify/enqueue/rollback/destroy
-lifecycle is implemented and fake-provider tested. The GCP Pub/Sub + Cloud Run
-lifecycle and live qualification follow; do not treat both cloud workflows as
-equally qualified yet.
+this package. The AWS SQS + Lambda and GCP Pub/Sub + Cloud Run
+deploy/verify/enqueue/rollback/destroy lifecycles are implemented, fake-provider
+tested, and exercised in bounded live checkout builds on both providers. They
+are **not** released-candidate qualified; provider differences and the
+qualified limits are recorded in the task-execution procedure.
 :::
 
 The handler module and `Sol_task.TASK` contract are unchanged in the cloud.
@@ -190,6 +191,28 @@ The runtime is selected by the deployment, not by the application code:
 - **GCP:** `Sol_task_pubsub.Make(T).run` serves the Pub/Sub push endpoint
   (`200` ack, `500` retry, `400` malformed). Cloud Run IAM authenticates the
   Pub/Sub push service account; Pub/Sub owns the dead-letter topic.
+
+  ```text
+  sol task gcp deploy --project <project> --region <region> \
+    --service checkout --image <artifact-registry>@sha256:<digest> \
+    --max-attempts 5 --ack-deadline 60 \
+    --dlq-retention 604800 --concurrency 10 \
+    --record ./task-release.json
+
+  sol task gcp enqueue --project <project> --region <region> \
+    --service checkout --record ./task-release.json \
+    --kind send_welcome_email --payload '{"user_id":"u-1"}'
+
+  sol task gcp verify ... --record ./task-release.json
+  sol task gcp rollback ... --to-revision <cloud-run-revision>
+  sol task gcp destroy ... --apply
+  ```
+
+  The adapter creates the topic, dead-letter topic, push subscription, private
+  Cloud Run service, and a dedicated push service account with only
+  `roles/run.invoker` and `roles/iam.serviceAccountTokenCreator`. The ownership
+  record is written with deterministic names before creation and updated after
+  each stage, so a partial create remains destroyable.
 
 The shared guarantees are stable task identity, at-least-once delivery,
 acknowledge-after-success, retries, a provider-managed dead-letter budget, and
