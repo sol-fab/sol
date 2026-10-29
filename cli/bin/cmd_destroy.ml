@@ -33,34 +33,8 @@ let serverless_destroy ~target_cfg ~action ~record ~service =
       ~none:(Sol_cli_exit.error "serverless destroy requires --record")
       record
   in
-  match target_cfg.Sol_cli_config.provider with
-  | Sol_cli_provider.Aws ->
-    Sol_cli_aws_serverless_target.destroy ~target:target_cfg ~service ~record
-    |> Result.map_error Sol_cli_exit.error
-  | Sol_cli_provider.Gcp ->
-    let* project =
-      match Sol_cli_config.provider_field target_cfg "project_id" with
-      | Some project when String.trim project <> "" -> Ok project
-      | _ -> Error (Sol_cli_exit.error "serverless GCP destroy requires gcp.project_id")
-    in
-    let runner =
-      { Sol_cli_cloud_run.run =
-          (fun argv ->
-            Sol_cli_serverless_runner.run argv
-            |> Result.map (fun (o : Sol_cli_serverless_runner.output) ->
-              ({ Sol_cli_cloud_run.stdout = o.stdout; stderr = o.stderr }
-               : Sol_cli_cloud_run.output)))
-      ; http =
-          (fun ~url ~token ->
-            Sol_cli_serverless_runner.http ~url ~token
-            |> Result.map (fun (status, body) -> status, body))
-      }
-    in
-    Sol_cli_cloud_run.destroy runner ~project ~region:target_cfg.region ~service ~record
-    |> Result.map_error (fun failure ->
-      Sol_cli_exit.error (Sol_cli_cloud_run.failure_to_string failure))
-  | Sol_cli_provider.Byo ->
-    Error (Sol_cli_exit.error "serverless destroy supports AWS and GCP targets only")
+  Sol_cli_serverless_lifecycle.destroy ~target:target_cfg ~service ~record
+  |> Result.map_error Sol_cli_exit.error
 ;;
 
 let run ~target ~var_file ~vars ~action ~accept_unreleased ~record ~service () =

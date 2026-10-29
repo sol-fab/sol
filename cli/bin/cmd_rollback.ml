@@ -367,45 +367,19 @@ let serverless_rollback ~target ~record ~to_version ~to_revision ~token_file ~se
     }
   in
   let project = Option.value config.project ~default:"" in
-  match target_cfg.provider with
-  | Sol_cli_provider.Aws ->
-    let* version =
-      Option.to_result
-        ~none:(Sol_cli_exit.error "--to-version is required for AWS")
-        to_version
-    in
-    let* observed =
-      Sol_cli_aws_serverless_target.rollback
-        ~target:target_cfg
-        ~project
-        ~service:manifest_service
-        ~record
-        ~version
-        ~token
-      |> Result.map_error Sol_cli_exit.error
-    in
-    print_endline (Yojson.Safe.to_string observed);
-    Ok ()
-  | Sol_cli_provider.Gcp ->
-    let* revision =
-      Option.to_result
-        ~none:(Sol_cli_exit.error "--to-revision is required for GCP")
-        to_revision
-    in
-    let* observed =
-      Sol_cli_gcp_serverless_target.rollback
-        ~target:target_cfg
-        ~project
-        ~service:manifest_service
-        ~record
-        ~revision
-        ~token
-      |> Result.map_error Sol_cli_exit.error
-    in
-    print_endline (Yojson.Safe.to_string (Sol_cli_cloud_run.observed_json observed));
-    Ok ()
-  | Sol_cli_provider.Byo ->
-    Error (Sol_cli_exit.error "serverless rollback supports AWS and GCP targets only")
+  let* observed =
+    Sol_cli_serverless_lifecycle.rollback
+      ~target:target_cfg
+      ~project
+      ~service:manifest_service
+      ~record
+      ~version:to_version
+      ~revision:to_revision
+      ~token
+    |> Result.map_error Sol_cli_exit.error
+  in
+  print_endline (Yojson.Safe.to_string observed);
+  Ok ()
 ;;
 
 let release_id_arg =

@@ -1,3 +1,6 @@
+(** Provider-native operations behind [Sol_cli_serverless_lifecycle], which
+    establishes [execution: serverless] before calling them. *)
+
 val deploy
   :  target:Sol_cli_config.target
   -> config:Sol_cli_config.t
@@ -15,3 +18,9 @@ val rollback
   -> revision:string
   -> token:string
   -> (Sol_cli_cloud_run.observed, string) result
+
+val destroy
+  :  target:Sol_cli_config.target
+  -> service:string
+  -> record:string
+  -> (unit, string) result

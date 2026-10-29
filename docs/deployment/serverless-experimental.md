@@ -165,10 +165,12 @@ production:
 
 `sol deploy production/gcp/us-west1 --image-ref checkout_svc=...@sha256:...` uses the
 verified Cloud Run lifecycle. `gcp.project_id` and the target region supply the provider
-coordinates; Cloud Run creates no execution role. The same limits apply: one
-dependency-free HTTP `-svc`, apply only, and application authentication remains explicit.
-A GCP serverless target with a `-fn` fails closed: Cloud Run Jobs is not implemented
-and is not assumed to have AWS Lambda parity.
+coordinates; Cloud Run creates no execution role. The ownership record is written after
+the provider deploy returns and before the target's post-deploy smoke, so a failed smoke
+still leaves a destroyable record. The same limits apply: one dependency-free HTTP `-svc`,
+apply only, and application authentication remains explicit. A GCP serverless target with
+a `-fn` fails closed: Cloud Run Jobs is not implemented and is not assumed to have AWS
+Lambda parity.
 
 ## Target-scoped destroy
 

@@ -348,3 +348,13 @@
  (deps ../bin/main.exe test_target_serverless_refusals.sh)
  (action
   (run bash %{dep:test_target_serverless_refusals.sh} %{dep:../bin/main.exe})))
+
+(rule
+ (alias runtest)
+ (deps ../bin/main.exe test_target_serverless_gcp.sh)
+ (action
+  (run
+   bash
+   %{dep:test_target_serverless_gcp.sh}
+   %{dep:../bin/main.exe}
+   %{workspace_root}/examples/pluto)))
