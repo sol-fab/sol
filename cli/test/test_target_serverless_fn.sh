@@ -29,6 +29,7 @@ printf '%s\n' "$*" >> "$FAKE_AWS_LOG"
 args="$*"
 if [[ "$args" == *"lambda list-functions"* ]]; then
   if [[ "${FAKE_LIST_MALFORMED:-0}" == 1 ]]; then printf '{}\n'
+  elif [[ "${FAKE_LIST_MALFORMED:-0}" == 2 ]]; then printf '{"Functions":[{}]}\n'
   elif [[ -f "$FAKE_AWS_STATE/function" ]]; then printf '{"Functions":[{"FunctionName":"checkout-fn"}]}\n'
   else printf '{"Functions":[]}\n'; fi
 elif [[ "$args" == *"lambda create-function"* ]]; then
@@ -127,5 +128,12 @@ if FAKE_LIST_MALFORMED=1 "$sol" deploy live/aws/us-east-1 --image-tag test --ima
   echo "deploy accepted a malformed list-functions response" >&2; exit 1
 fi
 grep -q 'Functions array' "$work/malformed"
+[[ ! -f "$work/state/function" ]]
+
+# A malformed entry must not be silently dropped from the inventory either.
+if FAKE_LIST_MALFORMED=2 "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/malformed-entry" 2>&1; then
+  echo "deploy accepted a list-functions entry without FunctionName" >&2; exit 1
+fi
+grep -q 'entry 1 has no FunctionName' "$work/malformed-entry"
 [[ ! -f "$work/state/function" ]]
 echo "target serverless fn deploy/invoke/rollback/destroy fake-provider test passed"
