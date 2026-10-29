@@ -20,18 +20,15 @@ let runner () =
   }
 ;;
 
-let deploy ~target ~config ~project ~(service : Sol_cli_manifest.service) ~image ~record =
+let deploy_svc
+      ~target
+      ~config
+      ~project
+      ~(service : Sol_cli_manifest.service)
+      ~image
+      ~record
+  =
   let* () = ensure_gcp target in
-  let* () =
-    match service.primitive with
-    | Sol_cli_manifest.Svc -> Ok ()
-    | Sol_cli_manifest.Fn ->
-      Error
-        "target-scoped serverless -fn dispatch is not implemented for GCP; only AWS \
-         Lambda -fn is supported"
-    | Sol_cli_manifest.Worker ->
-      Error "target-scoped serverless dispatch does not support -worker on GCP"
-  in
   let* () = Sol_cli_serverless_target_common.declared_uses config service in
   let* () = Sol_cli_serverless_target_common.require_http_callers target in
   let* cloud_project =
@@ -100,10 +97,53 @@ let deploy ~target ~config ~project ~(service : Sol_cli_manifest.service) ~image
     then Ok ()
     else Error (Printf.sprintf "post-deploy unauthenticated /quote %d" unauth)
   in
-  Ok release
+  Ok (Sol_cli_cloud_run.release_json release)
 ;;
 
-let rollback
+let deploy_fn
+      ~target
+      ~config
+      ~project:_project
+      ~(service : Sol_cli_manifest.service)
+      ~image
+      ~record
+  =
+  let* () = ensure_gcp target in
+  let* () = Sol_cli_serverless_target_common.declared_uses config service in
+  let* cloud_project =
+    Sol_cli_serverless_target_common.required_field target ~provider:"gcp" "project_id"
+  in
+  let* job =
+    Sol_cli_cloud_run.provider_service_of service.name
+    |> Result.map_error Sol_cli_cloud_run.failure_to_string
+  in
+  let request : Sol_cli_gcp_serverless_job.request =
+    { project = cloud_project
+    ; region = target.region
+    ; service = service.name
+    ; job
+    ; image
+    ; record
+    ; runner = runner ()
+    }
+  in
+  let* release =
+    Sol_cli_gcp_serverless_job.deploy request
+    |> Result.map_error Sol_cli_gcp_serverless_job.failure_to_string
+  in
+  Ok (Sol_cli_gcp_serverless_job.release_json release)
+;;
+
+let deploy ~target ~config ~project ~(service : Sol_cli_manifest.service) ~image ~record =
+  let* () = ensure_gcp target in
+  match service.primitive with
+  | Sol_cli_manifest.Svc -> deploy_svc ~target ~config ~project ~service ~image ~record
+  | Sol_cli_manifest.Fn -> deploy_fn ~target ~config ~project ~service ~image ~record
+  | Sol_cli_manifest.Worker ->
+    Error "target-scoped serverless dispatch does not support -worker on GCP"
+;;
+
+let rollback_svc
       ~target
       ~project
       ~(service : Sol_cli_manifest.service)
@@ -156,7 +196,57 @@ let rollback
     }
   in
   let* () = write_record recorded in
-  Ok observed
+  Ok (Sol_cli_cloud_run.observed_json observed)
+;;
+
+let rollback_fn
+      ~target
+      ~project:_project
+      ~(service : Sol_cli_manifest.service)
+      ~record
+      ~execution
+  =
+  let* () = ensure_gcp target in
+  let* cloud_project =
+    Sol_cli_serverless_target_common.required_field target ~provider:"gcp" "project_id"
+  in
+  let* job =
+    Sol_cli_cloud_run.provider_service_of service.name
+    |> Result.map_error Sol_cli_cloud_run.failure_to_string
+  in
+  let request : Sol_cli_gcp_serverless_job.request =
+    { project = cloud_project
+    ; region = target.region
+    ; service = service.name
+    ; job
+    ; image = ""
+    ; record
+    ; runner = runner ()
+    }
+  in
+  let* release =
+    Sol_cli_gcp_serverless_job.rollback request ~record ~execution
+    |> Result.map_error Sol_cli_gcp_serverless_job.failure_to_string
+  in
+  Ok (Sol_cli_gcp_serverless_job.release_json release)
+;;
+
+let rollback
+      ~target
+      ~project
+      ~(service : Sol_cli_manifest.service)
+      ~record
+      ~revision
+      ~token
+  =
+  let* () = ensure_gcp target in
+  match service.primitive with
+  | Sol_cli_manifest.Svc ->
+    rollback_svc ~target ~project ~service ~record ~revision ~token
+  | Sol_cli_manifest.Fn ->
+    rollback_fn ~target ~project ~service ~record ~execution:revision
+  | Sol_cli_manifest.Worker ->
+    Error "target-scoped serverless dispatch does not support -worker on GCP"
 ;;
 
 let destroy ~target ~service ~record =
@@ -164,6 +254,25 @@ let destroy ~target ~service ~record =
   let* project =
     Sol_cli_serverless_target_common.required_field target ~provider:"gcp" "project_id"
   in
-  Sol_cli_cloud_run.destroy (runner ()) ~project ~region:target.region ~service ~record
-  |> Result.map_error Sol_cli_cloud_run.failure_to_string
+  match Sol_cli_gcp_serverless_job.read_record record with
+  | Ok _ ->
+    let* job =
+      Sol_cli_cloud_run.provider_service_of service
+      |> Result.map_error Sol_cli_cloud_run.failure_to_string
+    in
+    let request : Sol_cli_gcp_serverless_job.request =
+      { project
+      ; region = target.region
+      ; service
+      ; job
+      ; image = ""
+      ; record
+      ; runner = runner ()
+      }
+    in
+    Sol_cli_gcp_serverless_job.destroy request ~record
+    |> Result.map_error Sol_cli_gcp_serverless_job.failure_to_string
+  | Error _ ->
+    Sol_cli_cloud_run.destroy (runner ()) ~project ~region:target.region ~service ~record
+    |> Result.map_error Sol_cli_cloud_run.failure_to_string
 ;;

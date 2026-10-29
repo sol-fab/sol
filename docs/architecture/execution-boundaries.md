@@ -15,7 +15,7 @@ and how Sol runs it. They are not interchangeable.
 |---|---|---|---|
 | `-svc` | HTTP request/response, `/readyz`, identity-checked routes | Deployment + Service | AWS Lambda through the request adapter (target `execution: serverless`); GCP Cloud Run |
 | `-worker` | Long-running Kafka consumer group, `Ack`/`Fail`, drain on SIGTERM | Deployment | **No managed mapping.** SQS/Pub/Sub are not substituted for Kafka semantics |
-| `-fn` | Run-to-completion; scheduled locally | CronJob | AWS Lambda run-once; GCP `-fn` target dispatch is not implemented and is refused |
+| `-fn` | Run-to-completion; scheduled locally | CronJob | AWS Lambda run-once; GCP Cloud Run Jobs (target dispatch, pending live) |
 | `-jobs` (`sol-jobs`) | Durable leased Postgres jobs; retry/backoff, terminal failure, retention | Hosted by a `-worker` | No separate provider mapping; a cloud worker hosts the same loop |
 | `-task` (`sol-task`) | Durable task handler: stable `task_id`, `Ack`/`Retry`, at-least-once, provider-managed terminal delivery | Hosted by a `-worker` over `sol-jobs` (`sol-task.local`) | AWS SQS + Lambda (`sol-task.lambda`); GCP Pub/Sub + Cloud Run (`sol-task.pubsub`) |
 
@@ -74,12 +74,12 @@ Within `sol_cli_cloud`:
 - **Provider adapters:** `sol_cli_aws_*`, `sol_cli_gcp_*`, `sol_cli_cloud_run`,
   `sol_cli_aws_lambda*`, and the task-specific `sol_cli_aws_task` module.
   Shared Lambda function/version/alias mechanics are in
-  `sol_cli_aws_lambda_common`; Cloud Run service mechanics are in
+  `sol_cli_aws_lambda_common`; Cloud Run service and Job mechanics are in
   `sol_cli_cloud_run`. Providers do not call each other's adapters. The task
   provider lifecycles are standalone; they are not part of target-scoped
   dispatch.
 - **Target serverless scope:** AWS supports `-svc` and `-fn`; GCP supports
-  `-svc`; both refuse `-worker`. GCP refuses `-fn`. This is explicit in the
+  `-svc` and Cloud Run Jobs `-fn`; both refuse `-worker`. This is explicit in the
   adapters, not inferred from a service name.
 
 ## Where shared invariants live
@@ -91,7 +91,8 @@ Within `sol_cli_cloud`:
 - Durable retry/lease/terminal behavior: `sol-jobs`; task-local reuses it rather
   than duplicating the queue.
 - Release records, ownership and rollback shape: `sol_cli_deploy` + provider
-  adapters; provider-native identity (Lambda version/alias, Cloud Run revision,
+  adapters; provider-native identity (Lambda version/alias, Cloud Run revision or
+  Job execution,
   SQS/SNS/Pub/Sub ARNs) is recorded by the adapter.
 - Ownership proof: `docs/architecture/ownership.md`; provider adapters must
   refuse foreign resources and establish absence independently.
@@ -119,8 +120,8 @@ universal execution abstraction is introduced merely to make the map tidier.
   its consumers. Moving migration execution into the deploy layer is a
   cross-cutting change that should be justified by a concrete failure, not by
   the map alone.
-- Target-scoped serverless dispatch covers `-svc` and, on AWS, `-fn`; it does not
-  cover `-worker`. **Decision:** the supported deployment workflow for durable
+- Target-scoped serverless dispatch covers `-svc` and, on AWS `-fn` and GCP
+  Cloud Run Jobs `-fn`; it does not cover `-worker`. **Decision:** the supported deployment workflow for durable
   tasks is the standalone `sol task aws`/`sol task gcp` lifecycle, which owns
   its provider queue/topic, retry/DLQ policy, and release record. Target-scoped
   `sol deploy` does not create task queues or triggers. `sol-task` is a library,

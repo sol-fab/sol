@@ -13,16 +13,16 @@ needs and independently verifies their absence afterwards.
 |---|---|---|---|---|
 | `-svc` HTTP | native `sol local run` | supported | target + standalone; live | target + standalone; live |
 | `-worker` | native run with explicit Kafka/Postgres | supported | not supported | not supported |
-| `-fn` | `sol local invoke` | CronJob | not supported | target deploy/invoke/rollback/destroy; fake + live |
+| `-fn` | `sol local invoke` | CronJob | target deploy/execute/rollback/destroy; fake | target deploy/invoke/rollback/destroy; fake + live |
 | Queue/trigger | explicit Kafka/Postgres only | Kafka/Postgres | none | none |
 | Secrets/dependencies | injected locally | supported | env/identity proven; `uses:` refused | env/identity proven; `uses:` refused |
 | Identity | local explicit | supported | Google workload token; explicit callers | `-svc`: Google app token, explicit callers; `-fn`: execution role only, no incoming callers |
 | Observability | app logs/metrics | supported | provider/app logs; no Sol acceptance | provider/CloudWatch logs; no Sol acceptance |
-| Target deploy | n/a | supported | `-svc` live | `-svc` and `-fn` live |
-| Target rollback | n/a | release based | `-svc` live | `-svc` and `-fn` live |
-| Target destroy/absence | n/a | supported | `-svc` live | `-svc` and `-fn` live |
+| Target deploy | n/a | supported | `-svc` live; `-fn` fake | `-svc` and `-fn` live |
+| Target rollback | n/a | release based | `-svc` live; `-fn` execution-history | `-svc` and `-fn` live |
+| Target destroy/absence | n/a | supported | `-svc` live; `-fn` fake | `-svc` and `-fn` live |
 | Plan projection | n/a | supported | fail closed | fail closed |
-| Post-deploy execution smoke | n/a | readiness/rollout | readiness 200 + unauth 401 | `-svc`: readiness 200 + unauth 401; `-fn`: invoke through the live alias returns `{"status":"ok"}` |
+| Post-deploy execution smoke | n/a | readiness/rollout | `-svc`: readiness 200 + unauth 401; `-fn`: one completed Cloud Run Job execution | `-svc`: readiness 200 + unauth 401; `-fn`: invoke through the live alias returns `{"status":"ok"}` |
 
 No serverless production claim is made. The `-fn` row covers the run-once
 contract only; no scheduler or event trigger is created by any serverless target.
@@ -169,9 +169,51 @@ verified Cloud Run lifecycle. `gcp.project_id` and the target region supply the 
 coordinates; Cloud Run creates no execution role. The ownership record is written after
 the provider deploy returns and before the target's post-deploy smoke, so a failed smoke
 still leaves a destroyable record. The same limits apply: one dependency-free HTTP `-svc`,
-apply only, and application authentication remains explicit. A GCP serverless target with
-a `-fn` fails closed: Cloud Run Jobs is not implemented and is not assumed to have AWS
-Lambda parity.
+apply only, and application authentication remains explicit.
+
+## Target-scoped GCP Cloud Run Jobs `-fn`
+
+Cloud Run Jobs is a distinct run-to-completion backend; it does not reproduce Lambda
+aliases, event payloads, or response bodies. The target contract is:
+
+- deploy updates the Job template to the image digest, runs one execution, and requires
+  the execution to complete with one successful task and no failed/cancelled tasks;
+- the record carries the project, region, service, Job name, image, generation, and
+  execution name;
+- rollback names a prior execution with `--to-revision`; Sol reads that execution's
+  image from its immutable template, patches the Job, runs a new execution, and records
+  the new execution;
+- destroy removes the Job's executions and the Job, then verifies both are absent;
+- no schedule, trigger, input payload, or Lambda-style `{"status":"ok"}` response is
+  inferred. The application's exit status and the execution counters are the success
+  signal.
+
+```yaml
+production:
+  targets:
+    gcp/us-west1:
+      execution: serverless
+      gcp:
+        project_id: example-project
+```
+
+```text
+sol deploy production/gcp/us-west1 --image-ref probe_fn=<repo>@sha256:<digest>
+sol rollback --target production/gcp/us-west1 --record <serverless-release.json> \
+  --service probe_fn --to-revision <prior-execution>
+sol destroy production/gcp/us-west1 --apply --service probe_fn \
+  --record <serverless-release.json>
+```
+
+The Job is configured with one task, parallelism one, zero task retries, and a 600-second
+task timeout. Because the provider has no alias, rollback requires an execution name; a
+Job with no retained prior execution cannot be rolled back. Partial creates remain
+destroyable because the intended record is written before the Job mutation, and a failed
+execution is recorded before the command fails.
+
+This path is implemented and fake-provider tested. Live GCP evidence is pending
+operator authorization. The OCaml and TypeScript probes run unchanged: without a Lambda
+runtime API they execute their run-once path and exit; with one they use Lambda.
 
 ## Target-scoped destroy
 
@@ -182,9 +224,9 @@ sol destroy <target> --apply --service checkout_fn --record <serverless-release.
 ```
 
 `--apply`, `--service`, and the ownership record are required. The record must match the
-target's provider, region/project, service, and provider function name. For AWS the
-record's `kind` selects the HTTP or run-once lifecycle; a missing or unknown kind fails
-closed. Inventory failure or an ambiguous provider answer fails closed; absence is
+target's provider, region/project, service, and provider resource name. For AWS the
+record's `kind` selects the HTTP or run-once lifecycle; for GCP a Cloud Run Job record
+selects the Jobs lifecycle. A missing or unknown kind fails closed. Inventory failure or an ambiguous provider answer fails closed; absence is
 positively checked. `--plan` is refused for serverless targets rather than pretending a
 read-only destroy plan is authoritative.
 
@@ -199,16 +241,22 @@ sol rollback --target <target> --record <serverless-release.json> \
 
 sol rollback --target <target> --record <serverless-release.json> \
   --service checkout_svc --to-revision <cloud-run-revision> --token-file <token>
+
+sol rollback --target <target> --record <serverless-release.json> \
+  --service probe_fn --to-revision <prior-execution>
 ```
 
-For AWS the record's `kind` selects the rollback lifecycle and the record must match the
+For a GCP `-fn`, `--to-revision` names the prior Cloud Run Jobs execution; no token is
+required because a run-once function has no incoming HTTP identity. For `-svc` the token
+remains required. For AWS the record's `kind` selects the rollback lifecycle and the record must match the
 target, service, and provider function name before the alias moves. The record is updated
 immediately after the alias move, before the post-rollback smoke, so a failed smoke leaves
 the record naming the version that is actually live rather than the previous version. GCP
 `-svc` follows the same rule for the serving revision. The post-rollback check performs the
 same execution smoke as deploy: readiness plus authorized/unauthorized requests for `-svc`,
-or an invoke through `live` returning `{"status":"ok"}` for `-fn`. Kubernetes rollback
-continues to require `RELEASE_ID`.
+or an invoke through `live` returning `{"status":"ok"}` for AWS `-fn`; a GCP `-fn`
+rollback starts and verifies a new Cloud Run Job execution. Kubernetes rollback continues
+to require `RELEASE_ID`.
 
 ### Serving mutations, records, and uncertain outcomes
 
@@ -235,9 +283,14 @@ These are deliberate exclusions, not missing dispatch:
   delivery with explicit acknowledgement and consumer-group semantics. Neither provider
   offers those semantics directly; SQS/Pub/Sub are not a drop-in substitute. No portable
   queue abstraction is introduced to make the matrix symmetrical.
-- **`-fn` on Cloud Run:** a GCP serverless target refuses `-fn`. Cloud Run Jobs is a
-  different execution model and is not assumed to match the verified AWS Lambda
-  function lifecycle; it requires its own audit and implementation.
+- **A shared `-fn` event payload or Lambda-style response body on GCP:** Cloud Run Jobs
+  takes command/args/env and reports task counters, not an invocation payload or a
+  response body. The two probes deliberately ignore input and use exit status.
+- **Scheduling or triggers for GCP `-fn`:** the Jobs backend deploys and executes the
+  Job; Cloud Scheduler is a separate resource and is not created.
+- **Alias-like atomic rollback for GCP `-fn`:** Cloud Run Jobs has no version/alias
+  pointer. Rollback patches the Job from a named prior execution and runs a new
+  execution; it is not atomic traffic movement.
 - **Triggers and schedules for serverless `-fn`:** Sol deploys the run-once function and
   verifies a direct invocation. Event sources, schedules, and their identity are a
   separate contract and are not inferred from the execution backend.

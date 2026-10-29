@@ -1,6 +1,7 @@
 # Audit: Cloud Run Jobs as a GCP `-fn` execution backend
 
-- **Status:** audit only — no implementation authorized
+- **Status:** implemented for target-scoped GCP `-fn`; fake-provider tested, live
+  pending operator approval.
 - **Date:** 2026-10-28
 - **Related:** ADR 0009 (`-fn` contract), ADR 0010 (target-scoped execution),
   `docs/deployment/serverless-experimental.md`, PR #1779 (AWS Lambda `-fn` slice)
@@ -10,7 +11,12 @@
 
 ## Short answer
 
-No parity can be assumed. Cloud Run Jobs is a credible run-to-completion
+No parity can be assumed. The implementation is deliberately narrower than the AWS
+Lambda path: deploys execute one Cloud Run Job execution, success is the execution
+counter/terminal condition, and rollback patches the Job to the image of a named prior
+execution rather than moving an alias. It creates no schedule, trigger, or input event.
+
+ Cloud Run Jobs is a credible run-to-completion
 execution backend, but it does not supply three things the AWS slice relies on:
 
 1. a provider-native version/alias pointer that rollback can move atomically;

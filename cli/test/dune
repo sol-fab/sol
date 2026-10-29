@@ -351,6 +351,16 @@
 
 (rule
  (alias runtest)
+ (deps ../bin/main.exe test_target_serverless_gcp_fn.sh)
+ (action
+  (run
+   bash
+   %{dep:test_target_serverless_gcp_fn.sh}
+   %{dep:../bin/main.exe}
+   %{workspace_root}/examples/pluto)))
+
+(rule
+ (alias runtest)
  (deps ../bin/main.exe test_target_serverless_gcp.sh)
  (action
   (run

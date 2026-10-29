@@ -78,6 +78,39 @@ the serverless dispatch deploys one `-fn` per target. It uses the AWS
 Lambda Node.js base image, not `@sol-fab/fn`: that package is the Kubernetes
 CronJob runtime and is not a Lambda runtime.
 
+## GCP Cloud Run Jobs functions
+
+The same probe images run on Cloud Run Jobs. Set `gcp.project_id` in the
+`serverless_gcp` and `serverless_gcp_ts` environments (and the target region),
+push the images to Artifact Registry, then deploy one probe per target:
+
+```sh
+sol deploy serverless_gcp/gcp/us-west1 \
+  --image-ref probe_fn=<region>-docker.pkg.dev/<project>/<repo>/probe-fn@sha256:<digest>
+sol deploy serverless_gcp_ts/gcp/us-west1 \
+  --image-ref probe_ts_fn=<region>-docker.pkg.dev/<project>/<repo>/probe-ts-fn@sha256:<digest>
+```
+
+Cloud Run Jobs has no Lambda event payload, alias, or response body. Deployment
+updates the Job to the image, starts one execution with one task/parallelism and
+zero task retries, and requires the execution to complete successfully. The
+probes already handle this: without `AWS_LAMBDA_RUNTIME_API` they run once and
+exit; with it they use the Lambda runtime.
+
+Rollback names a prior execution; Sol reads its immutable image, patches the Job,
+and runs a new execution:
+
+```sh
+sol rollback --target serverless_gcp/gcp/us-west1 \
+  --record <serverless-release.json> --service probe_fn --to-revision <execution-id>
+sol destroy serverless_gcp/gcp/us-west1 --apply \
+  --service probe_fn --record <serverless-release.json>
+```
+
+A Job with no retained prior execution cannot be rolled back. There is no
+schedule, input event, or trigger. The GCP path is fake-provider tested; live
+GCP evidence is pending operator approval.
+
 ## Queue consumption
 
 Create a Lambda execution role that can receive/delete from the source queue,

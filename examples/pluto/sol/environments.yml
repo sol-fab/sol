@@ -206,3 +206,73 @@ serverless_ts:
       aws:
         profile: default
         lambda_role_arn: arn:aws:iam::123456789012:role/pluto-probe-fn-exec
+
+# Experimental GCP Cloud Run Jobs targets for the two run-once probes. Each
+# target selects one -fn because target-scoped serverless dispatch deploys one
+# service per target. Cloud Run Jobs has no schedule or trigger here.
+serverless_gcp:
+  shape: local
+  base_domain: serverless.pluto.example.com
+  dns_zone_ownership: user
+  resources:
+    app_db:
+      omit: true
+    events:
+      omit: true
+  services:
+    checkout_svc:
+      omit: true
+    charge_svc:
+      omit: true
+    notify_worker:
+      omit: true
+    orders_svc:
+      omit: true
+    fulfilment_worker:
+      omit: true
+    order_svc:
+      omit: true
+    fulfillment_worker:
+      omit: true
+    probe_ts_fn:
+      omit: true
+  targets:
+    gcp/us-west1:
+      execution: serverless
+      gcp:
+        # Replace with the project that owns the Cloud Run Jobs.
+        project_id: example-project
+        region: us-west1
+
+serverless_gcp_ts:
+  shape: local
+  base_domain: serverless.pluto.example.com
+  dns_zone_ownership: user
+  resources:
+    app_db:
+      omit: true
+    events:
+      omit: true
+  services:
+    checkout_svc:
+      omit: true
+    charge_svc:
+      omit: true
+    notify_worker:
+      omit: true
+    orders_svc:
+      omit: true
+    fulfilment_worker:
+      omit: true
+    order_svc:
+      omit: true
+    fulfillment_worker:
+      omit: true
+    probe_fn:
+      omit: true
+  targets:
+    gcp/us-west1:
+      execution: serverless
+      gcp:
+        project_id: example-project
+        region: us-west1
