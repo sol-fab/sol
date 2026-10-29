@@ -31,20 +31,16 @@ let run_serverless
       ~(selection : Sol_cli_deploy_selection.selection)
       ~run_log
   =
-  let http_services =
-    List.filter
-      (fun (service : Sol_cli_manifest.service) ->
-         service.primitive = Sol_cli_manifest.Svc)
-      deployed.services
-  in
   let* service =
-    match http_services with
+    match deployed.services with
     | [ service ] -> Ok service
-    | [] -> Error (Sol_cli_exit.error "serverless deployment requires one HTTP -svc")
+    | [] ->
+      Error (Sol_cli_exit.error "serverless deployment requires one -svc or -fn service")
     | _ ->
       Error
         (Sol_cli_exit.error
-           "serverless deployment currently supports exactly one HTTP -svc per target")
+           "serverless deployment currently supports exactly one -svc or -fn service per \
+            target")
   in
   let* project =
     match resolved_config.project with
@@ -74,9 +70,22 @@ let run_serverless
         ~record
       |> Result.map_error Sol_cli_exit.error
     in
-    print_endline (Yojson.Safe.to_string (Sol_cli_aws_lambda.release_json release));
+    print_endline (Yojson.Safe.to_string release);
     Ok ()
   | Sol_cli_provider.Gcp ->
+    let* () =
+      match service.primitive with
+      | Sol_cli_manifest.Svc -> Ok ()
+      | Sol_cli_manifest.Fn ->
+        Error
+          (Sol_cli_exit.error
+             "target-scoped serverless -fn dispatch is not implemented for GCP; only AWS \
+              Lambda -fn is supported")
+      | Sol_cli_manifest.Worker ->
+        Error
+          (Sol_cli_exit.error
+             "target-scoped serverless dispatch does not support -worker on GCP")
+    in
     let* release =
       Sol_cli_gcp_serverless_target.deploy
         ~target:target_cfg

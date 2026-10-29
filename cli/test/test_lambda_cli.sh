@@ -15,7 +15,7 @@ elif [[ "$args" == *"lambda create-function"* ]]; then touch "$FAKE_AWS_STATE/fu
 elif [[ "$args" == *"lambda update-function-code"* ]]; then printf '{}\n'
 elif [[ "$args" == *"lambda wait function-updated"* ]]; then printf '{}\n'
 elif [[ "$args" == *"lambda publish-version"* ]]; then printf '{"Version":"1"}\n'
-elif [[ "$args" == *"lambda get-alias"* ]]; then if [[ -f "$FAKE_AWS_STATE/alias" ]]; then printf '{"FunctionVersion":"1"}\n'; else exit 254; fi
+elif [[ "$args" == *"lambda get-alias"* ]]; then if [[ -f "$FAKE_AWS_STATE/alias" ]]; then printf '{"FunctionVersion":"1"}\n'; else printf 'ResourceNotFoundException: Alias not found.\n' >&2; exit 254; fi
 elif [[ "$args" == *"lambda create-alias"* || "$args" == *"lambda update-alias"* ]]; then touch "$FAKE_AWS_STATE/alias"; printf '{}\n'
 elif [[ "$args" == *"lambda get-function-url-config"* ]]; then printf '{"FunctionUrl":"https://lambda.example/"}\n'
 elif [[ "$args" == *"lambda create-function-url-config"* ]]; then printf '{}\n'
@@ -36,8 +36,9 @@ chmod +x "$work/bin/aws" "$work/bin/curl"
 export PATH="$work/bin:$PATH" FAKE_AWS_LOG="$work/aws.log" FAKE_AWS_STATE="$work/state"
 printf 'token\n' > "$work/token"
 cd "$examples"
-common=(--profile test --region us-east-1 --service checkout_svc --image repo@sha256:abc123 --role arn:aws:iam::123:role/test --unit checkout/checkout_svc --issuer https://accounts.google.com --jwks-uri https://www.googleapis.com/oauth2/v3/certs)
+common=(--profile test --region us-east-1 --service checkout_svc --image repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --role arn:aws:iam::123:role/test --unit checkout/checkout_svc --issuer https://accounts.google.com --jwks-uri https://www.googleapis.com/oauth2/v3/certs)
 "$sol" lambda deploy "${common[@]}" --caller checkout/checkout_svc=123 --record "$work/release.json" > "$work/deploy"
+grep -q '"kind":"svc"' "$work/deploy"
 grep -q '"version":"1"' "$work/deploy"
 grep -q 'lambda create-function' "$FAKE_AWS_LOG"
 "$sol" lambda verify "${common[@]}" --token-file "$work/token" > "$work/verify"

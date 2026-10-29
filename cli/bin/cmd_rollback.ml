@@ -384,7 +384,7 @@ let serverless_rollback ~target ~record ~to_version ~to_revision ~token_file ~se
         ~token
       |> Result.map_error Sol_cli_exit.error
     in
-    print_endline (Yojson.Safe.to_string (Sol_cli_aws_lambda.observed_json observed));
+    print_endline (Yojson.Safe.to_string observed);
     Ok ()
   | Sol_cli_provider.Gcp ->
     let* revision =

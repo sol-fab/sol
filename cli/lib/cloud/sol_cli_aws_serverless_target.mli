@@ -5,8 +5,10 @@ val deploy
   -> service:Sol_cli_manifest.service
   -> image:string
   -> record:string
-  -> (Sol_cli_aws_lambda.release, string) result
+  -> (Yojson.Safe.t, string) result
 
+(** Dispatch on the ownership record's [kind]. The record, not the command line, is the
+    authority for which Lambda lifecycle produced the function. *)
 val rollback
   :  target:Sol_cli_config.target
   -> project:string
@@ -14,4 +16,10 @@ val rollback
   -> record:string
   -> version:string
   -> token:string
-  -> (Sol_cli_aws_lambda.observed, string) result
+  -> (Yojson.Safe.t, string) result
+
+val destroy
+  :  target:Sol_cli_config.target
+  -> service:string
+  -> record:string
+  -> (unit, string) result

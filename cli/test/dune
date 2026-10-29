@@ -336,3 +336,15 @@
    %{dep:test_target_serverless.sh}
    %{dep:../bin/main.exe}
    %{workspace_root}/examples/pluto)))
+
+(rule
+ (alias runtest)
+ (deps ../bin/main.exe test_target_serverless_fn.sh)
+ (action
+  (run bash %{dep:test_target_serverless_fn.sh} %{dep:../bin/main.exe})))
+
+(rule
+ (alias runtest)
+ (deps ../bin/main.exe test_target_serverless_refusals.sh)
+ (action
+  (run bash %{dep:test_target_serverless_refusals.sh} %{dep:../bin/main.exe})))

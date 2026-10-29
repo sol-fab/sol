@@ -46,10 +46,13 @@ measure.
 Local is development by design. AWS and GCP are both contracted at the production
 profile. BYO is a development/experimental driver, not a production target.
 
-`-fn` is a run-once execution primitive deployed as a Kubernetes CronJob; it can
-run on a schedule or be invoked manually as a Job created from the CronJob. It is
-not a Kafka worker and not a managed Lambda deployment. `Fn.Lambda` is
-framework-only/experimental and is not part of this contract.
+`-fn` is a run-once execution primitive. On a Kubernetes target it is a CronJob
+that can run on a schedule or be invoked manually as a Job created from the
+CronJob. On an AWS target with `execution: serverless` it is a Lambda function
+invoked on demand, using the `Fn.Lambda` runtime contract; Sol does not create a
+trigger or schedule for it. It is not a Kafka worker. Provider-native serverless
+execution is an experimental slice documented in
+`docs/deployment/serverless-experimental.md`, not part of the production profile.
 
 A target's observability is one Grafana, reachable at a TLS-protected URL and
 gated by OIDC. Anonymous access is disabled; Google OIDC is the default and any
