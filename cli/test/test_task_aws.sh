@@ -66,11 +66,12 @@ elif [[ "$args" == *"sqs get-queue-url"* ]]; then
 elif [[ "$args" == *"sqs create-queue"* ]]; then
   name=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "--queue-name" ]]; then j=$((i+1)); name="${!j}"; fi; done
   [[ "$args" == *"sol-owned=lambda-task-experiment"* ]] || { echo "queue lost the task ownership tag" >&2; exit 1; }
+  attrs=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "--attributes" ]]; then j=$((i+1)); attrs="${!j}"; fi; done
   if [[ "$name" == "checkout-task" ]]; then
-    [[ "$args" == *"RedrivePolicy"* && "$args" == *"maxReceiveCount"* && "$args" == *"VisibilityTimeout=60"* ]] || { echo "source queue lost its settings" >&2; exit 1; }
+    python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["VisibilityTimeout"]=="60"; assert json.loads(d["RedrivePolicy"])["maxReceiveCount"]=="5"' "$attrs" || { echo "source queue lost its settings or attributes are not valid JSON" >&2; exit 1; }
     if [[ "${FAKE_SOURCE_QUEUE_FAIL:-0}" == 1 ]]; then echo "simulated source queue failure" >&2; exit 1; fi
   else
-    [[ "$args" == *"MessageRetentionPeriod=604800"* ]] || { echo "DLQ lost retention" >&2; exit 1; }
+    python3 -c 'import json,sys; assert json.loads(sys.argv[1])["MessageRetentionPeriod"]=="604800"' "$attrs" || { echo "DLQ lost retention" >&2; exit 1; }
   fi
   echo "https://sqs.us-east-1.amazonaws.com/123/$name" > "$state/queue-$name"
   printf 'sol-owned=lambda-task-experiment\nsol-service=checkout-task\n' > "$state/queue-tags-$name"

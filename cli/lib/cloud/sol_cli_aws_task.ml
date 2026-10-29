@@ -188,7 +188,8 @@ let create_queue (r : request) ~queue_name ~attributes ~function_name =
     | Error failure -> Error failure
   in
   let attributes_arg =
-    attributes |> List.map (fun (key, value) -> key ^ "=" ^ value) |> String.concat ","
+    `Assoc (List.map (fun (key, value) -> key, `String value) attributes)
+    |> Yojson.Safe.to_string
   in
   let args =
     [ "sqs"; "create-queue"; "--queue-name"; queue_name ]
@@ -370,25 +371,51 @@ let describe_mapping (r : request) ~uuid =
 ;;
 
 let mapping_ready (r : request) ~uuid =
-  let* json = describe_mapping r ~uuid in
-  let* state =
-    field "State" json
-    |> Result.map_error (fun message -> Sol_cli_aws_lambda_common.Unknown message)
+  let deadline = Unix.gettimeofday () +. 120. in
+  let rec loop () =
+    let* json = describe_mapping r ~uuid in
+    let* state =
+      field "State" json
+      |> Result.map_error (fun message -> Sol_cli_aws_lambda_common.Unknown message)
+    in
+    let* response_types =
+      match Sol_cli_json.list (Sol_cli_json.field [ "FunctionResponseTypes" ] json) with
+      | None -> Ok []
+      | Some values ->
+        Ok (List.filter_map (fun value -> Sol_cli_json.string value) values)
+    in
+    match state with
+    | "Enabled" ->
+      if List.mem "ReportBatchItemFailures" response_types
+      then Ok ()
+      else
+        Error
+          (Sol_cli_aws_lambda_common.Unknown
+             (Printf.sprintf
+                "event source mapping is Enabled with response types [%s]"
+                (String.concat ", " response_types)))
+    | "Creating" | "Enabling" | "Updating" ->
+      if Unix.gettimeofday () > deadline
+      then
+        Error
+          (Sol_cli_aws_lambda_common.Unknown
+             (Printf.sprintf
+                "timed out waiting for event source mapping %s (state %s)"
+                uuid
+                state))
+      else (
+        Unix.sleepf 2.;
+        loop ())
+    | "Failed" ->
+      Error
+        (Sol_cli_aws_lambda_common.Unknown
+           ("event source mapping " ^ uuid ^ " entered Failed"))
+    | other ->
+      Error
+        (Sol_cli_aws_lambda_common.Unknown
+           (Printf.sprintf "event source mapping %s is %s" uuid other))
   in
-  let* response_types =
-    match Sol_cli_json.list (Sol_cli_json.field [ "FunctionResponseTypes" ] json) with
-    | None -> Ok []
-    | Some values -> Ok (List.filter_map (fun value -> Sol_cli_json.string value) values)
-  in
-  if state = "Enabled" && List.mem "ReportBatchItemFailures" response_types
-  then Ok ()
-  else
-    Error
-      (Sol_cli_aws_lambda_common.Unknown
-         (Printf.sprintf
-            "event source mapping is %s with response types [%s]"
-            state
-            (String.concat ", " response_types)))
+  loop ()
 ;;
 
 let release_json (r : release) =
