@@ -1,4 +1,8 @@
+(** A full image reference with Docker's repository-name grammar and a
+    lowercase [sha256:<64 hex>] digest. This is the one image-reference rule;
+    the deploy resolver, release-bundle assets and provider adapters use it. *)
 val is_digest : string -> bool
+
 val split_flag_value : string -> string option * string
 
 val resolve
