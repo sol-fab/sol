@@ -34,7 +34,7 @@ run_script() {
 
 checkout="$scratch/checkout"
 make_checkout "$checkout"
-for package in sol-svc sol-task kafka-eio-service sol; do
+for package in sol-svc sol-task kafka-eio-service sol sol-extra; do
   : >"$checkout/$package.opam"
 done
 log="$scratch/opam.log"
@@ -57,7 +57,7 @@ for raw in open(log):
         # install -y <package>...
         install.extend(args[2:])
 
-expected = {"kafka-eio-service", "sol-svc", "sol-task"}
+expected = {"kafka-eio-service", "sol-svc", "sol-task", "sol-extra"}
 if set(pin) != expected:
     raise SystemExit(f"unexpected pinned set: {sorted(pin)}; expected {sorted(expected)}")
 if set(install) != expected:
