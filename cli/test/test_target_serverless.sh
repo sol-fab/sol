@@ -54,6 +54,7 @@ while [[ $# -gt 0 ]]; do case "$1" in --config) config="$2"; shift 2;; --output|
 if [[ "$url" == */readyz ]]; then printf '\n200'; elif [[ -s "$config" ]]; then printf 'ok\n200'; else printf 'no\n401'; fi
 FAKE
 chmod +x "$work/bin/aws" "$work/bin/curl"
+unset XDG_DATA_HOME
 export PATH="$work/bin:$PATH" FAKE_AWS_LOG="$work/aws.log" FAKE_AWS_STATE="$work/state" HOME="$work/home"
 cd "$work/ws"
 "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref checkout_svc=repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "$work/deploy"
