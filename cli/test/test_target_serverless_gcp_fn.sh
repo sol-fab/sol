@@ -82,9 +82,15 @@ if [[ "$1 $2 $3 $4" == "run jobs executions describe" ]]; then
   name="${5##*/}"
   [[ -f "$state/executions/$name.image" ]] || { echo "execution absent" >&2; exit 1; }
   image="$(cat "$state/executions/$name.image")"
-  cat <<JSON
+  if [[ "${FAKE_EXEC_FAIL:-0}" == 1 ]]; then
+    cat <<JSON
+{"job":"projects/example-project/locations/us-west1/jobs/probe-fn","spec":{"template":{"spec":{"containers":[{"image":"$image"}]}}},"status":{"succeededCount":0,"failedCount":1,"cancelledCount":0,"conditions":[{"type":"Completed","status":"False"}]}}
+JSON
+  else
+    cat <<JSON
 {"job":"projects/example-project/locations/us-west1/jobs/probe-fn","spec":{"template":{"spec":{"containers":[{"image":"$image"}]}}},"status":{"succeededCount":1,"failedCount":0,"cancelledCount":0,"conditions":[{"type":"Completed","status":"True"}]}}
 JSON
+  fi
   exit 0
 fi
 if [[ "$1 $2 $3 $4" == "run jobs executions delete" ]]; then
@@ -138,4 +144,16 @@ grep -q '"execution":"projects/example-project/locations/us-west1/jobs/probe-fn/
 [[ ! -e "$work/state/executions/ex-1.image" ]]
 [[ ! -e "$work/state/executions/ex-2.image" ]]
 [[ ! -e "$work/state/executions/ex-3.image" ]]
+
+# A Job that was created and executed but whose execution failed must still leave a
+# destroyable ownership record.
+if FAKE_EXEC_FAIL=1 "$sol" deploy live/gcp/us-west1 --image-tag test --image-ref "probe_fn=$image_a" > "$work/deploy-fail" 2>&1; then
+  echo "deploy accepted a failed execution" >&2; exit 1
+fi
+grep -q 'did not succeed' "$work/deploy-fail"
+record=$(find "$work/home/.local/share/sol/runs" -name serverless-release.json -type f -print | sort | tail -1)
+grep -q '"kind":"fn"' "$record"
+"$sol" destroy live/gcp/us-west1 --apply --service probe_fn --record "$record" > "$work/destroy-fail"
+[[ ! -f "$work/state/job" ]]
+[[ -z "$(ls -A "$work/state/executions" 2>/dev/null)" ]]
 echo "GCP Cloud Run Jobs fn lifecycle test passed"
