@@ -119,6 +119,11 @@ No positional: the command acts on the workspace, and a target or scope is a nar
 | `sol task aws enqueue` | — | `--idempotency-key=KEY`, `--kind=KIND`, `--payload=JSON`, `--payload-file=FILE`, `--profile=PROFILE`, `--record=PATH`, `--region=REGION`, `--service=SERVICE` | documented | Send one task envelope to the deployed SQS |
 | `sol task aws rollback` | — | `--profile=PROFILE`, `--record=PATH`, `--region=REGION`, `--service=SERVICE`, `--to-version=VERSION` | documented | Move the Lambda task alias to a prior version |
 | `sol task aws verify` | — | `--profile=PROFILE`, `--record=PATH`, `--region=REGION`, `--service=SERVICE` | documented | Verify the task queue, mapping, and Lambda alias |
+| `sol task gcp deploy` | — | `--ack-deadline=SECONDS`, `--concurrency=N`, `--dlq-retention=SECONDS`, `--image=IMAGE`, `--max-attempts=N`, `--project=PROJECT`, `--record=PATH`, `--region=REGION`, `--service=SERVICE` | documented | Deploy a Pub/Sub topic, push subscription, |
+| `sol task gcp destroy` | — | `--apply`, `--project=PROJECT`, `--record=PATH`, `--region=REGION`, `--service=SERVICE` | documented | Delete the task subscription, topics, service |
+| `sol task gcp enqueue` | — | `--idempotency-key=KEY`, `--kind=KIND`, `--payload=JSON`, `--payload-file=FILE`, `--project=PROJECT`, `--record=PATH`, `--region=REGION`, `--service=SERVICE` | documented | Publish one task envelope to the deployed topic |
+| `sol task gcp rollback` | — | `--project=PROJECT`, `--record=PATH`, `--region=REGION`, `--service=SERVICE`, `--to-revision=REVISION` | documented | Move Cloud Run traffic to a prior task |
+| `sol task gcp verify` | — | `--project=PROJECT`, `--record=PATH`, `--region=REGION`, `--service=SERVICE` | documented | Verify the Pub/Sub subscription, dead-letter |
 <!-- END GENERATED: workspace -->
 
 ## Local commands

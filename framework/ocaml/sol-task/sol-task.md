@@ -168,7 +168,10 @@ The service is deployed without public invoker access and grants
 `roles/run.invoker` only to the Pub/Sub push service account. Cloud Run IAM is
 the incoming authentication boundary; the task runtime does not add a second
 application auth layer. Pub/Sub owns the dead-letter topic after
-`maxDeliveryAttempts`.
+`maxDeliveryAttempts`. The provider lifecycle is
+`sol task gcp deploy|verify|enqueue|rollback|destroy`; it creates the topics,
+push subscription, private Cloud Run service, and push service account, and
+writes an ownership record with deterministic names before creation.
 
 ## Observability
 

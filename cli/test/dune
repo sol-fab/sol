@@ -364,3 +364,9 @@
  (deps ../bin/main.exe test_task_aws.sh)
  (action
   (run bash %{dep:test_task_aws.sh} %{dep:../bin/main.exe})))
+
+(rule
+ (alias runtest)
+ (deps ../bin/main.exe test_task_gcp.sh)
+ (action
+  (run bash %{dep:test_task_gcp.sh} %{dep:../bin/main.exe})))

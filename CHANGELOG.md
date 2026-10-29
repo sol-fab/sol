@@ -13,7 +13,10 @@ not a full commit log — see `git log` for that.
   Tasks have a stable `task_id`, application payload and optional idempotency
   key, and handlers return `Ack` or `Retry`; delivery is at-least-once and
   terminal dead-lettering is provider-managed. `sol local task enqueue` inserts
-  an envelope into the local queue for development.
+  an envelope into the local queue for development. `sol task aws` and
+  `sol task gcp` provide the experimental provider lifecycles (queue/topic,
+  handler runtime, ownership record, rollback, destroy); live qualification is
+  tracked separately from the fake-provider lifecycle tests.
 - **Behavior change:** `sol new workspace` pins the Sol framework packages in the
   generated `*.opam` to the exact revision the CLI was built from, instead of
   `github.com/sol-fab/sol.git#main`. A generated workspace is now reproducible
