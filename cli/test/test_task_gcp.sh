@@ -144,4 +144,16 @@ grep -q '"subscription":"checkout-task-sub"' "$work/partial.json"
 [[ ! -f "$work/state/topic-checkout-task-dlq" ]]
 [[ ! -f "$work/state/sa-checkout-push.description" ]]
 
+# A failure at Cloud Run deploy must leave the record and be destroyable even
+# though the service was never created.
+FAKE_RUN_DEPLOY_FAIL=1 "$sol" task gcp deploy "${common[@]}" --record "$work/partial-service.json" > "$work/partial-service.out" 2>&1 && {
+  echo "deploy accepted a Cloud Run deploy failure" >&2; exit 1
+}
+[[ -f "$work/partial-service.json" ]]
+grep -q '"cloud_run_url":""' "$work/partial-service.json"
+"$sol" task gcp destroy --project p --region us-west1 --service checkout --record "$work/partial-service.json" --apply > /dev/null
+[[ ! -f "$work/state/topic-checkout-task" ]]
+[[ ! -f "$work/state/topic-checkout-task-dlq" ]]
+[[ ! -f "$work/state/sa-checkout-push.description" ]]
+
 echo "task GCP fake-provider lifecycle test passed"
