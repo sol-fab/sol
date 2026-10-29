@@ -10,3 +10,16 @@ export async function handler(): Promise<{ status: "ok" }> {
   console.log("[probe-fn-ts] pluto serverless probe ok");
   return { status: "ok" };
 }
+
+// The same image runs as a Lambda (the target's runtime API is present) and as
+// a local Kubernetes CronJob (it is absent). The Lambda base image entrypoint
+// chooses the handler; direct Node execution is the local one-shot.
+if (require.main === module) {
+  void handler().then(
+    () => process.exit(0),
+    (error: unknown) => {
+      console.error(`[probe-fn-ts] local run failed: ${String(error)}`);
+      process.exit(1);
+    },
+  );
+}

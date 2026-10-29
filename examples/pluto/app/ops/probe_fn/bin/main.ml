@@ -17,7 +17,15 @@ let () =
       ~service:"pluto-probe-fn"
       ()
   in
-  let module F = Fn.Make (Probe_fn) in
+  (* The serverless target supplies the Lambda runtime API; local CronJob and
+     `sol local invoke` have no Lambda API, so run the same function once through
+     the Cron trigger instead of waiting forever for a Lambda invocation. *)
+  let has_lambda_runtime = Sys.getenv_opt "AWS_LAMBDA_RUNTIME_API" <> None in
+  let module F = Fn.Make (struct
+      let trigger = if has_lambda_runtime then Fn.Lambda else Fn.Cron
+      let run = Probe_fn.run
+    end)
+  in
   match F.run ~env ~ot:obs () with
   | Ok () -> ()
   | Error `Signalled -> exit 130

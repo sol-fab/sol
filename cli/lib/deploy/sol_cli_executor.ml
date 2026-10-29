@@ -133,8 +133,15 @@ let dispatch_rendered ~ctx ~mode spec bundle =
    sol/secrets.local), so force every key to Sol_managed and never wait on ESO. *)
 let local_development_spec (spec : Sol_cli_deployment_plan.service_spec) =
   let key = "SOL_ALLOW_UNVERIFIED_JWT" in
+  (* Local runs have no target capability projection to supply a workload
+     issuer. Supply a local-only issuer so an internal route can boot; requests
+     still need a token, and this value is never rendered by a real target. *)
+  let issuer_key = "SOL_TRUSTED_WORKLOAD_ISSUER" in
   { spec with
-    config = (key, "1") :: List.remove_assoc key spec.config
+    config =
+      (key, "1")
+      :: (issuer_key, "https://local.sol.invalid")
+      :: List.remove_assoc key (List.remove_assoc issuer_key spec.config)
   ; secret_sources = []
   }
 ;;

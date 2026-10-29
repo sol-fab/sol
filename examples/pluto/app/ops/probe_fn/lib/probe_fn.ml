@@ -4,8 +4,6 @@
     serves this module through the Lambda runtime and answers an invocation with
     [{"status":"ok"}]; locally or on Kubernetes it is a run-once CronJob. *)
 
-let trigger = Fn.Lambda
-
 let run () =
   Printf.printf "[probe-fn] pluto serverless probe ok\n%!";
   Ok ()

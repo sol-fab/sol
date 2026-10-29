@@ -8,4 +8,7 @@ RUN npm run build
 FROM public.ecr.aws/lambda/nodejs:22
 WORKDIR ${LAMBDA_TASK_ROOT}
 COPY --from=build /src/dist/index.js ./index.js
+COPY app/demo_ts/probe_ts_fn/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["index.handler"]

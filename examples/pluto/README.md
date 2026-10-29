@@ -174,9 +174,15 @@ curl localhost:8080/orders/o1
 ## Run locally
 
 ```bash
-# Start Kafka (Redpanda) and Postgres
-bash <path-to-sol>/platform/local/scripts/ensure-broker.sh
-bash <path-to-sol>/platform/local/scripts/ensure-postgres.sh
+# If localhost:5432 is already used, choose another host port for the local
+# PostgreSQL forward; the cluster itself still uses 5432 internally.
+export SOL_LOCAL_POSTGRES_PORT=55432
+
+# Bring up Sol's local cluster, infrastructure, and workloads.
+sol local deploy
+sol local migrate
+sol local deploy
+```
 
 # Run the worker (POSTGRES_URL is required — both services depend on Postgres)
 KAFKA_SECURITY_PROTOCOL=plaintext KAFKA_BROKERS=localhost:9092 SCHEMA_REGISTRY_URL=http://localhost:8081 REDPANDA_ADMIN_URL=http://localhost:9644 POSTGRES_URL=postgresql://postgres:dev@localhost:5432/sol_dev \

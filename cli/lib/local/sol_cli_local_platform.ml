@@ -283,6 +283,24 @@ let postgres_service = "postgresql"
 let postgres_namespace = "postgresql"
 let postgres_remote_port = 5432
 
+(* The cluster always listens on 5432. The host-side forward defaults to the
+   same port for compatibility, but a developer machine commonly has a local
+   PostgreSQL there; SOL_LOCAL_POSTGRES_PORT lets the local loop move without
+   changing the workload URL (which stays on cluster DNS). *)
+let postgres_local_port () =
+  match Sys.getenv_opt "SOL_LOCAL_POSTGRES_PORT" with
+  | None -> postgres_remote_port
+  | Some value ->
+    (match int_of_string_opt (String.trim value) with
+     | Some port when port > 0 && port < 65536 -> port
+     | _ ->
+       Sol_cli_report.warn
+         "warning: SOL_LOCAL_POSTGRES_PORT=%S is not a port in 1..65535; using %d"
+         value
+         postgres_remote_port;
+       postgres_remote_port)
+;;
+
 let postgres_url ~host ~port =
   Printf.sprintf "postgresql://postgres:dev@%s:%d/dev" host port
 ;;
@@ -404,18 +422,19 @@ let endpoints ~(req : Sol_cli_workspace.infra_requirements) =
   in
   let postgres_endpoints =
     if req.postgres
-    then
+    then (
+      let local_port = postgres_local_port () in
       [ endpoint
           ~required:req.postgres
           "postgres"
           ~namespace:postgres_namespace
           ~target:(service postgres_service)
-          ~local_port:postgres_remote_port
+          ~local_port
           ~remote_port:postgres_remote_port
           (Printf.sprintf
              "  postgres     ✓  %s  (port-forwarded)"
-             (postgres_url ~host:"localhost" ~port:postgres_remote_port))
-      ]
+             (postgres_url ~host:"localhost" ~port:local_port))
+      ])
     else []
   in
   let observability_endpoints =

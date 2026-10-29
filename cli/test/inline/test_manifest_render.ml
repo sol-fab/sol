@@ -2568,7 +2568,13 @@ let test_local_executor_renders_unverified_jwt_opt_in () =
   check_bool
     "local render carries SOL_ALLOW_UNVERIFIED_JWT=1"
     true
-    (Sol_cli_string.contains ~needle:"SOL_ALLOW_UNVERIFIED_JWT: \"1\"" workload)
+    (Sol_cli_string.contains ~needle:"SOL_ALLOW_UNVERIFIED_JWT: \"1\"" workload);
+  check_bool
+    "local render supplies a local workload issuer"
+    true
+    (Sol_cli_string.contains
+       ~needle:"SOL_TRUSTED_WORKLOAD_ISSUER: \"https://local.sol.invalid\""
+       workload)
 ;;
 
 let test_sol_toml_cannot_set_unverified_jwt_opt_in () =

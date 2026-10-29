@@ -152,4 +152,8 @@ dune build app/ops/probe_fn/bin/main.exe serverless/task_consumer_ocaml/bin/main
 sol check
 ```
 
-No live AWS resources are created by these local commands.
+The probes are also runnable as local Kubernetes CronJobs: the OCaml probe
+selects the `Cron` trigger when `AWS_LAMBDA_RUNTIME_API` is absent, and the
+TypeScript image entrypoint runs `index.js` once when that API is absent. Create
+a local test Job from each CronJob to exercise it without AWS. No live AWS
+resources are created by these local commands.
