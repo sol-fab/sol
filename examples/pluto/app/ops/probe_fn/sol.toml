@@ -1,0 +1,10 @@
+# The schedule is required for the -fn contract; an AWS serverless target
+# deploys this unit as a run-once Lambda and creates no schedule or trigger.
+[service]
+schedule = "0 * * * *"
+scheduled_concurrency = "forbid"
+# backoff_limit = 3
+
+[infra.scale]
+# cpu    = "100m"
+# memory = "128Mi"

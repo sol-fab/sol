@@ -97,6 +97,8 @@ let test_pluto_services_carry_their_primitive_and_language () =
     ; "notify_worker"
     ; "order_svc"
     ; "orders_svc"
+    ; "probe_fn"
+    ; "probe_ts_fn"
     ]
     (service_names facts);
   Windtrap.equal Windtrap.string ~msg:"root" (fixture "examples/pluto") facts.root;
@@ -110,6 +112,8 @@ let test_pluto_services_carry_their_primitive_and_language () =
     ; "notify_worker=ocaml"
     ; "order_svc=typescript"
     ; "orders_svc=ocaml"
+    ; "probe_fn=ocaml"
+    ; "probe_ts_fn=typescript"
     ]
     (languages facts);
   let primitives =
@@ -128,6 +132,8 @@ let test_pluto_services_carry_their_primitive_and_language () =
     ; "notify_worker=worker"
     ; "order_svc=svc"
     ; "orders_svc=svc"
+    ; "probe_fn=fn"
+    ; "probe_ts_fn=fn"
     ]
     primitives;
   Windtrap.equal

@@ -31,6 +31,10 @@ prod:
       scale:
         min: 1
         max: 2
+    probe_fn:
+      omit: true
+    probe_ts_fn:
+      omit: true
   targets:
     aws/us-east-1:
       cluster_name: pluto-prod
@@ -53,6 +57,11 @@ pilot:
   alert_owner: pluto-oncall
   alert_runbook_url: https://runbooks.example.com/sol
   node_failure_headroom_nodes: 1
+  services:
+    probe_fn:
+      omit: true
+    probe_ts_fn:
+      omit: true
   targets:
     aws/us-east-1:
       cluster_name: pluto-pilot
@@ -93,6 +102,10 @@ dev:
       omit: true
     fulfillment_worker:
       omit: true
+    probe_fn:
+      omit: true
+    probe_ts_fn:
+      omit: true
   targets:
     aws/us-east-1:
       cluster_name: pluto-dev
@@ -106,6 +119,11 @@ customer_cloud:
   # The customer's own DNS: Sol asks for the delegation and does not own the zone.
   dns_zone_ownership: external
   letsencrypt_email: ops@pluto.example.com
+  services:
+    probe_fn:
+      omit: true
+    probe_ts_fn:
+      omit: true
   targets:
     aws/us-east-1:
       cluster_name: pluto-customer
@@ -113,3 +131,78 @@ customer_cloud:
     byo/onprem:
       kube_context: pluto-customer
       registry: registry.example.com/pluto
+
+
+# Experimental AWS serverless target for the two run-once probes. The target
+# creates Lambda functions, versions, and the live alias only; it does not
+# create a schedule, trigger, or queue. Task queues are deployed separately with
+# `sol task aws` (see examples/pluto/SERVERLESS.md).
+serverless:
+  shape: local
+  base_domain: serverless.pluto.example.com
+  dns_zone_ownership: user
+  resources:
+    app_db:
+      omit: true
+    events:
+      omit: true
+  services:
+    checkout_svc:
+      omit: true
+    charge_svc:
+      omit: true
+    notify_worker:
+      omit: true
+    orders_svc:
+      omit: true
+    fulfilment_worker:
+      omit: true
+    order_svc:
+      omit: true
+    fulfillment_worker:
+      omit: true
+    probe_ts_fn:
+      omit: true
+  targets:
+    aws/us-east-1:
+      execution: serverless
+      aws:
+        # Replace with an AWS profile and an existing Lambda execution role.
+        profile: default
+        lambda_role_arn: arn:aws:iam::123456789012:role/pluto-probe-fn-exec
+
+
+# The target-scoped serverless dispatch deploys exactly one service per target,
+# so the TypeScript probe has its own environment/target selection.
+serverless_ts:
+  shape: local
+  base_domain: serverless.pluto.example.com
+  dns_zone_ownership: user
+  resources:
+    app_db:
+      omit: true
+    events:
+      omit: true
+  services:
+    checkout_svc:
+      omit: true
+    charge_svc:
+      omit: true
+    notify_worker:
+      omit: true
+    orders_svc:
+      omit: true
+    fulfilment_worker:
+      omit: true
+    order_svc:
+      omit: true
+    fulfillment_worker:
+      omit: true
+    probe_fn:
+      omit: true
+  targets:
+    aws/us-east-1:
+      execution: serverless
+      aws:
+        profile: default
+        lambda_role_arn: arn:aws:iam::123456789012:role/pluto-probe-fn-exec

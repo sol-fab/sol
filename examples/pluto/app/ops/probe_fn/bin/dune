@@ -1,0 +1,3 @@
+(executable
+ (name main)
+ (libraries pluto_ops_probe sol-fn sol-obs eio_main))

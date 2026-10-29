@@ -113,7 +113,8 @@ The lifecycle is:
 
 No Function URL is created, and no HTTP authentication smoke is claimed. The
 record deliberately has no `url` field, so it cannot be mistaken for the HTTP
-lifecycle.
+lifecycle. A complete workspace example, including a TypeScript Lambda probe
+and SQS task consumers, is in [`examples/pluto/SERVERLESS.md`](../../examples/pluto/SERVERLESS.md).
 
 ## GCP Cloud Run HTTP
 

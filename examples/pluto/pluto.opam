@@ -12,6 +12,7 @@ depends: [
   "sol-svc-core"
   "sol-worker"
   "sol-fn"
+  "sol-task"
   "sol-jobs"
   "sol-outbox"
   "sol-retry"
@@ -30,6 +31,7 @@ pin-depends: [
   [ "sol-svc-core.dev"      "git+https://github.com/sol-fab/sol.git#main" ]
   [ "sol-worker.dev"        "git+https://github.com/sol-fab/sol.git#main" ]
   [ "sol-fn.dev"            "git+https://github.com/sol-fab/sol.git#main" ]
+  [ "sol-task.dev"          "git+https://github.com/sol-fab/sol.git#main" ]
   [ "sol-jobs.dev"          "git+https://github.com/sol-fab/sol.git#main" ]
   [ "sol-outbox.dev"        "git+https://github.com/sol-fab/sol.git#main" ]
   [ "sol-retry.dev"         "git+https://github.com/sol-fab/sol.git#main" ]

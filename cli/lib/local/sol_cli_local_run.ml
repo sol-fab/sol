@@ -397,7 +397,9 @@ let plan ?(secret_values = []) ~root ~facts services =
              (if database_consumer
               then
                 [ ( "POSTGRES_URL"
-                  , Sol_cli_local_platform.postgres_url ~host:"localhost" ~port:5432 )
+                  , Sol_cli_local_platform.postgres_url
+                      ~host:"localhost"
+                      ~port:(Sol_cli_local_platform.postgres_local_port ()) )
                 ]
               else [])
              @
