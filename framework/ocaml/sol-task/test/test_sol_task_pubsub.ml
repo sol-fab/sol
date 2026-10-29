@@ -5,6 +5,7 @@ type task =
   | Retry_task
 
 let handled = ref 0
+let handled_ids = ref []
 
 module T = struct
   type t = task
@@ -29,8 +30,9 @@ module T = struct
     | _ -> Error "unknown task"
   ;;
 
-  let handle ~task_id:_ ?idempotency_key:_ task =
+  let handle ~task_id ?idempotency_key:_ task =
     incr handled;
+    handled_ids := task_id :: !handled_ids;
     match task with
     | Ack_task -> Sol_task.Ack
     | Retry_task -> Sol_task.Retry "temporary"
@@ -67,6 +69,24 @@ let test_ack_and_retry () =
   Windtrap.equal Windtrap.int ~msg:"both handlers entered" 2 !handled
 ;;
 
+let test_duplicate_delivery_keeps_identity () =
+  handled := 0;
+  handled_ids := [];
+  let body = push_body "ack" "ack" in
+  (match Runtime.For_testing.handle_push body with
+   | Ok (200, _) -> ()
+   | Ok (status, _) -> failf "first delivery returned %d" status
+   | Error message -> failf "first delivery failed: %s" message);
+  (match Runtime.For_testing.handle_push body with
+   | Ok (200, _) -> ()
+   | Ok (status, _) -> failf "redelivery returned %d" status
+   | Error message -> failf "redelivery failed: %s" message);
+  match List.rev !handled_ids with
+  | [ first; second ] ->
+    Windtrap.equal Windtrap.string ~msg:"same task id on redelivery" first second
+  | _ -> failf "expected two deliveries"
+;;
+
 let test_malformed () =
   (match Runtime.For_testing.handle_push {|{"message":{"data":"%%%"}}|} with
    | Error _ -> ()
@@ -97,6 +117,7 @@ let test_malformed () =
 
 let () =
   test_ack_and_retry ();
+  test_duplicate_delivery_keeps_identity ();
   test_malformed ();
   print_endline "sol-task pubsub tests passed"
 ;;

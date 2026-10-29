@@ -109,6 +109,27 @@ let test_partial_batch_failure () =
     (List.length !handled)
 ;;
 
+let test_duplicate_delivery_keeps_identity () =
+  handled := [];
+  let event = sqs_event [ "m-dup", envelope "echo" "echo:hello" ] in
+  let first = Runtime.For_testing.handle_event event |> Result.get_ok in
+  let second = Runtime.For_testing.handle_event event |> Result.get_ok in
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"first has no failures"
+    0
+    (List.length (failure_ids first));
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"second has no failures"
+    0
+    (List.length (failure_ids second));
+  match List.rev !handled with
+  | [ (first_id, _, Echo _); (second_id, _, Echo _) ] ->
+    Windtrap.equal Windtrap.string ~msg:"same task id on redelivery" first_id second_id
+  | _ -> failf "expected two Echo deliveries"
+;;
+
 let test_rejects_non_sqs_event () =
   match Runtime.For_testing.handle_event {|{"hello":"world"}|} with
   | Error _ -> ()
@@ -117,6 +138,7 @@ let test_rejects_non_sqs_event () =
 
 let () =
   test_partial_batch_failure ();
+  test_duplicate_delivery_keeps_identity ();
   test_rejects_non_sqs_event ();
   print_endline "sol-task lambda tests passed"
 ;;
