@@ -5,6 +5,13 @@ A Sol workspace with OCaml service examples (`charge_svc`, `checkout_svc`,
 also carries the alpha campaign's reference application, the "Pluto orders"
 scenario, in both languages.
 
+The workspace also demonstrates the experimental serverless path: two run-once
+functions (`probe_fn` in OCaml and `probe_ts_fn` in TypeScript) on an AWS
+serverless target, and two SQS queue consumers (`serverless/task_consumer_ocaml`
+and `serverless/task_consumer_ts`) deployed as another Lambda function. See
+[`SERVERLESS.md`](SERVERLESS.md) for the build/deploy/destroy procedure and the
+separate task lifecycle.
+
 ## The reference scenario: Pluto orders
 
 `examples/pluto` is the alpha campaign's reference application: one realistic

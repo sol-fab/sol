@@ -1,5 +1,10 @@
 # Sol's TypeScript framework parity
 
+This directory's `probe_ts_fn` and `../serverless/task_consumer_ts` are the
+TypeScript half of the serverless demo: an AWS Lambda probe and an SQS task
+consumer. They use provider-native Node Lambda images because `@sol-fab/task`
+does not exist yet; see [`../SERVERLESS.md`](../SERVERLESS.md).
+
 `order_svc` and `fulfillment_worker` are a real TypeScript service and worker
 running on Sol's deploy machinery (CLI, Docker builds, Kubernetes manifests
 are all language-neutral) and consuming Sol's own conventions via seven published

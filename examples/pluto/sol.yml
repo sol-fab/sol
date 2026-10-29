@@ -49,3 +49,17 @@ services:
     path: app/demo_ts/fulfillment_worker
     uses: [app_db, events]
     language: typescript
+
+  # Serverless execution: `probe_fn` and `probe_ts_fn` are run-once functions.
+  # The `serverless` environment maps them to AWS Lambda; ordinary environments
+  # omit them. The queue consumers are deployed by the standalone task lifecycle
+  # (`sol task aws`), not by this target-scoped manifest.
+  probe_fn:
+    type: fn
+    path: app/ops/probe_fn
+    language: ocaml
+
+  probe_ts_fn:
+    type: fn
+    path: app/demo_ts/probe_ts_fn
+    language: typescript

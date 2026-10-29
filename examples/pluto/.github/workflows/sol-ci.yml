@@ -157,6 +157,13 @@ jobs:
           find app -name Dockerfile -print0 | while IFS= read -r -d '' dockerfile; do
             dir="$(dirname "$dockerfile")"
             service="$(basename "$dir")"
+            # The serverless probes are deployed by the separate `serverless`
+            # target, not by this workspace's regular target. Their images are
+            # built by SERVERLESS.md, so do not add refs the regular deploy
+            # cannot select.
+            case "$service" in
+              probe_fn|probe_ts_fn) continue ;;
+            esac
             image_unit="$(printf '%s' "$service" | tr '_' '-')"
             image="${SOL_REGISTRY}/pluto/${image_unit}:${short_sha}"
             docker build --provenance=false --sbom=false -t "$image" -f "$dockerfile" .

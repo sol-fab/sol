@@ -1,0 +1,5 @@
+(library
+ (name pluto_ops_task_consumer)
+ (wrapped false)
+ (modules Task_consumer)
+ (libraries sol-task yojson))

@@ -1,0 +1,8 @@
+# Schedule is part of the -fn declaration. The AWS serverless target maps this
+# unit to a run-once Lambda and creates no schedule or trigger.
+[service]
+schedule = "0 * * * *"
+
+[infra.scale]
+# cpu    = "100m"
+# memory = "128Mi"
