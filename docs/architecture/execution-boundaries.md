@@ -120,12 +120,13 @@ universal execution abstraction is introduced merely to make the map tidier.
   cross-cutting change that should be justified by a concrete failure, not by
   the map alone.
 - Target-scoped serverless dispatch covers `-svc` and, on AWS, `-fn`; it does not
-  cover `-worker` or the standalone task lifecycle. A task queue/trigger is not
-  created by `sol deploy`.
-- The AWS task lifecycle is an experimental standalone command with its own
-  ownership record; it is not yet integrated with the target release store. The
-  `sol-task.pubsub` runtime exists, but the target-scoped dispatch does not yet
-  create task queues or triggers.
+  cover `-worker`. **Decision:** the supported deployment workflow for durable
+  tasks is the standalone `sol task aws`/`sol task gcp` lifecycle, which owns
+  its provider queue/topic, retry/DLQ policy, and release record. Target-scoped
+  `sol deploy` does not create task queues or triggers. `sol-task` is a library,
+  not a workload kind; `-worker` is the Kafka consumer primitive. A
+  target-scoped task primitive would be a new public contract and is outside
+  this capability's scope.
 - Live provider behavior is qualified separately and is not part of ordinary PR
   CI; see [`internal/qualification/README.md`](../../internal/qualification/README.md).
 - `sol-task` supports the task runtime on all three environments, but the

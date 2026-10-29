@@ -1,0 +1,8 @@
+{
+    "AliasArn": "arn:aws:lambda:us-east-1:<aws-account>:function:checkout-task:live",
+    "Name": "live",
+    "FunctionVersion": "3",
+    "Description": "",
+    "RevisionId": "baf3d696-e7d6-487b-a3dc-ae3b6e9c7d3f"
+}
+

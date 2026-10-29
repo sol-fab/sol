@@ -1,0 +1,17 @@
+{
+    "Attributes": {
+        "QueueArn": "arn:aws:sqs:us-east-1:<aws-account>:checkout-task-dlq",
+        "ApproximateNumberOfMessages": "1",
+        "ApproximateNumberOfMessagesNotVisible": "1",
+        "ApproximateNumberOfMessagesDelayed": "0",
+        "CreatedTimestamp": "1793282712",
+        "LastModifiedTimestamp": "1793282712",
+        "VisibilityTimeout": "30",
+        "MaximumMessageSize": "1048576",
+        "MessageRetentionPeriod": "3600",
+        "DelaySeconds": "0",
+        "ReceiveMessageWaitTimeSeconds": "0",
+        "SqsManagedSseEnabled": "true"
+    }
+}
+

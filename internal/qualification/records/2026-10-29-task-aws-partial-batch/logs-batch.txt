@@ -1,0 +1,6 @@
+2026/10/29/[3]6db64f0318e043468cf81cc3fab55d54 task_handler task_id=batch-ack-1 kind=ack idempotency_key=batch-ack-1
+2026/10/29/[3]6db64f0318e043468cf81cc3fab55d54 sol-task: task acknowledged task_id=batch-ack-1 kind=ack
+2026/10/29/[3]6db64f0318e043468cf81cc3fab55d54 task_handler task_id=batch-fail-1 kind=fail idempotency_key=batch-fail-1
+2026/10/29/[3]6db64f0318e043468cf81cc3fab55d54 sol-task: task requested retry task_id=batch-fail-1 kind=fail error=live failure probe
+2026/10/29/[3]6db64f0318e043468cf81cc3fab55d54 task_handler task_id=batch-fail-1 kind=fail idempotency_key=batch-fail-1
+2026/10/29/[3]6db64f0318e043468cf81cc3fab55d54 sol-task: task requested retry task_id=batch-fail-1 kind=fail error=live failure probe

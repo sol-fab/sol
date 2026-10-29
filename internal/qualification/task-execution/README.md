@@ -10,9 +10,9 @@ observed for this capability.
 | Surface | Implementation | Automated evidence | Live evidence |
 |---|---|---|---|
 | Local Postgres | `sol-task.local` + `sol local task enqueue` | envelope/local unit tests; `sol-task local Postgres integration` (Ack, Retry→terminal, duplicate delivery + idempotent effect, idempotent enqueue); manual CLI enqueue | disposable Docker Postgres only |
-| AWS SQS + Lambda | `sol-task.lambda` + `sol task aws` | envelope/Lambda unit tests; fake-provider lifecycle (deploy, enqueue, verify, rollback, destroy, partial-create cleanup) | **mechanism-level record**: [`2026-10-29-task-aws-live.md`](../records/2026-10-29-task-aws-live.md) |
+| AWS SQS + Lambda | `sol-task.lambda` + `sol task aws` | envelope/Lambda unit tests; fake-provider lifecycle (deploy, enqueue, verify, rollback, destroy, partial-create cleanup); live mixed-batch partial-delivery exercise | **mechanism-level records**: [`2026-10-29-task-aws-live.md`](../records/2026-10-29-task-aws-live.md) and [`2026-10-29-task-aws-partial-batch.md`](../records/2026-10-29-task-aws-partial-batch.md) |
 | GCP Pub/Sub + Cloud Run | `sol-task.pubsub` + `sol task gcp` | envelope/PubSub unit tests; fake-provider lifecycle (deploy, enqueue, verify, rollback, destroy, partial-create cleanup) | **mechanism-level record**: [`2026-10-29-task-gcp-live.md`](../records/2026-10-29-task-gcp-live.md) |
-| Target-scoped `sol deploy` | not implemented | none | none |
+| Target-scoped `sol deploy` | **excluded by design**; use `sol task aws` or `sol task gcp` | standalone provider lifecycle tests; task guide/boundary decision | provider lifecycle records above |
 | Observability acceptance | logs only (task_id/kind/outcome) | unit tests assert mapping | provider logs inspected; no Sol-managed metrics/traces claim |
 
 Runs are evidence only for the rows they exercise. A fake-provider test is not
@@ -54,6 +54,34 @@ still `pending`/in the queue is not failed; a dead-lettered task is not proof
 that the handler never ran. Correlate the provider message identity with the
 handler `task_id` and the provider delivery counters, keeping the provider-count
 caveat above in mind.
+
+## Released-candidate path
+
+The AWS/GCP records above are mechanism-level exercises from checkout builds.
+A release-candidate qualification is a separate, operator-authorized run against
+the installed candidate:
+
+1. Download the draft release's `candidate.json` and its recorded bundle. Extract
+   the bundle and set `SOL_INSTALL` to the extracted `sol-<version>` prefix and
+   `SOL_CANDIDATE` to the candidate document. Run
+   `source internal/qualification/sol-under-test.sh`; it verifies the installed
+   version, revision, runner image, and every installed file against the
+   candidate bundle before anything is provisioned.
+2. Bind the handler build to the candidate revision with
+   `internal/qualification/candidate-binding.sh`: build the fixture context from
+   the candidate revision, not from the working tree. Build the image as a
+   Docker v2 manifest for AWS.
+3. Use the candidate's `bin/sol` for `sol task aws`/`sol task gcp` deploy,
+   verify, enqueue, rollback, and destroy. Record the candidate version,
+   revision, and bundle hash in the evidence directory with the provider
+   observations.
+4. Run the provider procedures below for both supported providers against that
+   same candidate and the same harness revision. A provider result from a
+   checkout build, or from a prefix that is not the candidate bundle, is not a
+   candidate qualification.
+
+The task capability has no release candidate recorded yet. The earlier
+`v0.1.0-prealpha.3` draft predates the task implementation.
 
 ## Shared procedure
 
@@ -101,10 +129,12 @@ Then run a `-worker` hosting `Sol_task_local.Make(T).run`; the row status and
 
 ## AWS SQS + Lambda live procedure
 
-**Status: executed 2026-10-29.** The mechanism-level result is in
-[`2026-10-29-task-aws-live.md`](../records/2026-10-29-task-aws-live.md). The
-procedure below records the current sequence, including the packaging
-requirement and the failures found during that run.
+**Status: executed 2026-10-29.** The mechanism-level lifecycle result is in
+[`2026-10-29-task-aws-live.md`](../records/2026-10-29-task-aws-live.md); the
+mixed-batch result is in
+[`2026-10-29-task-aws-partial-batch.md`](../records/2026-10-29-task-aws-partial-batch.md).
+The procedure below records the current sequence, including the packaging
+requirement and the failures found during those runs.
 
 Prerequisites: AWS profile with ECR, IAM, Lambda, SQS, and CloudWatch Logs;
 an immutable image; an execution role trusted by `lambda.amazonaws.com` with
@@ -166,7 +196,14 @@ equivalent policy covering source-queue receive/delete and logs).
    `ApproximateReceiveCount`/the DLQ source count; do not call it a
    handler-attempt count.
 
-6. Deploy the same image again (version 2), then roll back:
+6. Exercise a mixed batch explicitly. Send one `ack` and one `fail` envelope in a
+   single `SendMessageBatch` request, then inspect one Lambda log stream, the
+   source queue, and the DLQ. A two-message smoke run sent as separate calls
+   does not establish the batch result; the 2026-10-29 partial-batch record
+   establishes that the Ack is handled once and the fail is retried and
+   dead-lettered while its successful batch peer is not repeated.
+
+7. Deploy the same image again (version 2), then roll back:
 
    ```sh
    sol task aws rollback --profile sol-qual --region us-east-1 \
@@ -183,7 +220,7 @@ equivalent policy covering source-queue receive/delete and logs).
    be one JSON object (the nested `RedrivePolicy` cannot use the shorthand
    form); the adapter now sends JSON.
 
-7. Destroy and clean resources the adapter does not own:
+8. Destroy and clean resources the adapter does not own:
 
    ```sh
    sol task aws destroy --profile sol-qual --region us-east-1 \
@@ -197,11 +234,13 @@ equivalent policy covering source-queue receive/delete and logs).
    aws logs delete-log-group --log-group-name /aws/lambda/checkout-task
    ```
 
-8. Independently inventory: Lambda functions, SQS queues (source + DLQ), ECR
+9. Independently inventory: Lambda functions, SQS queues (source + DLQ), ECR
    repository, role, and log group. A provider error or unreadable response is
    UNKNOWN, not absence.
 
-Failure injection for the cleanup path: the fake-provider test already covers
+After a partial destroy, SQS refuses to recreate a deleted queue name for 60
+seconds (`QueueDeletedRecently`); wait before redeploying. Failure injection for
+the cleanup path: the fake-provider test already covers
 foreign ownership refusal, mapping failure after queues/function exist, and
 source-queue failure after DLQ creation. A live failure can be produced by
 using a role without SQS receive permission; the deploy's event-source-mapping
@@ -246,6 +285,9 @@ grants and verifies it. The live run observed repeated redelivery without it.
 - No production-profile, SLO, cost, or security-review claim.
 - No released-candidate qualification. AWS and GCP each have a bounded live
   mechanism-level record, not a release verdict.
-- No target-scoped `sol deploy` for tasks.
+- Target-scoped `sol deploy` for tasks is explicitly out of scope. The supported
+  workflow is the standalone `sol task aws`/`sol task gcp` lifecycle; `-worker`
+  is Kafka and `sol-task` is a library, so target-scoped task dispatch would be
+  a new public primitive.
 - No Sol-managed task metrics/traces acceptance; the runtimes emit logs and the
   local `sol-jobs` package exposes its own metrics.
