@@ -128,7 +128,7 @@ let provider_names ~service =
       (Sol_cli_cloud_run.Refused
          "task Cloud Run service name is longer than 49 characters")
   else (
-    let push_service_account = truncate_to 20 provider ^ "-push" in
+    let push_service_account = truncate_to 17 provider ^ "-push" in
     Ok
       ( cloud_run_service
       , provider ^ "-task"
