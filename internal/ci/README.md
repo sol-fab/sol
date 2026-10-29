@@ -54,6 +54,24 @@ unit, lifecycle, integration and E2E suites. The 2026-10-29 reorder keeps the
 same 33 test steps; only their order, step timeouts, one redundant command, and
 the integration-diagnostics outcome guard changed.
 
+## Jobs
+
+| Job | Required | Classification | Establishes | External |
+|---|---|---|---|---|
+| `test` | **yes** | every non-docs change; docs-only reports an intentional skip | Product build, unit/lifecycle, framework Kafka/Postgres integration, E2E, static/qualification, installed-release smoke | Redpanda, Postgres, Loki, Docker, kubectl |
+| `golden-path-smoke` | no | `ocaml`/`source` | `sol new` + local k3d scaffold/golden path | k3d, Docker, kubectl, Helm |
+| `dockerfile-matrix` | no | every non-docs change | Derives the example/Dockerfile matrices from tracked files | none |
+| `example-dockerfile-smoke` | no | `ocaml`/`source` | Builds the OCaml example Dockerfiles with `--no-cache` | Docker |
+| `demo-ts-dockerfile-smoke` | no | `typescript`/`source` | Builds the `demo_ts` Dockerfiles | Docker |
+| `ts-tests` | no | `typescript`/`source` | TypeScript install/build/typecheck, duplicate-delivery test, CA trust, dependency audit | Node/npm |
+| `golden-path-smoke-ts` | no | `typescript`/`source` | TypeScript scaffold/golden path | k3d, Docker, Node/npm |
+
+Only `test` is required by branch protection. The other jobs are deliberately
+advisory because they consume dedicated toolchains or external services and have
+path/language conditions; see the comments in the workflow. A change that
+removes or weakens one of their inputs still routes to `source` through
+`classify`, so the required suite remains fail-closed.
+
 ## Suite map
 
 | Command | Establishes | External services |
