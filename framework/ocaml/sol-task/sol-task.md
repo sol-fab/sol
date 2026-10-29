@@ -55,6 +55,59 @@ Provider delivery counters are not application handler counters and are not part
 of the contract. Applications that need attempt-aware behavior should use their
 own durable state and idempotency key.
 
+## Semantics by environment
+
+The contract is shared; the delivery mechanics are provider-native.
+
+| Concern | Local `sol-jobs` | AWS SQS + Lambda | GCP Pub/Sub push + Cloud Run |
+|---|---|---|---|
+| Task identity | Envelope `task_id` in the job payload | Envelope `task_id` | Envelope `task_id` |
+| Ack | `Ack` completes the row | `Ack` omits the record from `batchItemFailures` | `200` response |
+| Retry | `Retry` uses `sol-jobs` backoff | `Retry` returns a batch item failure | `500` response |
+| Terminal | `max_attempts` → retained `failed` row | `maxReceiveCount` → SQS DLQ | `maxDeliveryAttempts` → Pub/Sub DLQ topic |
+| Attempt number | Not exposed | Not exposed | Not exposed |
+| Payload | 256 KiB envelope cap | 256 KiB envelope cap | 256 KiB envelope cap (Pub/Sub's own limit is larger) |
+| Ordering | None | None for a standard queue | None promised |
+| Concurrency | One claim loop per worker process | Event source mapping `MaximumConcurrency` | Cloud Run max instances; container concurrency 1 |
+| Incoming auth | Database credentials | Lambda execution role; no inbound endpoint | Cloud Run IAM + Pub/Sub OIDC push identity |
+| Enqueue | Application transaction or CLI | `sol task aws enqueue` | `sol task gcp enqueue` |
+| Rollback | Redeploy the worker image | Move the Lambda alias to a prior version | Move Cloud Run traffic to a prior revision |
+| Delivery window | `sol-jobs` lease | SQS visibility timeout | Pub/Sub ack deadline |
+
+Provider delivery counters are **not** handler-attempt counters. In a bounded
+live GCP exercise with `maxDeliveryAttempts=5` and a handler that returned
+`Retry`, Pub/Sub dead-lettered the task but its
+`CloudPubSubDeadLetterSourceDeliveryCount` was 12. The contract therefore
+promises eventual provider-managed terminal delivery after the configured
+budget, not an exact number of handler invocations. The same caution applies to
+SQS `ApproximateReceiveCount` and Lambda batch retries.
+
+## Adding a task kind
+
+1. Add a variant to the handler's `t`.
+2. Add its wire name to `kind` and `kinds`.
+3. Extend `encode`/`decode`; decoding returns an error for an unknown payload.
+4. Handle the variant with `Ack` or `Retry`; make the side effect idempotent.
+5. Add round-trip, ack, and retry tests.
+6. No provider or lifecycle change is needed: the new kind flows through the
+   same envelope and the same runtime.
+
+## Adding a provider
+
+1. Implement a `Make(T)` runtime that validates the envelope, calls
+   `T.handle ~task_id ?idempotency_key`, and maps `Ack`/`Retry` to the
+   provider's acknowledge/nack response.
+2. Make malformed input a non-retryable response where the provider supports
+   one; otherwise let it exhaust into the provider dead-letter destination.
+3. Add a lifecycle adapter that owns the queue/topic, runtime, trigger, auth,
+   dead-letter destination, ownership record, rollback, and destroy/absence.
+4. Write the ownership record with deterministic resource names before creating
+   anything, verify ownership before mutation, and update the record after each
+   stage.
+5. Add fake-provider lifecycle tests for foreign ownership, deploy, enqueue,
+   retry/dead-letter, rollback, destroy, and partial-create cleanup, then a
+   bounded live exercise. Do not claim live qualification from the fake tests.
+
 ## Package structure
 
 ```
