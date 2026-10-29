@@ -28,7 +28,7 @@ cat > "$work/bin/gcloud" <<'FAKE'
 set -euo pipefail
 state="$FAKE_GCLOUD_STATE"
 if [[ "$1 $2 $3" == "run jobs describe" ]]; then
-  [[ -f "$state/job" ]] || { echo "ERROR: NOT_FOUND: job absent" >&2; exit 1; }
+  [[ -f "$state/job" ]] || { echo "ERROR: Cannot find job [probe-fn]." >&2; exit 1; }
   cat <<JSON
 {"metadata":{"name":"probe-fn","labels":{"sol-owned":"cloud-run-job-experiment","sol-service":"probe-fn"},"generation":"2"}}
 JSON

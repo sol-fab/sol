@@ -120,7 +120,7 @@ let is_not_found message =
     let rec go i = i + n <= m && (String.sub message i n = needle || go (i + 1)) in
     go 0
   in
-  contains "not found" || contains "not_found" || contains "404"
+  contains "not found" || contains "not_found" || contains "cannot find" || contains "404"
 ;;
 
 let not_found message = is_not_found message
