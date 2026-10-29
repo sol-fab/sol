@@ -12,7 +12,7 @@ observed for this capability.
 | Local Postgres | `sol-task.local` + `sol local task enqueue` | envelope/local unit tests; `sol-task local Postgres integration` (Ack, Retry→terminal, duplicate delivery + idempotent effect, idempotent enqueue); manual CLI enqueue | disposable Docker Postgres only |
 | AWS SQS + Lambda | `sol-task.lambda` + `sol task aws` | envelope/Lambda unit tests; fake-provider lifecycle (deploy, enqueue, verify, rollback, destroy, partial-create cleanup); live mixed-batch partial-delivery exercise | **mechanism-level records**: [`2026-10-29-task-aws-live.md`](../records/2026-10-29-task-aws-live.md) and [`2026-10-29-task-aws-partial-batch.md`](../records/2026-10-29-task-aws-partial-batch.md) |
 | GCP Pub/Sub + Cloud Run | `sol-task.pubsub` + `sol task gcp` | envelope/PubSub unit tests; fake-provider lifecycle (deploy, enqueue, verify, rollback, destroy, partial-create cleanup) | **mechanism-level record**: [`2026-10-29-task-gcp-live.md`](../records/2026-10-29-task-gcp-live.md) |
-| Target-scoped `sol deploy` | not implemented | none | none |
+| Target-scoped `sol deploy` | **excluded by design**; use `sol task aws` or `sol task gcp` | standalone provider lifecycle tests; task guide/boundary decision | provider lifecycle records above |
 | Observability acceptance | logs only (task_id/kind/outcome) | unit tests assert mapping | provider logs inspected; no Sol-managed metrics/traces claim |
 
 Runs are evidence only for the rows they exercise. A fake-provider test is not
@@ -253,6 +253,9 @@ grants and verifies it. The live run observed repeated redelivery without it.
 - No production-profile, SLO, cost, or security-review claim.
 - No released-candidate qualification. AWS and GCP each have a bounded live
   mechanism-level record, not a release verdict.
-- No target-scoped `sol deploy` for tasks.
+- Target-scoped `sol deploy` for tasks is explicitly out of scope. The supported
+  workflow is the standalone `sol task aws`/`sol task gcp` lifecycle; `-worker`
+  is Kafka and `sol-task` is a library, so target-scoped task dispatch would be
+  a new public primitive.
 - No Sol-managed task metrics/traces acceptance; the runtimes emit logs and the
   local `sol-jobs` package exposes its own metrics.

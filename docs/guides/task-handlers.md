@@ -159,7 +159,14 @@ qualified limits are recorded in the task-execution procedure.
 :::
 
 The handler module and `Sol_task.TASK` contract are unchanged in the cloud.
-The runtime is selected by the deployment, not by the application code:
+The runtime is selected by the deployment, not by the application code.
+
+**Supported deployment workflow:** use the standalone `sol task aws` or
+`sol task gcp` lifecycle below. Target-scoped `sol deploy` does not deploy task
+handlers. In Sol's target contract, `-worker` is the Kafka consumer primitive and
+`sol-task` is a library, not a workload kind; a target-scoped task queue/trigger
+would be a new public primitive. The standalone lifecycle owns the provider
+queue/topic, retry/DLQ policy, and release record for this capability.
 
 - **AWS:** `Sol_task_lambda.Make(T).run` handles SQS records and returns
   `batchItemFailures`; the event source mapping must enable
