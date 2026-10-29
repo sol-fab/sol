@@ -85,11 +85,13 @@ _build/default/framework/ocaml/sol-task/test/test_sol_task_local_pg.exe \
 
 It asserts Ack→completed, Retry with `max_attempts=1`→failed, idempotent
 enqueue, and the duplicate-delivery case: the first delivery of a flaky task
-commits an idempotent effect keyed by `task_id` and returns `Retry`; the
-redelivery sees the same `task_id`, does not reapply the effect, and returns
-`Ack`. The test asserts two handler entries, one `task_id`, one effect, and a
-completed row after two attempts. For the CLI path, create the `sol_jobs` table
-from
+commits a durable Postgres idempotency effect keyed by `task_id` and then raises
+before acknowledging; the redelivery sees the committed effect, does not reapply
+it, and returns `Ack`. The test asserts two handler entries, one `task_id`, one
+persisted effect row, and a completed row after two attempts. The effect is
+durable and would be visible to another worker process; the framework still does
+not make the application's effect and acknowledgement atomic. For the CLI path,
+create the `sol_jobs` table from
 [`sol-task.md`](../../../framework/ocaml/sol-task/sol-task.md) and run:
 
 ```sh
