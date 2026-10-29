@@ -285,6 +285,21 @@ GitHub Issues, and detailed evidence is under `internal/qualification/`.
 | Alert delivery and acknowledgement | none | none | No named receiver/owner has acknowledged a delivered alert. |
 | Observability SSO access | partial | partial | TLS+OIDC configuration and guards are in place; live login and dashboard visibility are not yet verified. |
 
+### Serverless and task execution
+
+| Surface | Local | AWS | GCP | Evidence | Gap |
+|---|---|---|---|---|---|
+| OCaml serverless `-svc` | none | live | live | [AWS](docs/deployment/serverless.md), [GCP](docs/deployment/serverless.md) | Live demo evidence only; no production-profile serverless campaign. Local has no serverless target. |
+| OCaml serverless `-fn` | none | live | live | [AWS](internal/qualification/records/2026-10-28-serverless-fn-aws.md), [GCP](docs/deployment/serverless.md) | AWS has a bounded record; GCP is documented live demo evidence without a formal production record. No triggers or dependencies. |
+| TypeScript serverless `-svc` | none | none | none | — | No TypeScript serverless -svc live scenario; the live TypeScript serverless work is the -fn probe. |
+| TypeScript serverless `-fn` | none | live | live | [AWS](docs/deployment/serverless.md), [GCP](docs/deployment/serverless.md) | Live demo evidence only; no production-profile serverless campaign or formal record. |
+| OCaml local tasks | live | none | none | [local](examples/pluto/SERVERLESS.md) | Direct local harness; no deployed -worker scenario in this demo. Not a provider execution mode. |
+| OCaml AWS tasks | none | live | none | [AWS](internal/qualification/records/2026-10-29-task-aws-live.md) | Mechanism/live task lifecycle; no production-profile evidence for roles, observability, or recovery. |
+| OCaml GCP tasks | none | none | live | [GCP](internal/qualification/records/2026-10-29-task-gcp-live.md) | Mechanism/live task lifecycle; production-profile evidence, redeploy after SA deletion, and push-IAM readiness remain open. |
+| TypeScript local tasks | live | none | none | [local](examples/pluto/SERVERLESS.md) | Workspace host over @sol-fab/jobs; no published @sol-fab/task package. |
+| TypeScript AWS tasks | none | partial | none | [AWS](examples/pluto/SERVERLESS.md) | Demo SQS/Lambda adapter live-tested; no formal production record or production-profile evidence. |
+| TypeScript GCP tasks | none | none | partial | [GCP](examples/pluto/SERVERLESS.md) | Demo Pub/Sub adapter live-tested; no formal production record or production-profile evidence. |
+
 Evidence: `local` = repeatable local test; `live` = deployed and behaviorally
 verified; `partial` = some evidence; `prod` = production-profile evidence;
 `none` = no qualifying evidence. The contract still applies to every cell;

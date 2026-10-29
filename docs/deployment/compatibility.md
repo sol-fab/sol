@@ -72,10 +72,10 @@ of the following hold:
   revision, and the release policy can read and verify the resulting records.
 
 The current non-`prod` cells in the README matrix are open v0.1 gate items, not
-evidence that a lower support tier is acceptable. The matrix currently covers
-only the Kubernetes/local primitive cells; adding serverless and task execution
-rows is a required part of this freeze. Release promotion is blocked
-independently: the policy currently refuses before reading qualification assets.
+evidence that a lower support tier is acceptable. The matrix now includes an
+execution section for serverless and provider-task surfaces; those rows exist,
+but none is `prod` yet. Release promotion is blocked independently: the policy
+currently refuses before reading qualification assets.
 
 Known blocker classes include the AWS/GCP preflight evidence gate (it admits only
 AWS and OCaml today), missing serverless/task matrix rows and preflight

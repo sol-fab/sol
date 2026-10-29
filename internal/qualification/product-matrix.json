@@ -187,5 +187,118 @@
       "gcp": "partial",
       "gap": "TLS+OIDC configuration and guards are in place; live login and dashboard visibility are not yet verified."
     }
+  ],
+  "execution": [
+    {
+      "id": "ocaml-serverless-svc",
+      "label": "OCaml serverless `-svc`",
+      "local": "none",
+      "aws": "live",
+      "gcp": "live",
+      "evidence": {
+        "aws": "docs/deployment/serverless.md",
+        "gcp": "docs/deployment/serverless.md"
+      },
+      "gap": "Live demo evidence only; no production-profile serverless campaign. Local has no serverless target."
+    },
+    {
+      "id": "ocaml-serverless-fn",
+      "label": "OCaml serverless `-fn`",
+      "local": "none",
+      "aws": "live",
+      "gcp": "live",
+      "evidence": {
+        "aws": "internal/qualification/records/2026-10-28-serverless-fn-aws.md",
+        "gcp": "docs/deployment/serverless.md"
+      },
+      "gap": "AWS has a bounded record; GCP is documented live demo evidence without a formal production record. No triggers or dependencies."
+    },
+    {
+      "id": "typescript-serverless-svc",
+      "label": "TypeScript serverless `-svc`",
+      "local": "none",
+      "aws": "none",
+      "gcp": "none",
+      "evidence": {},
+      "gap": "No TypeScript serverless -svc live scenario; the live TypeScript serverless work is the -fn probe."
+    },
+    {
+      "id": "typescript-serverless-fn",
+      "label": "TypeScript serverless `-fn`",
+      "local": "none",
+      "aws": "live",
+      "gcp": "live",
+      "evidence": {
+        "aws": "docs/deployment/serverless.md",
+        "gcp": "docs/deployment/serverless.md"
+      },
+      "gap": "Live demo evidence only; no production-profile serverless campaign or formal record."
+    },
+    {
+      "id": "ocaml-local-tasks",
+      "label": "OCaml local tasks",
+      "local": "live",
+      "aws": "none",
+      "gcp": "none",
+      "evidence": {
+        "local": "examples/pluto/SERVERLESS.md"
+      },
+      "gap": "Direct local harness; no deployed -worker scenario in this demo. Not a provider execution mode."
+    },
+    {
+      "id": "ocaml-aws-tasks",
+      "label": "OCaml AWS tasks",
+      "local": "none",
+      "aws": "live",
+      "gcp": "none",
+      "evidence": {
+        "aws": "internal/qualification/records/2026-10-29-task-aws-live.md"
+      },
+      "gap": "Mechanism/live task lifecycle; no production-profile evidence for roles, observability, or recovery."
+    },
+    {
+      "id": "ocaml-gcp-tasks",
+      "label": "OCaml GCP tasks",
+      "local": "none",
+      "aws": "none",
+      "gcp": "live",
+      "evidence": {
+        "gcp": "internal/qualification/records/2026-10-29-task-gcp-live.md"
+      },
+      "gap": "Mechanism/live task lifecycle; production-profile evidence, redeploy after SA deletion, and push-IAM readiness remain open."
+    },
+    {
+      "id": "typescript-local-tasks",
+      "label": "TypeScript local tasks",
+      "local": "live",
+      "aws": "none",
+      "gcp": "none",
+      "evidence": {
+        "local": "examples/pluto/SERVERLESS.md"
+      },
+      "gap": "Workspace host over @sol-fab/jobs; no published @sol-fab/task package."
+    },
+    {
+      "id": "typescript-aws-tasks",
+      "label": "TypeScript AWS tasks",
+      "local": "none",
+      "aws": "partial",
+      "gcp": "none",
+      "evidence": {
+        "aws": "examples/pluto/SERVERLESS.md"
+      },
+      "gap": "Demo SQS/Lambda adapter live-tested; no formal production record or production-profile evidence."
+    },
+    {
+      "id": "typescript-gcp-tasks",
+      "label": "TypeScript GCP tasks",
+      "local": "none",
+      "aws": "none",
+      "gcp": "partial",
+      "evidence": {
+        "gcp": "examples/pluto/SERVERLESS.md"
+      },
+      "gap": "Demo Pub/Sub adapter live-tested; no formal production record or production-profile evidence."
+    }
   ]
 }
