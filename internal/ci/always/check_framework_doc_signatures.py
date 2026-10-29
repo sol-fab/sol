@@ -24,7 +24,15 @@ MANIFEST = [
     ("framework/ocaml/sol-obs/sol-obs.md", "## Public API", ["framework/ocaml/sol-obs/lib/sol_obs.mli"]),
     ("framework/ocaml/sol-jobs/sol-jobs.md", "## Entrypoint", ["framework/ocaml/sol-jobs/lib/sol_jobs.mli"]),
     ("framework/ocaml/sol-outbox/sol-outbox.md", "## Public API", ["framework/ocaml/sol-outbox/lib/sol_outbox.mli"]),
+    ("framework/ocaml/sol-task/sol-task.md", "## The contract", ["framework/ocaml/sol-task/lib/sol_task.mli"]),
 ]
+
+# A mapped section may show a subset of its .mli, but these declarations are the
+# section's reason for existing. Their absence is a removed contract, not a
+# smaller example.
+REQUIRED = {
+    ("framework/ocaml/sol-task/sol-task.md", "## The contract"): [("type", "outcome")],
+}
 
 EXCLUSIONS = [
     ("framework/ocaml/sol-svc/sol-svc.md", "## Runtime Loop", "the server's implementation sketch, not a declaration the package owns"),
@@ -47,6 +55,11 @@ EXCLUSIONS = [
     ),
     ("framework/ocaml/sol-jobs/sol-jobs.md", "## Deduplication: the Kafka → jobs handoff", "a call-site example"),
     ("framework/ocaml/sol-jobs/sol-jobs.md", "## Example: transactional enqueue", "an application example"),
+    (
+        "framework/ocaml/sol-task/sol-task.md",
+        "## Local usage",
+        "an application's task module and runtime invocation, not the package's declaration surface",
+    ),
 ]
 
 KEYWORDS = ("val", "type", "exception", "external", "module")
@@ -136,7 +149,14 @@ def ocaml_sections(md_text):
 problems = 0
 for doc, heading, mlis in MANIFEST:
     have = mli_declarations(mlis)
-    for keyword, name, joined in spec_declarations(pathlib.Path(doc).read_text(), heading):
+    documented = spec_declarations(pathlib.Path(doc).read_text(), heading)
+    for keyword, name in REQUIRED.get((doc, heading), []):
+        if not any((k, n) == (keyword, name) for k, n, _ in documented):
+            print(
+                f"✗ {doc}: {heading} must document `{name}`, but does not"
+            )
+            problems += 1
+    for keyword, name, joined in documented:
         key = (keyword, name)
         if key not in have:
             print(f"✗ {doc}: {heading} documents `{name}`, which {', '.join(mlis)} does not declare")

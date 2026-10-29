@@ -13,10 +13,11 @@ FN = "framework/ocaml/sol-fn/sol-fn.md"
 OBS = "framework/ocaml/sol-obs/sol-obs.md"
 JOBS = "framework/ocaml/sol-jobs/sol-jobs.md"
 OUTBOX = "framework/ocaml/sol-outbox/sol-outbox.md"
+TASK = "framework/ocaml/sol-task/sol-task.md"
 
-PACKAGES = ("sol-svc-core", "sol-svc", "kafka-eio-service", "sol-worker", "sol-fn", "sol-obs", "sol-jobs", "sol-outbox")
+PACKAGES = ("sol-svc-core", "sol-svc", "kafka-eio-service", "sol-worker", "sol-fn", "sol-obs", "sol-jobs", "sol-outbox", "sol-task")
 CORE = "framework/ocaml/sol-svc-core/sol-svc-core.md"
-SPECS = (SVC, CORE, KAFKA, WORKER, FN, OBS, JOBS, OUTBOX)
+SPECS = (SVC, CORE, KAFKA, WORKER, FN, OBS, JOBS, OUTBOX, TASK)
 
 CASES = [
     ("a dropped Request.t field", "fail", SVC, "  ; trace_ctx : Obs_trace.t option\n", ""),
@@ -42,6 +43,21 @@ CASES = [
      "## Entrypoints\n", "## Extra API\n\n```ocaml\nval extra : unit\n```\n\n## Entrypoints\n"),
     ("an exclusion that names a section the spec no longer carries", "fail", WORKER,
      "```ocaml\nmodule NotifyWorker", "```text\nmodule NotifyWorker"),
+    (
+        "a protected sol-task declaration removed",
+        "fail",
+        TASK,
+        "type outcome =\n  | Ack            (* the side effect committed *)\n  | Retry of string (* leave the task eligible for redelivery *)\n",
+        "",
+    ),
+    ("a sol-task outcome type renamed", "fail", TASK, "type outcome =\n", "type result =\n"),
+    (
+        "a sol-task constructor changed",
+        "fail",
+        TASK,
+        "  | Retry of string (* leave the task eligible for redelivery *)",
+        "  | Retry of string option (* leave the task eligible for redelivery *)",
+    ),
 ]
 
 
