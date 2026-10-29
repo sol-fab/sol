@@ -4,7 +4,7 @@
   2026-10-29 in `sol-qualification`/`us-west1`; fake and live lifecycle evidence.
 - **Date:** 2026-10-28
 - **Related:** ADR 0009 (`-fn` contract), ADR 0010 (target-scoped execution),
-  `docs/deployment/serverless-experimental.md`, PR #1779 (AWS Lambda `-fn` slice)
+  `docs/deployment/serverless.md`, PR #1779 (AWS Lambda `-fn` slice)
 - **Question:** can Cloud Run Jobs implement the Sol `-fn` contract with the same
   lifecycle semantics as the verified AWS Lambda slice, or does it require a
   different, explicitly provider-specific contract?
@@ -156,8 +156,8 @@ The implementation accepts them: no input event, execution-counter success,
 a full Job/execution release record, execution-history rollback, Job and
 execution absence checks, no trigger, and live deploy/execute/rollback/destroy
 evidence. See the support matrix in
-`docs/deployment/serverless-experimental.md`; the production contract still
-excludes target `execution: serverless`.
+`docs/deployment/serverless.md`; under ADR 0011 target `execution: serverless`
+is in the v0.1 production scope, with the production gate still open.
 
 ## References
 

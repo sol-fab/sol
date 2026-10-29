@@ -21,8 +21,8 @@ and how Sol runs it. They are not interchangeable.
 
 `-jobs` and `-task` are libraries, not deployment primitives. A task handler is
 not a renamed Kafka `-worker`, and a `sol-jobs` row is not a generic queue. The
-provider task lifecycle commands are standalone experimental lifecycles; target-
-scoped dispatch does not yet create task queues/triggers.
+provider task lifecycle commands are standalone lifecycles in the v0.1
+production scope; target-scoped dispatch does not create task queues/triggers.
 
 ## Package and library ownership
 
