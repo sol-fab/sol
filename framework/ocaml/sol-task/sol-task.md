@@ -74,7 +74,7 @@ The contract is shared; the delivery mechanics are provider-native.
 | Incoming auth | Database credentials | Lambda execution role; no inbound endpoint | Cloud Run IAM + Pub/Sub OIDC push identity |
 | Enqueue | Application transaction or CLI | `sol task aws enqueue` | `sol task gcp enqueue` |
 | Rollback | Redeploy the worker image | Move the Lambda alias to a prior version | Move Cloud Run traffic to a prior revision |
-| Delivery window | `sol-jobs` lease | SQS visibility timeout | Pub/Sub ack deadline |
+| Delivery window | `sol-jobs` lease | SQS visibility timeout; Lambda timeout is five seconds shorter | Pub/Sub ack deadline; Cloud Run request timeout equals it |
 
 Provider delivery counters are **not** handler-attempt counters. In a bounded
 live GCP exercise with `maxDeliveryAttempts=5` and a handler that returned

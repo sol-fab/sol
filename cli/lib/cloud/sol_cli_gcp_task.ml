@@ -319,6 +319,8 @@ let deploy_service (r : request) ~cloud_run_service =
     ; "1"
     ; "--max-instances"
     ; string_of_int r.concurrency
+    ; "--timeout"
+    ; string_of_int r.ack_deadline_s
     ; "--set-env-vars"
     ; "SOL_TASK_RUNTIME=pubsub"
     ; "--labels"
