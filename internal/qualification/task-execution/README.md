@@ -33,6 +33,28 @@ this contract. The local `sol_jobs_failed`/retry metrics are the local analogue
 of the provider DLQ. A provider unreadable/timeout result is UNKNOWN, not
 absence.
 
+Useful provider-native queries:
+
+```sh
+# AWS: find the handler/outcome lines for one task, and read queue depth.
+aws logs filter-log-events --log-group-name /aws/lambda/checkout-task \
+  --filter-pattern '<task_id>'
+aws sqs get-queue-attributes --queue-url <source-or-dlq-url> --attribute-names All
+
+# GCP: find the Cloud Run handler/outcome lines for one task.
+gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="checkout-task" AND textPayload:"<task_id>"' \
+  --project <project> --limit 20 --freshness 1d
+
+# Local: inspect the leased row and its terminal error.
+psql "$POSTGRES_URL" -c "select status, attempts, last_error, finished_at from sol_jobs where payload like '%<task_id>%'"
+```
+
+The AWS/GCP commands return provider records, not a Sol verdict. A task that is
+still `pending`/in the queue is not failed; a dead-lettered task is not proof
+that the handler never ran. Correlate the provider message identity with the
+handler `task_id` and the provider delivery counters, keeping the provider-count
+caveat above in mind.
+
 ## Shared procedure
 
 Build the handler fixture once:
