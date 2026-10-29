@@ -1,0 +1,3 @@
+(executable
+ (name task_handler)
+ (libraries eio eio_main sol_task sol_task_lambda sol_task_pubsub yojson))

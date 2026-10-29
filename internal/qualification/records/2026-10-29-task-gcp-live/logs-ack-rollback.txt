@@ -1,0 +1,10 @@
+2026-10-29T09:02:12.951228Z	checkout-task-00001-h9t	sol-task: task acknowledged task_id=00de49a63832a325def70c301f503682 kind=ack
+2026-10-29T09:02:12.951218Z	checkout-task-00001-h9t	task_handler task_id=00de49a63832a325def70c301f503682 kind=ack idempotency_key=live-ack-2
+2026-10-29T09:02:12.929284Z	checkout-task-00001-h9t	
+2026-10-29T09:02:01.876067Z		
+2026-10-29T09:02:01.592348Z	checkout-task-00001-h9t	Default STARTUP TCP probe succeeded after 1 attempt for container "task-handler-1" on port 8080.
+2026-10-29T09:02:01.591925Z	checkout-task-00001-h9t	sol-task: Pub/Sub push listening on :8080
+2026-10-29T09:02:01.272573Z	checkout-task-00001-h9t	Starting new instance. Reason: AUTOSCALING - Instance started due to configured scaling factors (e.g. CPU utilization, request throughput, etc.) or no existing capacity for current traffic.
+2026-10-29T09:02:00.539321Z	checkout-task-00001-h9t	
+2026-10-29T09:02:00.020440Z	checkout-task-00002-zjr	sol-task: task requested retry task_id=a3b11c23be602a98820790d2c0ef651d kind=fail error=live failure probe
+2026-10-29T09:02:00.020401Z	checkout-task-00002-zjr	task_handler task_id=a3b11c23be602a98820790d2c0ef651d kind=fail idempotency_key=live-fail-2

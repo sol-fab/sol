@@ -1,0 +1,29 @@
+{
+  "ackDeadlineSeconds": 30,
+  "deadLetterPolicy": {
+    "deadLetterTopic": "projects/sol-qualification/topics/checkout-task-dlq",
+    "maxDeliveryAttempts": 5
+  },
+  "expirationPolicy": {
+    "ttl": "2678400s"
+  },
+  "labels": {
+    "sol-owned": "cloud-run-task-experiment",
+    "sol-service": "checkout-task"
+  },
+  "messageRetentionDuration": "3600s",
+  "name": "projects/sol-qualification/subscriptions/checkout-task-sub",
+  "pushConfig": {
+    "oidcToken": {
+      "serviceAccountEmail": "checkout-push@sol-qualification.iam.gserviceaccount.com"
+    },
+    "pushEndpoint": "https://checkout-task-yzef77wyjq-uw.a.run.app"
+  },
+  "retryPolicy": {
+    "maximumBackoff": "600s",
+    "minimumBackoff": "1s"
+  },
+  "state": "ACTIVE",
+  "topic": "projects/sol-qualification/topics/checkout-task",
+  "topicMessageRetentionDuration": "3600s"
+}

@@ -1,0 +1,13 @@
+Observed after `sol task gcp destroy --apply` (exit 0) and before disabling
+run.googleapis.com:
+
+- Cloud Run services: `gcloud run services list` returned no rows.
+- Pub/Sub topics: none.
+- Pub/Sub subscriptions: none.
+- Task service accounts: none.
+- Artifact Registry repositories (us-west1): none (repository deleted).
+- Temporary user `roles/iam.serviceAccountTokenCreator` grant: removed.
+
+After the inventory, `run.googleapis.com` was disabled to restore the prior
+project state. Cloud Run is therefore UNREADABLE in a post-run inventory
+(`SERVICE_DISABLED`); the absence claim rests on the pre-disable observation.

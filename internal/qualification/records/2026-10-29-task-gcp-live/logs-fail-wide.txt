@@ -1,0 +1,22 @@
+2026-10-29T09:01:05.942724Z	sol-task: task requested retry task_id=a3b11c23be602a98820790d2c0ef651d kind=fail error=live failure probe
+2026-10-29T09:01:05.942108Z	task_handler task_id=a3b11c23be602a98820790d2c0ef651d kind=fail idempotency_key=live-fail-2
+2026-10-29T09:00:57.909135Z	sol-task: task requested retry task_id=a3b11c23be602a98820790d2c0ef651d kind=fail error=live failure probe
+2026-10-29T09:00:57.909115Z	task_handler task_id=a3b11c23be602a98820790d2c0ef651d kind=fail idempotency_key=live-fail-2
+2026-10-29T09:00:48.980168Z	sol-task: task requested retry task_id=a3b11c23be602a98820790d2c0ef651d kind=fail error=live failure probe
+2026-10-29T09:00:48.979512Z	task_handler task_id=a3b11c23be602a98820790d2c0ef651d kind=fail idempotency_key=live-fail-2
+2026-10-29T09:00:40.950470Z	sol-task: task requested retry task_id=a3b11c23be602a98820790d2c0ef651d kind=fail error=live failure probe
+2026-10-29T09:00:40.950458Z	task_handler task_id=a3b11c23be602a98820790d2c0ef651d kind=fail idempotency_key=live-fail-2
+2026-10-29T09:00:36.280951Z	sol-task: task requested retry task_id=a3b11c23be602a98820790d2c0ef651d kind=fail error=live failure probe
+2026-10-29T09:00:36.280933Z	task_handler task_id=a3b11c23be602a98820790d2c0ef651d kind=fail idempotency_key=live-fail-2
+2026-10-29T09:00:32.271222Z	sol-task: task requested retry task_id=a3b11c23be602a98820790d2c0ef651d kind=fail error=live failure probe
+2026-10-29T09:00:32.271207Z	task_handler task_id=a3b11c23be602a98820790d2c0ef651d kind=fail idempotency_key=live-fail-2
+2026-10-29T09:00:27.933226Z	sol-task: task requested retry task_id=a3b11c23be602a98820790d2c0ef651d kind=fail error=live failure probe
+2026-10-29T09:00:27.932963Z	task_handler task_id=a3b11c23be602a98820790d2c0ef651d kind=fail idempotency_key=live-fail-2
+2026-10-29T09:00:23.938967Z	sol-task: task requested retry task_id=a3b11c23be602a98820790d2c0ef651d kind=fail error=live failure probe
+2026-10-29T09:00:23.938950Z	task_handler task_id=a3b11c23be602a98820790d2c0ef651d kind=fail idempotency_key=live-fail-2
+2026-10-29T09:00:20.920572Z	sol-task: task requested retry task_id=a3b11c23be602a98820790d2c0ef651d kind=fail error=live failure probe
+2026-10-29T09:00:20.920557Z	task_handler task_id=a3b11c23be602a98820790d2c0ef651d kind=fail idempotency_key=live-fail-2
+2026-10-29T09:00:17.919674Z	sol-task: task requested retry task_id=a3b11c23be602a98820790d2c0ef651d kind=fail error=live failure probe
+2026-10-29T09:00:17.919661Z	task_handler task_id=a3b11c23be602a98820790d2c0ef651d kind=fail idempotency_key=live-fail-2
+2026-10-29T09:00:15.533125Z	sol-task: task requested retry task_id=a3b11c23be602a98820790d2c0ef651d kind=fail error=live failure probe
+2026-10-29T09:00:15.532864Z	task_handler task_id=a3b11c23be602a98820790d2c0ef651d kind=fail idempotency_key=live-fail-2
