@@ -133,24 +133,6 @@ async function main() {
     health.onPoll();
   });
 
-  await consumer.run({
-    eachMessage: wrapEachMessage({
-      decode: decodeOrderPlaced,
-      decodeErrorCounter: decodeErrorsTotal,
-      onDecodeError,
-      dlq: {
-        publisher: {
-          publish: async (record) => {
-            await producer.send({ topic: record.topic, messages: [record] });
-          },
-        },
-        groupId: GROUP_ID,
-        sourceTopic: TOPIC_NAME,
-      },
-      handler: ({ message, traceContext }) => handleOrder(message, traceContext, deps),
-    }),
-  });
-
   const pushgatewayUrl = setting("PUSHGATEWAY_URL");
   const pushInterval = pushgatewayUrl
     ? setInterval(() => {
@@ -263,6 +245,25 @@ async function main() {
       return lifecycle.shutdown();
     },
   });
+
+  await consumer.run({
+    eachMessage: wrapEachMessage({
+      decode: decodeOrderPlaced,
+      decodeErrorCounter: decodeErrorsTotal,
+      onDecodeError,
+      dlq: {
+        publisher: {
+          publish: async (record) => {
+            await producer.send({ topic: record.topic, messages: [record] });
+          },
+        },
+        groupId: GROUP_ID,
+        sourceTopic: TOPIC_NAME,
+      },
+      handler: ({ message, traceContext }) => handleOrder(message, traceContext, deps),
+    }),
+  });
+
 }
 
 main().catch((err) => {
