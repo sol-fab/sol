@@ -371,6 +371,26 @@ let test_external_stop_is_prompt env () =
     (elapsed < 1.5)
 ;;
 
+let test_duplicate_routes_are_config_errors env () =
+  let module H = struct
+    let routes =
+      [ Route.external_ (Route.get "/x" (fun _ -> Response.ok "public"))
+      ; Route.get "/x" (fun _ -> Response.ok "internal")
+      ]
+    ;;
+  end
+  in
+  let module S = Service.Make (H) in
+  let stop, stop_r = Promise.create () in
+  Promise.resolve stop_r ();
+  match S.run ~env ~port:0 ~stop ~shutdown_delay_s:0.0 ~drain_timeout_s:0.1 () with
+  | Error (`Config message) ->
+    Windtrap.is_true
+      ~msg:"the refusal names the duplicate pattern"
+      (Sol_runtime.contains_substring ~needle:"/x" message)
+  | Ok () -> Windtrap.fail "a duplicate route was accepted"
+;;
+
 let test_malformed_port_is_config_error env () =
   with_env "PORT" "80800x" (fun () ->
     let module S = Service.Make (H) in
@@ -616,6 +636,9 @@ let () =
           ; Windtrap.test
               "readyz flips to 503 before the listener closes"
               (test_readyz_flips_before_listener_closes env)
+          ; Windtrap.test
+              "duplicate method+pattern routes are a startup Config error"
+              (test_duplicate_routes_are_config_errors env)
           ; Windtrap.test
               "malformed PORT is a startup Config error"
               (test_malformed_port_is_config_error env)

@@ -620,6 +620,24 @@ module For_testing = struct
 end
 
 module Make (H : HANDLER) = struct
+  (* A duplicate method+pattern silently shadows the later route. An external route before
+     an internal one would expose the later handler without its workload-identity check,
+     so this is a startup configuration error rather than a first-match lookup decision. *)
+  let duplicate_route routes =
+    let seen = Hashtbl.create (List.length routes) in
+    let rec loop = function
+      | [] -> None
+      | (route : Route.t) :: rest ->
+        let key = route.method_, Route.pattern_to_string route.pattern in
+        if Hashtbl.mem seen key
+        then Some (Route.pattern_to_string route.pattern)
+        else (
+          Hashtbl.add seen key ();
+          loop rest)
+    in
+    loop routes
+  ;;
+
   let run
         ~(env :
            < net : _ Eio.Net.t
@@ -637,6 +655,18 @@ module Make (H : HANDLER) = struct
         ?on_listen
         ()
     =
+    let* () =
+      match duplicate_route H.routes with
+      | None -> Ok ()
+      | Some pattern ->
+        Error
+          (`Config
+              (Printf.sprintf
+                 "duplicate route %S: every method+pattern pair must be unique, because \
+                  a                 later duplicate is otherwise unreachable and may \
+                  hide an internal                 handler behind a public one"
+                 pattern))
+    in
     let* port =
       match Sol_runtime.setting "PORT" with
       | None -> Ok port
