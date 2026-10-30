@@ -42,7 +42,14 @@ module Make (F : FN) = struct
       | Some o -> Sol_obs.backend_and_renderer o
       | None -> Obs_prometheus.create ()
     in
-    let ot = Obs_eio.create ~service:job ~mono_clock:env#mono_clock ~backend () in
+    (* Preserve the caller's Sol_obs context and service identity. Rebuilding an
+       Obs_eio.t here discarded the workspace/env/domain labels that svc, worker and jobs
+       all carry and replaced the service with the Pushgateway job name. *)
+    let ot =
+      match ot with
+      | Some o -> Sol_obs.obs_eio o
+      | None -> Obs_eio.create ~service:job ~mono_clock:env#mono_clock ~backend ()
+    in
     let invocations, duration_h =
       Obs_eio.register_counter_and_histogram
         ot
