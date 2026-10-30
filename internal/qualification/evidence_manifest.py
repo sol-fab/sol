@@ -31,7 +31,7 @@ EVIDENCE = {
     "aws": {
         "profile": (["profile-target.yml"], "mechanism"),
         "transaction": (
-            ["app-transaction.log", "app-transaction-ts.log"],
+            ["app-transaction.log", "app-transaction-ts.txt"],
             "behavioral",
         ),
         "destroy-preparation": (
@@ -56,7 +56,7 @@ PHASE_EVIDENCE = {
     "aws": {
         "prepare": ["candidate-binding.txt"],
         "cloud": ["cloud-apply.log"],
-        "app": ["app-transaction.log", "app-transaction-ts.log"],
+        "app": ["app-transaction.log", "app-transaction-ts.txt"],
         "destroy": ["cloud-destroy.log"],
     },
     "gcp": {
