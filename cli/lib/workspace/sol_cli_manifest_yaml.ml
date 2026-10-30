@@ -145,7 +145,12 @@ let namespace_doc ~ns =
   resource
     ~api_version:"v1"
     ~kind:"Namespace"
-    [ "metadata", Y.map [ "name", Y.string ns ] ]
+    [ ( "metadata"
+      , Y.map
+          [ "name", Y.string ns
+          ; "labels", Y.map [ "sol.io/workload-namespace", Y.string "true" ]
+          ] )
+    ]
 ;;
 
 let role_binding_doc ~ns ~name ~cluster_role ~group ?service_account () =

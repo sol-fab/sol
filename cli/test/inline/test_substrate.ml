@@ -16,6 +16,10 @@ let test_substrate_is_namespace_and_role_bindings_only () =
     (Sol_cli_string.contains ~needle:"kind: Namespace" (List.nth docs 0)
      && Sol_cli_string.contains ~needle:"pluto-payments" (List.nth docs 0));
   check_bool
+    "the namespace is labelled for the deploy RoleBinding boundary"
+    true
+    (Sol_cli_string.contains ~needle:"sol.io/workload-namespace" (List.nth docs 0));
+  check_bool
     "then the deploy RoleBinding, scoped to this namespace"
     true
     (Sol_cli_string.contains ~needle:"kind: RoleBinding" (List.nth docs 1)

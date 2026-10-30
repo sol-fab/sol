@@ -179,3 +179,56 @@ resource "kubernetes_role_binding" "sol_boundary_lease" {
     api_group = ""
   }
 }
+
+# The deploy identity needs to create a RoleBinding in each workload namespace before it
+# can operate there. A cluster-wide `rolebindings` grant would also let it bind its broad
+# ClusterRole in monitoring/cert-manager/argocd/redpanda, reaching platform Secrets and
+# workloads. Keep that power but confine it to namespaces Sol itself labelled as workload
+# namespaces, and only for the two ClusterRoles the deployment contract owns.
+resource "kubernetes_manifest" "deploy_rolebinding_boundary" {
+  manifest = {
+    apiVersion = "admissionregistration.k8s.io/v1"
+    kind       = "ValidatingAdmissionPolicy"
+    metadata = {
+      name = "sol-deploy-rolebinding-boundary"
+    }
+    spec = {
+      failurePolicy = "Fail"
+      matchConstraints = {
+        resourceRules = [{
+          apiGroups   = ["rbac.authorization.k8s.io"]
+          apiVersions = ["v1"]
+          operations  = ["CREATE", "UPDATE"]
+          resources   = ["rolebindings"]
+        }]
+      }
+      validations = [{
+        expression = <<-CEL
+          !request.userInfo.groups.exists(g, g == "sol:deployers") ||
+          (has(namespaceObject.metadata.labels) &&
+           namespaceObject.metadata.labels["sol.io/workload-namespace"] == "true" &&
+           object.roleRef.apiGroup == "rbac.authorization.k8s.io" &&
+           object.roleRef.kind == "ClusterRole" &&
+           (object.roleRef.name == "sol-deploy" ||
+            object.roleRef.name == "sol-operator-diagnostics"))
+        CEL
+        message    = "the deploy identity may create only Sol workload RoleBindings in a namespace labelled sol.io/workload-namespace=true"
+      }]
+    }
+  }
+}
+
+resource "kubernetes_manifest" "deploy_rolebinding_boundary_binding" {
+  manifest = {
+    apiVersion = "admissionregistration.k8s.io/v1"
+    kind       = "ValidatingAdmissionPolicyBinding"
+    metadata = {
+      name = "sol-deploy-rolebinding-boundary"
+    }
+    spec = {
+      policyName        = "sol-deploy-rolebinding-boundary"
+      validationActions = ["Deny"]
+    }
+  }
+  depends_on = [kubernetes_manifest.deploy_rolebinding_boundary]
+}
