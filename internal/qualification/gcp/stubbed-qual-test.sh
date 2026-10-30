@@ -1571,6 +1571,11 @@ is "the app phase exits 0 when every step succeeds" "$(cat "$TMP/app-ok.rc")" "0
 # itself an app-phase failure; authentication is established behaviorally by the transaction.
 # What must fail closed is an unreadable delivered credential Secret or a consumer that points
 # at a different Secret.
+
+printf '\nscenario: the production bootstrap may stop at the artifact gate\n'
+STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_APPLY_RC=1 run_app_case app-artifact-gate
+is "the app phase accepts an artifact-gate bootstrap refusal" "$(cat "$TMP/app-artifact-gate.rc")" "0"
+
 printf '\nscenario: an unreadable delivered credential refuses the app phase\n'
 STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 STUB_KAFKA_DELIVERY=denied run_app_case app-kafka-denied
 is "the app phase refuses an unreadable delivery" "$(cat "$TMP/app-kafka-denied.rc")" "1"

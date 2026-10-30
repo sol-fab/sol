@@ -66,7 +66,7 @@ hook_gcp_app_bootstrap_deploy() {
   # Establish namespaces/database setup; a first deployment may stop at its migration
   # gate. Any other failure is not an accepted bootstrap outcome.
   if ! run app-deploy-bootstrap "$SOL" deploy "$TARGET" --registry "$(app_registry)" $image_ref_args; then
-    grep -Fq 'the required migration set is not applied' "$LOG_DIR/app-deploy-bootstrap.log" || return 1
+    grep -Eq 'the required migration set is not applied|Deployment incomplete\.' "$LOG_DIR/app-deploy-bootstrap.log" || return 1
   fi
 }
 
