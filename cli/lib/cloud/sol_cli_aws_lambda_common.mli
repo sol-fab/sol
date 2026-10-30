@@ -33,8 +33,15 @@ val workspace_label : unit -> string
 val aws : profile:string option -> region:string -> string list -> string list
 
 (** An immutable OCI reference: [<repo>@sha256:<64 lowercase hex>]. *)
-val valid_image : string -> (unit, failure) result
+val function_role : scope -> function_name:string -> (string, failure) result
 
+val verify_role
+  :  expected:string
+  -> scope
+  -> function_name:string
+  -> (unit, failure) result
+
+val valid_image : string -> (unit, failure) result
 val inventory : scope -> (string list, string) result
 val resource_is_absent : string -> bool
 

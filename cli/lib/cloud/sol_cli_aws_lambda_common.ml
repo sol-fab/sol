@@ -123,6 +123,38 @@ let describe (s : scope) ~function_name =
 (* AWS reports a missing alias as ResourceNotFoundException. Anything else -- expired
    credentials, a denied API call, a malformed response -- must not become "create the
    alias", because the create would then collide with the real state. *)
+let function_role (s : scope) ~function_name =
+  match
+    s.run
+      (aws
+         ~profile:s.profile
+         ~region:s.region
+         [ "lambda"; "get-function-configuration"; "--function-name"; function_name ])
+  with
+  | Error e -> Error (Provider e)
+  | Ok o ->
+    (match Sol_cli_json.decode ~what:"Lambda function configuration" o.stdout with
+     | Error m -> Error (Unknown m)
+     | Ok json ->
+       (match Sol_cli_json.string (Sol_cli_json.field [ "Role" ] json) with
+        | Some role when String.trim role <> "" -> Ok role
+        | _ -> Error (Unknown "Lambda function configuration has no Role")))
+;;
+
+let verify_role ~expected s ~function_name =
+  let* observed = function_role s ~function_name in
+  if String.equal expected observed
+  then Ok ()
+  else
+    Error
+      (Refused
+         (Printf.sprintf
+            "Lambda function %s runs as %S, not the recorded execution role %S"
+            function_name
+            observed
+            expected))
+;;
+
 let contains_substring ~needle haystack =
   let needle_length = String.length needle in
   let haystack_length = String.length haystack in

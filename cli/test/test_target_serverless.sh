@@ -44,6 +44,7 @@ elif [[ "$args" == *"lambda create-alias"* || "$args" == *"lambda update-alias"*
   printf '{}\n'
 elif [[ "$args" == *"lambda get-function-url-config"* ]]; then printf '{"FunctionUrl":"https://lambda.example/"}\n'
 elif [[ "$args" == *"lambda create-function-url-config"* || "$args" == *"lambda remove-permission"* || "$args" == *"lambda add-permission"* ]]; then printf '{}\n'
+elif [[ "$args" == *"lambda get-function-configuration"* ]]; then printf '{"Role":"%s"}\n' "${FAKE_AWS_ROLE:-arn:aws:iam::123:role/test}"
 elif [[ "$args" == *"lambda get-function"* ]]; then printf '{"Configuration":{"Version":"%s","FunctionArn":"arn:aws:lambda:us-east-1:123:function:checkout-svc"},"Tags":{"sol-owned":"lambda-experiment","sol-service":"checkout-svc"}}\n' "$(cat "$FAKE_AWS_STATE/version")"
 elif [[ "$args" == *"lambda delete-function-url-config"* ]]; then printf '{}\n'
 elif [[ "$args" == *"lambda delete-function"* ]]; then rm -f "$FAKE_AWS_STATE/function" "$FAKE_AWS_STATE/alias"; printf '{}\n'
@@ -71,6 +72,10 @@ grep -q '"version":"2"' "$work/deploy2"
 record=$(find "$work/home/.local/share/sol/runs" -name serverless-release.json -type f -print | sort | tail -1)
 [[ -n "$record" ]]
 printf 'token\n' > "$work/token"
+if FAKE_AWS_ROLE=arn:aws:iam::123:role/other "$sol" rollback --target live/aws/us-east-1 --record "$record" --service checkout_svc --to-version 1 --token-file "$work/token" > "$work/rollback-role" 2>&1; then
+  echo "rollback accepted a foreign execution role" >&2; exit 1
+fi
+grep -q 'not the recorded execution role' "$work/rollback-role"
 "$sol" rollback --target live/aws/us-east-1 --record "$record" --service checkout_svc --to-version 1 --token-file "$work/token" > "$work/rollback"
 grep -q '"version":"1"' "$work/rollback"
 grep -q '"version":"1"' "$record"
@@ -100,6 +105,10 @@ fi
 grep -q 'Functions array' "$work/destroy-malformed"
 [[ -f "$work/state/function" ]]
 
+if FAKE_AWS_ROLE=arn:aws:iam::123:role/other "$sol" destroy live/aws/us-east-1 --apply --service checkout_svc --record "$record" > "$work/destroy-role" 2>&1; then
+  echo "destroy accepted a foreign execution role" >&2; exit 1
+fi
+grep -q 'not the recorded execution role' "$work/destroy-role"
 "$sol" destroy live/aws/us-east-1 --apply --service checkout_svc --record "$record" > /dev/null
 [[ ! -f "$work/state/function" ]]
 echo "target serverless deploy/rollback/destroy fake-provider test passed"
