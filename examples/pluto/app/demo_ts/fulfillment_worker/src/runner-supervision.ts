@@ -30,7 +30,14 @@ export function watch(
   label: string,
   supervisor: Supervisor,
 ): Promise<void> {
-  return running.then((error) => {
-    if (error) supervisor.report(label, error);
-  });
+  return running.then(
+    (error) => {
+      if (error) supervisor.report(label, error);
+    },
+    (error: unknown) => {
+      // A rejected runner promise is a terminal failure too. Without this branch the
+      // rejection is unhandled and Node exits without running the supervised shutdown.
+      supervisor.report(label, { kind: "crash", message: String(error) });
+    },
+  );
 }
