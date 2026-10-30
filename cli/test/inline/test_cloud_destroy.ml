@@ -24,6 +24,29 @@ let gcp_bucket_with_soft_delete =
   {|{"address":"google_storage_bucket.loki","type":"google_storage_bucket","values":{"name":"loki","soft_delete_policy":[{"retention_duration_seconds":604800}]}}|}
 ;;
 
+let test_gcp_prepare_blocks_applied_soft_delete () =
+  let state = inventory_of_show_json (show_json_resources gcp_bucket_with_soft_delete) in
+  let run_log = Sol_cli_run_log.create ~prefix:"test-gcp-retention" () in
+  match
+    Sol_cli_gcp_destruction.gcp_prepare_destroy_result
+      ~retention:Sol_cli_cloud_lifecycle.Retain_nothing
+      ~guarded:[]
+      run_log
+      ""
+      []
+      []
+      state
+  with
+  | Sol_cli_cloud_lifecycle.Preparation_failed
+      { policy = Sol_cli_cloud_lifecycle.Block_destroy; reason } ->
+    Windtrap.is_true
+      ~msg:"the block names the applied window"
+      (Sol_cli_string.contains ~needle:"604800" reason)
+  | Sol_cli_cloud_lifecycle.Preparation_failed _ ->
+    Windtrap.fail "the applied soft-delete window did not block destroy"
+  | _ -> Windtrap.fail "prepare did not block an applied soft-delete window"
+;;
+
 let test_gcp_applied_soft_delete_is_not_retention_none () =
   let state = inventory_of_show_json (show_json_resources gcp_bucket_with_soft_delete) in
   match
@@ -3364,6 +3387,10 @@ let%test "execute: the cluster contents are classified" =
 
 let%test "execute: failed release does not prepare" =
   test_failed_release_does_not_prepare ()
+;;
+
+let%test "state: GCP prepare blocks applied soft delete" =
+  test_gcp_prepare_blocks_applied_soft_delete ()
 ;;
 
 let%test "state: GCP applied soft delete is not retention none" =
