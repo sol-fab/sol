@@ -10,6 +10,7 @@ let authorization_resource =
   ; secret_id = None
   ; email = None
   ; deletion_protection = None
+  ; soft_delete_retention_seconds = None
   ; final_snapshot_identifier = None
   ; skip_final_snapshot = None
   ; url = None

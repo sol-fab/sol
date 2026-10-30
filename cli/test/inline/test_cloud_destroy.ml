@@ -20,6 +20,21 @@ let gcp_binding_inside_the_cluster =
   {|{"address":"kubernetes_cluster_role_binding.provisioner_bootstrap_admin","type":"kubernetes_cluster_role_binding","values":{"metadata":[{"name":"sol-provisioner-bootstrap"}]}}|}
 ;;
 
+let gcp_bucket_with_soft_delete =
+  {|{"address":"google_storage_bucket.loki","type":"google_storage_bucket","values":{"name":"loki","soft_delete_policy":[{"retention_duration_seconds":604800}]}}|}
+;;
+
+let test_gcp_bucket_soft_delete_is_read_from_state () =
+  match inventory_of_show_json (show_json_resources gcp_bucket_with_soft_delete) with
+  | State_represented [ resource ] ->
+    Windtrap.equal
+      (Windtrap.option Windtrap.int)
+      ~msg:"the applied soft-delete window is carried for retention verification"
+      (Some 604800)
+      resource.soft_delete_retention_seconds
+  | _ -> Windtrap.fail "the bucket fixture was not represented"
+;;
+
 let gcp_postgres_outside_the_cluster =
   {|{"address":"google_sql_database_instance.postgres","type":"google_sql_database_instance","values":{"name":"sol-postgres","deletion_protection":true}}|}
 ;;
@@ -3333,6 +3348,10 @@ let%test "execute: the cluster contents are classified" =
 
 let%test "execute: failed release does not prepare" =
   test_failed_release_does_not_prepare ()
+;;
+
+let%test "state: GCP bucket soft-delete window is represented" =
+  test_gcp_bucket_soft_delete_is_read_from_state ()
 ;;
 
 let%test "execute: half-built state" = test_half_built_state_is_destroyable ()
