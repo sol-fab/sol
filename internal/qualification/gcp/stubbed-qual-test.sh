@@ -3041,6 +3041,15 @@ STUB_STATE_WITH_OUTPUTS=1 PRESEED_CREDENTIALS=1 run_app_case app-secret-false-su
 is "false success of a missing application secret fails qualification" "$(cat "$TMP/app-secret-false-success.rc")" "1"
 lacks "captured state metadata excludes database credentials" "qual-secret" "$TMP/app-ok.logs/state/cloud.tfstate"
 
+
+run_case cluster-name-too-long prepare CLUSTER=sol-qual-v01-gcp-1
+is "a cluster name whose derived service-account id exceeds 30 characters is refused" "$(cat "$TMP/cluster-name-too-long.rc")" "2"
+if grep -qF "30-character limit allows at most 17" "$TMP/cluster-name-too-long.out"; then
+  ok "the refusal names the derived-id limit"
+else
+  no "the refusal names the derived-id limit" "missing message" "30-character limit allows at most 17"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 if [ "$fail" != "0" ]; then
   printf 'PASSED=%d FAILED=%d EXIT=1\n' "$pass" "$fail"
