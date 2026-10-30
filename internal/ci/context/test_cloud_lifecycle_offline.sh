@@ -825,18 +825,40 @@ if [ -z "$substrate_line" ] || [ "$wait_line" -ge "$substrate_line" ]; then
   exit 1
 fi
 
-# The same destroy with no seeded record: no recorded UID evidence means the workloads are
-# retained and reported, never deleted (docs/architecture/ownership.md) — and the substrate
-# destroy still proceeds, because Sol retaining an object it cannot prove it owns must not
-# block tearing down the target.
+# The same destroy with no seeded record: live workloads with no recorded UID are not
+# provably owned, so the default destroy refuses before any destructive step. With the
+# explicit --accept-unreleased override it retains and reports them, and may tear down the
+# substrate because the operator accepted that the absence check decides the outcome.
+no_release_dir="$tmp/no-release"
+mkdir -p "$no_release_dir"
+retain_refusal_log="$tmp/release-retain-refusal.log"
+if (cd "$tmp/work" && DESTROYING=1 WORKSPACE_PODS=1 \
+      FAKE_CONFIGMAP_DIR="$no_release_dir" LIFECYCLE_LOG="$retain_refusal_log" \
+      "$sol" destroy prod/gcp/us-central1 --apply) \
+  >"$retain_refusal_log.out" 2>&1
+then
+  cat "$retain_refusal_log.out" >&2
+  echo "destroy without recorded UID evidence proceeded without --accept-unreleased" >&2
+  exit 1
+fi
+grep -F -- '--accept-unreleased' "$retain_refusal_log.out" >/dev/null || {
+  echo "the refusal did not name the explicit override:" >&2
+  cat "$retain_refusal_log.out" >&2
+  exit 1
+}
+if grep -F ' destroy ' "$retain_refusal_log" >/dev/null; then
+  echo "destroy without recorded UID evidence reached terraform" >&2
+  grep -F ' destroy ' "$retain_refusal_log" >&2
+  exit 1
+fi
 retain_log="$tmp/release-retain-destroy.log"
 if ! (cd "$tmp/work" && DESTROYING=1 WORKSPACE_PODS=1 \
-        LIFECYCLE_LOG="$retain_log" \
-        "$sol" destroy prod/gcp/us-central1 --apply) \
+        FAKE_CONFIGMAP_DIR="$no_release_dir" LIFECYCLE_LOG="$retain_log" \
+        "$sol" destroy prod/gcp/us-central1 --apply --accept-unreleased) \
   >"$retain_log.out" 2>&1
 then
   cat "$retain_log.out" >&2
-  echo "destroy with no recorded evidence failed instead of retaining the workloads" >&2
+  echo "destroy with the explicit unreleased override failed instead of retaining workloads" >&2
   exit 1
 fi
 grep -F 'retaining' "$retain_log.out" >/dev/null || {
@@ -844,7 +866,7 @@ grep -F 'retaining' "$retain_log.out" >/dev/null || {
   cat "$retain_log.out" >&2
   exit 1
 }
-grep -F 'deployment/charge-svc' "$retain_log.out" >/dev/null || {
+grep -E 'deployment/(charge-svc|notify-worker)' "$retain_log.out" >/dev/null || {
   echo "the retained workloads were not named for the operator:" >&2
   cat "$retain_log.out" >&2
   exit 1

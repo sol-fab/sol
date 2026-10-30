@@ -226,6 +226,46 @@ let%test "guard: rollback prunes only on the recorded UID, not the label" =
   test_rollback_prunes_only_label_matched_workloads_with_the_recorded_uid ()
 ;;
 
+let test_release_with_only_retained_workloads_is_unestablished () =
+  let deleted = ref [] in
+  let run args =
+    match List.nth_opt args 1 with
+    | Some "deployment" -> Ok deployment_listing
+    | Some ("cronjob" | "job" | "rollout" | "statefulset" | "daemonset") ->
+      Ok empty_listing
+    | _ -> Ok empty_listing
+  in
+  let release =
+    Sol_cli_workload_scope.release_workloads
+      ~run
+      ~namespace_probe:(fun _ -> Sol_cli_workload_scope.Namespace_exists)
+      ~delete:(fun ~namespace:_ ~names ->
+        deleted := !deleted @ names;
+        Ok ())
+      ~wait:(fun ~namespace:_ -> Ok ())
+      ~evidence:[]
+      ~namespaces:[ "myapp-payments" ]
+      ~workspace:"myapp"
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"live workloads with no recorded UID are not reported as released"
+    true
+    (match release with
+     | Sol_cli_workload_scope.Workloads_unestablished _ -> true
+     | Sol_cli_workload_scope.Workloads_released
+     | Sol_cli_workload_scope.Workloads_not_releasable _ -> false);
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"nothing is deleted when no live workload matches a recorded UID"
+    []
+    !deleted
+;;
+
 let%test "guard: destroy releases only on the recorded UID, not the workspace label" =
   test_release_deletes_only_label_matched_workloads_with_the_recorded_uid ()
+;;
+
+let%test "guard: a release with only unmatched live workloads is unestablished" =
+  test_release_with_only_retained_workloads_is_unestablished ()
 ;;
