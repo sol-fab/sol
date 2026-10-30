@@ -31,6 +31,13 @@ val fence
   -> target:Sol_cli_config.target
   -> (outcome, string) result
 
+val apply_serverless_identities
+  :  assets:Sol_cli_platform_assets.t
+  -> run_log:Sol_cli_run_log.t
+  -> target:Sol_cli_config.target
+  -> Sol_cli_grant.serverless_unit list
+  -> ((string * string) list, string) result
+
 val verify_destroyed_state : Sol_cli_cloud_destroy.state_read -> (unit, string) result
 
 type destroy_result =

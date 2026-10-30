@@ -8,6 +8,7 @@ type request =
   ; service : string
   ; job : string
   ; image : string
+  ; service_account : string
   ; record : string
   ; runner : Sol_cli_cloud_run.runner
   }
@@ -15,6 +16,7 @@ type request =
 type release
 
 val failure_to_string : Sol_cli_cloud_run.failure -> string
+val runtime_service_account : release -> string
 val release_json : release -> Yojson.Safe.t
 val read_record : string -> (release, string) result
 val write_record : path:string -> release -> (unit, string) result

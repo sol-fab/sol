@@ -118,6 +118,10 @@ type t =
   ; authorization_destroy_trust_placeholder : string
   ; authorization_root_vars :
       Sol_cli_config.target -> ((string * string) list, string) result
+  ; authorization_serverless_root_vars :
+      Sol_cli_config.target
+      -> Sol_cli_grant.serverless_unit list
+      -> ((string * string) list, string) result
   ; authorization_fence_addresses : string list
   ; authorization_reconciler :
       Sol_cli_config.target -> (authorization_reconciler, string) result
@@ -568,6 +572,30 @@ let aws_authorization_reconciler target =
     (required_field target "reconciler_role_arn")
 ;;
 
+let aws_serverless_root_vars _target _units =
+  Error "serverless runtime identities are not implemented for AWS targets"
+;;
+
+let gcp_serverless_root_vars target units =
+  let open Result.Syntax in
+  let* project = required_field target "project_id" in
+  let* existing_trust =
+    match required_field target "reconciler_trust_principal" with
+    | Ok trust -> Ok trust
+    | Error _ -> Ok ""
+  in
+  let units =
+    `List (List.map Sol_cli_grant.serverless_unit_to_json units) |> Yojson.Safe.to_string
+  in
+  Ok
+    [ "region", target.region
+    ; "environment", target.env
+    ; "project_id", project
+    ; "reconciler_trust_principal", existing_trust
+    ; "serverless_units", units
+    ]
+;;
+
 let gcp_authorization_reconciler target =
   Result.map
     (fun account -> Reconciler_service_account account)
@@ -985,6 +1013,7 @@ let aws : t =
   ; authorization_destroy_trust_placeholder =
       "arn:aws:iam::000000000000:role/sol-destroy-placeholder"
   ; authorization_root_vars = aws_authorization_root_vars
+  ; authorization_serverless_root_vars = aws_serverless_root_vars
   ; authorization_fence_addresses =
       [ "aws_iam_policy.workload_boundary"
       ; "aws_iam_role.reconciler"
@@ -1231,6 +1260,7 @@ let gcp : t =
   ; authorization_destroy_trust_placeholder =
       "user:sol-destroy-placeholder@example.invalid"
   ; authorization_root_vars = gcp_authorization_root_vars
+  ; authorization_serverless_root_vars = gcp_serverless_root_vars
   ; authorization_fence_addresses =
       [ "google_service_account.reconciler"
       ; "google_project_iam_custom_role.authorization"
@@ -1295,6 +1325,7 @@ let byo : t =
   ; authorization_trust_field = ""
   ; authorization_destroy_trust_placeholder = ""
   ; authorization_root_vars = (fun _ -> Ok [])
+  ; authorization_serverless_root_vars = (fun _ _ -> Error byo_no_root)
   ; authorization_fence_addresses = []
   ; authorization_reconciler = (fun _ -> Error byo_no_root)
   ; authorization_assumption = (fun _ -> Error byo_no_root)

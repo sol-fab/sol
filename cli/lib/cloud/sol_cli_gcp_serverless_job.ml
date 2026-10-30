@@ -15,6 +15,7 @@ type request =
   ; service : string
   ; job : string
   ; image : string
+  ; service_account : string
   ; record : string
   ; runner : Sol_cli_cloud_run.runner
   }
@@ -25,6 +26,7 @@ type release =
   ; service : string
   ; job : string
   ; image : string
+  ; service_account : string
   ; generation : int
   ; execution : string
   ; task_timeout_s : int
@@ -47,6 +49,7 @@ let release_json (r : release) =
     ; "service", `String r.service
     ; "job", `String r.job
     ; "image", `String r.image
+    ; "service_account", `String r.service_account
     ; "generation", `Int r.generation
     ; "execution", `String r.execution
     ; "task_timeout_s", `Int r.task_timeout_s
@@ -78,12 +81,14 @@ let read_record path =
     and+ service = string "service"
     and+ job = string "job"
     and+ image = string "image"
+    and+ service_account = string "service_account"
     and+ execution = string "execution" in
     { project
     ; region
     ; service
     ; job
     ; image
+    ; service_account
     ; generation = int_or_zero "generation"
     ; execution
     ; task_timeout_s = int_or_zero "task_timeout_s"
@@ -205,6 +210,8 @@ let deploy_argv (r : request) ~job ~image =
   ; job
   ; "--image"
   ; image
+  ; "--service-account"
+  ; r.service_account
   ; "--project"
   ; r.project
   ; "--region"
@@ -372,6 +379,7 @@ let update_record r ~job ~image ~generation ~execution =
     ; service = r.service
     ; job
     ; image
+    ; service_account = r.service_account
     ; generation
     ; execution
     ; task_timeout_s
@@ -418,6 +426,31 @@ let execute ~(r : request) ~job ~image ~generation =
     Ok execution
 ;;
 
+let service_account_of_job json =
+  Sol_cli_json.string
+    (Sol_cli_json.field [ "spec"; "template"; "spec"; "serviceAccountName" ] json)
+  |> Option.value ~default:""
+;;
+
+let verify_runtime_service_account ~expected json =
+  let observed = service_account_of_job json in
+  if String.equal expected observed
+  then Ok ()
+  else
+    Error
+      (Refused
+         (Printf.sprintf
+            "Cloud Run job runs as %S, not the recorded runtime identity %S"
+            observed
+            expected))
+;;
+
+let valid_runtime_service_account value =
+  String.trim value <> ""
+  && (not (String.equal value "default"))
+  && not (String.ends_with ~suffix:"-compute@developer.gserviceaccount.com" value)
+;;
+
 let deploy (r : request) =
   let* () =
     if String.trim r.project = ""
@@ -428,6 +461,15 @@ let deploy (r : request) =
     if String.trim r.region = ""
     then Error (Refused "region must not be empty")
     else Ok ()
+  in
+  let* () =
+    if valid_runtime_service_account r.service_account
+    then Ok ()
+    else
+      Error
+        (Refused
+           "Cloud Run Jobs requires a dedicated per-unit runtime service account, not \
+            the default Compute engine identity")
   in
   let* () =
     if String.trim r.job = ""
@@ -469,6 +511,7 @@ let deploy (r : request) =
     | Ok None -> Error (Unknown "Cloud Run job is absent after deploy")
     | Error failure -> Error failure
   in
+  let* () = verify_runtime_service_account ~expected:r.service_account job_json in
   let generation = job_generation job_json in
   let* () =
     update_record r ~job:r.job ~image:r.image ~generation ~execution:""
@@ -481,6 +524,7 @@ let deploy (r : request) =
     ; service = r.service
     ; job = r.job
     ; image = r.image
+    ; service_account = r.service_account
     ; generation
     ; execution
     ; task_timeout_s
@@ -563,6 +607,7 @@ let rollback (r : request) ~record ~execution =
     ; service = r.service
     ; job = r.job
     ; image
+    ; service_account = r.service_account
     ; generation
     ; execution
     ; task_timeout_s
@@ -631,6 +676,7 @@ let destroy (r : request) ~record =
     match existing with
     | None -> Ok ()
     | Some json ->
+      let* () = verify_runtime_service_account ~expected:recorded.service_account json in
       if owns ~job:r.job (labels_of_job json)
       then Ok ()
       else
@@ -726,3 +772,5 @@ let destroy (r : request) ~record =
   in
   Ok ()
 ;;
+
+let runtime_service_account (r : release) = r.service_account

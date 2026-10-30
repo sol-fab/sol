@@ -27,8 +27,19 @@ let deploy_svc
       ~(service : Sol_cli_manifest.service)
       ~image
       ~record
+      ~runtime_service_account
   =
   let* () = ensure_gcp target in
+  let* service_account =
+    Option.to_result
+      ~none:"GCP serverless deploy requires a provisioned per-unit runtime identity"
+      runtime_service_account
+  in
+  let* () =
+    if String.trim service_account = ""
+    then Error "GCP serverless runtime identity is empty"
+    else Ok ()
+  in
   let* () = Sol_cli_serverless_target_common.declared_uses config service in
   let* () = Sol_cli_serverless_target_common.require_http_callers target in
   let* cloud_project =
@@ -54,6 +65,7 @@ let deploy_svc
     ; image
     ; identity
     ; ingress = Sol_cli_cloud_run.Public
+    ; service_account
     ; record = Some record
     }
   in
@@ -104,8 +116,19 @@ let deploy_fn
       ~(service : Sol_cli_manifest.service)
       ~image
       ~record
+      ~runtime_service_account
   =
   let* () = ensure_gcp target in
+  let* service_account =
+    Option.to_result
+      ~none:"GCP serverless deploy requires a provisioned per-unit runtime identity"
+      runtime_service_account
+  in
+  let* () =
+    if String.trim service_account = ""
+    then Error "GCP serverless runtime identity is empty"
+    else Ok ()
+  in
   let* () = Sol_cli_serverless_target_common.declared_uses config service in
   let* cloud_project =
     Sol_cli_serverless_target_common.required_field target ~provider:"gcp" "project_id"
@@ -120,6 +143,7 @@ let deploy_fn
     ; service = service.name
     ; job
     ; image
+    ; service_account
     ; record
     ; runner = runner ()
     }
@@ -131,11 +155,21 @@ let deploy_fn
   Ok (Sol_cli_gcp_serverless_job.release_json release)
 ;;
 
-let deploy ~target ~config ~project ~(service : Sol_cli_manifest.service) ~image ~record =
+let deploy
+      ~target
+      ~config
+      ~project
+      ~(service : Sol_cli_manifest.service)
+      ~image
+      ~record
+      ~runtime_service_account
+  =
   let* () = ensure_gcp target in
   match service.primitive with
-  | Sol_cli_manifest.Svc -> deploy_svc ~target ~config ~project ~service ~image ~record
-  | Sol_cli_manifest.Fn -> deploy_fn ~target ~config ~project ~service ~image ~record
+  | Sol_cli_manifest.Svc ->
+    deploy_svc ~target ~config ~project ~service ~image ~record ~runtime_service_account
+  | Sol_cli_manifest.Fn ->
+    deploy_fn ~target ~config ~project ~service ~image ~record ~runtime_service_account
   | Sol_cli_manifest.Worker ->
     Error "target-scoped serverless dispatch does not support -worker on GCP"
 ;;
@@ -163,6 +197,7 @@ let rollback_svc
     ; service = service.name
     ; provider_service
     ; image = release.image
+    ; service_account = release.service_account
     ; identity =
         { Sol_cli_cloud_run.unit =
             Sol_cli_serverless_target_common.unit_of_service ~project service
@@ -204,6 +239,7 @@ let rollback_fn
       ~execution
   =
   let* () = ensure_gcp target in
+  let* recorded = Sol_cli_gcp_serverless_job.read_record record in
   let* cloud_project =
     Sol_cli_serverless_target_common.required_field target ~provider:"gcp" "project_id"
   in
@@ -217,6 +253,7 @@ let rollback_fn
     ; service = service.name
     ; job
     ; image = ""
+    ; service_account = Sol_cli_gcp_serverless_job.runtime_service_account recorded
     ; record
     ; runner = runner ()
     }
@@ -263,13 +300,16 @@ let destroy ~target ~service ~record =
       ; service
       ; job
       ; image = ""
+      ; service_account = ""
       ; record
       ; runner = runner ()
       }
     in
     Sol_cli_gcp_serverless_job.destroy request ~record
     |> Result.map_error Sol_cli_gcp_serverless_job.failure_to_string
-  | Error _ ->
+  | Error job_error ->
     Sol_cli_cloud_run.destroy (runner ()) ~project ~region:target.region ~service ~record
     |> Result.map_error Sol_cli_cloud_run.failure_to_string
+    |> Result.map_error (fun message ->
+      Printf.sprintf "%s (Cloud Run record: %s)" job_error message)
 ;;

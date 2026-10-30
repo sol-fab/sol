@@ -145,6 +145,7 @@ let request
       ~callers
       ~record
       ~ingress
+      ~service_account
   =
   Sol_cli_cloud_run.
     { project
@@ -154,6 +155,7 @@ let request
     ; image
     ; identity = { unit; callers; issuer; jwks_uri }
     ; ingress
+    ; service_account
     ; record
     }
 ;;
@@ -239,7 +241,28 @@ let common_terms =
     $ callers)
 ;;
 
-let deploy_run project region service image unit issuer jwks_uri callers ingress_value =
+let service_account_arg =
+  Arg.(
+    required
+    & opt (some string) None
+    & info
+        [ "service-account" ]
+        ~docv:"EMAIL"
+        ~doc:"Dedicated Cloud Run runtime service account")
+;;
+
+let deploy_run
+      project
+      region
+      service
+      image
+      unit
+      issuer
+      jwks_uri
+      callers
+      ingress_value
+      service_account
+  =
   let* provider_service = service_is_http service in
   let* ingress = parse_ingress ingress_value in
   let* callers =
@@ -280,6 +303,7 @@ let deploy_run project region service image unit issuer jwks_uri callers ingress
       ~callers
       ~record:None
       ~ingress
+      ~service_account
   in
   let* release =
     Sol_cli_cloud_run.deploy (runner ()) request
@@ -295,7 +319,11 @@ let deploy_cmd =
   let term =
     Term.(
       const
-        (fun (project, region, service, image, unit, issuer, jwks_uri, callers) ingress ->
+        (fun
+            (project, region, service, image, unit, issuer, jwks_uri, callers)
+             ingress
+             service_account
+           ->
            Sol_cli_exit.exit_on
              (deploy_run
                 project
@@ -306,9 +334,11 @@ let deploy_cmd =
                 issuer
                 jwks_uri
                 callers
-                ingress))
+                ingress
+                service_account))
       $ common_terms
-      $ ingress_arg)
+      $ ingress_arg
+      $ service_account_arg)
   in
   Cmd.v (Cmd.info "deploy" ~doc) term
 ;;
@@ -345,6 +375,7 @@ let verify_run
       ~callers:[]
       ~record
       ~ingress
+      ~service_account:""
   in
   let* observed =
     Sol_cli_cloud_run.verify (runner ()) request ~token
@@ -431,6 +462,7 @@ let rollback_run
       ~callers:[]
       ~record:None
       ~ingress
+      ~service_account:""
   in
   let* observed =
     Sol_cli_cloud_run.rollback

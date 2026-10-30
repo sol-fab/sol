@@ -19,7 +19,16 @@ val deploy
   -> service:Sol_cli_manifest.service
   -> image:string
   -> record:string
+  -> runtime_service_account:string option
   -> (Yojson.Safe.t, string) result
+
+val ensure_runtime_identity
+  :  assets:Sol_cli_platform_assets.t
+  -> run_log:Sol_cli_run_log.t
+  -> target:Sol_cli_config.target
+  -> unit:string
+  -> requirements:Sol_cli_grant.requirement list
+  -> (string option, string) result
 
 val rollback
   :  target:Sol_cli_config.target

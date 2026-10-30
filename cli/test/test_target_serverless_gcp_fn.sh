@@ -20,9 +20,22 @@ live:
   targets:
     gcp/us-west1:
       execution: serverless
+      state_bucket: test-state
       gcp:
         project_id: example-project
 YAML
+cat > "$work/bin/terraform" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"output -json"*)
+    printf '%s
+' '{"serverless_service_accounts":{"value":{"ops/probe_fn":"sol-runtime@example.iam.gserviceaccount.com"}}}'
+    ;;
+esac
+exit 0
+FAKE
+chmod +x "$work/bin/terraform"
 cat > "$work/bin/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -30,11 +43,12 @@ state="$FAKE_GCLOUD_STATE"
 if [[ "$1 $2 $3" == "run jobs describe" ]]; then
   [[ -f "$state/job" ]] || { echo "ERROR: Cannot find job [probe-fn]." >&2; exit 1; }
   cat <<JSON
-{"metadata":{"name":"probe-fn","labels":{"sol-owned":"cloud-run-job-experiment","sol-service":"probe-fn"},"generation":"2"}}
+{"spec":{"template":{"spec":{"serviceAccountName":"sol-runtime@example.iam.gserviceaccount.com"}}},"metadata":{"name":"probe-fn","labels":{"sol-owned":"cloud-run-job-experiment","sol-service":"probe-fn"},"generation":"2"}}
 JSON
   exit 0
 fi
 if [[ "$1 $2 $3" == "run jobs deploy" ]]; then
+  [[ "$*" == *"--service-account sol-runtime@example.iam.gserviceaccount.com"* ]] || { echo "job deploy lost runtime identity" >&2; exit 1; }
   image=""
   for arg in "$@"; do
     case "$arg" in --image=*|--image) ;; esac
@@ -84,7 +98,7 @@ if [[ "$1 $2 $3 $4" == "run jobs executions describe" ]]; then
   image="$(cat "$state/executions/$name.image")"
   if [[ "${FAKE_EXEC_FAIL:-0}" == 1 ]]; then
     cat <<JSON
-{"job":"projects/example-project/locations/us-west1/jobs/probe-fn","spec":{"template":{"spec":{"containers":[{"image":"$image"}]}}},"status":{"succeededCount":0,"failedCount":1,"cancelledCount":0,"conditions":[{"type":"Completed","status":"False"}]}}
+{"job":"projects/example-project/locations/us-west1/jobs/probe-fn","spec":{"template":{"spec":{"serviceAccountName":"sol-runtime@example.iam.gserviceaccount.com","containers":[{"image":"$image"}]}}},"status":{"succeededCount":0,"failedCount":1,"cancelledCount":0,"conditions":[{"type":"Completed","status":"False"}]}}
 JSON
   else
     cat <<JSON

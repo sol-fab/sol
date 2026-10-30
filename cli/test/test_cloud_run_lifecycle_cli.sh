@@ -21,7 +21,7 @@ if [[ "$1 $2 $3" == "run services describe" ]]; then
   [[ -f "$state/revision" ]] || { echo "ERROR: not found" >&2; exit 1; }
   rev="rev-$(cat "$state/revision")"
   cat <<JSON
-{"spec":{"template":{"spec":{"containers":[{"image":"repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}}},"metadata":{"name":"checkout-svc","labels":{"sol-owned":"cloud-run-experiment","sol-service":"checkout-svc"}},"status":{"url":"https://service.example","latestReadyRevisionName":"$rev","traffic":[{"revisionName":"$rev","percent":100}]}}
+{"spec":{"template":{"spec":{"serviceAccountName":"sol-runtime@example.iam.gserviceaccount.com","containers":[{"image":"repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}}},"metadata":{"name":"checkout-svc","labels":{"sol-owned":"cloud-run-experiment","sol-service":"checkout-svc"}},"status":{"url":"https://service.example","latestReadyRevisionName":"$rev","traffic":[{"revisionName":"$rev","percent":100}]}}
 JSON
   exit 0
 fi
@@ -71,11 +71,11 @@ export FAKE_GCLOUD_STATE="$work/state"
 printf 'secret-token\n' > "$work/token"
 cd "$examples"
 common=(--project p --region r --service checkout_svc --image repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --unit checkout/checkout_svc --issuer https://accounts.google.com --jwks-uri https://www.googleapis.com/oauth2/v3/certs)
-"$sol" cloud-run deploy "${common[@]}" --caller checkout/checkout_svc=103076866099743206289 --ingress public > "$work/deploy1"
+"$sol" cloud-run deploy "${common[@]}" --service-account sol-runtime@example.iam.gserviceaccount.com --caller checkout/checkout_svc=103076866099743206289 --ingress public > "$work/deploy1"
 grep -q '"revision":"rev-1"' "$work/deploy1"
 "$sol" cloud-run verify "${common[@]}" --token-file "$work/token" --record "$work/release.json" --ingress public > "$work/verify1"
 grep -q '"provider_service":"checkout-svc"' "$work/release.json"
-"$sol" cloud-run deploy "${common[@]}" --caller checkout/checkout_svc=103076866099743206289 --caller checkout/checkout_svc=999999999999999999999 --ingress public > "$work/deploy2"
+"$sol" cloud-run deploy "${common[@]}" --service-account sol-runtime@example.iam.gserviceaccount.com --caller checkout/checkout_svc=103076866099743206289 --caller checkout/checkout_svc=999999999999999999999 --ingress public > "$work/deploy2"
 grep -q '"revision":"rev-2"' "$work/deploy2"
 "$sol" cloud-run rollback "${common[@]}" --revision rev-1 --token-file "$work/token" --ingress public > "$work/rollback"
 grep -q '"revision":"rev-1"' "$work/rollback"

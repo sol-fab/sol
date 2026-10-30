@@ -109,6 +109,10 @@ type t =
   ; authorization_destroy_trust_placeholder : string
   ; authorization_root_vars :
       Sol_cli_config.target -> ((string * string) list, string) result
+  ; authorization_serverless_root_vars :
+      Sol_cli_config.target
+      -> Sol_cli_grant.serverless_unit list
+      -> ((string * string) list, string) result
   ; authorization_fence_addresses : string list
   ; authorization_reconciler :
       Sol_cli_config.target -> (authorization_reconciler, string) result

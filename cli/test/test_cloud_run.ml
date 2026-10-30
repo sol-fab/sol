@@ -26,6 +26,7 @@ let request ?(record = None) () =
         ; jwks_uri = "https://www.googleapis.com/oauth2/v3/certs"
         }
     ; ingress = Public
+    ; service_account = "sol-test@example.iam.gserviceaccount.com"
     ; record
     }
 ;;
@@ -39,7 +40,9 @@ let describe_json_with_latest ~latest ~revision ~percent =
                 , `Assoc
                     [ ( "spec"
                       , `Assoc
-                          [ ( "containers"
+                          [ ( "serviceAccountName"
+                            , `String "sol-test@example.iam.gserviceaccount.com" )
+                          ; ( "containers"
                             , `List
                                 [ `Assoc
                                     [ ( "image"
@@ -89,6 +92,16 @@ let test_preflight () =
   (match Sol_cli_cloud_run.preflight (request ()) with
    | Ok () -> check "request preflight" true
    | Error e -> check ("request preflight " ^ Sol_cli_cloud_run.failure_to_string e) false);
+  let missing_identity = { (request ()) with service_account = "" } in
+  check
+    "missing runtime identity refused"
+    (Result.is_error (Sol_cli_cloud_run.preflight missing_identity));
+  let default_identity =
+    { (request ()) with service_account = "123-compute@developer.gserviceaccount.com" }
+  in
+  check
+    "default Compute identity refused"
+    (Result.is_error (Sol_cli_cloud_run.preflight default_identity));
   let bad_image = { (request ()) with image = "image:latest" } in
   check "mutable image refused" (Result.is_error (Sol_cli_cloud_run.preflight bad_image));
   let bad_caller =
@@ -267,6 +280,7 @@ let test_destroy () =
                   , `String
                       "repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                   )
+                ; "service_account", `String "sol-test@example.iam.gserviceaccount.com"
                 ]));
        close_out channel;
        match
@@ -391,6 +405,7 @@ let test_destroy_refuses_stale_record () =
                   , `String
                       "repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                   )
+                ; "service_account", `String "sol-test@example.iam.gserviceaccount.com"
                 ]));
        close_out channel;
        let runner =
@@ -557,6 +572,7 @@ let test_destroy_refuses_unowned_live_service () =
                   , `String
                       "repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                   )
+                ; "service_account", `String "sol-test@example.iam.gserviceaccount.com"
                 ]));
        close_out channel;
        let runner =
@@ -707,6 +723,7 @@ let test_destroy_refuses_provider_record_mismatch () =
                   , `String
                       "repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                   )
+                ; "service_account", `String "sol-test@example.iam.gserviceaccount.com"
                 ]));
        close_out channel;
        let runner =
@@ -756,6 +773,7 @@ let test_destroy_unreadable_inventory_is_unknown () =
                   , `String
                       "repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                   )
+                ; "service_account", `String "sol-test@example.iam.gserviceaccount.com"
                 ]));
        close_out channel;
        let runner =
@@ -915,6 +933,7 @@ let test_destroy_accepts_provisional_record () =
          ; url = ""
          ; image =
              "repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+         ; service_account = "sol-test@example.iam.gserviceaccount.com"
          }
        |> Result.get_ok;
        match
@@ -993,6 +1012,7 @@ let test_destroy_refuses_provisional_record_without_image () =
          ; revision = ""
          ; url = ""
          ; image = ""
+         ; service_account = "sol-test@example.iam.gserviceaccount.com"
          }
        |> Result.get_ok;
        match

@@ -15,6 +15,7 @@ let request
       ~region
       ~service
       ~image
+      ~runtime_service_account
       ~max_attempts
       ~ack_deadline
       ~dlq_retention
@@ -25,6 +26,7 @@ let request
    ; region
    ; service
    ; image
+   ; runtime_service_account
    ; max_attempts
    ; ack_deadline_s = ack_deadline
    ; dlq_retention_s = dlq_retention
@@ -40,6 +42,13 @@ let project_arg =
     required
     & opt (some string) None
     & info [ "project" ] ~docv:"PROJECT" ~doc:"GCP project")
+;;
+
+let target_arg =
+  Arg.(
+    required
+    & opt (some string) None
+    & info [ "target" ] ~docv:"TARGET" ~doc:"Target that owns the runtime identity")
 ;;
 
 let region_arg =
@@ -97,6 +106,7 @@ let concurrency_arg =
 ;;
 
 let deploy_run
+      target
       project
       region
       service
@@ -107,12 +117,33 @@ let deploy_run
       concurrency
       record
   =
+  let* config =
+    Sol_cli_config.load_for_target ~target
+    |> Result.map_error (fun error ->
+      Sol_cli_exit.error (Sol_cli_config.error_to_string error))
+  in
+  let* assets = Cmd_cloud_tf.resolve_assets () in
+  let run_log = Sol_cli_run_log.create ~prefix:"task" () in
+  let* identities =
+    Sol_cli_authorization_stage.apply_serverless_identities
+      ~assets
+      ~run_log
+      ~target:config.target
+      [ { Sol_cli_grant.unit = service; requirements = [] } ]
+    |> Result.map_error Sol_cli_exit.error
+  in
+  let* runtime_service_account =
+    match List.assoc_opt service identities with
+    | Some email when String.trim email <> "" -> Ok email
+    | _ -> Error (command_error (Printf.sprintf "no runtime identity for %s" service))
+  in
   let request =
     request
       ~project
       ~region
       ~service
       ~image
+      ~runtime_service_account
       ~max_attempts
       ~ack_deadline
       ~dlq_retention
@@ -138,7 +169,8 @@ let deploy_cmd =
     Term.(
       const
         (fun
-            project
+            target
+             project
              region
              service
              image
@@ -150,6 +182,7 @@ let deploy_cmd =
            ->
            Sol_cli_exit.exit_on
              (deploy_run
+                target
                 project
                 region
                 service
@@ -159,6 +192,7 @@ let deploy_cmd =
                 dlq_retention
                 concurrency
                 record))
+      $ target_arg
       $ project_arg
       $ region_arg
       $ service_arg
@@ -177,6 +211,7 @@ let verify_run project region service record =
       ~region
       ~service
       ~image:""
+      ~runtime_service_account:""
       ~max_attempts:5
       ~ack_deadline:60
       ~dlq_retention:604800
@@ -258,6 +293,7 @@ let enqueue_run project region service record kind payload payload_file idempote
       ~region
       ~service
       ~image:""
+      ~runtime_service_account:""
       ~max_attempts:5
       ~ack_deadline:60
       ~dlq_retention:604800
@@ -315,6 +351,7 @@ let rollback_run project region service record revision =
       ~region
       ~service
       ~image:""
+      ~runtime_service_account:""
       ~max_attempts:5
       ~ack_deadline:60
       ~dlq_retention:604800
@@ -352,6 +389,7 @@ let destroy_run project region service record apply =
       ~region
       ~service
       ~image:""
+      ~runtime_service_account:""
       ~max_attempts:5
       ~ack_deadline:60
       ~dlq_retention:604800

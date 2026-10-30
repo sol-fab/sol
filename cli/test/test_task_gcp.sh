@@ -19,7 +19,7 @@ if [[ "$args" == *"run deploy checkout-task"* ]]; then
 elif [[ "$args" == *"run services describe checkout-task"* ]]; then
   [[ -f "$state/service" ]] || { echo "NOT_FOUND: service" >&2; exit 1; }
   owner="$(cat "$state/service-owner" 2>/dev/null || echo cloud-run-task-experiment)"
-  v=$(cat "$state/revision"); printf '{"metadata":{"labels":{"sol-owned":"%s","sol-service":"checkout-task"}},"status":{"url":"https://task.example","latestReadyRevisionName":"rev-%s","traffic":[{"revisionName":"rev-%s","percent":100}]}}\n' "$owner" "$v" "$v"
+  v=$(cat "$state/revision"); printf '{"spec":{"template":{"spec":{"serviceAccountName":"sol-runtime@example.iam.gserviceaccount.com"}}},"metadata":{"labels":{"sol-owned":"%s","sol-service":"checkout-task"}},"status":{"url":"https://task.example","latestReadyRevisionName":"rev-%s","traffic":[{"revisionName":"rev-%s","percent":100}]}}\n' "$owner" "$v" "$v"
 elif [[ "$args" == *"run services update-traffic checkout-task"* ]]; then
   rev=""; for arg in "$@"; do case "$arg" in --to-revisions=*) rev="${arg#--to-revisions=}"; rev="${rev%=100}";; esac; done
   echo "${rev#rev-}" > "$state/revision"; printf 'updated\n'
@@ -104,11 +104,33 @@ else
   printf '{}\n'
 fi
 FAKE
-chmod +x "$work/bin/gcloud"
+cat > "$work/bin/terraform" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"output -json"*) printf '%s\n' '{"serverless_service_accounts":{"value":{"checkout":"sol-runtime@example.iam.gserviceaccount.com"}}}' ;;
+esac
+exit 0
+FAKE
+chmod +x "$work/bin/gcloud" "$work/bin/terraform"
 export PATH="$work/bin:$PATH" FAKE_GCLOUD_STATE="$work/state" HOME="$work/home"
-mkdir -p "$work/ws"; cd "$work/ws"
+mkdir -p "$work/ws/sol"; cd "$work/ws"
+cat > sol.yml <<'YAML'
+project: pluto
+services: {}
+YAML
+cat > sol/environments.yml <<'YAML'
+live:
+  shape: local
+  targets:
+    gcp/us-west1:
+      execution: serverless
+      state_bucket: test-state
+      gcp:
+        project_id: p
+YAML
 image="repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-common=(--project p --region us-west1 --service checkout --image "$image" --max-attempts 7 --ack-deadline 60 --dlq-retention 604800 --concurrency 7)
+common=(--target live/gcp/us-west1 --project p --region us-west1 --service checkout --image "$image" --max-attempts 7 --ack-deadline 60 --dlq-retention 604800 --concurrency 7)
 
 # Foreign ownership is refused before mutation.
 touch "$work/state/service"; echo 1 > "$work/state/revision"; echo other > "$work/state/service-owner"
@@ -122,6 +144,8 @@ rm -f "$work/state/service" "$work/state/revision" "$work/state/service-owner"
 "$sol" task gcp deploy "${common[@]}" --record "$work/release.json" > "$work/deploy.json"
 grep -q '"kind":"gcp-task"' "$work/deploy.json"
 grep -q '"cloud_run_service":"checkout-task"' "$work/deploy.json"
+grep -q '"runtime_service_account":"sol-runtime@example.iam.gserviceaccount.com"' "$work/deploy.json"
+grep -q -- '--service-account sol-runtime@example.iam.gserviceaccount.com' "$work/state/calls.log"
 grep -q '"topic":"checkout-task"' "$work/deploy.json"
 grep -q '"subscription":"checkout-task-sub"' "$work/deploy.json"
 grep -q '"dlq_topic":"checkout-task-dlq"' "$work/deploy.json"
@@ -188,7 +212,7 @@ grep -q '"cloud_run_url":""' "$work/partial-service.json"
 # recreating the deleted one.
 old_sa=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["push_service_account"])' "$work/release.json")
 "$sol" task gcp deploy "${common[@]}" --record "$work/release.json" > "$work/redeploy.json"
-new_sa=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["push_service_account"])' "$work/redeploy.json")
+new_sa=$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().strip().splitlines()[-1])["push_service_account"])' "$work/redeploy.json")
 [[ "$new_sa" != "$old_sa" ]]
 grep -q 'iam service-accounts create' "$work/state/calls.log"
 # A false-success service-account delete must fail independent absence.

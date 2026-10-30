@@ -17,6 +17,7 @@ type request =
   ; image : string
   ; identity : identity
   ; ingress : ingress
+  ; service_account : string
   ; record : string option
   }
 
@@ -27,6 +28,7 @@ type observed =
   ; image : string option
   ; provider_service : string
   ; labels : (string * string) list
+  ; service_account : string
   }
 
 type release =
@@ -37,6 +39,7 @@ type release =
   ; revision : string
   ; url : string
   ; image : string
+  ; service_account : string
   }
 
 type failure =
@@ -138,6 +141,20 @@ let preflight (request : request) =
               request.service))
   in
   let* _ = valid_image request.image in
+  let* _ = nonempty "service_account" request.service_account in
+  let* () =
+    if
+      String.ends_with
+        ~suffix:"-compute@developer.gserviceaccount.com"
+        request.service_account
+      || String.equal request.service_account "default"
+    then
+      Error
+        (Refused
+           "the Cloud Run runtime must use a dedicated service account, not the \
+            project's             default Compute engine identity")
+    else Ok ()
+  in
   let* _ = nonempty "identity.unit" request.identity.unit in
   let* () =
     if request.identity.issuer = "https://accounts.google.com"
@@ -197,6 +214,8 @@ let deploy_argv (request : request) =
   ; request.region
   ; "--image"
   ; request.image
+  ; "--service-account"
+  ; request.service_account
   ; "--allow-unauthenticated"
   ; "--port"
   ; "8080"
@@ -321,6 +340,11 @@ let parse_observed text =
       Sol_cli_json.string (Sol_cli_json.field [ "image" ] container)
     | _ -> None
   in
+  let service_account =
+    Sol_cli_json.string
+      (Sol_cli_json.field [ "spec"; "template"; "spec"; "serviceAccountName" ] json)
+    |> Option.value ~default:""
+  in
   let serving = List.filter (fun (_, percent) -> percent = 100) traffic in
   let* revision =
     match serving with
@@ -330,7 +354,7 @@ let parse_observed text =
   in
   if not (String.starts_with ~prefix:"https://" url)
   then Error "Cloud Run service URL is not HTTPS"
-  else Ok { url; revision; traffic; image; provider_service; labels }
+  else Ok { url; revision; traffic; image; provider_service; labels; service_account }
 ;;
 
 let inventory runner ~project ~region =
@@ -385,6 +409,7 @@ let release (request : request) (observed : observed) =
   ; revision = observed.revision
   ; url = observed.url
   ; image = request.image
+  ; service_account = request.service_account
   }
 ;;
 
@@ -398,6 +423,7 @@ let write_record ~path release =
       ; "revision", `String release.revision
       ; "url", `String release.url
       ; "image", `String release.image
+      ; "service_account", `String release.service_account
       ]
   in
   Sol_cli_fs.write_atomic ~perm:0o600 path (Yojson.Safe.to_string json ^ "\n")
@@ -411,6 +437,7 @@ let provisional (request : request) =
   ; revision = ""
   ; url = ""
   ; image = request.image
+  ; service_account = request.service_account
   }
 ;;
 
@@ -449,7 +476,20 @@ let read_record ~path =
       Sol_cli_json.string (Sol_cli_json.field [ "image" ] json)
       |> Option.to_result ~none:"release record has no image"
     in
-    Ok { project; region; service; provider_service; revision; url; image }
+    let* service_account =
+      Sol_cli_json.string (Sol_cli_json.field [ "service_account" ] json)
+      |> Option.to_result ~none:"release record has no service_account"
+    in
+    Ok
+      { project
+      ; region
+      ; service
+      ; provider_service
+      ; revision
+      ; url
+      ; image
+      ; service_account
+      }
   with
   | Sys_error message -> Error ("cannot read release record: " ^ message)
 ;;
@@ -464,6 +504,20 @@ let owns ~service ~provider observed =
   match List.assoc_opt "sol-workspace" observed.labels with
   | Some label -> String.equal label workspace
   | None -> true
+;;
+
+let verify_runtime_identity ~expected (observed : observed) =
+  if String.equal expected ""
+  then Ok ()
+  else if String.equal expected observed.service_account
+  then Ok ()
+  else
+    Error
+      (Refused
+         (Printf.sprintf
+            "live Cloud Run service runs as %S, not the recorded runtime identity %S"
+            observed.service_account
+            expected))
 ;;
 
 let deploy runner (request : request) =
@@ -515,6 +569,12 @@ let deploy runner (request : request) =
          if owns ~service:request.service ~provider:request.provider_service observed
          then Ok ()
          else Error (Unknown "the deployed service lacks this adapter's ownership labels")
+       in
+       let* () =
+         verify_runtime_identity ~expected:request.service_account observed
+         |> Result.map_error (function
+           | Refused message -> Unknown message
+           | failure -> failure)
        in
        let* () =
          if
@@ -642,34 +702,35 @@ let rollback runner (request : request) ~revision ~token ~on_revision_moved =
         (Refused
            "live Cloud Run service lacks this adapter's ownership labels; refusing to \
             move traffic on an unverified service")
-    else (
-      match
-        runner.run
-          (traffic_argv
-             ~project:request.project
-             ~region:request.region
-             ~service:request.provider_service
-             ~revision)
-      with
-      | Ok _ ->
-        (match describe runner request with
-         | Error (`Unknown message) ->
-           Error (Unknown ("could not read rolled-back service: " ^ message))
-         | Ok observed -> finish observed)
-      | Error message ->
-        (* The CLI can report an error after the provider applied the mutation. Reconciling
+    else
+      let* () = verify_runtime_identity ~expected:request.service_account observed in
+      (match
+         runner.run
+           (traffic_argv
+              ~project:request.project
+              ~region:request.region
+              ~service:request.provider_service
+              ~revision)
+       with
+       | Ok _ ->
+         (match describe runner request with
+          | Error (`Unknown message) ->
+            Error (Unknown ("could not read rolled-back service: " ^ message))
+          | Ok observed -> finish observed)
+       | Error message ->
+         (* The CLI can report an error after the provider applied the mutation. Reconciling
           against observed traffic distinguishes "the update actually applied" from "the
           update did not apply"; unreadable state stays unknown. *)
-        (match describe runner request with
-         | Ok observed when serving_revision revision observed ->
-           Sol_cli_report.warn
-             "gcloud update-traffic reported an error but revision %s is serving 100%%; \
-              reconciled: %s"
-             revision
-             message;
-           finish observed
-         | Ok observed -> Error (Partial (message, Some observed))
-         | Error _ -> Error (Partial (message, None))))
+         (match describe runner request with
+          | Ok observed when serving_revision revision observed ->
+            Sol_cli_report.warn
+              "gcloud update-traffic reported an error but revision %s is serving 100%%; \
+               reconciled: %s"
+              revision
+              message;
+            finish observed
+          | Ok observed -> Error (Partial (message, Some observed))
+          | Error _ -> Error (Partial (message, None))))
 ;;
 
 let destroy runner ~project ~region ~service ~record =
@@ -700,6 +761,7 @@ let destroy runner ~project ~region ~service ~record =
     ; image = expected.image
     ; identity = { unit = ""; callers = []; issuer = ""; jwks_uri = "" }
     ; ingress = Public
+    ; service_account = expected.service_account
     ; record = None
     }
   in
@@ -720,6 +782,7 @@ let destroy runner ~project ~region ~service ~record =
                 "live service lacks this adapter's ownership labels; refusing to delete \
                  it")
        in
+       let* () = verify_runtime_identity ~expected:expected.service_account observed in
        let provisional = expected.revision = "" && expected.url = "" in
        let* () =
          if provisional
@@ -780,6 +843,7 @@ let release_json (release : release) =
     ; "revision", `String release.revision
     ; "url", `String release.url
     ; "image", `String release.image
+    ; "service_account", `String release.service_account
     ]
 ;;
 

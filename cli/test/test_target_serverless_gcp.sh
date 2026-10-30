@@ -19,15 +19,29 @@ live:
   targets:
     gcp/us-west1:
       execution: serverless
+      state_bucket: test-state
       gcp:
         project_id: example-project
         serverless_callers: checkout/checkout_svc=123
 YAML
+cat > "$work/bin/terraform" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"output -json"*)
+    printf '%s
+' '{"serverless_service_accounts":{"value":{"checkout/checkout_svc":"sol-runtime@example.iam.gserviceaccount.com"}}}'
+    ;;
+esac
+exit 0
+FAKE
+chmod +x "$work/bin/terraform"
 cat > "$work/bin/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
 state="$FAKE_GCLOUD_STATE"
 if [[ "$1 $2" == "run deploy" ]]; then
+  [[ "$*" == *"--service-account sol-runtime@example.iam.gserviceaccount.com"* ]] || { echo "deploy lost runtime identity" >&2; exit 1; }
   rev="rev-1"
   [[ -f "$state/revision" ]] && rev="rev-$(($(cat "$state/revision") + 1))"
   printf '%s\n' "${rev#rev-}" > "$state/revision"
@@ -38,7 +52,7 @@ if [[ "$1 $2 $3" == "run services describe" ]]; then
   [[ -f "$state/revision" ]] || { echo "ERROR: not found" >&2; exit 1; }
   rev="rev-$(cat "$state/revision")"
   cat <<JSON
-{"spec":{"template":{"spec":{"containers":[{"image":"repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}}},"metadata":{"name":"checkout-svc","labels":{"sol-owned":"cloud-run-experiment","sol-service":"checkout-svc"}},"status":{"url":"https://service.example","latestReadyRevisionName":"$rev","traffic":[{"revisionName":"$rev","percent":100}]}}
+{"spec":{"template":{"spec":{"serviceAccountName":"sol-runtime@example.iam.gserviceaccount.com","containers":[{"image":"repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}}},"metadata":{"name":"checkout-svc","labels":{"sol-owned":"cloud-run-experiment","sol-service":"checkout-svc"}},"status":{"url":"https://service.example","latestReadyRevisionName":"$rev","traffic":[{"revisionName":"$rev","percent":100}]}}
 JSON
   exit 0
 fi
