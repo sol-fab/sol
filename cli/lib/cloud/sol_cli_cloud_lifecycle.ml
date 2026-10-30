@@ -771,7 +771,8 @@ let destroy_retention_to_string = function
   | Retain_nothing -> "none"
 ;;
 
-let destroy_retention_of_string = function
+let destroy_retention_of_string raw =
+  match String.trim raw with
   | "final-snapshot" -> Ok Retain_final_snapshot
   | "none" -> Ok Retain_nothing
   | other ->
