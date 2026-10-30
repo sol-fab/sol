@@ -65,6 +65,7 @@ let serve ~sw ~net ~port t renderer =
       socket
       server
   with
+  | Eio.Cancel.Cancelled _ -> `Stop_daemon
   | e ->
     Printf.eprintf
       "sol-worker: could not serve /metrics,/readyz,/livez on port %d: %s\n%!"

@@ -46,7 +46,7 @@ end
 ```
 
 - `ot` — when provided, emits `sol_worker_messages_total{status}` and `sol_worker_message_duration_seconds` per message, and exposes `GET /metrics` on `metrics_port` for Prometheus scraping.
-- `metrics_port` — default `9090`. Only binds when `ot` is provided; pass `0` for an OS-assigned port when running more than one `-worker`/`-svc` in the same process.
+- `metrics_port` — default `9090`. The health server always binds `/readyz` and `/livez`; when `ot` is provided it also serves `/metrics`. Pass `0` for an OS-assigned port when running more than one `-worker`/`-svc` in the same process.
 - `on_ready` — called exactly once when the broker assigns partitions to this consumer.
 - `stop` — external stop signal. Resolve to request graceful shutdown; checked alongside the worker's own SIGTERM/SIGINT handling, not in place of it.
 - `max_messages` — stop cleanly after this many successfully processed messages. Useful in tests.
