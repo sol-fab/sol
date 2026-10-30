@@ -66,6 +66,10 @@ let run_serverless
               service.name))
   in
   let record = Filename.concat (Sol_cli_run_log.dir run_log) "serverless-release.json" in
+  let* () =
+    Sol_cli_serverless_target_common.declared_uses resolved_config service
+    |> Result.map_error Sol_cli_exit.error
+  in
   let* assets = Cmd_cloud_tf.resolve_assets () in
   let unit = Sol_cli_serverless_target_common.unit_of_service ~project service in
   let* facts =

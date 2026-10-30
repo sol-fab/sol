@@ -274,6 +274,15 @@ let deploy (r : request) =
       ~existing
       ()
   in
+  let* () =
+    Sol_cli_aws_lambda_common.verify_role
+      ~expected:r.role_arn
+      (scope r)
+      ~function_name:r.function_name
+    |> Result.map_error (function
+      | Sol_cli_aws_lambda_common.Refused message -> Partial message
+      | other -> other)
+  in
   let* version =
     Sol_cli_aws_lambda_common.publish_version (scope r) ~function_name:r.function_name
   in
@@ -308,8 +317,15 @@ let rollback (r : request) ~version ~on_alias_moved =
     then Error (Refused "rollback version is required")
     else Ok ()
   in
-  (* A rollback moves the live alias, so it establishes ownership before mutating. *)
+  (* A rollback moves the live alias, so it establishes ownership and the recorded
+     execution role before mutating. *)
   let* _, tags = describe_owned r in
+  let* () =
+    Sol_cli_aws_lambda_common.verify_role
+      ~expected:r.role_arn
+      (scope r)
+      ~function_name:r.function_name
+  in
   let* () =
     Sol_cli_aws_lambda_common.put_alias (scope r) ~function_name:r.function_name ~version
   in
@@ -351,6 +367,12 @@ let destroy (r : request) ~profile ~region ~service ~record =
   else (
     let owned = { s with function_name = expected.function_name } in
     let* () = describe_owned owned |> Result.map (fun _ -> ()) in
+    let* () =
+      Sol_cli_aws_lambda_common.verify_role
+        ~expected:expected.role_arn
+        (scope owned)
+        ~function_name:expected.function_name
+    in
     (* Deleting the function also deletes its versions and the live alias. There is no
        Function URL to remove, and no event source mapping is created by this adapter. *)
     let* () =

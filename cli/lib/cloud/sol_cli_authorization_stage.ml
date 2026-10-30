@@ -159,7 +159,11 @@ let apply_serverless_identities ~assets ~run_log ~target units =
     Sol_cli_json.decode ~what:"authorization outputs" output.stdout
     |> Result.map_error (fun message -> "authorization outputs are invalid: " ^ message)
   in
-  match Sol_cli_json.field [ "serverless_service_accounts"; "value" ] json with
+  match
+    Sol_cli_json.field
+      [ (capabilities target).authorization_serverless_output; "value" ]
+      json
+  with
   | `Assoc accounts ->
     Ok
       (List.map

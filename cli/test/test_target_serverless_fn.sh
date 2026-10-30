@@ -18,10 +18,20 @@ live:
   targets:
     aws/us-east-1:
       execution: serverless
+      state_bucket: test-state
       aws:
         profile: test
-        lambda_role_arn: arn:aws:iam::123:role/test
+        state_lock_table: test-locks
 YAML
+cat > "$work/bin/terraform" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"output -json"*) printf '%s\n' '{"serverless_role_arns":{"value":{"checkout/checkout_fn":"arn:aws:iam::123:role/test"}}}' ;;
+esac
+exit 0
+FAKE
+chmod +x "$work/bin/terraform"
 cat > "$work/bin/aws" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -50,6 +60,7 @@ elif [[ "$args" == *"lambda create-alias"* || "$args" == *"lambda update-alias"*
   for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "--function-version" ]]; then j=$((i+1)); echo "${!j}" > "$FAKE_AWS_STATE/alias"; fi; done
   if [[ "${FAKE_ALIAS_ERROR:-0}" == 1 ]]; then echo "simulated alias transport failure" >&2; exit 1; fi
   printf '{}\n'
+elif [[ "$args" == *"lambda get-function-configuration"* ]]; then printf '{"Role":"%s"}\n' "${FAKE_AWS_ROLE:-arn:aws:iam::123:role/test}"
 elif [[ "$args" == *"lambda get-function"* ]]; then
   owner="${FAKE_FUNCTION_OWNER:-lambda-fn-experiment}"
   printf '{"Configuration":{"Version":"%s"},"Tags":{"sol-owned":"%s","sol-service":"checkout-fn"}}\n' "$(cat "$FAKE_AWS_STATE/version")" "$owner"
@@ -104,6 +115,10 @@ record=$(find "$work/home/.local/share/sol/runs" -name serverless-release.json -
 [[ -n "$record" ]]
 grep -q '"kind":"fn"' "$record"
 
+if FAKE_AWS_ROLE=arn:aws:iam::123:role/other "$sol" rollback --target live/aws/us-east-1 --record "$record" --service checkout_fn --to-version 1 --token-file "$work/token" > "$work/rollback-role" 2>&1; then
+  echo "rollback accepted a foreign execution role" >&2; exit 1
+fi
+grep -q 'not the recorded execution role' "$work/rollback-role"
 "$sol" rollback --target live/aws/us-east-1 --record "$record" --service checkout_fn --to-version 1 --token-file "$work/token" > "$work/rollback"
 grep -q '"version":"1"' "$work/rollback"
 grep -q '"invocation_status":"ok"' "$work/rollback"
@@ -151,6 +166,10 @@ FAKE_FUNCTION_OWNER=foreign "$sol" destroy live/aws/us-east-1 --apply --service 
 }
 [[ -f "$work/state/function" ]]
 
+if FAKE_AWS_ROLE=arn:aws:iam::123:role/other "$sol" destroy live/aws/us-east-1 --apply --service checkout_fn --record "$record" > "$work/destroy-role" 2>&1; then
+  echo "destroy accepted a foreign execution role" >&2; exit 1
+fi
+grep -q 'not the recorded execution role' "$work/destroy-role"
 "$sol" destroy live/aws/us-east-1 --apply --service checkout_fn --record "$record" > /dev/null
 [[ ! -f "$work/state/function" ]]
 grep -q 'delete-function-url-config' "$FAKE_AWS_LOG" && { echo "fn destroy deleted a Function URL" >&2; exit 1; }

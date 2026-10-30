@@ -6,7 +6,14 @@ let deploy ~target ~config ~project ~service ~image ~record ~runtime_service_acc
   let* () = ensure_serverless target in
   match target.provider with
   | Sol_cli_provider.Aws ->
-    Sol_cli_aws_serverless_target.deploy ~target ~config ~project ~service ~image ~record
+    Sol_cli_aws_serverless_target.deploy
+      ~target
+      ~config
+      ~project
+      ~service
+      ~image
+      ~record
+      ~runtime_service_account
   | Sol_cli_provider.Gcp ->
     Sol_cli_gcp_serverless_target.deploy
       ~target
@@ -43,7 +50,19 @@ let ensure_runtime_identity
          (Printf.sprintf
             "the authorization root established no runtime identity for %s"
             unit))
-  | Sol_cli_provider.Aws -> Ok None
+  | Sol_cli_provider.Aws ->
+    let* identities =
+      Sol_cli_authorization_stage.apply_serverless_identities
+        ~assets
+        ~run_log
+        ~target
+        [ { Sol_cli_grant.unit; requirements } ]
+    in
+    (match List.assoc_opt unit identities with
+     | Some role when String.trim role <> "" -> Ok (Some role)
+     | _ ->
+       Error
+         (Printf.sprintf "the authorization root established no runtime role for %s" unit))
   | Sol_cli_provider.Byo -> Error "serverless targets support AWS and GCP only"
 ;;
 

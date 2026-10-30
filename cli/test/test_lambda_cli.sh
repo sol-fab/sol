@@ -25,6 +25,7 @@ elif [[ "$args" == *"lambda create-alias"* || "$args" == *"lambda update-alias"*
 elif [[ "$args" == *"lambda get-function-url-config"* ]]; then printf '{"FunctionUrl":"https://lambda.example/"}\n'
 elif [[ "$args" == *"lambda create-function-url-config"* ]]; then printf '{}\n'
 elif [[ "$args" == *"lambda remove-permission"* || "$args" == *"lambda add-permission"* ]]; then printf '{}\n'
+elif [[ "$args" == *"lambda get-function-configuration"* ]]; then printf '{"Role":"arn:aws:iam::123:role/test"}\n'
 elif [[ "$args" == *"lambda get-function"* ]]; then printf '{"Configuration":{"Version":"1","FunctionArn":"arn:aws:lambda:us-east-1:123:function:checkout-svc"},"Tags":{"sol-owned":"lambda-experiment","sol-service":"checkout-svc"}}\n'
 elif [[ "$args" == *"lambda delete-function-url-config"* ]]; then
   if [[ -n "${FAKE_AWS_URL_ABSENT:-}" ]]; then

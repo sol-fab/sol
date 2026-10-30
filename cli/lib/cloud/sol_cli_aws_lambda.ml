@@ -271,6 +271,15 @@ let deploy (r : request) =
       ~existing
       ()
   in
+  let* () =
+    Sol_cli_aws_lambda_common.verify_role
+      ~expected:r.role_arn
+      (scope r)
+      ~function_name:r.function_name
+    |> Result.map_error (function
+      | Sol_cli_aws_lambda_common.Refused message -> Partial message
+      | other -> other)
+  in
   let* version =
     Sol_cli_aws_lambda_common.publish_version (scope r) ~function_name:r.function_name
   in
@@ -443,6 +452,12 @@ let rollback (r : request) ~version ~token ~on_alias_moved : (observed, failure)
       else Error (Refused "live function lacks this adapter's ownership tags")
   in
   let* () =
+    Sol_cli_aws_lambda_common.verify_role
+      ~expected:r.role_arn
+      (scope r)
+      ~function_name:r.function_name
+  in
+  let* () =
     r.run
       (aws
          r
@@ -502,6 +517,12 @@ let destroy (r : request) ~profile ~region ~service ~record =
         if owns ~function_name:expected.function_name tags
         then Ok ()
         else Error (Refused "live function lacks this adapter's ownership tags")
+    in
+    let* () =
+      Sol_cli_aws_lambda_common.verify_role
+        ~expected:expected.role_arn
+        (scope owned_request)
+        ~function_name:expected.function_name
     in
     let delete args =
       match r.run (aws { r with profile; region } args) with

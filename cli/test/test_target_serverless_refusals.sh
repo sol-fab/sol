@@ -61,7 +61,6 @@ live:
       execution: serverless
       aws:
         profile: test
-        lambda_role_arn: arn:aws:iam::123:role/test
 YAML
 cd "$ws"
 if "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_worker=$image" > "$work/aws-worker.out" 2>&1; then
@@ -80,7 +79,6 @@ live:
       execution: serverless
       aws:
         profile: test
-        lambda_role_arn: arn:aws:iam::123:role/test
 YAML
 cd "$ws"
 if "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/aws-fn-deps.out" 2>&1; then

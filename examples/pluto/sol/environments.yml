@@ -169,7 +169,6 @@ serverless:
       aws:
         # Replace with an AWS profile and an existing Lambda execution role.
         profile: default
-        lambda_role_arn: arn:aws:iam::123456789012:role/pluto-probe-fn-exec
 
 
 # The target-scoped serverless dispatch deploys exactly one service per target,
@@ -205,7 +204,6 @@ serverless_ts:
       execution: serverless
       aws:
         profile: default
-        lambda_role_arn: arn:aws:iam::123456789012:role/pluto-probe-fn-exec
 
 # Experimental GCP Cloud Run Jobs targets for the two run-once probes. Each
 # target selects one -fn because target-scoped serverless dispatch deploys one
