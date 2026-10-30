@@ -493,6 +493,7 @@ let job_doc ~ns ~target ~image =
                 [ ( "spec"
                   , Y.map
                       [ "restartPolicy", Y.string "Never"
+                      ; "securityContext", Sol_cli_manifest_yaml.non_root_pod_security
                       ; ( "automountServiceAccountToken"
                         , Y.bool automount_service_account_token )
                       ; ( "containers"
@@ -500,6 +501,8 @@ let job_doc ~ns ~target ~image =
                             [ Y.map
                                 [ "name", Y.string "setup"
                                 ; "image", Y.string image
+                                ; ( "securityContext"
+                                  , Sol_cli_manifest_yaml.container_security )
                                 ; ( "command"
                                   , Y.list
                                       [ Y.string "/bin/sh"
@@ -538,6 +541,7 @@ let job_doc ~ns ~target ~image =
                                           ; "mountPath", Y.string service_mount_path
                                           ; "readOnly", Y.bool true
                                           ]
+                                      ; Sol_cli_manifest_yaml.tmp_mount
                                       ] )
                                 ]
                             ] )
@@ -554,6 +558,7 @@ let job_doc ~ns ~target ~image =
                                   , Y.map [ "name", Y.string (ca_configmap_name target) ]
                                   )
                                 ]
+                            ; Sol_cli_manifest_yaml.tmp_volume
                             ; Y.map
                                 [ "name", Y.string "pg-service"
                                 ; ( "secret"

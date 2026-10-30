@@ -1567,6 +1567,17 @@ let test_database_setup_renders_the_fail_closed_job () =
     ~msg:"the setup pod does not mount a service-account token"
     true
     (setup_mentions "automountServiceAccountToken: false" text);
+  List.iter
+    (fun (needle, message) ->
+       Windtrap.equal Windtrap.bool ~msg:message true (setup_mentions needle text))
+    [ "runAsNonRoot: true", "the setup Job is non-root"
+    ; "runAsUser: 65534", "the setup Job runs as the unprivileged uid"
+    ; "runAsGroup: 65534", "the setup Job runs as the unprivileged gid"
+    ; "seccompProfile", "the setup Job selects a seccomp profile"
+    ; "allowPrivilegeEscalation: false", "the setup Job cannot escalate privileges"
+    ; "readOnlyRootFilesystem: true", "the setup Job has a read-only root filesystem"
+    ; "mountPath: /tmp", "the setup Job still has writable scratch space"
+    ];
   (* The crash backstop, and the guarantee carried by the script rather than the
      invocation. *)
   Windtrap.equal

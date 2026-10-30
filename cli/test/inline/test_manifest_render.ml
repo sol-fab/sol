@@ -1912,6 +1912,9 @@ let test_live_backend_no_user_secrets_always_succeeds () =
 
 let assert_k8s_invariants label yaml =
   assert_contains (label ^ ": runAsNonRoot") yaml "runAsNonRoot: true";
+  assert_contains (label ^ ": runAsUser") yaml "runAsUser: 65534";
+  assert_contains (label ^ ": runAsGroup") yaml "runAsGroup: 65534";
+  assert_contains (label ^ ": seccompProfile") yaml "seccompProfile";
   assert_contains
     (label ^ ": allowPrivilegeEscalation")
     yaml
@@ -2798,13 +2801,20 @@ let test_contract_job_manifest () =
     |> render_doc
   in
   assert_contains "contract Job kind" doc "kind: Job";
+  assert_k8s_invariants "contract Job" doc;
   assert_contains "contract Job name" doc "name: sol-contract-1";
   assert_contains "contract Job namespace" doc "namespace: myapp-payments";
   assert_contains "contract Job image" doc "sol-registry:5000/myapp/charge-svc:abc123";
   assert_contains "contract Job command" doc "/usr/local/bin/contract";
   assert_contains "contract Job args" doc "--apply";
   assert_contains "contract Job does not retry" doc "backoffLimit: 0";
+  assert_contains "contract Job has a bounded run" doc "activeDeadlineSeconds: 300";
+  assert_contains "contract Job has a cleanup backstop" doc "ttlSecondsAfterFinished: 600";
   assert_contains "contract Job never restarts" doc "restartPolicy: Never";
+  assert_contains
+    "contract Job mounts no unused service-account token"
+    doc
+    "automountServiceAccountToken: false";
   assert_contains "contract Job env names the registry" doc "name: SCHEMA_REGISTRY_URL";
   assert_contains
     "contract Job reaches the private registry in-cluster"
@@ -3495,6 +3505,35 @@ let%test
     "contract reconciliation: the contract Job runs the deployed image's contract binary"
   =
   test_contract_job_manifest ()
+;;
+
+let%test "migration Job: the DDL runner uses the batch non-root posture" =
+  let doc =
+    Sol_cli_manifest.migration_job_doc
+      ~name:"sol-migrate-1"
+      ~namespace:"myapp-payments"
+      ~image:("ghcr.io/example/sol-migration-runner@sha256:" ^ String.make 64 'a')
+      ~args:[ "apply" ]
+      ~configmap_name:"migrations"
+      ~ddl_creds_name:"payments-ddl-creds"
+      ()
+    |> render_doc
+  in
+  let () =
+    assert_contains "migration Job kind" doc "kind: Job";
+    assert_k8s_invariants "migration Job" doc;
+    assert_contains "migration Job has writable scratch" doc "mountPath: /tmp";
+    assert_contains "migration Job has a bounded run" doc "activeDeadlineSeconds: 300";
+    assert_contains
+      "migration Job has a cleanup backstop"
+      doc
+      "ttlSecondsAfterFinished: 600";
+    assert_contains
+      "migration Job mounts no unused service-account token"
+      doc
+      "automountServiceAccountToken: false"
+  in
+  ()
 ;;
 
 let%test "contract reconciliation: one in-destination Job per language in scope" =
