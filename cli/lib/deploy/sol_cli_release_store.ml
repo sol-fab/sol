@@ -74,7 +74,24 @@ let write_json ~ctx json =
     (match live with
      | Some (live_data, _) when live_data = data_of_json json -> Ok ()
      | Some (_, live_rv) ->
-       write_one ~ctx ~verb:`Replace ~name (with_resource_version json live_rv)
+       let immutable =
+         match Sol_cli_json.bool (Sol_cli_json.field [ "immutable" ] json) with
+         | Some true -> true
+         | Some false | None -> false
+       in
+       if immutable
+       then
+         (* The content-addressed release object is immutable by design. A re-deploy of
+            the same release can nevertheless recover UID evidence that was missing or
+            changed (a recreated workload, or a failed capture). Kubernetes rejects a
+            data change on an immutable ConfigMap, so replace the object rather than
+            failing after the workloads were applied. *)
+         let* () =
+           Sol_cli_kubectl.delete ~ctx ~resource:"configmap" ~name ~namespace
+           |> Result.map_error Sol_cli_process.error_to_string
+         in
+         write_one ~ctx ~verb:`Create ~name json
+       else write_one ~ctx ~verb:`Replace ~name (with_resource_version json live_rv)
      | None -> write_one ~ctx ~verb:`Create ~name json)
 ;;
 

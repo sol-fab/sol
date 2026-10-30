@@ -263,6 +263,41 @@ let%test "release record write (INFRA-055): an absent object is created" =
   test_absent_object_is_created ()
 ;;
 
+let test_immutable_changed_object_is_recreated () =
+  let release_id = "r-aaaabbbbccccdddd" in
+  let live_json =
+    Printf.sprintf
+      {|{"kind":"ConfigMap","immutable":true,"metadata":{"name":"sol-release-%s","resourceVersion":"7"},"data":{"record":"old"}}|}
+      release_id
+  in
+  with_fake_kubectl ~mode:"present" ~live_json (fun log ->
+    (match Sol_cli_release_store.record ~ctx (release ~release_id) with
+     | Ok () -> ()
+     | Error e -> Windtrap.failf "an immutable release record could not be repaired: %s" e);
+    let calls = verbs log in
+    let index verb =
+      let rec find i = function
+        | [] -> None
+        | line :: rest ->
+          if String.starts_with ~prefix:verb line then Some i else find (i + 1) rest
+      in
+      find 0 calls
+    in
+    match index "delete", index "create" with
+    | Some deleted, Some created ->
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"the immutable object is deleted before it is recreated"
+        true
+        (deleted < created)
+    | _ ->
+      Windtrap.failf "expected delete then create, got: %s" (String.concat "; " calls))
+;;
+
+let%test "release record write: an immutable changed object is recreated" =
+  test_immutable_changed_object_is_recreated ()
+;;
+
 let%test "release record write (INFRA-055): an identical object is left alone" =
   test_identical_object_is_left_alone ()
 ;;
