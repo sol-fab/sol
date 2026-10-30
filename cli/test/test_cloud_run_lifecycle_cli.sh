@@ -77,7 +77,14 @@ grep -q '"revision":"rev-1"' "$work/deploy1"
 grep -q '"provider_service":"checkout-svc"' "$work/release.json"
 "$sol" cloud-run deploy "${common[@]}" --service-account sol-runtime@example.iam.gserviceaccount.com --caller checkout/checkout_svc=103076866099743206289 --caller checkout/checkout_svc=999999999999999999999 --ingress public > "$work/deploy2"
 grep -q '"revision":"rev-2"' "$work/deploy2"
-"$sol" cloud-run rollback "${common[@]}" --revision rev-1 --token-file "$work/token" --ingress public > "$work/rollback"
+cp "$work/release.json" "$work/wrong-identity.json"
+python3 -c 'import json,sys; p=sys.argv[1]; r=json.load(open(p)); r["service_account"]="other@example.iam.gserviceaccount.com"; json.dump(r,open(p,"w"))' "$work/wrong-identity.json"
+if "$sol" cloud-run rollback "${common[@]}" --revision rev-1 --token-file "$work/token" --record "$work/wrong-identity.json" --ingress public > "$work/wrong-rollback.out" 2> "$work/wrong-rollback.err"; then
+  echo "rollback accepted a foreign runtime identity" >&2
+  exit 1
+fi
+grep -q 'not the recorded runtime identity' "$work/wrong-rollback.err"
+"$sol" cloud-run rollback "${common[@]}" --revision rev-1 --token-file "$work/token" --record "$work/release.json" --ingress public > "$work/rollback"
 grep -q '"revision":"rev-1"' "$work/rollback"
 "$sol" cloud-run verify "${common[@]}" --token-file "$work/token" --record "$work/release.json" --ingress public > "$work/verify2"
 grep -q '"revision":"rev-1"' "$work/release.json"

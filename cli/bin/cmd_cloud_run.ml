@@ -439,9 +439,26 @@ let rollback_run
       jwks_uri
       revision
       token_file
+      record
       ingress_value
   =
   let* provider_service = service_is_http service in
+  let* expected =
+    Sol_cli_cloud_run.read_record ~path:record
+    |> Result.map_error (fun message ->
+      command_error ("rollback requires an ownership record: " ^ message))
+  in
+  let* () =
+    if
+      expected.project = project
+      && expected.region = region
+      && expected.provider_service = provider_service
+    then Ok ()
+    else
+      Error
+        (command_error
+           "ownership record does not match the requested project, region and service")
+  in
   let* ingress = parse_ingress ingress_value in
   let* token =
     match token_file with
@@ -462,7 +479,7 @@ let rollback_run
       ~callers:[]
       ~record:None
       ~ingress
-      ~service_account:""
+      ~service_account:expected.service_account
   in
   let* observed =
     Sol_cli_cloud_run.rollback
@@ -476,6 +493,16 @@ let rollback_run
   in
   print_endline (Yojson.Safe.to_string (Sol_cli_cloud_run.observed_json observed));
   Ok ()
+;;
+
+let rollback_record_arg =
+  Arg.(
+    required
+    & opt (some string) None
+    & info
+        [ "record" ]
+        ~docv:"PATH"
+        ~doc:"Ownership record whose runtime identity must match the live service")
 ;;
 
 let rollback_cmd =
@@ -501,6 +528,7 @@ let rollback_cmd =
             (project, region, service, image, unit, issuer, jwks_uri, _)
              revision
              token_file
+             record
              ingress
            ->
            Sol_cli_exit.exit_on
@@ -514,10 +542,12 @@ let rollback_cmd =
                 jwks_uri
                 revision
                 token_file
+                record
                 ingress))
       $ common_terms
       $ revision
       $ token_file
+      $ rollback_record_arg
       $ ingress_arg)
   in
   Cmd.v
