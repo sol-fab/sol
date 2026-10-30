@@ -24,7 +24,23 @@ elif [[ "$args" == *"run services update-traffic checkout-task"* ]]; then
   rev=""; for arg in "$@"; do case "$arg" in --to-revisions=*) rev="${arg#--to-revisions=}"; rev="${rev%=100}";; esac; done
   echo "${rev#rev-}" > "$state/revision"; printf 'updated\n'
 elif [[ "$args" == *"run services delete checkout-task"* ]]; then rm -f "$state/service"; printf 'deleted\n'
-elif [[ "$args" == *"run services add-iam-policy-binding"* || "$args" == *"run services remove-iam-policy-binding"* || "$args" == *"iam service-accounts add-iam-policy-binding"* || "$args" == *"iam service-accounts remove-iam-policy-binding"* ]]; then printf '{}\n'
+elif [[ "$args" == *"run services add-iam-policy-binding"* || "$args" == *"run services remove-iam-policy-binding"* || "$args" == *"iam service-accounts add-iam-policy-binding"* || "$args" == *"iam service-accounts remove-iam-policy-binding"* ]]; then
+  member=""; for arg in "$@"; do case "$arg" in --member=serviceAccount:*) member="${arg#--member=serviceAccount:}";; esac; done
+  if [[ "$args" == *"run services add-iam-policy-binding"* ]]; then printf '%s\n' "$member" > "$state/run-invoker"; fi
+  if [[ "$args" == *"iam service-accounts add-iam-policy-binding"* ]]; then touch "$state/sa-token-creator"; fi
+  printf '{}\n'
+elif [[ "$args" == *"run services get-iam-policy"* ]]; then
+  if [[ -f "$state/run-invoker" ]]; then
+    printf '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:%s"]}]}\n' "$(cat "$state/run-invoker")"
+  else
+    printf '{"bindings":[]}\n'
+  fi
+elif [[ "$args" == *"iam service-accounts get-iam-policy"* ]]; then
+  if [[ -f "$state/sa-token-creator" ]]; then
+    printf '{"bindings":[{"role":"roles/iam.serviceAccountTokenCreator","members":["serviceAccount:service-123@gcp-sa-pubsub.iam.gserviceaccount.com"]}]}\n'
+  else
+    printf '{"bindings":[]}\n'
+  fi
 elif [[ "$args" == *"iam service-accounts create"* ]]; then
   for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "--description=sol-owned=cloud-run-task-experiment" ]]; then :; fi; done
   name=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "create" ]]; then j=$((i+1)); name="${!j}"; fi; done
@@ -61,18 +77,22 @@ elif [[ "$args" == *"pubsub topics publish"* ]]; then
 elif [[ "$args" == *"pubsub subscriptions create"* ]]; then
   if [[ "${FAKE_SUBSCRIPTION_FAIL:-0}" == 1 ]]; then echo "simulated subscription failure" >&2; exit 1; fi
   name=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "create" ]]; then j=$((i+1)); name="${!j}"; fi; done
-  endpoint=""; attempts=""; for arg in "$@"; do case "$arg" in --push-endpoint=*) endpoint="${arg#--push-endpoint=}";; --max-delivery-attempts=*) attempts="${arg#--max-delivery-attempts=}";; esac; done
-  printf '%s\n%s\n' "$endpoint" "$attempts" > "$state/sub-$name"
+  endpoint=""; attempts=""; sa=""; for arg in "$@"; do case "$arg" in --push-endpoint=*) endpoint="${arg#--push-endpoint=}";; --max-delivery-attempts=*) attempts="${arg#--max-delivery-attempts=}";; --push-auth-service-account=*) sa="${arg#--push-auth-service-account=}";; esac; done
+  printf '%s\n%s\n%s\n' "$endpoint" "$attempts" "$sa" > "$state/sub-$name"
   printf 'created\n'
 elif [[ "$args" == *"pubsub subscriptions describe"* ]]; then
   name=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "describe" ]]; then j=$((i+1)); name="${!j}"; fi; done
   [[ -f "$state/sub-$name" ]] || { echo "NOT_FOUND: subscription" >&2; exit 1; }
-  endpoint="$(sed -n 1p "$state/sub-$name")"; attempts="$(sed -n 2p "$state/sub-$name")"
-  printf '{"labels":{"sol-owned":"cloud-run-task-experiment","sol-service":"checkout-task"},"pushConfig":{"pushEndpoint":"%s"},"deadLetterPolicy":{"maxDeliveryAttempts":%s},"ackDeadlineSeconds":60}\n' "$endpoint" "$attempts"
+  endpoint="$(sed -n 1p "$state/sub-$name")"; attempts="$(sed -n 2p "$state/sub-$name")"; sa="$(sed -n 3p "$state/sub-$name")"
+  if [[ -z "$endpoint" ]]; then
+    printf '{"labels":{"sol-owned":"cloud-run-task-experiment","sol-service":"checkout-task"},"ackDeadlineSeconds":10}\n'
+  else
+    printf '{"labels":{"sol-owned":"cloud-run-task-experiment","sol-service":"checkout-task"},"pushConfig":{"pushEndpoint":"%s","oidcToken":{"serviceAccountEmail":"%s"}},"deadLetterPolicy":{"maxDeliveryAttempts":%s},"ackDeadlineSeconds":60}\n' "$endpoint" "$sa" "$attempts"
+  fi
 elif [[ "$args" == *"pubsub subscriptions update"* ]]; then
   name=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "update" ]]; then j=$((i+1)); name="${!j}"; fi; done
-  endpoint=""; attempts=""; for arg in "$@"; do case "$arg" in --push-endpoint=*) endpoint="${arg#--push-endpoint=}";; --max-delivery-attempts=*) attempts="${arg#--max-delivery-attempts=}";; esac; done
-  printf '%s\n%s\n' "$endpoint" "$attempts" > "$state/sub-$name"
+  endpoint=""; attempts=""; sa=""; for arg in "$@"; do case "$arg" in --push-endpoint=*) endpoint="${arg#--push-endpoint=}";; --max-delivery-attempts=*) attempts="${arg#--max-delivery-attempts=}";; --push-auth-service-account=*) sa="${arg#--push-auth-service-account=}";; esac; done
+  printf '%s\n%s\n%s\n' "$endpoint" "$attempts" "$sa" > "$state/sub-$name"
   printf 'updated\n'
 elif [[ "$args" == *"pubsub subscriptions delete"* ]]; then
   name=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "delete" ]]; then j=$((i+1)); name="${!j}"; fi; done
@@ -102,7 +122,8 @@ grep -q '"cloud_run_service":"checkout-task"' "$work/deploy.json"
 grep -q '"topic":"checkout-task"' "$work/deploy.json"
 grep -q '"subscription":"checkout-task-sub"' "$work/deploy.json"
 grep -q '"dlq_topic":"checkout-task-dlq"' "$work/deploy.json"
-grep -q '"push_service_account":"checkout-push@p.iam.gserviceaccount.com"' "$work/deploy.json"
+grep -q '"dlq_subscription":"checkout-task-dlq-sub"' "$work/deploy.json"
+grep -Eq '"push_service_account":"checkout-push-[0-9a-f]{6}@p.iam.gserviceaccount.com"' "$work/deploy.json"
 grep -q 'run services add-iam-policy-binding' "$work/state/calls.log"
 grep -q 'iam service-accounts add-iam-policy-binding' "$work/state/calls.log"
 grep -q 'pubsub topics add-iam-policy-binding checkout-task-dlq' "$work/state/calls.log"
@@ -130,6 +151,7 @@ grep -q 'requires --apply' "$work/destroy.out"
 [[ ! -f "$work/state/topic-checkout-task" ]]
 [[ ! -f "$work/state/topic-checkout-task-dlq" ]]
 [[ ! -f "$work/state/sub-checkout-task-sub" ]]
+[[ ! -f "$work/state/sub-checkout-task-dlq-sub" ]]
 [[ ! -f "$work/state/sa-checkout-push.description" ]]
 
 # A failure after topics/SA/service exist must leave a record that can clean them up.
@@ -138,10 +160,12 @@ FAKE_SUBSCRIPTION_FAIL=1 "$sol" task gcp deploy "${common[@]}" --record "$work/p
 }
 [[ -f "$work/partial.json" ]]
 grep -q '"subscription":"checkout-task-sub"' "$work/partial.json"
+grep -q '"dlq_subscription":"checkout-task-dlq-sub"' "$work/partial.json"
 "$sol" task gcp destroy --project p --region us-west1 --service checkout --record "$work/partial.json" --apply > /dev/null
 [[ ! -f "$work/state/service" ]]
 [[ ! -f "$work/state/topic-checkout-task" ]]
 [[ ! -f "$work/state/topic-checkout-task-dlq" ]]
+[[ ! -f "$work/state/sub-checkout-task-dlq-sub" ]]
 [[ ! -f "$work/state/sa-checkout-push.description" ]]
 
 # A failure at Cloud Run deploy must leave the record and be destroyable even
@@ -155,5 +179,18 @@ grep -q '"cloud_run_url":""' "$work/partial-service.json"
 [[ ! -f "$work/state/topic-checkout-task" ]]
 [[ ! -f "$work/state/topic-checkout-task-dlq" ]]
 [[ ! -f "$work/state/sa-checkout-push.description" ]]
+
+# Destroy deletes the push service account. GCP keeps that ID reserved, so a
+# redeploy using the same record must allocate a fresh push identity rather than
+# recreating the deleted one.
+old_sa=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["push_service_account"])' "$work/release.json")
+"$sol" task gcp deploy "${common[@]}" --record "$work/release.json" > "$work/redeploy.json"
+new_sa=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["push_service_account"])' "$work/redeploy.json")
+[[ "$new_sa" != "$old_sa" ]]
+grep -q 'iam service-accounts create' "$work/state/calls.log"
+"$sol" task gcp destroy --project p --region us-west1 --service checkout --record "$work/release.json" --apply > /dev/null
+[[ ! -f "$work/state/service" ]]
+[[ ! -f "$work/state/sub-checkout-task-dlq-sub" ]]
+[[ ! -f "$work/state/sa-${new_sa%%@*}.description" ]]
 
 echo "task GCP fake-provider lifecycle test passed"

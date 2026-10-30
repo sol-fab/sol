@@ -10,7 +10,7 @@ COPY --chown=opam:opam . /workspace
 RUN opam exec -- dune build serverless/task_consumer_ocaml/bin/main.exe
 
 FROM ubuntu:24.04
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates libpq5 && rm -rf /var/lib/apt/lists/*
 COPY --from=build /workspace/_build/default/serverless/task_consumer_ocaml/bin/main.exe /usr/local/bin/pluto-task-consumer
 USER 65534
 CMD ["/usr/local/bin/pluto-task-consumer"]

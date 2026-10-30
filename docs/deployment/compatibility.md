@@ -81,9 +81,11 @@ Known blocker classes include the AWS/GCP preflight evidence gate (it admits onl
 AWS and OCaml today), missing serverless/task matrix rows and preflight
 admission, cloud rollback/uninstall/observability evidence, database and Kafka
 recovery, availability and alert delivery, the missing TypeScript local task
-runtime, the Pub/Sub dead-letter subscription gap, and release promotion. The
-evidence rows are generated from `internal/qualification/product-matrix.json`;
-the release gate is in `internal/tooling/release/README.md`.
+runtime, GCP deploy-time push-IAM propagation, and release promotion. The GCP task lifecycle now owns a pull subscription on
+its dead-letter topic, so exhausted tasks are inspectable without an operator
+creating provider resources. The evidence rows are generated from
+`internal/qualification/product-matrix.json`; the release gate is in
+`internal/tooling/release/README.md`.
 
 ## Guarantee layers
 
