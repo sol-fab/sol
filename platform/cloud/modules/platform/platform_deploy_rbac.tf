@@ -204,7 +204,10 @@ resource "kubernetes_manifest" "deploy_rolebinding_boundary" {
       }
       validations = [{
         expression = <<-CEL
-          !request.userInfo.groups.exists(g, g == "sol:deployers") ||
+          !(
+            request.userInfo.groups.exists(g, g == "sol:deployers") ||
+            request.userInfo.username == "system:serviceaccount:monitoring:sol-deploy"
+          ) ||
           (has(namespaceObject.metadata.labels) &&
            namespaceObject.metadata.labels["sol.io/workload-namespace"] == "true" &&
            object.roleRef.apiGroup == "rbac.authorization.k8s.io" &&
