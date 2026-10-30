@@ -185,7 +185,7 @@ run_apply() {
 }
 
 run_destroy() {
-  (cd "$tmp/work" && DESTROYING=1 LIFECYCLE_LOG="$1" "$sol" destroy prod/aws/us-east-1 --apply) \
+  (cd "$tmp/work" && DESTROYING=1 LIFECYCLE_LOG="$1" "$sol" destroy prod/aws/us-east-1 --apply --accept-unreleased) \
     >"$1.out" 2>&1
 }
 
@@ -1755,6 +1755,23 @@ fi
 while IFS= read -r kubeconfig; do test ! -e "$kubeconfig"; done <"$tmp/kubeconfigs"
 
 rm -f "$RDS_PREPARED_FILE"
+no_evidence_log="$tmp/destroy-no-context.log"
+if (cd "$tmp/work" && DESTROYING=1 LIFECYCLE_LOG="$no_evidence_log" \
+      "$sol" destroy prod/aws/us-east-1 --apply) >"$no_evidence_log.out" 2>&1; then
+  echo "a destroy without kube_context and without --accept-unreleased proceeded" >&2
+  cat "$no_evidence_log.out" >&2
+  exit 1
+fi
+grep -F -- '--accept-unreleased' "$no_evidence_log.out" >/dev/null || {
+  echo "the refusal did not name the explicit override:" >&2
+  cat "$no_evidence_log.out" >&2
+  exit 1
+}
+if grep -F ' destroy ' "$no_evidence_log" >/dev/null; then
+  echo "a destroy without recorded UID evidence reached terraform" >&2
+  grep -F ' destroy ' "$no_evidence_log" >&2
+  exit 1
+fi
 log="$tmp/destroy-established.log"
 if ! run_destroy "$log"; then
   cat "$log.out" >&2
@@ -1992,7 +2009,7 @@ assert_contains "an unparseable interval is refused, naming the variable" \
 
 mismatch_log="$tmp/destroy-snapshot-mismatch.log"
 if (cd "$tmp/work" && DESTROYING=1 RDS_SNAPSHOT_MISMATCH=1 \
-      LIFECYCLE_LOG="$mismatch_log" "$sol" destroy prod/aws/us-east-1 --apply) \
+      LIFECYCLE_LOG="$mismatch_log" "$sol" destroy prod/aws/us-east-1 --apply --accept-unreleased) \
       >"$mismatch_log.out" 2>&1; then
   echo "a destroy whose prepared snapshot identity does not match the provider's must fail" >&2
   cat "$mismatch_log.out" >&2
@@ -2141,7 +2158,7 @@ mv "$tmp/window-original-environments.yml" "$tmp/work/sol/environments.yml"
 destroy_tri_log="$tmp/destroy-can-i-indeterminate.log"
 rm -f "$FAIL_MARKER_DIR/bootstrap-window"
 if ! (cd "$tmp/work" && DESTROYING=1 CAN_I_FAIL=1 LIFECYCLE_LOG="$destroy_tri_log" \
-      "$sol" destroy prod/aws/us-east-1 --apply) >"$destroy_tri_log.out" 2>&1; then
+      "$sol" destroy prod/aws/us-east-1 --apply --accept-unreleased) >"$destroy_tri_log.out" 2>&1; then
   echo "the destroy was blocked by the de-escalation probe, which must never strand a target:" >&2
   cat "$destroy_tri_log.out" >&2
   exit 1
@@ -2535,7 +2552,7 @@ case "$retention_region" in
 esac
 for bad in abc inf -1 nan; do
   if (cd "$tmp/work" && FAIL_ON="" DESTROYING=1 SOL_DESTROY_SNAPSHOT_INTERVAL_S="$bad" \
-        LIFECYCLE_LOG="$interval_log" "$sol" destroy prod/aws/us-east-1 --apply) \
+        LIFECYCLE_LOG="$interval_log" "$sol" destroy prod/aws/us-east-1 --apply --accept-unreleased) \
       >"$interval_log.out" 2>&1; then
     cat "$interval_log.out" >&2
     echo "REFAC-115: a destroy proceeded with SOL_DESTROY_SNAPSHOT_INTERVAL_S=$bad" >&2
