@@ -177,6 +177,15 @@ let env_vars (request : request) =
   ]
 ;;
 
+let workspace_label () =
+  Sol_cli_workspace.current_name ()
+  |> String.map (function
+    | ('a' .. 'z' | '0' .. '9' | '-' | '_' | '.') as c -> c
+    | 'A' .. 'Z' as c -> Char.lowercase_ascii c
+    | _ -> '-')
+  |> fun value -> if String.length value > 63 then String.sub value 0 63 else value
+;;
+
 let deploy_argv (request : request) =
   [ "gcloud"
   ; "run"
@@ -196,7 +205,10 @@ let deploy_argv (request : request) =
     |> List.map (fun (key, value) -> key ^ "=" ^ value)
     |> String.concat ","
   ; "--labels"
-  ; "sol-owned=cloud-run-experiment,sol-service=" ^ request.provider_service
+  ; Printf.sprintf
+      "sol-owned=cloud-run-experiment,sol-service=%s,sol-workspace=%s"
+      request.provider_service
+      (workspace_label ())
   ; "--quiet"
   ]
 ;;
@@ -443,10 +455,15 @@ let read_record ~path =
 ;;
 
 let owns ~service ~provider observed =
+  let workspace = workspace_label () in
   service <> ""
   && provider <> ""
   && List.assoc_opt "sol-owned" observed.labels = Some "cloud-run-experiment"
   && List.assoc_opt "sol-service" observed.labels = Some provider
+  &&
+  match List.assoc_opt "sol-workspace" observed.labels with
+  | Some label -> String.equal label workspace
+  | None -> true
 ;;
 
 let deploy runner (request : request) =

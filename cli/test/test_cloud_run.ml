@@ -1042,6 +1042,33 @@ let test_rollback_refuses_foreign_labels () =
   | _ -> check "rollback refuses foreign labels" false
 ;;
 
+let test_deploy_refuses_foreign_workspace_label () =
+  let deployed = ref false in
+  let runner =
+    { Sol_cli_cloud_run.run =
+        (fun argv ->
+          match argv with
+          | "gcloud" :: "run" :: "services" :: "list" :: _ -> Ok (out "sol-test")
+          | "gcloud" :: "run" :: "deploy" :: _ ->
+            deployed := true;
+            Ok (out "deployed")
+          | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+            let json = describe_json ~revision:"rev-1" ~percent:100 in
+            Ok
+              (out
+                 (Str.global_replace
+                    (Str.regexp_string {|"sol-service":"sol-test"|})
+                    {|"sol-service":"sol-test","sol-workspace":"other"|}
+                    json))
+          | _ -> Error "unexpected")
+    ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+    }
+  in
+  match Sol_cli_cloud_run.deploy runner (request ()) with
+  | Error (Refused _) -> check "foreign workspace service is refused" (not !deployed)
+  | _ -> check "foreign workspace service is refused" false
+;;
+
 let () =
   test_ingress ();
   test_provider_naming ();
@@ -1067,6 +1094,7 @@ let () =
   test_rollback_refuses_unreconciled_traffic_error ();
   test_verify_writes_release_record ();
   test_deploy_refuses_unowned_service ();
+  test_deploy_refuses_foreign_workspace_label ();
   test_deploy_writes_provisional_record_before_describe ();
   test_destroy_accepts_provisional_record ();
   test_destroy_refuses_provisional_record_without_image ();
