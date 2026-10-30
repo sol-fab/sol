@@ -73,20 +73,44 @@ def main(argv):
             "with a data source instead, or relinquish it with `removed { lifecycle { "
             "destroy = false } }`."
         )
-    for resource_type, reason in sorted(PROJECT_WIDE.items()):
-        if re.search(rf'^data\s+"{resource_type}"', text_of_any_root(root), re.M) is None:
-            problems.append(
-                f"{reason}, and no root reads it: Sol needs its email to grant the node "
-                "identity registry access, so it must be read as a data source rather than "
-                "managed as a resource."
-            )
+    # A dedicated node service account is the least-privilege replacement for the
+    # project-shared default. Require the dedicated identity and its explicit use; the
+    # default account must not be managed, and there is no reason to read it.
+    cluster_text = text_of_any_root(root)
+    if re.search(r'^resource\s+"google_service_account"\s+"node"', cluster_text, re.M) is None:
+        problems.append(
+            "the GCP cluster root declares no dedicated google_service_account.node: nodes "
+            "must not run as the project's shared default Compute service account."
+        )
+    if re.search(
+        r'node_config\s*\{[^}]*service_account\s*=\s*'
+        r'google_service_account\.node\.email',
+        cluster_text,
+    ) is None:
+        problems.append(
+            "the GCP node pool does not set service_account = google_service_account.node.email; "
+            "a default or literal identity would reintroduce the shared node identity."
+        )
+    if re.search(
+        r'resource\s+"google_service_account"\s+"node"[\s\S]*?'
+        r'account_id\s*=\s*"default"',
+        cluster_text,
+    ):
+        problems.append(
+            "the dedicated node service account still uses the shared default account id."
+        )
+    if re.search(r'^data\s+"google_compute_default_service_account"', cluster_text, re.M):
+        problems.append(
+            "the GCP cluster root still reads the project's shared default Compute service "
+            "account; a dedicated node identity does not need it."
+        )
     if problems:
         for problem in problems:
             print(f"{NAME}: {problem}", file=sys.stderr)
         return 1
     print(
-        f"{NAME}: {len(declared)} declared resource(s) checked; no target manages a project-wide "
-        "resource, and each is read as a data source"
+        f"{NAME}: {len(declared)} declared resource(s) checked; no target manages a "
+        "project-wide resource, and GKE nodes use a dedicated identity"
     )
     return 0
 

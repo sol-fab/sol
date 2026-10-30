@@ -130,6 +130,7 @@ let gcp ~cluster_name ~project_id =
   let provisioner_observed, provisioner_import =
     service_account (cluster_name ^ "-provisioner")
   in
+  let node_observed, node_import = service_account (cluster_name ^ "-node") in
   let loki_observed, loki_import = service_account (cluster_name ^ "-loki") in
   let thanos_observed, thanos_import = service_account (cluster_name ^ "-thanos") in
   let cert_manager_observed, cert_manager_import =
@@ -278,6 +279,13 @@ let gcp ~cluster_name ~project_id =
       ~identity:(cluster_name ^ "-provisioner")
       ~import_identity:provisioner_import
   ; entry
+      "google_service_account.node"
+      direct
+      ~resource_class:"service account"
+      ~observed_as:node_observed
+      ~identity:(cluster_name ^ "-node")
+      ~import_identity:node_import
+  ; entry
       "google_service_account.loki[0]"
       direct
       ~resource_class:"service account"
@@ -367,6 +375,13 @@ let gcp ~cluster_name ~project_id =
       ~resource_class:""
       ~observed_as:""
       ~identity:"the provisioner's cluster-access grant"
+      ~import_identity:""
+  ; entry
+      "google_project_iam_member.node_default"
+      (not_recoverable composite_identity)
+      ~resource_class:""
+      ~observed_as:""
+      ~identity:"the GKE nodes' default-node service-account grant"
       ~import_identity:""
   ; entry
       "google_service_account_iam_member.provisioner_impersonators"
