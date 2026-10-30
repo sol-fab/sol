@@ -433,6 +433,12 @@ let container_security =
     [ "allowPrivilegeEscalation", Y.bool false; "readOnlyRootFilesystem", Y.bool true ]
 ;;
 
+(* Batch Jobs run with the same non-root, read-only posture as workloads. The explicit
+   /tmp volume is the one writable path they need for psql/sol scratch files; without it a
+   read-only root filesystem would turn a working migration into a startup failure. *)
+let tmp_volume = Y.map [ "name", Y.string "tmp"; "emptyDir", Y.map [] ]
+let tmp_mount = Y.map [ "name", Y.string "tmp"; "mountPath", Y.string "/tmp" ]
+
 let env_from ~name =
   Y.list [ Y.map [ "configMapRef", Y.map [ "name", Y.string (name ^ "-env") ] ] ]
 ;;
@@ -1183,12 +1189,14 @@ let migration_job_doc
     Y.map
       [ "name", Y.string migration_container_name
       ; "image", Y.string image
+      ; "securityContext", container_security
       ; "args", Y.list (List.map Y.quoted args)
       ; ( "envFrom"
         , Y.list [ Y.map [ "secretRef", Y.map [ "name", Y.string ddl_creds_name ] ] ] )
       ; ( "volumeMounts"
         , Y.list
             (Y.map [ "name", Y.string "migrations"; "mountPath", Y.string "/migrations" ]
+             :: tmp_mount
              :: db_ca_mounts) )
       ]
   in
@@ -1199,11 +1207,15 @@ let migration_job_doc
     ; ( "spec"
       , Y.map
           [ "backoffLimit", Y.int 0
+          ; "activeDeadlineSeconds", Y.int 300
+          ; "ttlSecondsAfterFinished", Y.int 600
           ; ( "template"
             , Y.map
                 [ ( "spec"
                   , Y.map
                       [ "restartPolicy", Y.string "Never"
+                      ; "automountServiceAccountToken", Y.bool false
+                      ; "securityContext", non_root_pod_security
                       ; "containers", Y.list [ container ]
                       ; ( "volumes"
                         , Y.list
@@ -1211,6 +1223,7 @@ let migration_job_doc
                                [ "name", Y.string "migrations"
                                ; "configMap", Y.map [ "name", Y.string configmap_name ]
                                ]
+                             :: tmp_volume
                              :: db_ca_volume_items) )
                       ] )
                 ] )
@@ -1281,11 +1294,12 @@ let contract_job_doc ~cluster_env ~secret_name ~name ~namespace ~image ~command 
     Y.map
       ([ "name", Y.string "contract"
        ; "image", Y.string image
+       ; "securityContext", container_security
        ; "command", Y.list (List.map Y.quoted command)
        ; "args", Y.list (List.map Y.quoted args)
        ; "env", Y.list env
        ]
-       @ non_empty_list "volumeMounts" kafka_ca_mounts)
+       @ non_empty_list "volumeMounts" (tmp_mount :: kafka_ca_mounts))
   in
   resource
     ~api_version:"batch/v1"
@@ -1294,12 +1308,17 @@ let contract_job_doc ~cluster_env ~secret_name ~name ~namespace ~image ~command 
     ; ( "spec"
       , Y.map
           [ "backoffLimit", Y.int 0
+          ; "activeDeadlineSeconds", Y.int 300
+          ; "ttlSecondsAfterFinished", Y.int 600
           ; ( "template"
             , Y.map
                 [ ( "spec"
                   , Y.map
-                      ([ "restartPolicy", Y.string "Never" ]
-                       @ non_empty_list "volumes" kafka_ca_volumes
+                      ([ "restartPolicy", Y.string "Never"
+                       ; "automountServiceAccountToken", Y.bool false
+                       ; "securityContext", non_root_pod_security
+                       ]
+                       @ non_empty_list "volumes" (tmp_volume :: kafka_ca_volumes)
                        @ [ "containers", Y.list [ container ] ]) )
                 ] )
           ] )
