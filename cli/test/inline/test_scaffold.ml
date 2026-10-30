@@ -1246,6 +1246,12 @@ let test_new_svc_typescript () =
     "typescript svc package.json is substituted"
     false
     (Sol_cli_string.contains ~needle:"{{" pkg);
+  let dockerfile = read_file (Filename.concat dir "Dockerfile") in
+  check_bool
+    "typescript svc Dockerfile installs its lockfile"
+    true
+    (Sol_cli_string.contains ~needle:"npm ci" dockerfile
+     && Sol_cli_string.contains ~needle:"package-lock.json" dockerfile);
   assert_contains "typescript svc package name" pkg "payments-charge-svc";
   let yml = read_file "sol.yml" in
   assert_contains "sol.yml declares typescript" yml "language: typescript"
@@ -1277,6 +1283,12 @@ let test_new_worker_typescript () =
     "typescript worker pins the worker package that owns /readyz"
     pkg
     "\"@sol-fab/worker\": \"^0.2.0\"";
+  let dockerfile = read_file (Filename.concat dir "Dockerfile") in
+  check_bool
+    "typescript worker Dockerfile installs its lockfile"
+    true
+    (Sol_cli_string.contains ~needle:"npm ci" dockerfile
+     && Sol_cli_string.contains ~needle:"package-lock.json" dockerfile);
   let src = read_file (Filename.concat dir "src/index.ts") in
   assert_contains "typescript worker uses createWorkerHealth" src "createWorkerHealth";
   assert_contains "typescript worker serves /readyz" src "health.response";
@@ -1311,6 +1323,12 @@ let test_new_fn_typescript () =
     "typescript fn package.json is substituted"
     false
     (Sol_cli_string.contains ~needle:"{{" pkg);
+  let dockerfile = read_file (Filename.concat dir "Dockerfile") in
+  check_bool
+    "typescript fn Dockerfile installs its lockfile"
+    true
+    (Sol_cli_string.contains ~needle:"npm ci" dockerfile
+     && Sol_cli_string.contains ~needle:"package-lock.json" dockerfile);
   let src = read_file (Filename.concat dir "src/index.ts") in
   assert_contains "typescript fn uses runFn" src "runFn";
   assert_contains "typescript fn reads PUSHGATEWAY_URL" src "PUSHGATEWAY_URL";
