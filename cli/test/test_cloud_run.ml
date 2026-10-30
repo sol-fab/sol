@@ -930,6 +930,35 @@ let test_destroy_accepts_provisional_record () =
          check ("provisional destroy " ^ Sol_cli_cloud_run.failure_to_string e) false)
 ;;
 
+let test_provider_error_after_apply_still_leaves_a_record () =
+  let record = Filename.temp_file "sol-cloud-run-apply-error-" ".json" in
+  Fun.protect
+    ~finally:(fun () ->
+      try Sys.remove record with
+      | Sys_error _ -> ())
+    (fun () ->
+       let runner =
+         { Sol_cli_cloud_run.run =
+             (fun argv ->
+               match argv with
+               | "gcloud" :: "run" :: "services" :: "list" :: _ -> Ok (out "")
+               | "gcloud" :: "run" :: "deploy" :: _ ->
+                 Error "the deploy timed out after applying"
+               | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+                 Ok (out (describe_json ~revision:"rev-1" ~percent:100))
+               | _ -> Error "unexpected")
+         ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+         }
+       in
+       let request = request ~record:(Some record) () in
+       (match Sol_cli_cloud_run.deploy runner request with
+        | Error (Partial _) -> ()
+        | _ -> check "provider error is partial" false);
+       match Sol_cli_cloud_run.read_record ~path:record with
+       | Ok release -> check "record exists after an apply error" (release.revision = "")
+       | Error message -> check ("provisional record unreadable: " ^ message) false)
+;;
+
 let () =
   test_ingress ();
   test_provider_naming ();
@@ -956,6 +985,7 @@ let () =
   test_deploy_refuses_unowned_service ();
   test_deploy_writes_provisional_record_before_describe ();
   test_destroy_accepts_provisional_record ();
+  test_provider_error_after_apply_still_leaves_a_record ();
   Printf.printf "%d passed, %d failed\n" !passed !failed;
   if !failed > 0 then exit 1
 ;;
