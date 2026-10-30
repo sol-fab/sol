@@ -653,6 +653,9 @@ phase_transport() {
   # namespace is platform-provided (it may be the database's own namespace), so it
   # is read from the deploy's `sol-database-identity:` line rather than derived.
   local -a observe_namespaces=("$APP_NS" "$WORKER_NS")
+  if app_unit_addresses | grep -q '^app/demo_ts/'; then
+    observe_namespaces+=("$TS_APP_NS")
+  fi
   local database_ns
   database_ns="$(app_database_field namespace)"
   if [ -n "$database_ns" ]; then
