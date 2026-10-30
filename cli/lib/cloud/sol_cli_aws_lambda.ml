@@ -337,18 +337,29 @@ let deploy (r : request) =
     |> Result.map (fun _ -> ())
     |> Result.map_error (fun m -> Provider ("invoke permission: " ^ m))
   in
-  let* o = observed r version [] in
-  let release =
+  (* The alias and URL permissions have already moved. Record a destroyable ownership
+     document now, before the postcondition read; a transient observed failure must not
+     leave a live function and alias with no record Sol can destroy. The final write below
+     replaces the provisional empty URL once the provider is readable. *)
+  let provisional =
     { region = r.region
     ; service = r.service
     ; function_name = r.function_name
     ; version
     ; alias = "live"
-    ; url = o.url
+    ; url = ""
     ; image = r.image
     ; role_arn = r.role_arn
     }
   in
+  let* () =
+    match r.record with
+    | None -> Ok ()
+    | Some path ->
+      write_record ~path provisional |> Result.map_error (fun m -> Provider m)
+  in
+  let* o = observed r version [] in
+  let release = { provisional with url = o.url } in
   let* () =
     match r.record with
     | None -> Ok ()
