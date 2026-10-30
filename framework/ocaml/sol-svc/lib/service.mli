@@ -52,6 +52,7 @@ val run
 module For_testing : sig
   val respond_or_500 : ?report_error:error_reporter -> (unit -> Response.t) -> Response.t
   val reset_jwks_cache : unit -> unit
+  val cached_jwks_urls : unit -> string list
   val seed_stale_jwks_cache : url:string -> age_s:float -> jwks:string -> unit
 
   val dispatch

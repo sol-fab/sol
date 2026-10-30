@@ -587,6 +587,7 @@ let emit_request_observation
 module For_testing = struct
   let respond_or_500 ?report_error = respond_or_500 ?report_error
   let reset_jwks_cache () = Auth_cache.clear ()
+  let cached_jwks_urls () = Auth_cache.urls ()
 
   let seed_stale_jwks_cache ~url ~age_s ~jwks =
     Auth_cache.replace
