@@ -418,7 +418,7 @@ let test_max_messages_stops_cleanly () =
       !processed)
 ;;
 
-let test_ack_failure_non_fatal_continues_and_is_metered () =
+let test_ack_failure_non_fatal_stops_and_is_metered () =
   Eio_main.run (fun env ->
     Eio.Switch.run
     @@ fun sw ->
@@ -448,8 +448,8 @@ let test_ack_failure_non_fatal_continues_and_is_metered () =
       ()
     |> run_ok;
     (match !result_r with
-     | Some Kafka.Consumer.Continue -> ()
-     | _ -> Windtrap.fail "expected Continue after a non-fatal ack failure");
+     | Some Kafka.Consumer.Stop -> ()
+     | _ -> Windtrap.fail "expected Stop after a non-fatal ack failure");
     let output = render () in
     Windtrap.equal
       Windtrap.bool
@@ -597,8 +597,8 @@ let () =
             "external stop flag skips messages"
             test_external_stop_flag_skips_messages
         ; Windtrap.test
-            "non-fatal ack failure continues"
-            test_ack_failure_non_fatal_continues_and_is_metered
+            "non-fatal ack failure stops for redelivery"
+            test_ack_failure_non_fatal_stops_and_is_metered
         ; Windtrap.test
             "fatal ack failure escalates to Error"
             test_ack_failure_fatal_escalates
