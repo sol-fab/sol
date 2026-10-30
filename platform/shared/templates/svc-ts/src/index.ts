@@ -35,7 +35,14 @@ app.addHook("onRequest", async (req, reply) => {
     path,
   });
   if (!decision.ok) {
-    await reply.code(decision.status).send({ error: decision.message });
+    if (decision.status >= 500) {
+      // The guard's detail can name the issuer/JWKS URL. Keep it in operator logs, not
+      // in an unauthenticated response; this mirrors Sol's OCaml services.
+      console.error(`[svc] workload identity check failed: ${decision.message}`);
+      await reply.code(decision.status).send({ error: "Internal server error" });
+    } else {
+      await reply.code(decision.status).send({ error: decision.message });
+    }
   }
 });
 
