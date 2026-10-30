@@ -50,6 +50,27 @@ for (const [name, module] of modules) {
     assert.equal(supervisor.failure(), undefined);
   });
 
+
+  test(`${name}: a rejected runner promise is reported as a crash`, async () => {
+    const calls: string[] = [];
+    let shutdowns = 0;
+    const supervisor = module.supervise((message) => calls.push(message));
+    supervisor.attach({
+      shutdown: async () => {
+        shutdowns += 1;
+      },
+    });
+
+    await module.watch(
+      Promise.reject(new Error("relay exploded")),
+      "outbox relay",
+      supervisor,
+    );
+    assert.match(supervisor.failure()?.message ?? "", /outbox relay stopped: Error: relay exploded/);
+    assert.equal(shutdowns, 1);
+    assert.equal(calls.length, 1);
+  });
+
   test(`${name}: watch reports a terminal error`, async () => {
     const supervisor = module.supervise(() => {});
     await module.watch(
