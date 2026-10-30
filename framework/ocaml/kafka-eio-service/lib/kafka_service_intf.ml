@@ -206,6 +206,11 @@ let observe_decode_error ~ot ~topic_name =
 
 let ack_and_drop_decode_error e ~raw_bytes:_ ~ack =
   Printf.eprintf "sol-worker: DECODE_ERROR skip=true error=%S\n%!" e;
-  ignore (ack ());
-  Kafka.Consumer.Continue
+  match ack () with
+  | Ok () -> Kafka.Consumer.Continue
+  | Error error ->
+    Printf.eprintf
+      "sol-worker: DECODE_ERROR skip=true ack_failed=%S; stopping for redelivery\n%!"
+      (Kafka.Error.to_string error);
+    Kafka.Consumer.Stop
 ;;
