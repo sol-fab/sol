@@ -890,6 +890,35 @@ let validate_availability (spec : service_spec) =
     | (Svc | Worker), [], _ -> Ok ())
 ;;
 
+let validate_unique_provider_names (specs : service_spec list) =
+  let seen = Hashtbl.create (List.length specs) in
+  let rec loop = function
+    | [] -> Ok ()
+    | (spec : service_spec) :: rest ->
+      let namespace = namespace_to_string spec.namespace in
+      let name = k8s_name_to_string spec.k8s_name in
+      let key = namespace ^ "/" ^ name in
+      (match Hashtbl.find_opt seen key with
+       | None ->
+         Hashtbl.add seen key (spec.domain ^ "/" ^ spec.source_name);
+         loop rest
+       | Some first ->
+         Error
+           (Invalid_kubernetes_name
+              { field = "normalized name"
+              ; value = key
+              ; message =
+                  Printf.sprintf
+                    "%s and %s normalize to the same provider object; refusing to plan \
+                     two                      workloads onto one \
+                     Deployment/Service/Secret"
+                    first
+                    (spec.domain ^ "/" ^ spec.source_name)
+              }))
+  in
+  loop specs
+;;
+
 let primitive_of_manifest = function
   | Sol_cli_manifest.Svc -> Svc
   | Sol_cli_manifest.Worker -> Worker
@@ -1299,6 +1328,7 @@ let of_services_result
     List.filter (fun (svc, _) -> List.mem (selection_key svc) selection_keys) loaded
   in
   let* resolved_services = collect [] deployable in
+  let* () = validate_unique_provider_names resolved_services in
   let* workspace_services = collect [] loaded in
   let resolved_services =
     resolved_services
