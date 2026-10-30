@@ -1234,6 +1234,7 @@ let test_new_svc_typescript () =
          true
          (Sys.file_exists (Filename.concat dir rel)))
     [ "package.json"
+    ; "package-lock.json"
     ; "tsconfig.json"
     ; "Dockerfile"
     ; "sol.toml"
@@ -1263,6 +1264,7 @@ let test_new_worker_typescript () =
          true
          (Sys.file_exists (Filename.concat dir rel)))
     [ "package.json"
+    ; "package-lock.json"
     ; "tsconfig.json"
     ; "Dockerfile"
     ; "sol.toml"
@@ -1296,7 +1298,13 @@ let test_new_fn_typescript () =
          (Printf.sprintf "typescript fn has %s" rel)
          true
          (Sys.file_exists (Filename.concat dir rel)))
-    [ "package.json"; "tsconfig.json"; "Dockerfile"; "sol.toml"; "src/index.ts" ];
+    [ "package.json"
+    ; "package-lock.json"
+    ; "tsconfig.json"
+    ; "Dockerfile"
+    ; "sol.toml"
+    ; "src/index.ts"
+    ];
   let pkg = read_file (Filename.concat dir "package.json") in
   assert_contains "typescript fn depends on @sol-fab/fn" pkg "\"@sol-fab/fn\": \"^0.1.0\"";
   check_bool
