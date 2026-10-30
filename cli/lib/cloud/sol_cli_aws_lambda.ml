@@ -476,27 +476,26 @@ let destroy (r : request) ~profile ~region ~service ~record =
         then Ok ()
         else Error (Refused "live function lacks this adapter's ownership tags")
     in
-    let* () =
-      r.run
-        (aws
-           { r with profile; region }
-           [ "lambda"
-           ; "delete-function-url-config"
-           ; "--function-name"
-           ; expected.function_name
-           ; "--qualifier"
-           ; "live"
-           ])
-      |> Result.map (fun _ -> ())
-      |> Result.map_error (fun m -> Partial m)
+    let delete args =
+      match r.run (aws { r with profile; region } args) with
+      | Ok _ -> Ok ()
+      | Error message ->
+        if Sol_cli_aws_lambda_common.resource_is_absent message
+        then Ok ()
+        else Error (Partial message)
     in
     let* () =
-      r.run
-        (aws
-           { r with profile; region }
-           [ "lambda"; "delete-function"; "--function-name"; expected.function_name ])
-      |> Result.map (fun _ -> ())
-      |> Result.map_error (fun m -> Partial m)
+      delete
+        [ "lambda"
+        ; "delete-function-url-config"
+        ; "--function-name"
+        ; expected.function_name
+        ; "--qualifier"
+        ; "live"
+        ]
+    in
+    let* () =
+      delete [ "lambda"; "delete-function"; "--function-name"; expected.function_name ]
     in
     let* names =
       inventory { r with profile; region } |> Result.map_error (fun m -> Unknown m)

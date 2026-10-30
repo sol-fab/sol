@@ -127,6 +127,11 @@ let contains_substring ~needle haystack =
   needle_length = 0 || at 0
 ;;
 
+let resource_is_absent message =
+  String.lowercase_ascii message
+  |> fun text -> contains_substring ~needle:"resourcenotfoundexception" text
+;;
+
 let alias_is_absent message =
   let text = String.lowercase_ascii message in
   contains_substring ~needle:"resourcenotfoundexception" text
