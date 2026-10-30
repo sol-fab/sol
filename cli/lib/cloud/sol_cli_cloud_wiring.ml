@@ -269,12 +269,10 @@ let adopt
                candidate.address)
         | Some resource ->
           let observed = Option.value resource.identifier ~default:"" in
-          let agrees =
-            Sol_cli_string.is_blank observed
-            || Sol_cli_string.contains ~needle:observed candidate.import_identity
-            || Sol_cli_string.contains ~needle:candidate.import_identity observed
-          in
-          if agrees
+          if
+            Sol_cli_ownership_reconciliation.adopted_identity_agrees
+              ~observed
+              ~import_identity:candidate.import_identity
           then Ok ()
           else
             Error
@@ -756,7 +754,10 @@ let apply_deps
                 with
                 | Ok () -> Ok ()
                 | Error message -> Error (Sol_cli_cloud_apply.Refused message))
-             | Error _ -> Ok ()))
+             | Error failure ->
+               Error
+                 (Sol_cli_cloud_apply.Refused
+                    (Sol_cli_provider_registry.resolution_failure_to_string failure))))
     ; cloud_ready =
         (fun cluster ->
           if cluster.ready ()

@@ -995,6 +995,28 @@ let test_json_dry_run_says_would_recover () =
   | _ -> Windtrap.fail "expected one resource"
 ;;
 
+let test_adopted_identity_requires_an_exact_non_blank_match () =
+  let agrees observed import_identity =
+    Sol_cli_ownership_reconciliation.adopted_identity_agrees ~observed ~import_identity
+  in
+  List.iter
+    (fun (observed, import_identity, expected) ->
+       Windtrap.equal
+         Windtrap.bool
+         ~msg:(Printf.sprintf "adopted identity %S vs %S" observed import_identity)
+         expected
+         (agrees observed import_identity))
+    [ "arn:aws:iam::123:role/sol-deploy", "arn:aws:iam::123:role/sol-deploy", true
+    ; "", "arn:aws:iam::123:role/sol-deploy", false
+    ; "arn:aws:iam::123:role/sol-dep", "arn:aws:iam::123:role/sol-deploy", false
+    ; "arn:aws:iam::123:role/sol-deploy-extra", "arn:aws:iam::123:role/sol-deploy", false
+    ]
+;;
+
+let%test "ownership: adoption requires an exact, non-blank identity" =
+  test_adopted_identity_requires_an_exact_non_blank_match ()
+;;
+
 let%test "json: unrecoverable and unknown are separate" =
   test_json_names_unrecoverable_and_unknown_separately ()
 ;;
