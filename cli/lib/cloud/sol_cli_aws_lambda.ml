@@ -223,6 +223,24 @@ let deploy (r : request) =
                   tags_json))))
     else Ok false
   in
+  let provisional =
+    { region = r.region
+    ; service = r.service
+    ; function_name = r.function_name
+    ; version = ""
+    ; alias = "live"
+    ; url = ""
+    ; image = r.image
+    ; role_arn = r.role_arn
+    }
+  in
+  let* () =
+    match r.record with
+    | None -> Ok ()
+    | Some path ->
+      write_record ~path provisional
+      |> Result.map_error (fun m -> Provider ("provisional ownership record: " ^ m))
+  in
   let* () =
     Sol_cli_aws_lambda_common.ensure_function
       (scope r)
