@@ -123,6 +123,7 @@ resource "kubernetes_cluster_role_binding" "everywhere" {
     ("publisher-deny-allows", edit(BOOTSTRAP, 'effect = "Deny"', 'effect = "Allow"', after='sid    = "NoProvisionOrDeploy"'), "no longer explicitly denies provisioning/IAM"),
     ("publisher-policy-output-renamed", edit(BOOTSTRAP_OUT, 'output "publisher_policy_json"', 'output "publisher_json"'), "no longer outputs publisher_policy_json"),
     ("provisioner-wildcard", edit(PROVISIONER, '    verbs      = ["get", "list", "watch"]', '    verbs      = ["get", "list", "watch", "*"]'), "grants escalate/bind"),
+    ("provisioner-write", edit(PROVISIONER, '    verbs      = ["get", "list", "watch"]', '    verbs      = ["get", "list", "watch", "create"]'), "not read-only"),
     ("module-declares-a-backend", append(MODULE, '\nterraform {\n  backend "s3" {}\n}\n'), "the shared platform module declares a backend"),
     ("gcp-cluster-on-s3", edit(GCP, 'backend "gcs" {}', 'backend "s3" {}'), "the GCP cloud root declares the S3 backend"),
     ("aws-platform-wrong-backend", edit(AWS_PLATFORM, 'backend "s3" {}', 'backend "gcs" {}'), "no longer declares the s3 backend"),

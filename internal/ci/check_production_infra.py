@@ -383,11 +383,21 @@ def check_identities(root):
     provisioner_rbac = root / "platform/cloud/modules/platform/platform_provisioner_rbac.tf"
     if not provisioner_rbac.is_file():
         fail(f"FAIL: {provisioner_rbac} is missing")
-    if any({"escalate", "bind", "*"} & set(verbs) for r in tfconfig.resources(provisioner_rbac, kinds=("resource",)) for _, verbs, _ in rules(r)):
+    provisioner_rules = [
+        verbs
+        for r in tfconfig.resources(provisioner_rbac, kinds=("resource",))
+        for _, verbs, _ in rules(r)
+    ]
+    if any({"escalate", "bind", "*"} & set(verbs) for verbs in provisioner_rules):
         fail(
             "FAIL: the steady-state platform provisioner RBAC grants escalate/bind;",
             "      the deploy ClusterRole must be created inside the bootstrap-admin",
             "      window, not by widening the provisioner's standing authority.",
+        )
+    if any(set(verbs) - {"get", "list", "watch"} for verbs in provisioner_rules):
+        fail(
+            "FAIL: the steady-state platform provisioner RBAC is not read-only;",
+            "      chart mutations belong inside the bootstrap-admin window.",
         )
 
 
