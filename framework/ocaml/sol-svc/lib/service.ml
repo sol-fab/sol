@@ -93,6 +93,7 @@ let auth_result
       ?fetch_jwks
       ?fetch_workload_jwks
       ?workload_identity
+      ?(report_error = fun ~operation:_ ~exn:_ -> ())
       auth_cfg
       headers
   =
@@ -107,11 +108,23 @@ let auth_result
   with
   | Error (`Unauthorized _) -> Error Response.unauthorized
   | Error (`Forbidden _) -> Error Response.forbidden
-  | Error (`Server_error msg) -> Error (Response.internal_error msg)
+  | Error (`Server_error msg) ->
+    (* Authentication failures are visible to unauthenticated callers. Keep the detail in
+       the operator log and return the same generic body as a handler exception; a JWKS
+       error must not disclose the issuer host or provider exception text. *)
+    report_error ~operation:"authentication" ~exn:(Failure msg);
+    Error (Response.internal_error "Internal server error")
   | Ok ctx -> Ok ctx
 ;;
 
-let authenticate_route ?fetch_jwks ?fetch_workload_jwks ?workload_identity route headers =
+let authenticate_route
+      ?fetch_jwks
+      ?fetch_workload_jwks
+      ?workload_identity
+      ?report_error
+      route
+      headers
+  =
   if route.Route.is_external
   then Ok None
   else
@@ -119,6 +132,7 @@ let authenticate_route ?fetch_jwks ?fetch_workload_jwks ?workload_identity route
       ?fetch_jwks
       ?fetch_workload_jwks
       ?workload_identity
+      ?report_error
       `Workload_identity
       headers
     |> Result.map Option.some
@@ -205,6 +219,7 @@ let dispatch_unguarded
                    ?fetch_jwks
                    ?fetch_workload_jwks
                    ?workload_identity
+                   ~report_error
                    metrics_auth
                    headers
                in
@@ -244,6 +259,7 @@ let dispatch_unguarded
                  ?fetch_jwks
                  ?fetch_workload_jwks
                  ?workload_identity
+                 ~report_error
                  route
                  headers
              in

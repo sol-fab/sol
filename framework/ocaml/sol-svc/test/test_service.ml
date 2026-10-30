@@ -532,6 +532,40 @@ let test_boundary_turns_exceptions_into_500 _env () =
     (Service.For_testing.respond_or_500 (fun () -> Response.created "x")).Response.status
 ;;
 
+let test_auth_server_error_body_is_generic _env () =
+  let reported = ref [] in
+  let report_error ~operation ~exn =
+    reported := (operation, Printexc.to_string exn) :: !reported
+  in
+  let response =
+    Service.For_testing.dispatch
+      ~report_error
+      ~routes:[ Route.get "/internal" (fun _ -> Response.ok "secret") ]
+      (Http.Request.make ~meth:`GET "/internal")
+      (Cohttp_eio.Body.of_string "")
+  in
+  Windtrap.equal Windtrap.int ~msg:"auth failure is a 500" 500 response.Response.status;
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"the body does not disclose configuration or IdP detail"
+    "Internal server error"
+    response.Response.body;
+  match !reported with
+  | [ (operation, message) ] ->
+    Windtrap.equal
+      Windtrap.string
+      ~msg:"authentication operation"
+      "authentication"
+      operation;
+    Windtrap.is_true
+      ~msg:"the detail is retained for operators"
+      (String.length message > 0)
+  | _ ->
+    Windtrap.failf
+      "expected one authentication diagnostic, got %d"
+      (List.length !reported)
+;;
+
 let test_reports_handler_failure _env () =
   let reported = ref [] in
   let report_error ~operation ~exn =
@@ -644,6 +678,9 @@ let () =
       ; Windtrap.group
           "failure diagnostics"
           [ Windtrap.test
+              "auth server errors keep a generic body"
+              (test_auth_server_error_body_is_generic env)
+          ; Windtrap.test
               "handler failure reported once"
               (test_reports_handler_failure env)
           ; Windtrap.test
