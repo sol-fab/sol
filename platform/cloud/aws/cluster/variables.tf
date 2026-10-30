@@ -165,6 +165,15 @@ variable "cluster_endpoint_cidr" {
   description = "The single CIDR allowed to reach the public Kubernetes API endpoint. Empty leaves the module default (0.0.0.0/0) for non-production clusters; a production-single-region target must set a specific value (enforced by sol deploy's preflight)."
   type        = string
   default     = ""
+
+  validation {
+    condition = (
+      var.cluster_endpoint_cidr == ""
+      || (can(cidrhost(var.cluster_endpoint_cidr, 0))
+      && var.cluster_endpoint_cidr != "0.0.0.0/0")
+    )
+    error_message = "cluster_endpoint_cidr must be empty or a valid, non-world CIDR; an explicit 0.0.0.0/0 is never accepted."
+  }
 }
 
 variable "enable_cluster_creator_admin" {

@@ -13,6 +13,15 @@ variable "cluster_endpoint_cidr" {
   description = "The single CIDR allowed to reach the public GKE control-plane endpoint. Empty leaves the endpoint unrestricted; a production profile requires a value and refuses 0.0.0.0/0."
   type        = string
   default     = ""
+
+  validation {
+    condition = (
+      var.cluster_endpoint_cidr == ""
+      || (can(cidrhost(var.cluster_endpoint_cidr, 0))
+      && var.cluster_endpoint_cidr != "0.0.0.0/0")
+    )
+    error_message = "cluster_endpoint_cidr must be empty or a valid, non-world CIDR; an explicit 0.0.0.0/0 is never accepted."
+  }
 }
 
 variable "cluster_name" {
