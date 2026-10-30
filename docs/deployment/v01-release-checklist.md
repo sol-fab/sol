@@ -36,6 +36,7 @@ These were checked read-only on 2026-10-30.
 | DNS | Route 53 zone `qual-aws.sol-fab.dev` exists |
 | Existing target | `examples/pluto/sol/environments.local.yml` has prior `qualalpha9-1`/`qualalpha8-1` attempts |
 | Disposable infrastructure | no current EKS cluster, RDS instance, ECR repository, or Pluto Lambda |
+| Grafana OIDC | operator-provided OAuth client JSON exists for `grafana.qual-aws.sol-fab.dev` and `grafana.qual-gcp.sol-fab.dev`; values are local and must be supplied via `TF_VAR_grafana_oidc_*` |
 
 ### GCP
 
@@ -56,8 +57,7 @@ discoverable from the existing configuration.
 
 | Input | Why it is needed | Current state |
 |---|---|---|
-| Alert receiver + accountable owner + acknowledgement | AWS G1–G3 and the GCP alert gate require a delivered and acknowledged alert, not just a configured URL | AWS target has a webhook URL and owner, but no acknowledgement evidence; GCP harness requires `ALERT_RECEIVER_URL`, `ALERT_OWNER`, `ALERT_RUNBOOK_URL` |
-| OIDC client/configuration for target Grafana | Production observability access must be TLS + OIDC and verified live | Not found in the inspected target/tfvars |
+| Alert acknowledgement | AWS G1–G3 and the GCP alert gate require a delivered and acknowledged alert, not just a configured URL | Receiver/owner/runbook are approved for reuse; the synthetic acknowledgement is performed during the authorized campaign |
 | AWS target file refresh | The existing target has no `terraform_var_file`, omits both TypeScript units, and names an old cluster | Must be regenerated/edited with the v0.1 required units and current tfvars |
 | AWS current egress CIDR | `cluster_endpoint_cidr` must be a narrow operator CIDR, not stale or `0.0.0.0/0` | Existing value is `73.98.203.180/32`; confirm it is still the operator's egress |
 | Database password | The AWS procedure requires `TF_VAR_db_password`; GCP setup has its own credential inputs | Operator-controlled; not discoverable |
@@ -67,6 +67,7 @@ discoverable from the existing configuration.
 | Serverless/task live campaigns | The Kubernetes production campaign does not qualify target serverless, DLQ, or provider task lifecycles | Need scoped campaigns and records; execution rows are not `prod` |
 | Promotion enablement | The typed authorization path is implemented but temporarily disabled pending a producer-generated live-qualified candidate (#1738) | Needs an authorized candidate + both provider records + verifier chain, then the release policy must be exercised |
 | Cost/billable window | EKS/GKE, RDS/Cloud SQL, brokers, monitoring, and restore tests create billable infrastructure | Requires operator authorization and a time window |
+| OIDC environment wiring | The local OAuth client JSONs contain secrets and must not be committed | Set `TF_VAR_grafana_oidc_client_id`/`secret` from the local files for each campaign |
 
 ## Proposed sequence
 
