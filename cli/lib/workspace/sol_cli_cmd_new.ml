@@ -208,7 +208,7 @@ let new_svc ?language arg =
      Sol_cli_report.app "\nDone.  Build: dune build %s/bin/main.exe" dir
    | Sol_cli_compat.Typescript ->
      Sol_cli_report.app
-       "\nDone.  Install and build:\n  cd %s && npm install && npm run build"
+       "\nDone.  Install and build:\n  cd %s && npm ci && npm run build"
        dir);
   Ok ()
 ;;
@@ -222,7 +222,7 @@ let new_worker ?language arg =
      Sol_cli_report.app "  dune build %s/bin/main.exe" dir
    | Sol_cli_compat.Typescript ->
      Sol_cli_report.app
-       "\nDone.  Install and build:\n  cd %s && npm install && npm run build"
+       "\nDone.  Install and build:\n  cd %s && npm ci && npm run build"
        dir);
   Ok ()
 ;;
@@ -234,7 +234,7 @@ let new_fn ?language arg =
      Sol_cli_report.app "\nDone.  Build: dune build %s/bin/main.exe" dir
    | Sol_cli_compat.Typescript ->
      Sol_cli_report.app
-       "\nDone.  Install and build:\n  cd %s && npm install && npm run build"
+       "\nDone.  Install and build:\n  cd %s && npm ci && npm run build"
        dir);
   Ok ()
 ;;
