@@ -176,14 +176,13 @@ declarations without a Kubernetes cluster:
 - AWS Lambda for both `-svc` and `-fn`;
 - GCP Cloud Run for `-svc` and Cloud Run Jobs for `-fn`.
 
-Sol provisions each unit's runtime identity through the target authorization root,
-records that identity in the release record, and verifies it against the live
-service/job during deploy, rollback, and destroy. The current `-worker` Kafka
-semantics are Kubernetes-only; there is no managed substitution. Task handlers
-remain a standalone `sol task aws`/`sol task gcp` lifecycle rather than a
-target-scoped serverless component. See
+Serverless execution is experimental and tracked separately from the primary
+Kubernetes path. The current `-worker` Kafka semantics are Kubernetes-only;
+there is no managed substitution. Task handlers remain a standalone
+`sol task aws`/`sol task gcp` lifecycle rather than a target-scoped serverless
+component. See
 [serverless execution](docs/deployment/serverless-experimental.md) for the
-support matrix, evidence, and explicit limits.
+support matrix, identity model, evidence, and explicit limits.
 
 ### TypeScript
 
