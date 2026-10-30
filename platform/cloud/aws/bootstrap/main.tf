@@ -249,9 +249,23 @@ data "aws_iam_policy_document" "publisher" {
 
 data "aws_iam_policy_document" "operator" {
   statement {
-    sid       = "ReadClusterAndState"
+    sid       = "ListClusters"
     effect    = "Allow"
-    actions   = ["eks:DescribeCluster", "eks:ListClusters", "s3:GetObject", "s3:ListBucket"]
+    actions   = ["eks:ListClusters"]
     resources = ["*"]
+  }
+
+  statement {
+    sid       = "DescribeThisAccountsClusters"
+    effect    = "Allow"
+    actions   = ["eks:DescribeCluster"]
+    resources = ["arn:aws:eks:${var.region}:${data.aws_caller_identity.current.account_id}:cluster/*"]
+  }
+
+  statement {
+    sid       = "ReadThisInstallationsState"
+    effect    = "Allow"
+    actions   = ["s3:GetObject", "s3:ListBucket"]
+    resources = ["arn:aws:s3:::${var.state_bucket}", "arn:aws:s3:::${var.state_bucket}/*"]
   }
 }
