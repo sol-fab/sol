@@ -219,6 +219,29 @@ let recovered address disposition =
   | _ -> Windtrap.fail "the observation did not produce a recovery or an unmapped refusal"
 ;;
 
+let test_not_attributable_is_unresolved () =
+  let observation =
+    Sol_cli_absence.Not_attributable
+      { resource_class = "ECR repository"; reason = "the registry prefix is absent" }
+  in
+  match
+    Sol_cli_ownership_reconciliation.dispositions
+      ~entries:[]
+      ~state_addresses:[]
+      [ observation ]
+  with
+  | [ Sol_cli_ownership_reconciliation.Unresolved { resource_class; reason } ] ->
+    Windtrap.equal
+      Windtrap.string
+      ~msg:"the unowned resource class is retained"
+      "ECR repository"
+      resource_class;
+    Windtrap.is_true
+      ~msg:"the refusal names the reason"
+      (Sol_cli_string.contains ~needle:"registry prefix" reason)
+  | _ -> Windtrap.fail "a not-attributable observation was silently dropped"
+;;
+
 let test_recovery_requires_an_exact_observed_name () =
   recovered
     "google_sql_database_instance.postgres[0]"
@@ -288,6 +311,10 @@ let test_recovery_requires_an_exact_observed_name () =
   | Sol_cli_ownership_reconciliation.Recover candidate ->
     Windtrap.failf "a longer custom-role name was imported as %s" candidate.address
   | _ -> Windtrap.fail "an unknown custom-role name must be Unmapped"
+;;
+
+let%test "recovery: a not-attributable observation is unresolved" =
+  test_not_attributable_is_unresolved ()
 ;;
 
 let%test "recovery: only an exact observed name becomes Terraform authority" =
