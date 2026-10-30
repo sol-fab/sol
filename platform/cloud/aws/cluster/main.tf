@@ -348,9 +348,10 @@ data "aws_iam_policy_document" "cert_manager" {
     condition {
       test     = "ForAllValues:StringLike"
       variable = "route53:ChangeResourceRecordSetsNormalizedRecordNames"
+      # Route 53 compares normalized record names: lowercase, no trailing dot.
       values = [
-        "_acme-challenge.${var.base_domain}",
-        "_acme-challenge.*.${var.base_domain}",
+        "_acme-challenge.${lower(trimsuffix(var.base_domain, "."))}",
+        "_acme-challenge.*.${lower(trimsuffix(var.base_domain, "."))}",
       ]
     }
 
