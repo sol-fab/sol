@@ -101,7 +101,27 @@ let validate_settings (r : request) =
   else Error (Sol_cli_aws_lambda_common.Refused "concurrency must be greater than zero")
 ;;
 
-let tags ~function_name = [ "sol-owned", ownership_tag; "sol-service", function_name ]
+let workspace_label () =
+  Sol_cli_workspace.current_name ()
+  |> String.map (function
+    | ('a' .. 'z' | '0' .. '9' | '-' | '_' | '.') as c -> c
+    | 'A' .. 'Z' as c -> Char.lowercase_ascii c
+    | _ -> '-')
+  |> fun value -> if String.length value > 63 then String.sub value 0 63 else value
+;;
+
+let tags ~function_name =
+  [ "sol-owned", ownership_tag
+  ; "sol-service", function_name
+  ; "sol-workspace", workspace_label ()
+  ]
+;;
+
+let workspace_matches tags =
+  match List.assoc_opt "sol-workspace" tags with
+  | Some workspace -> String.equal workspace (workspace_label ())
+  | None -> true
+;;
 
 let tag_string tags =
   tags |> List.map (fun (key, value) -> key ^ "=" ^ value) |> String.concat ","
@@ -171,6 +191,7 @@ let owns_queue (r : request) ~function_name ~queue_url =
   if
     List.assoc_opt "sol-owned" tags = Some ownership_tag
     && List.assoc_opt "sol-service" tags = Some function_name
+    && workspace_matches tags
   then Ok ()
   else
     Error
@@ -270,6 +291,7 @@ let ensure_function_owned (r : request) ~function_name ~existing =
     if
       List.assoc_opt "sol-owned" tags = Some ownership_tag
       && List.assoc_opt "sol-service" tags = Some function_name
+      && workspace_matches tags
     then Ok ()
     else
       Error
