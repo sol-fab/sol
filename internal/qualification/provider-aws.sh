@@ -68,7 +68,7 @@ hook_aws_app_bootstrap_deploy() {
   # Deliberately not local: the transaction hook re-reads the namespaces the deploy
   # was expected to enter, which is the same set this step deployed into.
   deploy_namespaces="$APP_NS $WORKER_NS"
-  if app_unit_addresses | grep -q '^app/demo_ts/'; then
+  if app_unit_addresses | grep -qE '^(app/)?demo_ts/'; then
     deploy_namespaces="$deploy_namespaces $TS_APP_NS"
   fi
   say "deploy-substrate"
@@ -194,7 +194,7 @@ hook_aws_app_transaction_primary() {
 # The contract selects both languages. Drive the TypeScript order path after the
 # OCaml transaction; the same producer requires its transcript as B1 evidence.
 hook_aws_app_transaction_secondary() {
-  if ! app_unit_addresses | grep -q '^app/demo_ts/'; then
+  if ! app_unit_addresses | grep -qE '^(app/)?demo_ts/'; then
     # The producer requires the TS transcript, so an OCaml-only target cannot
     # emit a passing record; the harness does not invent a TS deployment here.
     say "the target selects no TypeScript application unit; the producer will refuse the missing B1 evidence"
