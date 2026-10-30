@@ -140,7 +140,10 @@ Terraform-owned binding for this identity is the broker CA read: the deploy
 projects the chart's `redpanda-default-cert` into consumer namespaces, so the
 platform module binds a dedicated `sol-kafka-ca-reader` Role — exactly `get` on
 that one Secret in `redpanda` — to the same group. The broad `sol-deploy` role
-is never bound in the platform's namespaces. Once the role
+is never bound in the platform's namespaces: a cluster
+`ValidatingAdmissionPolicy` allows the deploy group to create RoleBindings only
+in namespaces labelled `sol.io/workload-namespace=true`, and only for the two
+ClusterRoles the deployment contract owns. Once the role
 exists and `deploy_role_arn` is set, `sol deploy`'s output prints the
 command to run — Sol does not write your kubeconfig or the target file for
 you (AUDIT-072: Sol owns the IAM policy contract, not your local kubeconfig
