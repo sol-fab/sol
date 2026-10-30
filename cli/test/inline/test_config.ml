@@ -1345,6 +1345,28 @@ let test_ecr_repositories_follow_dockerfiles () =
       (ecr_repositories_of_workspace ()))
 ;;
 
+let test_unknown_destroy_retention_is_refused_at_prepare () =
+  with_temp_dir (fun () ->
+    write "sol.yml" "target:\n  base_domain: example.test\n";
+    Targets_fixture.write
+      ~target:"prod/gcp/us-central1"
+      "target:\n  destroy_retention: keep-everything\n";
+    match Sol_cli_config.load_for_target ~target:"prod/gcp/us-central1" with
+    | Error e -> Windtrap.fail (Sol_cli_config.error_to_string e)
+    | Ok config ->
+      let target =
+        { config.Sol_cli_config.target with
+          Sol_cli_config.destroy_retention = Some "keep-everything"
+        }
+      in
+      (match Sol_cli_provider_capabilities.validate_target target.provider target with
+       | Error message ->
+         Windtrap.is_true
+           ~msg:"the refusal names the invalid value"
+           (Sol_cli_string.contains ~needle:"keep-everything" message)
+       | Ok () -> Windtrap.fail "an unknown destroy_retention was accepted at prepare"))
+;;
+
 let test_gcs_soft_delete_follows_destroy_retention () =
   let soft_delete ~target ~retention =
     with_temp_dir (fun () ->
@@ -2280,6 +2302,10 @@ let%test "sol.yml: ECR repositories: no app/ is empty (INFRA-074)" =
 
 let%test "sol.yml: ECR repositories follow Dockerfiles (INFRA-074)" =
   test_ecr_repositories_follow_dockerfiles ()
+;;
+
+let%test "sol.yml: an unknown destroy_retention is refused at prepare" =
+  test_unknown_destroy_retention_is_refused_at_prepare ()
 ;;
 
 let%test "sol.yml: destroy_retention survives the merge" =
