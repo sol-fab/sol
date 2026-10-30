@@ -139,24 +139,26 @@ module Make (T : Sol_task.TASK) = struct
       Printf.eprintf "sol-task: Pub/Sub push listening on :%d\n%!" actual_port;
       let server = Cohttp_eio.Server.make ~callback () in
       let server_stop, server_stop_r = Eio.Promise.create () in
-      (match stop with
-       | Some external_stop ->
-         Eio.Fiber.fork_daemon ~sw (fun () ->
-           Eio.Promise.await external_stop;
-           Eio.Promise.resolve server_stop_r ();
-           `Stop_daemon)
-       | None -> Sol_runtime.install_signal_handler ~sw server_stop_r);
-      Eio.Fiber.first
-        (fun () ->
-           Cohttp_eio.Server.run
-             ~stop:server_stop
-             ~on_error:(fun exn ->
-               Printf.eprintf
-                 "sol-task: Pub/Sub transport error: %s\n%!"
-                 (Printexc.to_string exn))
-             socket
-             server)
-        (fun () -> Eio.Promise.await server_stop));
+      (* Always install the signal handler, even when a caller supplies its own stop
+         promise. `Server.run ~stop` stops accepting and drains its connection fibers;
+         racing it against an immediate `await stop` used to cancel every in-flight
+         Pub/Sub handler instead of letting it answer. *)
+      Sol_runtime.install_signal_handler ~sw server_stop_r;
+      Option.iter
+        (fun external_stop ->
+           Eio.Fiber.fork_daemon ~sw (fun () ->
+             Eio.Promise.await external_stop;
+             ignore (Eio.Promise.try_resolve server_stop_r ());
+             `Stop_daemon))
+        stop;
+      Cohttp_eio.Server.run
+        ~stop:server_stop
+        ~on_error:(fun exn ->
+          Printf.eprintf
+            "sol-task: Pub/Sub transport error: %s\n%!"
+            (Printexc.to_string exn))
+        socket
+        server);
     Ok ()
   ;;
 
