@@ -697,7 +697,8 @@ let test_target_observability_backend_parsed () =
       {|
 target:
   base_domain: pluto.example.com
-  observability_backend: self_hosted_durable
+  observability_backend: external
+  observability_traces_url: https://otlp.example.com/v1/traces
 |};
     match Sol_cli_config.load_for_target ~target:"prod/aws/us-east-1" with
     | Error e -> Windtrap.fail (Sol_cli_config.error_to_string e)
@@ -705,8 +706,12 @@ target:
       let target = cfg.target in
       check_str
         "observability_backend"
-        "self_hosted_durable"
-        (Option.get target.observability_backend))
+        "external"
+        (Option.get target.observability_backend);
+      check_str
+        "observability_traces_url"
+        "https://otlp.example.com/v1/traces"
+        (Option.get target.observability_traces_url))
 ;;
 
 let test_target_alert_delivery_parsed () =

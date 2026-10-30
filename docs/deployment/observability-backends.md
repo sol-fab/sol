@@ -33,6 +33,22 @@ local Loki are skipped since there's nothing local left to browse; Prometheus
 itself keeps running because it's the thing doing the scraping, just with a
 couple hours of local retention instead of the usual 15 days.
 
+The target file also names the OTLP/HTTP trace endpoint the workloads receive as
+`TEMPO_URL`; it is a target contract, not an application-level override:
+
+```yaml
+target:
+  observability_backend: external
+  observability_traces_url: https://otlp.example.com/v1/traces
+```
+
+If `observability_backend: external` is declared without
+`observability_traces_url`, workloads receive an empty `TEMPO_URL`, which disables
+tracing instead of sending spans to the absent in-cluster Tempo. Set the endpoint
+to a hosted Grafana Tempo, Datadog OTLP intake, or another OTLP/HTTP-compatible
+backend. The URL is recorded in the deployment config, so do not embed credentials
+in it; header-based authentication is not yet part of the workload trace contract.
+
 ```hcl
 observability_backend                = "external"
 external_loki_url                    = "https://logs-prod-000.grafana.net/loki/api/v1/push"

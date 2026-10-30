@@ -20,6 +20,7 @@ let target ?(kube_context = Some "prod-us-east-1") ?kubeconfig () : Sol_cli_conf
   ; kubeconfig
   ; terraform_var_file = None
   ; observability_backend = None
+  ; observability_traces_url = None
   ; destroy_retention = None
   ; alert_receiver_type = None
   ; alert_receiver_url = None

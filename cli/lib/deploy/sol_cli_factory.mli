@@ -15,6 +15,7 @@ val plan_of_services
   -> ?target:string
   -> database:Sol_cli_resource_binding.postgres
   -> ?kafka:Sol_cli_resource_binding.kafka
+  -> ?telemetry_env:(string * string) list
   -> Sol_cli_manifest.service list
   -> (Sol_cli_deployment_plan.t, string) result
 

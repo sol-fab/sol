@@ -15,6 +15,7 @@ let plan_of_services
       ?target
       ~database
       ?kafka
+      ?(telemetry_env = [])
       services
   =
   Sol_cli_deployment_plan.of_services_result
@@ -29,6 +30,7 @@ let plan_of_services
     ?target
     ~database
     ?kafka
+    ~telemetry_env
     services
   |> Result.map_error Sol_cli_deployment_plan.plan_error_to_string
 ;;

@@ -12,6 +12,7 @@ let target : Sol_cli_config.target =
   ; kubeconfig = None
   ; terraform_var_file = None
   ; observability_backend = None
+  ; observability_traces_url = None
   ; destroy_retention = None
   ; alert_receiver_type = None
   ; alert_receiver_url = None
