@@ -185,9 +185,9 @@ let observe_retention ~retention ~pre_destroy =
        Retention_not_required
          "none declared, and there is no GCP snapshot surface to observe -- Cloud SQL \
           deletes its backups together with the instance (no final backup is requested), \
-          and the applied storage buckets have no soft-delete retention (retention 0 or \
-          absent, INFRA-077), so the verified absence of the instance is the whole \
-          guarantee (destroy_retention = none)"
+          and the observability buckets were created with soft delete off (applied \
+          retention 0 or absent, INFRA-077), so the verified absence of the instance is \
+          the whole guarantee (destroy_retention = none)"
      | applied ->
        Retention_unknown
          (Printf.sprintf
