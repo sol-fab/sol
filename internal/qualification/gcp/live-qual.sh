@@ -285,6 +285,8 @@ $(production_target_fields)
         fulfilment_worker: {}
         order_svc: {}
         fulfillment_worker: {}
+        probe_fn: {omit: true}
+        probe_ts_fn: {omit: true}
         charge_svc:
           omit: true
         notify_worker:
@@ -1742,6 +1744,8 @@ $(production_target_fields)
         fulfilment_worker: {}
         order_svc: {}
         fulfillment_worker: {}
+        probe_fn: {omit: true}
+        probe_ts_fn: {omit: true}
         charge_svc:
           omit: true
         notify_worker:
