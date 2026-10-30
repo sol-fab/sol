@@ -189,7 +189,7 @@ A failed commit is **not** treated like a handler failure. The side effect in `W
 
 - The commit failure is logged (`Warn`, or `Error` if fatal) and counted as `sol_worker_messages_total{status="ack_failed"}`.
 - If `Kafka_error.is_fatal e` — a broken consumer, not a transient hiccup — it escalates to an `Error`, stopping the worker the same way a `Fail` does.
-- Otherwise, the worker continues. The offset was never committed, so the message remains eligible for natural redelivery — no immediate duplicate side effect, no lost message.
+- Otherwise, the worker **stops after the failed commit** and lets the broker redeliver the uncommitted message. A later successful commit would be cumulative and supersede the failed offset, so continuing would silently lose the fact; stopping preserves at-least-once delivery and exposes the retry through the normal consumer loop.
 
 ### Acknowledgement ownership invariant
 

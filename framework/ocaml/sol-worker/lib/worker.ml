@@ -167,7 +167,10 @@ let handle_ack
           else
             "sol-worker: ack failed, offset not committed; message eligible for \
              redelivery"));
-    if Kafka.Error.is_fatal e then Kafka.Consumer.Error e else advance ()
+    (* At-least-once: a failed commit must not be superseded by a later cumulative
+       commit. Stop the consumer and let the broker redeliver the uncommitted message;
+       advancing here would make the failure silent and lose the fact after restart. *)
+    if Kafka.Error.is_fatal e then Kafka.Consumer.Error e else Kafka.Consumer.Stop
 ;;
 
 module Make_with_test_seam (W : WORKER) = struct
