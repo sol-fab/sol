@@ -188,11 +188,19 @@ SOL_TASK_RUNTIME=local POSTGRES_URL="$POSTGRES_URL" \
   dune exec serverless/task_consumer_ocaml/bin/main.exe
 ```
 
+The TypeScript host uses the published `@sol-fab/jobs` queue and the same
+shared envelope module:
+
+```sh
+cd serverless/task_consumer_ts
+npm install && npm run build
+POSTGRES_URL="$POSTGRES_URL" SOL_TASK_MAX_JOBS=1 node dist/local_main.js
+```
+
 `Ack` leaves the row `completed`; `Retry` uses the existing `sol-jobs` backoff
 and leaves a retained `failed` row after the retry budget. A repeated
-`--idempotency-key` enqueue is a no-op. This is the same handler module used by
-Lambda and Pub/Sub; it is a local test harness, not a provider-emulated SQS or
-Pub/Sub service.
+`--idempotency-key` enqueue is a no-op. These are local test harnesses, not
+provider-emulated SQS or Pub/Sub services.
 
 ### GCP Pub/Sub consumers
 
@@ -254,7 +262,7 @@ a provider subscription.
 | Surface | Verified | Boundary |
 |---|---|---|
 | Local `-svc`/`-worker`/`-fn` | order flows, Kafka/Postgres workers, local probe Jobs | no local AWS/GCP provider emulation |
-| Local tasks | `sol-task.local` via `SOL_TASK_RUNTIME=local`: Ack/completed, duplicate no-op, Retry/failed row | no local SQS/Pub/Sub emulation |
+| Local tasks | OCaml `sol-task.local` and TypeScript `@sol-fab/jobs` host: Ack/completed, duplicate no-op, Retry/failed row | no local SQS/Pub/Sub emulation |
 | AWS `-fn` | Lambda invoke/rollback/destroy | no event input or Sol-created schedule |
 | AWS tasks | SQS-triggered Lambda Ack/Retry/DLQ; Lambda-to-SQS producer is **not** a Sol-managed contract | enqueue with `sol task aws enqueue` or application code; SQS-backed `-worker` is not supported |
 | GCP `-fn` | Cloud Run Jobs execute/rollback/destroy | no alias, event payload, schedule, or response body |
