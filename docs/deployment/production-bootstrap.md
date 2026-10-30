@@ -143,7 +143,15 @@ that one Secret in `redpanda` — to the same group. The broad `sol-deploy` role
 is never bound in the platform's namespaces: a cluster
 `ValidatingAdmissionPolicy` allows the deploy group to create RoleBindings only
 in namespaces labelled `sol.io/workload-namespace=true`, and only for the two
-ClusterRoles the deployment contract owns. Once the role
+ClusterRoles the deployment contract owns. Existing application namespaces created
+before this policy was introduced do not carry the label and must be relabelled once
+by an operator with namespace-update authority:
+
+```
+kubectl label namespace <namespace> sol.io/workload-namespace=true
+```
+
+Once the role
 exists and `deploy_role_arn` is set, `sol deploy`'s output prints the
 command to run — Sol does not write your kubeconfig or the target file for
 you (AUDIT-072: Sol owns the IAM policy contract, not your local kubeconfig
