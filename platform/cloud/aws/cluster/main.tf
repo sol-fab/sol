@@ -344,6 +344,21 @@ data "aws_iam_policy_document" "cert_manager" {
   statement {
     actions   = ["route53:ChangeResourceRecordSets", "route53:ListResourceRecordSets"]
     resources = [local.route53_zone_arn]
+
+    condition {
+      test     = "ForAllValues:StringLike"
+      variable = "route53:ChangeResourceRecordSetsNormalizedRecordNames"
+      values = [
+        "_acme-challenge.${var.base_domain}",
+        "_acme-challenge.*.${var.base_domain}",
+      ]
+    }
+
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "route53:ChangeResourceRecordSetsRecordTypes"
+      values   = ["TXT"]
+    }
   }
   statement {
     actions   = ["route53:ListHostedZonesByName"]
