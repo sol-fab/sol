@@ -609,6 +609,31 @@ let test_no_reconciliation_is_claimed_when_there_is_none () =
        calls.reports)
 ;;
 
+let test_failed_release_does_not_prepare () =
+  let deps, calls =
+    fake_deps
+      ~state:(Ok (show_json_resources gcp_cluster))
+      ~release_workloads:(fun () ->
+        Sol_cli_workload_scope.Workloads_unestablished
+          { namespace = "pluto-payments"
+          ; kind = None
+          ; operation = "releasing"
+          ; reason = "recorded UID did not match"
+          })
+      ()
+  in
+  let outcome = execute ~deps in
+  (match outcome with
+   | Destroy_failed { failure = Release_unestablished _; _ } -> ()
+   | _ -> Windtrap.fail "an unreleased workload must stop destroy");
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"the deletion guards were not lowered before the release failed"
+    0
+    (List.length calls.prepare);
+  Windtrap.equal Windtrap.int ~msg:"the substrate was not destroyed" 0 calls.substrate
+;;
+
 let test_half_built_state_is_destroyable () =
   let state = show_json_resources gcp_cluster in
   let deps, calls =
@@ -3304,6 +3329,10 @@ let%test "execute: a reconciled state that cannot be re-read degrades" =
 
 let%test "execute: the cluster contents are classified" =
   test_the_cluster_contents_are_classified ()
+;;
+
+let%test "execute: failed release does not prepare" =
+  test_failed_release_does_not_prepare ()
 ;;
 
 let%test "execute: half-built state" = test_half_built_state_is_destroyable ()
