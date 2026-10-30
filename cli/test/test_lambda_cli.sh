@@ -14,7 +14,12 @@ if [[ "$args" == *"lambda list-functions"* ]]; then
 elif [[ "$args" == *"lambda create-function"* ]]; then touch "$FAKE_AWS_STATE/function"; printf '{}\n'
 elif [[ "$args" == *"lambda update-function-code"* ]]; then printf '{}\n'
 elif [[ "$args" == *"lambda wait function-updated"* ]]; then printf '{}\n'
-elif [[ "$args" == *"lambda publish-version"* ]]; then printf '{"Version":"1"}\n'
+elif [[ "$args" == *"lambda publish-version"* ]]; then
+  if [[ -n "${FAKE_AWS_PUBLISH_FAIL:-}" ]]; then
+    printf 'An error occurred (ServiceException) when calling the PublishVersion operation\n' >&2
+    exit 254
+  fi
+  printf '{"Version":"1"}\n'
 elif [[ "$args" == *"lambda get-alias"* ]]; then if [[ -f "$FAKE_AWS_STATE/alias" ]]; then printf '{"FunctionVersion":"1"}\n'; else printf 'ResourceNotFoundException: Alias not found.\n' >&2; exit 254; fi
 elif [[ "$args" == *"lambda create-alias"* || "$args" == *"lambda update-alias"* ]]; then touch "$FAKE_AWS_STATE/alias"; printf '{}\n'
 elif [[ "$args" == *"lambda get-function-url-config"* ]]; then printf '{"FunctionUrl":"https://lambda.example/"}\n'
@@ -61,5 +66,14 @@ if FAKE_AWS_DELETE_FAIL=1 "$sol" lambda destroy --profile test --region us-east-
   exit 1
 fi
 FAKE_AWS_URL_ABSENT=1 "$sol" lambda destroy --profile test --region us-east-1 --service checkout_svc --record "$work/release.json" > /dev/null
+[[ ! -f "$work/state/function" ]]
+# A first deploy that creates the function and then fails to publish must still leave a
+# destroyable ownership record.
+if FAKE_AWS_PUBLISH_FAIL=1 "$sol" lambda deploy "${common[@]}" --caller checkout/checkout_svc=123 --record "$work/partial.json" > /dev/null 2>&1; then
+  echo "an injected publish failure was reported as a successful deploy" >&2
+  exit 1
+fi
+[[ -f "$work/partial.json" ]]
+"$sol" lambda destroy --profile test --region us-east-1 --service checkout_svc --record "$work/partial.json" > /dev/null
 [[ ! -f "$work/state/function" ]]
 echo "lambda CLI fake-provider test passed"
