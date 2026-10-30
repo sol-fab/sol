@@ -77,22 +77,22 @@ elif [[ "$args" == *"pubsub topics publish"* ]]; then
 elif [[ "$args" == *"pubsub subscriptions create"* ]]; then
   if [[ "${FAKE_SUBSCRIPTION_FAIL:-0}" == 1 ]]; then echo "simulated subscription failure" >&2; exit 1; fi
   name=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "create" ]]; then j=$((i+1)); name="${!j}"; fi; done
-  endpoint=""; attempts=""; for arg in "$@"; do case "$arg" in --push-endpoint=*) endpoint="${arg#--push-endpoint=}";; --max-delivery-attempts=*) attempts="${arg#--max-delivery-attempts=}";; esac; done
-  printf '%s\n%s\n' "$endpoint" "$attempts" > "$state/sub-$name"
+  endpoint=""; attempts=""; sa=""; for arg in "$@"; do case "$arg" in --push-endpoint=*) endpoint="${arg#--push-endpoint=}";; --max-delivery-attempts=*) attempts="${arg#--max-delivery-attempts=}";; --push-auth-service-account=*) sa="${arg#--push-auth-service-account=}";; esac; done
+  printf '%s\n%s\n%s\n' "$endpoint" "$attempts" "$sa" > "$state/sub-$name"
   printf 'created\n'
 elif [[ "$args" == *"pubsub subscriptions describe"* ]]; then
   name=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "describe" ]]; then j=$((i+1)); name="${!j}"; fi; done
   [[ -f "$state/sub-$name" ]] || { echo "NOT_FOUND: subscription" >&2; exit 1; }
-  endpoint="$(sed -n 1p "$state/sub-$name")"; attempts="$(sed -n 2p "$state/sub-$name")"
+  endpoint="$(sed -n 1p "$state/sub-$name")"; attempts="$(sed -n 2p "$state/sub-$name")"; sa="$(sed -n 3p "$state/sub-$name")"
   if [[ -z "$endpoint" ]]; then
     printf '{"labels":{"sol-owned":"cloud-run-task-experiment","sol-service":"checkout-task"},"ackDeadlineSeconds":10}\n'
   else
-    printf '{"labels":{"sol-owned":"cloud-run-task-experiment","sol-service":"checkout-task"},"pushConfig":{"pushEndpoint":"%s"},"deadLetterPolicy":{"maxDeliveryAttempts":%s},"ackDeadlineSeconds":60}\n' "$endpoint" "$attempts"
+    printf '{"labels":{"sol-owned":"cloud-run-task-experiment","sol-service":"checkout-task"},"pushConfig":{"pushEndpoint":"%s","oidcToken":{"serviceAccountEmail":"%s"}},"deadLetterPolicy":{"maxDeliveryAttempts":%s},"ackDeadlineSeconds":60}\n' "$endpoint" "$sa" "$attempts"
   fi
 elif [[ "$args" == *"pubsub subscriptions update"* ]]; then
   name=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "update" ]]; then j=$((i+1)); name="${!j}"; fi; done
-  endpoint=""; attempts=""; for arg in "$@"; do case "$arg" in --push-endpoint=*) endpoint="${arg#--push-endpoint=}";; --max-delivery-attempts=*) attempts="${arg#--max-delivery-attempts=}";; esac; done
-  printf '%s\n%s\n' "$endpoint" "$attempts" > "$state/sub-$name"
+  endpoint=""; attempts=""; sa=""; for arg in "$@"; do case "$arg" in --push-endpoint=*) endpoint="${arg#--push-endpoint=}";; --max-delivery-attempts=*) attempts="${arg#--max-delivery-attempts=}";; --push-auth-service-account=*) sa="${arg#--push-auth-service-account=}";; esac; done
+  printf '%s\n%s\n%s\n' "$endpoint" "$attempts" "$sa" > "$state/sub-$name"
   printf 'updated\n'
 elif [[ "$args" == *"pubsub subscriptions delete"* ]]; then
   name=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "delete" ]]; then j=$((i+1)); name="${!j}"; fi; done

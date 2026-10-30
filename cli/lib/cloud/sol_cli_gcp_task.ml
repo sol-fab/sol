@@ -676,6 +676,22 @@ let verify (r : request) ~record =
               push_endpoint
               expected.cloud_run_url))
   in
+  let push_service_account =
+    Sol_cli_json.string
+      (json_field [ "pushConfig"; "oidcToken"; "serviceAccountEmail" ] subscription)
+    |> Option.value ~default:""
+  in
+  let* () =
+    if push_service_account = expected.push_service_account
+    then Ok ()
+    else
+      Error
+        (Sol_cli_cloud_run.Unknown
+           (Printf.sprintf
+              "subscription OIDC identity is %s, recorded %s"
+              push_service_account
+              expected.push_service_account))
+  in
   let* () =
     match
       Sol_cli_json.int
