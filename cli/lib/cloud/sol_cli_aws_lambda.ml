@@ -143,6 +143,11 @@ let observed (r : request) version tags =
 let owns ~function_name tags =
   List.assoc_opt "sol-owned" tags = Some "lambda-experiment"
   && List.assoc_opt "sol-service" tags = Some function_name
+  &&
+  match List.assoc_opt "sol-workspace" tags with
+  | Some workspace ->
+    String.equal workspace (Sol_cli_aws_lambda_common.workspace_label ())
+  | None -> true
 ;;
 
 let release_json (r : release) =
@@ -258,7 +263,11 @@ let deploy (r : request) =
         ; "SOL_WORKLOAD_SUBJECT_SCHEME", "google_oidc_service_account"
         ; "AWS_LWA_PORT", "8080"
         ]
-      ~tags:[ "sol-owned", "lambda-experiment"; "sol-service", r.function_name ]
+      ~tags:
+        [ "sol-owned", "lambda-experiment"
+        ; "sol-service", r.function_name
+        ; "sol-workspace", Sol_cli_aws_lambda_common.workspace_label ()
+        ]
       ~existing
       ()
   in

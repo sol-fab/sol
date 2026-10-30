@@ -29,6 +29,7 @@ type scope =
   ; run : string list -> (output, string) result
   }
 
+val workspace_label : unit -> string
 val aws : profile:string option -> region:string -> string list -> string list
 
 (** An immutable OCI reference: [<repo>@sha256:<64 lowercase hex>]. *)
