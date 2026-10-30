@@ -846,6 +846,15 @@ module Make (H : HANDLER) = struct
                       req
                       body
                   in
+                  (* An early error response (401/404/405/503) is produced before
+                     routing/auth reads the request body. Leave those bytes unread and
+                     cohttp-eio parses the body as the next request on a keep-alive
+                     connection -- request desynchronization. Consume the bounded remainder
+                     before responding so the next read starts at a request boundary. *)
+                  if response.Response.status >= 400
+                  then
+                    ignore
+                      (read_body_limited (Http.Request.headers req) body max_body_bytes);
                   observe_request response.Response.status;
                   send_response response)
          in
