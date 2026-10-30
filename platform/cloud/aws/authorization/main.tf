@@ -224,8 +224,8 @@ locals {
   serverless_statements = {
     for unit in local.serverless_units : unit => concat(
       [
-        for requirement in local.serverless_requirements_by_unit[unit] : {
-          Sid    = "Sol${requirement.resource}"
+        for i, requirement in local.serverless_requirements_by_unit[unit] : {
+          Sid    = "SolSecret${i}"
           Effect = "Allow"
           Action = local.capability_actions[requirement.capability]
           Resource = [
@@ -243,8 +243,7 @@ locals {
             "logs:PutLogEvents",
           ]
           Resource = [
-            "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/lambda/sol-${var.environment}-${unit}:*",
-            "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/lambda/sol-${var.environment}-${unit}",
+            "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/lambda/*"
           ]
         }
       ]
@@ -307,7 +306,7 @@ data "aws_iam_policy_document" "workload_trust" {
 
 resource "aws_iam_role" "workload" {
   for_each             = local.role_units
-  name                 = "sol-${var.environment}-${each.value}"
+  name                 = "sol-${var.environment}-${replace(each.value, "/", "-")}"
   path                 = "/${local.role_path}"
   permissions_boundary = aws_iam_policy.workload_boundary.arn
   assume_role_policy   = data.aws_iam_policy_document.workload_trust.json

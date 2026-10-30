@@ -108,8 +108,9 @@ event model and AWS-native workload identity are not yet part of Sol's contract.
 
 The `-fn` container uses the framework's `Fn.Lambda` runtime contract: it serves
 the Lambda runtime API and answers each invocation with `{"status":"ok"}` on a
-successful run. The image must be an immutable ECR digest and the execution role
-must already exist. Sol creates neither the ECR repository nor the role.
+successful run. The image must be an immutable ECR digest. Sol provisions the
+per-unit execution role through the target's authorization root; the ECR repository
+is not created by Sol.
 
 ```yaml
 production:
@@ -118,7 +119,6 @@ production:
       execution: serverless
       aws:
         profile: production
-        lambda_role_arn: arn:aws:iam::123456789012:role/sol-lambda-fn-exec
 ```
 
 ```text
@@ -170,11 +170,11 @@ production:
       execution: serverless
       aws:
         profile: production
-        lambda_role_arn: arn:aws:iam::123456789012:role/sol-lambda-exec
         serverless_callers: checkout/checkout_svc=1234567890
 ```
 
-The target field names are explicit; no ECR repository, role, or IAM policy is created.
+Sol provisions the unit execution role and its capability-derived IAM policy through the
+authorization root; no ECR repository is created.
 `serverless_callers` is required for a `-svc`: an empty application-authentication
 policy is refused. `sol deploy production/aws/us-east-1 --image-ref
 checkout_svc=...@sha256:...` uses the verified Lambda lifecycle and writes
