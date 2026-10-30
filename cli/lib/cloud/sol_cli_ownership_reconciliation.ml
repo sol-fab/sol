@@ -95,11 +95,10 @@ let dispositions ~entries ~state_addresses observations =
   |> List.concat_map (function
     | Sol_cli_absence.Present { resource_class; found; _ } ->
       List.map (disposition_of ~entries ~state_addresses ~resource_class) found
-    | Sol_cli_absence.Unobservable { resource_class; reason; _ } ->
+    | Sol_cli_absence.Unobservable { resource_class; reason; _ }
+    | Sol_cli_absence.Not_attributable { resource_class; reason } ->
       [ Unresolved { resource_class; reason } ]
-    | Sol_cli_absence.Absent _
-    | Sol_cli_absence.External _
-    | Sol_cli_absence.Not_attributable _ -> [])
+    | Sol_cli_absence.Absent _ | Sol_cli_absence.External _ -> [])
 ;;
 
 let candidate = function
