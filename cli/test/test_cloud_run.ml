@@ -847,6 +847,89 @@ let test_inventory_warning_is_unknown () =
   check "warning-bearing inventory did not mutate" (not !deployed)
 ;;
 
+let test_deploy_writes_provisional_record_before_describe () =
+  let record = Filename.temp_file "sol-cloud-run-provisional-" ".json" in
+  Fun.protect
+    ~finally:(fun () ->
+      try Sys.remove record with
+      | Sys_error _ -> ())
+    (fun () ->
+       let runner =
+         { Sol_cli_cloud_run.run =
+             (fun argv ->
+               match argv with
+               | "gcloud" :: "run" :: "services" :: "list" :: _ -> Ok (out "")
+               | "gcloud" :: "run" :: "deploy" :: _ -> Ok (out "deployed")
+               | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+                 Error "describe unavailable"
+               | _ -> Error "unexpected")
+         ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+         }
+       in
+       let request = request ~record:(Some record) () in
+       (match Sol_cli_cloud_run.deploy runner request with
+        | Error (Unknown _) -> ()
+        | Error e ->
+          check ("provisional deploy " ^ Sol_cli_cloud_run.failure_to_string e) false
+        | Ok _ -> check "provisional deploy should fail its postcondition" false);
+       match Sol_cli_cloud_run.read_record ~path:record with
+       | Ok release ->
+         check "provisional record names the service" (release.service = "sol-test");
+         check "provisional record has no revision yet" (release.revision = "");
+         check "provisional record has no URL yet" (release.url = "")
+       | Error message -> check ("provisional record unreadable: " ^ message) false)
+;;
+
+let test_destroy_accepts_provisional_record () =
+  let deleted = ref false in
+  let present = ref true in
+  let runner =
+    { Sol_cli_cloud_run.run =
+        (fun argv ->
+          match argv with
+          | "gcloud" :: "run" :: "services" :: "list" :: _ ->
+            Ok (out (if !present then "sol-test" else ""))
+          | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+            Ok (out (describe_json ~revision:"rev-1" ~percent:100))
+          | "gcloud" :: "run" :: "services" :: "delete" :: _ ->
+            present := false;
+            deleted := true;
+            Ok (out "deleted")
+          | _ -> Error "unexpected")
+    ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+    }
+  in
+  let record = Filename.temp_file "sol-cloud-run-provisional-destroy-" ".json" in
+  Fun.protect
+    ~finally:(fun () ->
+      try Sys.remove record with
+      | Sys_error _ -> ())
+    (fun () ->
+       Sol_cli_cloud_run.write_record
+         ~path:record
+         { project = "sol-qualification"
+         ; region = "us-west1"
+         ; service = "sol-test"
+         ; provider_service = "sol-test"
+         ; revision = ""
+         ; url = ""
+         ; image =
+             "repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+         }
+       |> Result.get_ok;
+       match
+         Sol_cli_cloud_run.destroy
+           runner
+           ~project:"sol-qualification"
+           ~region:"us-west1"
+           ~service:"sol-test"
+           ~record
+       with
+       | Ok () -> check "a provisional record can still delete its service" !deleted
+       | Error e ->
+         check ("provisional destroy " ^ Sol_cli_cloud_run.failure_to_string e) false)
+;;
+
 let () =
   test_ingress ();
   test_provider_naming ();
@@ -871,6 +954,8 @@ let () =
   test_rollback_refuses_unreconciled_traffic_error ();
   test_verify_writes_release_record ();
   test_deploy_refuses_unowned_service ();
+  test_deploy_writes_provisional_record_before_describe ();
+  test_destroy_accepts_provisional_record ();
   Printf.printf "%d passed, %d failed\n" !passed !failed;
   if !failed > 0 then exit 1
 ;;

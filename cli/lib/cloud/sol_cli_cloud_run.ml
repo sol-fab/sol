@@ -391,6 +391,17 @@ let write_record ~path release =
   Sol_cli_fs.write_atomic ~perm:0o600 path (Yojson.Safe.to_string json ^ "\n")
 ;;
 
+let provisional (request : request) =
+  { project = request.project
+  ; region = request.region
+  ; service = request.service
+  ; provider_service = request.provider_service
+  ; revision = ""
+  ; url = ""
+  ; image = request.image
+  }
+;;
+
 let read_record ~path =
   try
     let text = In_channel.with_open_bin path In_channel.input_all in
@@ -463,6 +474,17 @@ let deploy runner (request : request) =
     in
     Error (Partial (message, observed))
   | Ok _ ->
+    let* () =
+      match request.record with
+      | None -> Ok ()
+      | Some path ->
+        write_record ~path (provisional request)
+        |> Result.map_error (fun message ->
+          Partial
+            ( "the service was deployed but its ownership record could not be written: "
+              ^ message
+            , None ))
+    in
     (match describe runner request with
      | Error (`Unknown message) ->
        Error (Unknown ("could not read the deployed service: " ^ message))
@@ -480,7 +502,20 @@ let deploy runner (request : request) =
          then Ok ()
          else Error (Unknown "the deployed revision is not serving 100% of traffic")
        in
-       Ok (release request observed))
+       let release = release request observed in
+       let* () =
+         match request.record with
+         | None -> Ok ()
+         | Some path ->
+           write_record ~path release
+           |> Result.map_error (fun message ->
+             Partial
+               ( "the service was deployed but its final ownership record could not be \
+                  written: "
+                 ^ message
+               , Some observed ))
+       in
+       Ok release)
 ;;
 
 let verify runner (request : request) ~token =
@@ -656,8 +691,18 @@ let destroy runner ~project ~region ~service ~record =
                 "live service lacks this adapter's ownership labels; refusing to delete \
                  it")
        in
+       let provisional = expected.revision = "" && expected.url = "" in
        let* () =
-         if
+         if provisional
+         then
+           if expected.image = "" || observed.image = Some expected.image
+           then Ok ()
+           else
+             Error
+               (Refused
+                  "live service image does not match the provisional ownership record; \
+                   refusing to delete a different deployment")
+         else if
            expected.revision = observed.revision
            && expected.url = observed.url
            && observed.image = Some expected.image
