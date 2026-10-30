@@ -69,6 +69,7 @@ let resource_of_json json =
       ; soft_delete_retention_seconds =
           (match Sol_cli_json.field [ "soft_delete_policy" ] values with
            | `List (policy :: _) -> int_attr "retention_duration_seconds" policy
+           | `Assoc _ as policy -> int_attr "retention_duration_seconds" policy
            | _ -> None)
       }
   | None, _ ->
