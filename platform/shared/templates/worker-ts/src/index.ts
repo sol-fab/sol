@@ -102,26 +102,6 @@ async function main() {
     health.onPoll();
   });
 
-  await consumer.run({
-    eachMessage: wrapEachMessage({
-      decode: decodePayload,
-      decodeErrorCounter: decodeErrorsTotal,
-      onDecodeError: (err) => {
-        log("error", "undecodable message, dead-lettered", { error: String(err) });
-      },
-      dlq: {
-        publisher: {
-          publish: async (record) => {
-            await producer.send({ topic: record.topic, messages: [record] });
-          },
-        },
-        groupId: GROUP_ID,
-        sourceTopic: TOPIC_NAME,
-      },
-      handler: ({ message }) => handle(message),
-    }),
-  });
-
   const pushgatewayUrl = setting("PUSHGATEWAY_URL");
   const pushInterval = pushgatewayUrl
     ? setInterval(() => {
@@ -131,6 +111,9 @@ async function main() {
       }, 3000)
     : undefined;
 
+  // Start the supervised lifecycle and crash listener before the consumer starts. A
+  // non-retriable join/sync failure emits CRASH before `consumer.run` resolves; installing
+  // the listener afterwards misses it and leaves the process running without a consumer.
   const lifecycle = runWorker({
     drain: () => consumer.disconnect(),
     onDrainStart: () => {
@@ -152,6 +135,26 @@ async function main() {
       console.error(`[{{binary}}] handler failed a fact (fail-stop): ${reason}`);
       return lifecycle.shutdown();
     },
+  });
+
+  await consumer.run({
+    eachMessage: wrapEachMessage({
+      decode: decodePayload,
+      decodeErrorCounter: decodeErrorsTotal,
+      onDecodeError: (err) => {
+        log("error", "undecodable message, dead-lettered", { error: String(err) });
+      },
+      dlq: {
+        publisher: {
+          publish: async (record) => {
+            await producer.send({ topic: record.topic, messages: [record] });
+          },
+        },
+        groupId: GROUP_ID,
+        sourceTopic: TOPIC_NAME,
+      },
+      handler: ({ message }) => handle(message),
+    }),
   });
 }
 
