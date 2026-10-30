@@ -700,13 +700,13 @@ let destroy runner ~project ~region ~service ~record =
        let* () =
          if provisional
          then
-           if expected.image = "" || observed.image = Some expected.image
+           if expected.image <> "" && observed.image = Some expected.image
            then Ok ()
            else
              Error
                (Refused
-                  "live service image does not match the provisional ownership record; \
-                   refusing to delete a different deployment")
+                  "the provisional ownership record has no image, or its image does not \
+                   match the live service; refusing to delete a different deployment")
          else if
            expected.revision = observed.revision
            && expected.url = observed.url
