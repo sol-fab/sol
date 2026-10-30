@@ -117,7 +117,11 @@ let provisioner_kubeconfig ?role_arn ~region outputs f =
            ])
     with
     | Ok _ -> Ok (f env)
-    | Error _ -> Error "could not establish ephemeral provisioner cluster access")
+    | Error error ->
+      Error
+        (Printf.sprintf
+           "could not establish ephemeral provisioner cluster access: %s"
+           (Sol_cli_process.error_to_string error)))
 ;;
 
 let deploy_access ~region (outputs : aws_outputs) ~deploy_role_arn () =
