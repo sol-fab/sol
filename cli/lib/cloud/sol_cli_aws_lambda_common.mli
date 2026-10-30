@@ -35,6 +35,7 @@ val aws : profile:string option -> region:string -> string list -> string list
 val valid_image : string -> (unit, failure) result
 
 val inventory : scope -> (string list, string) result
+val resource_is_absent : string -> bool
 
 val describe
   :  scope

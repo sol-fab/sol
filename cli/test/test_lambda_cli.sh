@@ -21,8 +21,18 @@ elif [[ "$args" == *"lambda get-function-url-config"* ]]; then printf '{"Functio
 elif [[ "$args" == *"lambda create-function-url-config"* ]]; then printf '{}\n'
 elif [[ "$args" == *"lambda remove-permission"* || "$args" == *"lambda add-permission"* ]]; then printf '{}\n'
 elif [[ "$args" == *"lambda get-function"* ]]; then printf '{"Configuration":{"Version":"1","FunctionArn":"arn:aws:lambda:us-east-1:123:function:checkout-svc"},"Tags":{"sol-owned":"lambda-experiment","sol-service":"checkout-svc"}}\n'
-elif [[ "$args" == *"lambda delete-function-url-config"* ]]; then printf '{}\n'
-elif [[ "$args" == *"lambda delete-function"* ]]; then rm -f "$FAKE_AWS_STATE/function" "$FAKE_AWS_STATE/alias"; printf '{}\n'
+elif [[ "$args" == *"lambda delete-function-url-config"* ]]; then
+  if [[ -n "${FAKE_AWS_URL_ABSENT:-}" ]]; then
+    printf 'An error occurred (ResourceNotFoundException) when calling the DeleteFunctionUrlConfig operation\n' >&2
+    exit 254
+  fi
+  printf '{}\n'
+elif [[ "$args" == *"lambda delete-function"* ]]; then
+  if [[ -n "${FAKE_AWS_DELETE_FAIL:-}" ]]; then
+    printf 'An error occurred (ServiceException) when calling the DeleteFunction operation\n' >&2
+    exit 254
+  fi
+  rm -f "$FAKE_AWS_STATE/function" "$FAKE_AWS_STATE/alias"; printf '{}\n'
 else printf '{}\n'; fi
 FAKE
 cat > "$work/bin/curl" <<'FAKE'
@@ -44,6 +54,12 @@ grep -q 'lambda create-function' "$FAKE_AWS_LOG"
 "$sol" lambda verify "${common[@]}" --token-file "$work/token" > "$work/verify"
 grep -q '"version":"1"' "$work/verify"
 "$sol" lambda rollback "${common[@]}" --to-version 1 --token-file "$work/token" > "$work/rollback"
-"$sol" lambda destroy --profile test --region us-east-1 --service checkout_svc --record "$work/release.json" > /dev/null
+# A partial destroy that already removed the URL config must be retryable: the second
+# delete-function-url-config reports ResourceNotFoundException and must not block deletion.
+if FAKE_AWS_DELETE_FAIL=1 "$sol" lambda destroy --profile test --region us-east-1 --service checkout_svc --record "$work/release.json" > /dev/null 2>&1; then
+  echo "an injected function-delete failure was reported as successful" >&2
+  exit 1
+fi
+FAKE_AWS_URL_ABSENT=1 "$sol" lambda destroy --profile test --region us-east-1 --service checkout_svc --record "$work/release.json" > /dev/null
 [[ ! -f "$work/state/function" ]]
 echo "lambda CLI fake-provider test passed"
