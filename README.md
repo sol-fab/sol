@@ -8,7 +8,9 @@ Sol is an open-source software factory for backend systems. Write domain logic i
 
 Sol's promise is a PaaS-simple deployment experience on infrastructure you own.
 The factory is Sol's; the cloud account, registry, database and DNS are yours, and
-stopping use of Sol does not stop what it deployed. There is no Sol-operated
+stopping use of Sol does not stop what it deployed. Workloads can run on a
+Kubernetes target Sol manages, or on provider-managed serverless compute
+(AWS Lambda and GCP Cloud Run) with the same application model. There is no Sol-operated
 control plane in the core product: everything on the happy path runs from the Sol
 CLI, your own CI, or resources Sol installs into your account. Setup is designed
 to happen once per account; after that, deployment is essentially
@@ -82,9 +84,13 @@ This is the **local** path, and it needs no cloud account. Deploying the same
 workspace to your own AWS or GCP runs `sol deploy <env>/<provider>/<region>`: the
 first run observes the account's durable installation, sets it up in place if it is
 missing, reconciles the environment, establishes its own cluster access as the
-target's deploy identity, and continues into the application. The
-**[installation and first-deploy guide](docs/guides/installation.md)** is that path
-end to end, from an empty account to a live endpoint.
+target's deploy identity, and continues into the application. A target can also
+select `execution: serverless` to deploy `-svc` and `-fn` units to AWS Lambda or
+GCP Cloud Run/Cloud Run Jobs without a Kubernetes cluster; the
+**[installation and first-deploy guide](docs/guides/installation.md)** is the
+Kubernetes path end to end, and
+**[serverless execution](docs/deployment/serverless-experimental.md)** covers the
+managed-compute path and its current limits.
 The intended first-run flow, its current status, and what stays your
 responsibility are in **[The Sol developer experience](docs/developer-experience.md)**.
 
@@ -137,7 +143,7 @@ local-substrate walkthrough, including the exact dependency commands.
 - **HTTP** — REST routing, middleware, request/response types
 - **Storage** — PostgreSQL via caqti, typed table functor, migrations
 - **Observability** — structured logs to Loki, metrics to Prometheus, Grafana dashboards, wired automatically
-- **Deployment** — Kubernetes manifests, Terraform for cloud infrastructure, Argo CD for GitOps, CI workflow references
+- **Deployment** — Kubernetes manifests, Terraform for cloud infrastructure, Argo CD for GitOps, CI workflow references, and target-scoped serverless compute (AWS Lambda, GCP Cloud Run/Cloud Run Jobs)
 
 You write domain logic. Sol handles the factory work: scaffold, build, package, deploy, observe, inspect, roll back.
 
@@ -161,6 +167,23 @@ myapp/
 `-svc` is a REST API service, `-worker` is a Kafka consumer, `-fn` is a scheduled function — the three primitives every domain team builds with. Teams don't share code across domains; they publish and subscribe to typed Kafka events, enforced at the wire level by Sol's schema registry integration.
 
 See [Product Architecture](docs/architecture/product-architecture.md) for the full factory model and design principles.
+
+### Serverless execution
+
+A target with `execution: serverless` deploys the same `-svc` and `-fn`
+declarations without a Kubernetes cluster:
+
+- AWS Lambda for both `-svc` and `-fn`;
+- GCP Cloud Run for `-svc` and Cloud Run Jobs for `-fn`.
+
+Sol provisions each unit's runtime identity through the target authorization root,
+records that identity in the release record, and verifies it against the live
+service/job during deploy, rollback, and destroy. The current `-worker` Kafka
+semantics are Kubernetes-only; there is no managed substitution. Task handlers
+remain a standalone `sol task aws`/`sol task gcp` lifecycle rather than a
+target-scoped serverless component. See
+[serverless execution](docs/deployment/serverless-experimental.md) for the
+support matrix, evidence, and explicit limits.
 
 ### TypeScript
 
@@ -220,7 +243,16 @@ remains the default. `sol new fn` currently supports OCaml only. See
 
 ## Deployment
 
-Sol targets Kubernetes. Run locally against a k3d cluster with `sol local deploy`, or ship to your own AWS/GCP infrastructure with `sol deploy <env>/<provider>/<region>` (direct or GitOps) — the same application model compiles to Kubernetes manifests and Terraform either way. The same whole-target deploy reconciles the underlying cluster, registry, and database in your own cloud account; Sol never owns your infrastructure.
+Sol deploys Kubernetes workloads by default and can also run them on
+provider-managed serverless compute. Run locally against a k3d cluster with
+`sol local deploy`, ship to your own Kubernetes infrastructure with
+`sol deploy <env>/<provider>/<region>` (direct or GitOps), or select
+`execution: serverless` for AWS Lambda or GCP Cloud Run/Cloud Run Jobs. The same
+application model compiles to Kubernetes manifests and Terraform for Kubernetes
+targets; serverless targets translate the same unit declarations to the
+provider's native service, job, identity, and IAM model. The whole-target deploy
+reconciles the underlying cluster, registry, and database in your own cloud
+account; Sol never owns your infrastructure.
 
 Two things are worth distinguishing, because conflating them is the usual source
 of lifecycle confusion:
