@@ -1009,6 +1009,39 @@ let test_destroy_refuses_provisional_record_without_image () =
        | Ok () -> check "an empty image record must not delete" false)
 ;;
 
+let test_rollback_refuses_foreign_labels () =
+  let mutated = ref false in
+  let runner =
+    { Sol_cli_cloud_run.run =
+        (fun argv ->
+          match argv with
+          | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+            let json = describe_json ~revision:"rev-current" ~percent:100 in
+            Ok
+              (out
+                 (Str.global_replace
+                    (Str.regexp_string "cloud-run-experiment")
+                    "foreign"
+                    json))
+          | "gcloud" :: "run" :: "services" :: "update-traffic" :: _ ->
+            mutated := true;
+            Ok (out "done")
+          | _ -> Error "unexpected")
+    ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+    }
+  in
+  match
+    Sol_cli_cloud_run.rollback
+      runner
+      (request ())
+      ~revision:"rev-prev"
+      ~token:"token"
+      ~on_revision_moved:(fun _ -> Ok ())
+  with
+  | Error (Refused _) -> check "rollback refuses foreign labels" (not !mutated)
+  | _ -> check "rollback refuses foreign labels" false
+;;
+
 let () =
   test_ingress ();
   test_provider_naming ();
@@ -1025,6 +1058,7 @@ let () =
   test_rollback_requires_target_traffic ();
   test_destroy_requires_matching_ownership ();
   test_destroy_refuses_unowned_live_service ();
+  test_rollback_refuses_foreign_labels ();
   test_destroy_refuses_stale_record ();
   test_destroy_refuses_provider_record_mismatch ();
   test_destroy_unreadable_inventory_is_unknown ();

@@ -501,6 +501,24 @@ let rollback (r : request) ~record ~execution =
     | Some _ -> Error (Refused "rollback execution belongs to a different Cloud Run job")
     | None -> Ok ()
   in
+  let* existing =
+    describe_job r ~job:r.job
+    |> Result.map_error (function
+      | Unknown message -> Refused ("could not read the live Cloud Run job: " ^ message)
+      | other -> other)
+  in
+  let* () =
+    match existing with
+    | None -> Error (Refused "Cloud Run job is absent during rollback")
+    | Some json ->
+      if owns ~job:r.job (labels_of_job json)
+      then Ok ()
+      else
+        Error
+          (Refused
+             "live Cloud Run job lacks this adapter's ownership labels; refusing to \
+              redeploy an unverified job")
+  in
   let* image =
     match execution_image target with
     | Some image -> valid_image image
