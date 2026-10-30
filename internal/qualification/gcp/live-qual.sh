@@ -122,6 +122,11 @@ assert_environment() {
 }
 assert_environment
 
+if [ "${#CLUSTER}" -gt 17 ]; then
+  echo "✗ refusing: the GKE cluster name \"$CLUSTER\" is ${#CLUSTER} characters; GCP derives service-account ids by appending -cert-manager, and the 30-character limit allows at most 17." >&2
+  exit 2
+fi
+
 source "$ROOT/internal/qualification/sol-under-test.sh"
 source "$ROOT/internal/qualification/candidate-binding.sh"
 source "$ROOT/internal/qualification/attempt.sh"
