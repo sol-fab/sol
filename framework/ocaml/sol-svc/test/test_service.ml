@@ -75,16 +75,36 @@ let with_server_obs env ~sw f =
       | _ -> ())
 ;;
 
-let http_call env ~sw ~port ~meth ~path ?(headers = []) ?(body = "") () =
+let http_call_with_headers
+      ?(request_close = true)
+      env
+      ~sw
+      ~port
+      ~meth
+      ~path
+      ?(headers = [])
+      ?(body = "")
+      ()
+  =
   let client = Cohttp_eio.Client.make ~https:None env#net in
   let uri = Uri.of_string (Printf.sprintf "http://127.0.0.1:%d%s" port path) in
-  let hdrs = Http.Header.of_list (("connection", "close") :: headers) in
+  let hdrs =
+    Http.Header.of_list
+      ((if request_close then [ "connection", "close" ] else []) @ headers)
+  in
   let body_val = if body = "" then None else Some (Cohttp_eio.Body.of_string body) in
   let resp, resp_body =
     Cohttp_eio.Client.call client ~sw ~headers:hdrs ?body:body_val meth uri
   in
   let status = Http.Status.to_int (Http.Response.status resp) in
   let body_str = Eio.Buf_read.(parse_exn take_all) resp_body ~max_size:65536 in
+  status, body_str, Http.Response.headers resp
+;;
+
+let http_call env ~sw ~port ~meth ~path ?(headers = []) ?(body = "") () =
+  let status, body_str, _ =
+    http_call_with_headers env ~sw ~port ~meth ~path ~headers ~body ()
+  in
   status, body_str
 ;;
 
@@ -190,6 +210,26 @@ let test_handler_exception env () =
     let s2, _ = http_call env ~sw ~port ~meth:`GET ~path:"/ok" () in
     Windtrap.equal Windtrap.int ~msg:"server still up" 200 s2;
     Promise.resolve stop_r ())
+;;
+
+let test_every_response_closes_the_connection env () =
+  Switch.run (fun sw ->
+    with_server env ~sw (fun port ->
+      let _status, _body, headers =
+        http_call_with_headers
+          ~request_close:false
+          env
+          ~sw
+          ~port
+          ~meth:`GET
+          ~path:"/hello"
+          ()
+      in
+      Windtrap.equal
+        (Windtrap.option Windtrap.string)
+        ~msg:"a response with an unread/absent body closes the connection"
+        (Some "close")
+        (Http.Header.get headers "connection")))
 ;;
 
 let test_external_stop_on_listen env () =
@@ -609,6 +649,9 @@ let () =
           ; Windtrap.test
               "handler exception → 500, server survives"
               (test_handler_exception env)
+          ; Windtrap.test
+              "every response closes the connection"
+              (test_every_response_closes_the_connection env)
           ; Windtrap.test "external stop on listen" (test_external_stop_on_listen env)
           ; Windtrap.test
               "external stop does not wait out the drain window"

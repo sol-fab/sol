@@ -735,10 +735,20 @@ module Make (H : HANDLER) = struct
            in
            let send_response response =
              let body_str = response.Response.body in
+             (* The service reads a request body only after routing/auth, so an early
+                response (401/404/405/413/503) leaves bytes unread. Keep-alive would then
+                parse the body as the next request on the same connection (request
+                desynchronization). The documented contract is one request per connection;
+                enforce it rather than relying on the client to close. *)
              let headers =
+               response.Response.headers
+               |> List.filter (fun (name, _) ->
+                 not (String.equal (String.lowercase_ascii name) "connection"))
+               |> fun headers ->
                Http.Header.of_list
                  (("content-length", string_of_int (String.length body_str))
-                  :: response.Response.headers)
+                  :: ("connection", "close")
+                  :: headers)
              in
              Cohttp_eio.Server.respond
                ~status:(http_status_of_int response.Response.status)
