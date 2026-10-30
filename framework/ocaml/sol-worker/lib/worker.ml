@@ -140,6 +140,8 @@ let handle_ack
       ~t0
       ~advance
       ~ack
+      ~topic
+      ~key
   =
   let dt = Eio.Time.now env#clock -. t0 in
   (match msg_duration with
@@ -155,13 +157,27 @@ let handle_ack
     (match msg_count with
      | Some c -> c ~labels:[ "status", "ack_failed" ] 1
      | None -> ());
+    let fields =
+      [ "topic", topic; "error", Kafka.Error.to_string e ]
+      @
+      match key with
+      | Some key -> [ "key", key ]
+      | None -> []
+    in
     (match ot with
-     | None -> ()
+     | None ->
+       Printf.eprintf
+         "sol-worker: ack failed topic=%s key=%s error=%s; offset not committed, \
+          stopping for redelivery\n\
+          %!"
+         topic
+         (Option.value key ~default:"-")
+         (Kafka.Error.to_string e)
      | Some o ->
        Obs_eio.log_standalone
          o
          (if Kafka.Error.is_fatal e then Obs_eio.Error else Obs_eio.Warn)
-         ~fields:[ "error", Kafka.Error.to_string e ]
+         ~fields
          (if Kafka.Error.is_fatal e
           then "sol-worker: fatal ack failure, stopping consumer"
           else
@@ -211,18 +227,43 @@ module Make_with_test_seam (W : WORKER) = struct
             else (
               let t0 = Eio.Time.now env#clock in
               match W.handle msg ~trace_ctx with
-              | Ack -> handle_ack ~env ~ot ~msg_count ~msg_duration ~t0 ~advance ~ack
+              | Ack ->
+                handle_ack
+                  ~env
+                  ~ot
+                  ~msg_count
+                  ~msg_duration
+                  ~t0
+                  ~advance
+                  ~ack
+                  ~topic:(Kafka_service.topic_name_to_string W.Message.topic_name)
+                  ~key:(W.Message.key msg)
               | Fail ->
                 (match msg_count with
                  | Some c -> c ~labels:[ "status", "fail" ] 1
                  | None -> ());
+                let topic = Kafka_service.topic_name_to_string W.Message.topic_name in
+                let key = W.Message.key msg in
+                let fields =
+                  [ "topic", topic ]
+                  @
+                  match key with
+                  | Some key -> [ "key", key ]
+                  | None -> []
+                in
                 (match ot with
-                 | None -> ()
+                 | None ->
+                   Printf.eprintf
+                     "sol-worker: handler failed a fact topic=%s key=%s; the offset is \
+                      not committed and the consumer stops\n\
+                      %!"
+                     topic
+                     (Option.value key ~default:"-")
                  | Some o ->
                    Obs_eio.log_standalone
                      o
                      Obs_eio.Error
-                     ~fields:[]
+                     ~fields
                      "sol-worker: handler failed a fact; the offset is not committed and \
                       the consumer stops. This is a contract failure, not a retryable \
                       one: fix the handler or the fact, then restart.");
