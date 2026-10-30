@@ -1212,7 +1212,15 @@ let destroy (r : request) ~record =
   in
   let* () = if topic_owned then delete_topic r ~topic:expected.topic else Ok () in
   let* () = if dlq_owned then delete_topic r ~topic:expected.dlq_topic else Ok () in
-  (* Independent absence. *)
+  (* Independent absence. The push identity is a created resource too: a delete
+     success is not proof that the IAM account is gone. *)
+  let* () =
+    match service_account_json r ~email:expected.push_service_account with
+    | Ok None -> Ok ()
+    | Ok (Some _) ->
+      Error (Sol_cli_cloud_run.Unknown "push service account remains after delete")
+    | Error failure -> Error failure
+  in
   let* () =
     match service_json r ~cloud_run_service:expected.cloud_run_service with
     | Ok None -> Ok ()

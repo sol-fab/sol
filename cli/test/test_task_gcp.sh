@@ -52,7 +52,10 @@ elif [[ "$args" == *"iam service-accounts describe"* ]]; then
   printf '{"email":"%s","description":"%s"}\n' "$email" "$(cat "$state/sa-$name.description")"
 elif [[ "$args" == *"iam service-accounts delete"* ]]; then
   email=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "delete" ]]; then j=$((i+1)); email="${!j}"; fi; done
-  rm -f "$state/sa-${email%%@*}.description"; printf 'deleted\n'
+  if [[ -z "${FAKE_GCP_SA_LINGER:-}" ]]; then
+    rm -f "$state/sa-${email%%@*}.description"
+  fi
+  printf 'deleted\n'
 elif [[ "$args" == *"projects describe"* ]]; then printf '123\n'
 elif [[ "$args" == *"pubsub topics create"* ]]; then
   name=""; for ((i=1;i<=$#;i++)); do if [[ "${!i}" == "create" ]]; then j=$((i+1)); name="${!j}"; fi; done
@@ -188,6 +191,12 @@ old_sa=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["push_s
 new_sa=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["push_service_account"])' "$work/redeploy.json")
 [[ "$new_sa" != "$old_sa" ]]
 grep -q 'iam service-accounts create' "$work/state/calls.log"
+# A false-success service-account delete must fail independent absence.
+if FAKE_GCP_SA_LINGER=1 "$sol" task gcp destroy --project p --region us-west1 --service checkout --record "$work/release.json" --apply > "$work/sa-linger.out" 2>&1; then
+  echo "destroy accepted a lingering push service account" >&2
+  exit 1
+fi
+grep -F "push service account remains after delete" "$work/sa-linger.out" >/dev/null
 "$sol" task gcp destroy --project p --region us-west1 --service checkout --record "$work/release.json" --apply > /dev/null
 [[ ! -f "$work/state/service" ]]
 [[ ! -f "$work/state/sub-checkout-task-dlq-sub" ]]
