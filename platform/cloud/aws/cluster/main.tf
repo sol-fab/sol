@@ -78,6 +78,12 @@ module "eks" {
         enableNetworkPolicy = "true"
       })
     }
+    # The workload authorization path uses EKS Pod Identity associations
+    # (platform/cloud/aws/authorization). Without the agent, the association exists in IAM
+    # but the pod never receives role credentials.
+    eks-pod-identity-agent = {
+      most_recent = true
+    }
   }
 
   eks_managed_node_groups = {
