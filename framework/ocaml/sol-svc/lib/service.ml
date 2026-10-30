@@ -66,6 +66,19 @@ let http_status_of_int = function
   | n -> `Code n
 ;;
 
+let discard_body (body : Cohttp_eio.Body.t) =
+  let buffer = Cstruct.create 65536 in
+  let rec loop () =
+    try
+      match Eio.Flow.single_read body buffer with
+      | 0 -> ()
+      | _ -> loop ()
+    with
+    | End_of_file -> ()
+  in
+  loop ()
+;;
+
 let read_body_limited headers (body : Cohttp_eio.Body.t) max_bytes =
   let too_large_from_header =
     match Http.Header.get headers "content-length" with
@@ -815,11 +828,23 @@ module Make (H : HANDLER) = struct
                ~body:(Cohttp_eio.Body.of_string body_str)
                ()
            in
+           let drain_error_body () =
+             try
+               Eio.Time.with_timeout_exn env#clock 1.0 (fun () ->
+                 match
+                   read_body_limited (Http.Request.headers req) body max_body_bytes
+                 with
+                 | Some _ -> ()
+                 | None -> discard_body body)
+             with
+             | Eio.Time.Timeout -> ()
+           in
            match Lifecycle.begin_request lifecycle with
            | None ->
              let response =
                { Response.status = 503; headers = [ "content-length", "0" ]; body = "" }
              in
+             drain_error_body ();
              observe_request response.Response.status;
              send_response response
            | Some lease ->
@@ -846,15 +871,7 @@ module Make (H : HANDLER) = struct
                       req
                       body
                   in
-                  (* An early error response (401/404/405/503) is produced before
-                     routing/auth reads the request body. Leave those bytes unread and
-                     cohttp-eio parses the body as the next request on a keep-alive
-                     connection -- request desynchronization. Consume the bounded remainder
-                     before responding so the next read starts at a request boundary. *)
-                  if response.Response.status >= 400
-                  then
-                    ignore
-                      (read_body_limited (Http.Request.headers req) body max_body_bytes);
+                  if response.Response.status >= 400 then drain_error_body ();
                   observe_request response.Response.status;
                   send_response response)
          in
