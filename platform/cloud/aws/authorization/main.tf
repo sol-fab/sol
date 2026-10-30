@@ -244,9 +244,11 @@ data "aws_iam_policy_document" "workload_trust" {
     condition {
       test     = "ArnLike"
       variable = "aws:SourceArn"
-      # EKS Pod Identity association ARNs omit the service and region segments:
-      # arn:aws::<account>:podidentityassociation/<cluster>/<association-id>.
-      values = ["arn:aws::${local.account_id}:podidentityassociation/${var.cluster_name}/*"]
+      # EKS Pod Identity association ARNs use the standard EKS service/region segments:
+      # arn:aws:eks:<region>:<account>:podidentityassociation/<cluster>/<association-id>.
+      values = [
+        "arn:aws:eks:${var.region}:${local.account_id}:podidentityassociation/${var.cluster_name}/*",
+      ]
     }
   }
 }
