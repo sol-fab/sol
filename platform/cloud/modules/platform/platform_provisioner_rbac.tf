@@ -3,7 +3,7 @@ resource "kubernetes_cluster_role" "platform_provisioner_namespaced" {
   rule {
     api_groups = ["*"]
     resources  = ["*"]
-    verbs      = ["*"]
+    verbs      = ["get", "list", "watch"]
   }
 }
 
@@ -50,37 +50,37 @@ resource "kubernetes_cluster_role" "platform_provisioner_cluster" {
   rule {
     api_groups = [""]
     resources  = ["namespaces", "nodes", "persistentvolumes"]
-    verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs      = ["get", "list", "watch"]
   }
   rule {
     api_groups = ["apiextensions.k8s.io"]
     resources  = ["customresourcedefinitions"]
-    verbs      = ["*"]
+    verbs      = ["get", "list", "watch"]
   }
   rule {
     api_groups = ["storage.k8s.io"]
     resources  = ["storageclasses", "csidrivers", "csinodes"]
-    verbs      = ["*"]
+    verbs      = ["get", "list", "watch"]
   }
   rule {
     api_groups = ["rbac.authorization.k8s.io"]
     resources  = ["clusterroles", "clusterrolebindings"]
-    verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs      = ["get", "list", "watch"]
   }
   rule {
     api_groups = ["admissionregistration.k8s.io"]
     resources  = ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
-    verbs      = ["*"]
+    verbs      = ["get", "list", "watch"]
   }
   rule {
     api_groups = ["cert-manager.io"]
     resources  = ["clusterissuers"]
-    verbs      = ["*"]
+    verbs      = ["get", "list", "watch"]
   }
   rule {
     api_groups = ["scheduling.k8s.io", "apiregistration.k8s.io"]
     resources  = ["priorityclasses", "apiservices"]
-    verbs      = ["*"]
+    verbs      = ["get", "list", "watch"]
   }
 }
 
