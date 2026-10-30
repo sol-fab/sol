@@ -16,9 +16,27 @@ type workload_kind =
   | Rollout
 
 let kinds = [ Deployment; CronJob; Job; Rollout ]
-let selector ~workspace = "workspace=" ^ workspace
+
+(* The manifest writer stores the workspace under a sanitized label value. Readers must
+   apply the same normalization before comparing or selecting; a raw directory name such
+   as `My_App` never matches the `my-app` label. *)
+let workspace_label workspace = Sol_cli_kubernetes_name.sanitize_label_value workspace
+let selector ~workspace = "workspace=" ^ workspace_label workspace
 let pod_template_labels = [ "spec"; "template"; "metadata"; "labels" ]
 let job_template_prefix = [ "spec"; "jobTemplate" ]
+
+let namespaces_of_evidence (evidence : Sol_cli_release_id.owned_object list) =
+  evidence
+  |> List.map (fun (owned : Sol_cli_release_id.owned_object) -> owned.namespace)
+  |> List.sort_uniq String.compare
+;;
+
+(* A destroy must observe both what today's workspace declares and the namespaces the
+   applied release recorded. A service removed from sol.yml after apply still has a
+   running workload in the old namespace; the declared set alone would miss it. *)
+let release_namespaces ~declared ~evidence =
+  List.sort_uniq String.compare (declared @ namespaces_of_evidence evidence)
+;;
 
 let resource_of_kind = function
   | Deployment -> "deployment"
@@ -121,7 +139,7 @@ let template_labels_of_kind = function
 let template_carries_workspace ~kind ~workspace item =
   Sol_cli_json.field (template_labels_of_kind kind @ [ "workspace" ]) item
   |> Sol_cli_json.string
-  = Some workspace
+  = Some (workspace_label workspace)
 ;;
 
 let workload_of_item ~workspace item =

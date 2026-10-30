@@ -30,6 +30,12 @@ val delete_args
 val wait_args : namespace:string -> workspace:string -> timeout_seconds:int -> string list
 val workloads_of_json : string -> workspace:string -> (workload list, string) result
 val workload_to_string : workload -> string
+val namespaces_of_evidence : Sol_cli_release_id.owned_object list -> string list
+
+val release_namespaces
+  :  declared:string list
+  -> evidence:Sol_cli_release_id.owned_object list
+  -> string list
 
 val partition_owned
   :  evidence:Sol_cli_release_id.owned_object list
