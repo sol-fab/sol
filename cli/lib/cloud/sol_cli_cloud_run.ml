@@ -618,34 +618,41 @@ let rollback runner (request : request) ~revision ~token ~on_revision_moved =
   in
   match describe runner request with
   | Error (`Unknown message) -> Error (Unknown message)
-  | Ok _ ->
-    (match
-       runner.run
-         (traffic_argv
-            ~project:request.project
-            ~region:request.region
-            ~service:request.provider_service
-            ~revision)
-     with
-     | Ok _ ->
-       (match describe runner request with
-        | Error (`Unknown message) ->
-          Error (Unknown ("could not read rolled-back service: " ^ message))
-        | Ok observed -> finish observed)
-     | Error message ->
-       (* The CLI can report an error after the provider applied the mutation. Reconciling
+  | Ok observed ->
+    if not (owns ~service:request.service ~provider:request.provider_service observed)
+    then
+      Error
+        (Refused
+           "live Cloud Run service lacks this adapter's ownership labels; refusing to \
+            move traffic on an unverified service")
+    else (
+      match
+        runner.run
+          (traffic_argv
+             ~project:request.project
+             ~region:request.region
+             ~service:request.provider_service
+             ~revision)
+      with
+      | Ok _ ->
+        (match describe runner request with
+         | Error (`Unknown message) ->
+           Error (Unknown ("could not read rolled-back service: " ^ message))
+         | Ok observed -> finish observed)
+      | Error message ->
+        (* The CLI can report an error after the provider applied the mutation. Reconciling
           against observed traffic distinguishes "the update actually applied" from "the
           update did not apply"; unreadable state stays unknown. *)
-       (match describe runner request with
-        | Ok observed when serving_revision revision observed ->
-          Sol_cli_report.warn
-            "gcloud update-traffic reported an error but revision %s is serving 100%%; \
-             reconciled: %s"
-            revision
-            message;
-          finish observed
-        | Ok observed -> Error (Partial (message, Some observed))
-        | Error _ -> Error (Partial (message, None))))
+        (match describe runner request with
+         | Ok observed when serving_revision revision observed ->
+           Sol_cli_report.warn
+             "gcloud update-traffic reported an error but revision %s is serving 100%%; \
+              reconciled: %s"
+             revision
+             message;
+           finish observed
+         | Ok observed -> Error (Partial (message, Some observed))
+         | Error _ -> Error (Partial (message, None))))
 ;;
 
 let destroy runner ~project ~region ~service ~record =
