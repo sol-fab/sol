@@ -622,55 +622,59 @@ let execute ~deps =
            (Preparation_refused
               "Ready policy must not apply once destruction has been prepared")
        else (
-         let preparation_outcome =
-           match !substrate with
-           | Substrate_absent ->
-             deps.report "  prepare: cloud substrate is absent, nothing to prepare.";
-             Sol_cli_cloud_lifecycle.Nothing_to_prepare
-           | Substrate_present | Substrate_unknown -> deps.prepare ~state:!state
+         let platform =
+           if provably_absent_substrate
+           then (
+             deps.report
+               "  the platform teardown is skipped: the substrate is provably absent at \
+                the provider, so nothing inside it can still exist.";
+             Ok None)
+           else if !substrate = Substrate_present
+           then platform_outputs_of_read (deps.cloud_outputs ())
+           else Ok None
          in
-         match Sol_cli_cloud_lifecycle.destruction_blocked preparation_outcome with
-         | Some guarantee -> block guarantee
-         | None ->
-           Sol_cli_cloud_lifecycle.preparation_failure preparation_outcome
-           |> Option.iter (fun reason -> degrade "preparation" reason);
-           let preparation =
-             match preparation_outcome with
-             | Sol_cli_cloud_lifecycle.Prepared preparation -> preparation
-             | Sol_cli_cloud_lifecycle.Nothing_to_prepare
-             | Sol_cli_cloud_lifecycle.Preparation_failed _ -> Nothing_prepared
-           in
-           let platform =
-             if provably_absent_substrate
+         match platform with
+         | Error reason -> fail (Outputs_unreadable reason)
+         | Ok platform ->
+           let release =
+             if !substrate = Substrate_absent
+             then Ok ()
+             else if provably_absent_substrate
              then (
                deps.report
-                 "  the platform teardown is skipped: the substrate is provably absent \
-                  at the provider, so nothing inside it can still exist.";
-               Ok None)
-             else if !substrate = Substrate_present
-             then platform_outputs_of_read (deps.cloud_outputs ())
-             else Ok None
+                 "\n\
+                  No workloads to release: the substrate is provably absent at the \
+                  provider, so no workload this target deployed can be running.";
+               Ok ())
+             else (
+               deps.report "\nReleasing the application workloads...";
+               release_decision (deps.release_workloads ()))
            in
-           (match platform with
-            | Error reason -> fail (Outputs_unreadable reason)
-            | Ok platform ->
-              let release =
-                if !substrate = Substrate_absent
-                then Ok ()
-                else if provably_absent_substrate
-                then (
-                  deps.report
-                    "\n\
-                     No workloads to release: the substrate is provably absent at the \
-                     provider, so no workload this target deployed can be running.";
-                  Ok ())
-                else (
-                  deps.report "\nReleasing the application workloads...";
-                  release_decision (deps.release_workloads ()))
+           (match release with
+            | Error stopped -> stopped
+            | Ok () ->
+              (* Preparation mutates the provider's deletion guards. Do it only after
+                  the platform outputs and workload release have succeeded, so an
+                  unreadable output or an unreleased workload cannot leave the database
+                  unprotected while destroy exits without tearing it down. *)
+              let preparation_outcome =
+                match !substrate with
+                | Substrate_absent ->
+                  deps.report "  prepare: cloud substrate is absent, nothing to prepare.";
+                  Sol_cli_cloud_lifecycle.Nothing_to_prepare
+                | Substrate_present | Substrate_unknown -> deps.prepare ~state:!state
               in
-              (match release with
-               | Error stopped -> stopped
-               | Ok () ->
+              (match Sol_cli_cloud_lifecycle.destruction_blocked preparation_outcome with
+               | Some guarantee -> block guarantee
+               | None ->
+                 Sol_cli_cloud_lifecycle.preparation_failure preparation_outcome
+                 |> Option.iter (fun reason -> degrade "preparation" reason);
+                 let preparation =
+                   match preparation_outcome with
+                   | Sol_cli_cloud_lifecycle.Prepared preparation -> preparation
+                   | Sol_cli_cloud_lifecycle.Nothing_to_prepare
+                   | Sol_cli_cloud_lifecycle.Preparation_failed _ -> Nothing_prepared
+                 in
                  (match teardown ~deps ~platform with
                   | Error (failure, cleanup) -> fail ~cleanup failure
                   | Ok (cleanup, teardown_degradations) ->
