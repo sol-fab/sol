@@ -217,12 +217,15 @@ class KafkaAuthorityPermissions(unittest.TestCase):
             return {k: cls.resolved(v) for k, v in value.items()}
         if isinstance(value, str):
             import json
+            # The self-access-entry deny uses the IAM policy variable for the caller.
+            if value.strip('"') in ("$${aws:PrincipalArn}", "${aws:PrincipalArn}"):
+                return "arn:aws:iam::111122223333:role/provisioner"
             if value.startswith("${") and value.endswith("}") and value[2:-1] in refs:
                 return json.dumps(refs[value[2:-1]])
             for key, replacement in refs.items():
                 value = value.replace("${" + key + "}", replacement)
             if "${" in value or "%{" in value:
-                raise ValueError("unresolved Kafka policy fixture input")
+                raise ValueError(f"unresolved Kafka policy fixture input: {value!r}")
         return value
 
     @classmethod
