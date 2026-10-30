@@ -33,6 +33,35 @@ limits, not an implied capability. Serverless observability is provider-native
 today; Sol acceptance of provider logs/metrics is an open production gate, not
 a claim.
 
+## Observability acceptance
+
+Serverless targets use **provider-native observability**. For v0.1 the accepted
+boundary is:
+
+- CloudWatch Logs for AWS Lambda / SQS and Cloud Logging for GCP Cloud Run
+  services/jobs, queried by the provider resource identity;
+- provider-native invocation, error, duration, queue/topic, and DLQ metrics;
+- task logs carrying the stable `task_id`, `kind`, and `acknowledged`/`retry`
+  outcome;
+- DLQ inspection through the AWS DLQ or Sol's GCP pull subscription.
+
+Sol does **not** install Grafana on a serverless target, does not claim a
+Sol-managed log/metric/trace acceptance layer, and does not propagate W3C trace
+context through task envelopes. Those are explicit boundaries, not silently
+missing features. The Kubernetes/local target's Grafana, TLS, OIDC, and
+dashboard evidence is separate and remains a production-profile gate.
+
+The production gate requires a live provider log/metric query for each
+serverless/task mode. The demo's evidence uses, for example:
+
+```sh
+aws logs filter-log-events   --log-group-name /aws/lambda/pluto-tasks-task   --filter-pattern task_consumer
+
+gcloud logging read   'resource.type="cloud_run_revision" AND resource.labels.service_name="pluto-tasks-gcp-task" AND textPayload:"task_consumer"'   --project <project> --limit 20 --freshness 1d
+```
+
+No dashboard or alert-delivery claim follows from a log query.
+
 ## AWS Lambda HTTP
 
 The same `-svc` container is extended with AWS Lambda Web Adapter:
