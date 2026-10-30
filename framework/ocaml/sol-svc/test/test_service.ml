@@ -626,6 +626,21 @@ let test_auth_server_error_body_is_generic _env () =
       (List.length !reported)
 ;;
 
+let test_jwks_cache_keeps_one_entry_per_url _env () =
+  Service.For_testing.reset_jwks_cache ();
+  let seed url =
+    Service.For_testing.seed_stale_jwks_cache ~url ~age_s:0.0 ~jwks:{|{"keys":[]}|}
+  in
+  seed "https://issuer.example/one";
+  seed "https://issuer.example/two";
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"both issuer URLs stay cached"
+    [ "https://issuer.example/one"; "https://issuer.example/two" ]
+    (Service.For_testing.cached_jwks_urls ());
+  Service.For_testing.reset_jwks_cache ()
+;;
+
 let test_reports_handler_failure _env () =
   let reported = ref [] in
   let report_error ~operation ~exn =
@@ -746,6 +761,9 @@ let () =
           [ Windtrap.test
               "auth server errors keep a generic body"
               (test_auth_server_error_body_is_generic env)
+          ; Windtrap.test
+              "JWKS cache keeps one entry per issuer URL"
+              (test_jwks_cache_keeps_one_entry_per_url env)
           ; Windtrap.test
               "handler failure reported once"
               (test_reports_handler_failure env)

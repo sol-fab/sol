@@ -262,11 +262,11 @@ let get_jwks ?(max_age_s = Auth_cache.ttl_s) ~fetch_jwks url =
     entry.Auth_cache.url = url
     && Unix.gettimeofday () -. entry.Auth_cache.fetched_at < max_age_s
   in
-  match Auth_cache.peek () with
+  match Auth_cache.peek url with
   | Some entry when usable entry -> Ok entry.Auth_cache.jwks
   | _ ->
     Eio.Mutex.use_ro jwks_refresh_mutex (fun () ->
-      match Auth_cache.peek (), Auth_cache.last_failure () with
+      match Auth_cache.peek url, Auth_cache.last_failure () with
       | Some entry, _ when usable entry -> Ok entry.Auth_cache.jwks
       | _, Some (u, at, msg)
         when u = url && Unix.gettimeofday () -. at < Auth_cache.failure_backoff_s ->

@@ -4,16 +4,29 @@ type entry =
   ; jwks : Jose.Jwks.t
   }
 
-let cache : entry option Atomic.t = Atomic.make None
+(* A service can validate against more than one issuer: its metrics JWT and its
+   workload-identity JWKS are separate URLs. Keep one entry per URL; a single slot made the
+   two modes evict each other and refetch on every alternating request. *)
+let cache : entry list Atomic.t = Atomic.make []
 let failure : (string * float * string) option Atomic.t = Atomic.make None
 let ttl_s = 300.0
 let unknown_kid_refetch_interval_s = 30.0
 let failure_backoff_s = 5.0
-let peek () = Atomic.get cache
-let replace entry = Atomic.set cache (Some entry)
+let peek url = Atomic.get cache |> List.find_opt (fun entry -> String.equal entry.url url)
+
+let replace entry =
+  let entries = Atomic.get cache in
+  Atomic.set
+    cache
+    (entry :: List.filter (fun e -> not (String.equal e.url entry.url)) entries)
+;;
+
+let urls () =
+  Atomic.get cache |> List.map (fun entry -> entry.url) |> List.sort_uniq String.compare
+;;
 
 let clear () =
-  Atomic.set cache None;
+  Atomic.set cache [];
   Atomic.set failure None
 ;;
 
