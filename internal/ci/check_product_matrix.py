@@ -93,6 +93,24 @@ def render_rows(rows: list[dict], kind: str) -> list[str]:
                     gap=table_cell(row.get("gap", "")),
                 )
             )
+    elif kind == "execution":
+        lines += [
+            "### Serverless and task execution",
+            "",
+            "| Surface | Local | AWS | GCP | Evidence | Gap |",
+            "|---|---|---|---|---|---|",
+        ]
+        for row in rows:
+            lines.append(
+                "| {label} | {local} | {aws} | {gcp} | {evidence} | {gap} |".format(
+                    label=table_cell(row["label"]),
+                    local=cell(row.get("local")),
+                    aws=cell(row.get("aws")),
+                    gcp=cell(row.get("gcp")),
+                    evidence=evidence(row),
+                    gap=table_cell(row.get("gap", "")),
+                )
+            )
     elif kind == "production":
         lines += [
             "### Production profile",
@@ -122,6 +140,7 @@ def render(document: dict) -> str:
         ("primitives", "primitives"),
         ("lifecycle", "lifecycle"),
         ("production", "production"),
+        ("execution", "execution"),
     ):
         rows = document.get(key)
         if not isinstance(rows, list) or not rows:
