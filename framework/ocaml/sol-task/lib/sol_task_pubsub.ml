@@ -94,7 +94,8 @@ module Make (T : Sol_task.TASK) = struct
   let respond ~status ~body () =
     Cohttp_eio.Server.respond
       ~status
-      ~headers:(Cohttp.Header.of_list [ "content-type", "text/plain" ])
+      ~headers:
+        (Cohttp.Header.of_list [ "content-type", "text/plain"; "connection", "close" ])
       ~body:(Cohttp_eio.Body.of_string body)
       ()
   ;;
@@ -113,7 +114,13 @@ module Make (T : Sol_task.TASK) = struct
     | _ -> respond ~status:`Method_not_allowed ~body:"POST only\n" ()
   ;;
 
-  let run ~(env : (_, _, _, _) Sol_env.timed) ?(port = 8080) ?stop () =
+  let run
+        ~(env : (_, _, _, _) Sol_env.timed)
+        ?(port = 8080)
+        ?(drain_timeout_s = 10.0)
+        ?stop
+        ()
+    =
     let port =
       match Sol_runtime.setting "PORT" with
       | None -> port
@@ -151,14 +158,28 @@ module Make (T : Sol_task.TASK) = struct
              ignore (Eio.Promise.try_resolve server_stop_r ());
              `Stop_daemon))
         stop;
-      Cohttp_eio.Server.run
-        ~stop:server_stop
-        ~on_error:(fun exn ->
-          Printf.eprintf
-            "sol-task: Pub/Sub transport error: %s\n%!"
-            (Printexc.to_string exn))
-        socket
-        server);
+      let serve () =
+        Cohttp_eio.Server.run
+          ~stop:server_stop
+          ~on_error:(fun exn ->
+            Printf.eprintf
+              "sol-task: Pub/Sub transport error: %s\n%!"
+              (Printexc.to_string exn))
+          socket
+          server;
+        `Drained
+      in
+      let bounded_drain () =
+        Eio.Promise.await server_stop;
+        Eio.Time.sleep env#clock drain_timeout_s;
+        Printf.eprintf
+          "sol-task: Pub/Sub drain exceeded %.1fs; closing remaining connections\n%!"
+          drain_timeout_s;
+        `Timed_out
+      in
+      match Eio.Fiber.first serve bounded_drain with
+      | `Drained -> ()
+      | `Timed_out -> ());
     Ok ()
   ;;
 

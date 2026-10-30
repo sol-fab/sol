@@ -15,6 +15,7 @@ module Make (T : Sol_task.TASK) : sig
   val run
     :  env:(_, _, _, _) Sol_env.timed
     -> ?port:int
+    -> ?drain_timeout_s:float
     -> ?stop:unit Eio.Promise.t
     -> unit
     -> (unit, string) result
