@@ -12,6 +12,24 @@ let secret_grant ~unit ~key =
   }
 ;;
 
+(* A secret key becomes the resource suffix of an IAM ARN. AWS treats `*` and `?` as
+   wildcards and `/` as a path separator, so a declaration such as `secrets = ["*"]`
+   would grant every environment secret rather than the unit's own. The full secret-key
+   grammar is checked by `sol check`; this is the narrower IAM-resource safety boundary
+   every grant path must enforce. *)
+let validate_secret_resource key =
+  let invalid =
+    if String.equal key ""
+    then Some "secret key must not be empty"
+    else if String.exists (fun c -> c = '*' || c = '?' || c = '/') key
+    then Some "secret key must not contain *, ?, or / in an authorization grant"
+    else None
+  in
+  match invalid with
+  | None -> Ok ()
+  | Some message -> Error message
+;;
+
 let unit_name (service : Sol_cli_manifest.service) =
   Sol_cli_kubernetes_name.k8s_name_of_source service.name
   |> Result.map Sol_cli_kubernetes_name.k8s_name_to_string
@@ -37,8 +55,17 @@ let desired workspace =
       (match unit_name workload.service with
        | Error message -> Error message
        | Ok unit ->
-         Ok
-           (List.map (fun key -> secret_grant ~unit ~key) config.Sol_cli_toml.secret_keys)))
+         (match
+            Sol_cli_result.map_list
+              (fun key ->
+                 validate_secret_resource key
+                 |> Result.map (fun () -> key)
+                 |> Result.map_error (fun message ->
+                   Printf.sprintf "unit %s declares %S: %s" unit key message))
+              config.Sol_cli_toml.secret_keys
+          with
+          | Error message -> Error message
+          | Ok keys -> Ok (List.map (fun key -> secret_grant ~unit ~key) keys))))
   |> Result.map List.concat
 ;;
 

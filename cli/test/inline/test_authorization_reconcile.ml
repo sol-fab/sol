@@ -76,6 +76,21 @@ let test_desired_is_every_declared_secret_of_every_unit () =
     | Ok grants -> check_grants "one grant per declared secret" [ stripe; legacy ] grants)
 ;;
 
+let test_desired_refuses_iam_wildcards () =
+  in_temp_dir (fun () ->
+    List.iter
+      (fun key ->
+         let model = model [ workload ~keys:[ key ] "payments-api" ] in
+         match Sol_cli_authorization_reconcile.desired model with
+         | Ok _ -> Windtrap.failf "grant resource %S was accepted" key
+         | Error message ->
+           check_bool
+             (Printf.sprintf "the refusal names %S" key)
+             true
+             (Sol_cli_string.contains ~needle:key message))
+      [ "*"; "FOO*"; "FOO?"; "A/B"; "" ])
+;;
+
 let test_desired_spans_the_whole_workspace () =
   in_temp_dir (fun () ->
     let model =
@@ -469,6 +484,10 @@ let test_fence_vars_require_the_trust_principal () =
 
 let%test "grants: the desired set is every declared secret of every unit" =
   test_desired_is_every_declared_secret_of_every_unit ()
+;;
+
+let%test "grants: IAM wildcards cannot become secret grants" =
+  test_desired_refuses_iam_wildcards ()
 ;;
 
 let%test "grants: desired spans the whole workspace, never a scope" =
