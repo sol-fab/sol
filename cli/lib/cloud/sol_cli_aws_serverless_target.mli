@@ -8,6 +8,7 @@ val deploy
   -> service:Sol_cli_manifest.service
   -> image:string
   -> record:string
+  -> runtime_service_account:string option
   -> (Yojson.Safe.t, string) result
 
 (** Dispatch on the ownership record's [kind]. The record, not the command line, is the

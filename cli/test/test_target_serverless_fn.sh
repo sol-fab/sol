@@ -18,10 +18,20 @@ live:
   targets:
     aws/us-east-1:
       execution: serverless
+      state_bucket: test-state
       aws:
         profile: test
-        lambda_role_arn: arn:aws:iam::123:role/test
+        state_lock_table: test-locks
 YAML
+cat > "$work/bin/terraform" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"output -json"*) printf '%s\n' '{"serverless_role_arns":{"value":{"checkout/checkout_fn":"arn:aws:iam::123:role/test"}}}' ;;
+esac
+exit 0
+FAKE
+chmod +x "$work/bin/terraform"
 cat > "$work/bin/aws" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail

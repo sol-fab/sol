@@ -47,14 +47,19 @@ let deploy_svc
       ~(service : Sol_cli_manifest.service)
       ~image
       ~record
+      ~runtime_service_account
   =
   let* () = Sol_cli_serverless_target_common.declared_uses config service in
   let* () = Sol_cli_serverless_target_common.require_http_callers target in
   let* role_arn =
-    Sol_cli_serverless_target_common.required_field
-      target
-      ~provider:"aws"
-      "lambda_role_arn"
+    Option.to_result
+      ~none:"AWS serverless deploy requires a provisioned per-unit execution role"
+      runtime_service_account
+  in
+  let* () =
+    if String.trim role_arn = ""
+    then Error "AWS serverless execution role is empty"
+    else Ok ()
   in
   let* function_name = provider_name service in
   let identity =
@@ -118,17 +123,22 @@ let deploy_fn
       ~(service : Sol_cli_manifest.service)
       ~image
       ~record
+      ~runtime_service_account
   =
   let* () = Sol_cli_serverless_target_common.declared_uses config service in
+  let* role_arn =
+    Option.to_result
+      ~none:"AWS serverless deploy requires a provisioned per-unit execution role"
+      runtime_service_account
+  in
+  let* () =
+    if String.trim role_arn = ""
+    then Error "AWS serverless execution role is empty"
+    else Ok ()
+  in
   (* There is deliberately no serverless_callers requirement here: a run-once function
      has no incoming HTTP request, and triggers/incoming identity are a separate
      contract. *)
-  let* role_arn =
-    Sol_cli_serverless_target_common.required_field
-      target
-      ~provider:"aws"
-      "lambda_role_arn"
-  in
   let* function_name = provider_name service in
   let request =
     { Sol_cli_aws_lambda_fn.profile = Sol_cli_config.provider_field target "profile"
@@ -156,11 +166,14 @@ let deploy
       ~(service : Sol_cli_manifest.service)
       ~image
       ~record
+      ~runtime_service_account
   =
   let* () = ensure_aws target in
   match service.primitive with
-  | Sol_cli_manifest.Svc -> deploy_svc ~target ~config ~project ~service ~image ~record
-  | Sol_cli_manifest.Fn -> deploy_fn ~target ~config ~project ~service ~image ~record
+  | Sol_cli_manifest.Svc ->
+    deploy_svc ~target ~config ~project ~service ~image ~record ~runtime_service_account
+  | Sol_cli_manifest.Fn ->
+    deploy_fn ~target ~config ~project ~service ~image ~record ~runtime_service_account
   | Sol_cli_manifest.Worker ->
     Error
       "target-scoped serverless dispatch does not support -worker: worker delivery needs \

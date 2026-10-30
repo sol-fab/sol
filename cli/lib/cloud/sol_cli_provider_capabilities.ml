@@ -122,6 +122,7 @@ type t =
       Sol_cli_config.target
       -> Sol_cli_grant.serverless_unit list
       -> ((string * string) list, string) result
+  ; authorization_serverless_output : string
   ; authorization_fence_addresses : string list
   ; authorization_reconciler :
       Sol_cli_config.target -> (authorization_reconciler, string) result
@@ -572,8 +573,22 @@ let aws_authorization_reconciler target =
     (required_field target "reconciler_role_arn")
 ;;
 
-let aws_serverless_root_vars _target _units =
-  Error "serverless runtime identities are not implemented for AWS targets"
+let aws_serverless_root_vars target units =
+  let existing_trust =
+    match required_field target "reconciler_trust_principal_arn" with
+    | Ok trust -> trust
+    | Error _ -> ""
+  in
+  let units =
+    `List (List.map Sol_cli_grant.serverless_unit_to_json units) |> Yojson.Safe.to_string
+  in
+  Ok
+    [ "region", target.region
+    ; "environment", target.env
+    ; "cluster_name", Option.value target.cluster_name ~default:""
+    ; "reconciler_trust_principal_arn", existing_trust
+    ; "serverless_units", units
+    ]
 ;;
 
 let gcp_serverless_root_vars target units =
@@ -1014,6 +1029,7 @@ let aws : t =
       "arn:aws:iam::000000000000:role/sol-destroy-placeholder"
   ; authorization_root_vars = aws_authorization_root_vars
   ; authorization_serverless_root_vars = aws_serverless_root_vars
+  ; authorization_serverless_output = "serverless_role_arns"
   ; authorization_fence_addresses =
       [ "aws_iam_policy.workload_boundary"
       ; "aws_iam_role.reconciler"
@@ -1261,6 +1277,7 @@ let gcp : t =
       "user:sol-destroy-placeholder@example.invalid"
   ; authorization_root_vars = gcp_authorization_root_vars
   ; authorization_serverless_root_vars = gcp_serverless_root_vars
+  ; authorization_serverless_output = "serverless_service_accounts"
   ; authorization_fence_addresses =
       [ "google_service_account.reconciler"
       ; "google_project_iam_custom_role.authorization"
@@ -1326,6 +1343,7 @@ let byo : t =
   ; authorization_destroy_trust_placeholder = ""
   ; authorization_root_vars = (fun _ -> Ok [])
   ; authorization_serverless_root_vars = (fun _ _ -> Error byo_no_root)
+  ; authorization_serverless_output = ""
   ; authorization_fence_addresses = []
   ; authorization_reconciler = (fun _ -> Error byo_no_root)
   ; authorization_assumption = (fun _ -> Error byo_no_root)

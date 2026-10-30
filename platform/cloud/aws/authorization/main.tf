@@ -80,6 +80,7 @@ resource "aws_iam_policy" "workload_boundary" {
 }
 
 data "aws_iam_policy_document" "reconciler_trust" {
+  count = var.reconciler_trust_principal_arn == "" ? 0 : 1
   statement {
     effect  = "Allow"
     actions = ["sts:AssumeRole"]
@@ -92,6 +93,7 @@ data "aws_iam_policy_document" "reconciler_trust" {
 }
 
 data "aws_iam_policy_document" "reconciler" {
+  count = var.reconciler_trust_principal_arn == "" ? 0 : 1
   statement {
     sid       = "CreateWorkloadRolesOnlyUnderTheEnvironmentPathWithTheBoundary"
     effect    = "Allow"
@@ -175,17 +177,19 @@ data "aws_iam_policy_document" "reconciler" {
 }
 
 resource "aws_iam_role" "reconciler" {
+  count                = var.reconciler_trust_principal_arn == "" ? 0 : 1
   name                 = local.reconciler
   path                 = "/sol/authorization/"
-  assume_role_policy   = data.aws_iam_policy_document.reconciler_trust.json
+  assume_role_policy   = data.aws_iam_policy_document.reconciler_trust[0].json
   description          = "Fenced reconciler for ${var.environment}'s Sol workload roles and grants (DEC-062)."
   max_session_duration = 3600
 }
 
 resource "aws_iam_role_policy" "reconciler" {
+  count  = var.reconciler_trust_principal_arn == "" ? 0 : 1
   name   = "sol-${var.environment}-authorization"
-  role   = aws_iam_role.reconciler.id
-  policy = data.aws_iam_policy_document.reconciler.json
+  role   = aws_iam_role.reconciler[0].id
+  policy = data.aws_iam_policy_document.reconciler[0].json
 }
 
 locals {
@@ -203,10 +207,48 @@ locals {
 
   grant_units = toset([for grant in local.realized_grants : grant.unit])
 
+  serverless_units = toset([for unit in var.serverless_units : unit.unit])
+
+  role_units = setunion(local.grant_units, local.serverless_units)
+
+  serverless_requirements_by_unit = {
+    for unit in var.serverless_units : unit.unit => unit.requirements
+  }
+
   grants_by_unit = {
     for unit in local.grant_units : unit => [
       for grant in local.realized_grants : grant if grant.unit == unit
     ]
+  }
+
+  serverless_statements = {
+    for unit in local.serverless_units : unit => concat(
+      [
+        for requirement in local.serverless_requirements_by_unit[unit] : {
+          Sid    = "Sol${requirement.resource}"
+          Effect = "Allow"
+          Action = local.capability_actions[requirement.capability]
+          Resource = [
+            "arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:sol/${var.environment}/${requirement.resource}*"
+          ]
+        } if requirement.capability == "secret"
+      ],
+      [
+        {
+          Sid    = "SolLambdaLogs"
+          Effect = "Allow"
+          Action = [
+            "logs:CreateLogGroup",
+            "logs:CreateLogStream",
+            "logs:PutLogEvents",
+          ]
+          Resource = [
+            "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/lambda/sol-${var.environment}-${unit}:*",
+            "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/lambda/sol-${var.environment}-${unit}",
+          ]
+        }
+      ]
+    )
   }
 
   grant_statements = {
@@ -251,10 +293,20 @@ data "aws_iam_policy_document" "workload_trust" {
       ]
     }
   }
+
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
 }
 
 resource "aws_iam_role" "workload" {
-  for_each             = local.grant_units
+  for_each             = local.role_units
   name                 = "sol-${var.environment}-${each.value}"
   path                 = "/${local.role_path}"
   permissions_boundary = aws_iam_policy.workload_boundary.arn
@@ -263,12 +315,15 @@ resource "aws_iam_role" "workload" {
 }
 
 resource "aws_iam_role_policy" "workload" {
-  for_each = local.grant_units
+  for_each = local.role_units
   name     = "sol-${var.environment}-${each.value}"
   role     = aws_iam_role.workload[each.value].id
   policy = jsonencode({
-    Version   = "2012-10-17"
-    Statement = local.grant_statements[each.value]
+    Version = "2012-10-17"
+    Statement = concat(
+      lookup(local.grant_statements, each.value, []),
+      lookup(local.serverless_statements, each.value, [])
+    )
   })
 }
 

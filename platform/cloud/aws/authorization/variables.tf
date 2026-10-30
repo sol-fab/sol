@@ -9,8 +9,9 @@ variable "environment" {
 }
 
 variable "reconciler_trust_principal_arn" {
-  description = "Principal permitted to assume the authorization reconciler role: the gated CI authorization job's own identity, never the deploy identity."
+  description = "Principal permitted to assume the authorization reconciler role: the gated CI authorization job's own identity, never the deploy identity. Empty establishes only runtime identities."
   type        = string
+  default     = ""
 }
 
 variable "cluster_name" {
@@ -26,6 +27,18 @@ variable "grants" {
     capability = string
     resource   = string
     namespace  = string
+  }))
+  default = []
+}
+
+variable "serverless_units" {
+  description = "Serverless units whose Lambda runtime roles and capability grants this target owns."
+  type = list(object({
+    unit = string
+    requirements = list(object({
+      capability = string
+      resource   = string
+    }))
   }))
   default = []
 }

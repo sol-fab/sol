@@ -33,8 +33,21 @@ let serverless_destroy ~target_cfg ~action ~record ~service =
       ~none:(Sol_cli_exit.error "serverless destroy requires --record")
       record
   in
-  Sol_cli_serverless_lifecycle.destroy ~target:target_cfg ~service ~record
-  |> Result.map_error Sol_cli_exit.error
+  let* () =
+    Sol_cli_serverless_lifecycle.destroy ~target:target_cfg ~service ~record
+    |> Result.map_error Sol_cli_exit.error
+  in
+  let* assets = Cmd_cloud_tf.resolve_assets () in
+  let run_log = Sol_cli_run_log.create ~prefix:"destroy-identities" () in
+  let* _identities =
+    Sol_cli_authorization_stage.apply_serverless_identities
+      ~assets
+      ~run_log
+      ~target:target_cfg
+      []
+    |> Result.map_error Sol_cli_exit.error
+  in
+  Ok ()
 ;;
 
 let run ~target ~var_file ~vars ~action ~accept_unreleased ~record ~service () =
