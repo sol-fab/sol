@@ -22,7 +22,7 @@ case "$1 $2" in
           exit 1
         fi
         cat <<'JSON'
-{"metadata":{"name":"checkout-svc","labels":{"sol-owned":"cloud-run-experiment","sol-service":"checkout-svc"}},"status":{"url":"https://observed.example","latestReadyRevisionName":"rev-1","traffic":[{"revisionName":"rev-1","percent":100}]}}
+{"spec":{"template":{"spec":{"serviceAccountName":"sol-runtime@example.iam.gserviceaccount.com"}}},"metadata":{"name":"checkout-svc","labels":{"sol-owned":"cloud-run-experiment","sol-service":"checkout-svc"}},"status":{"url":"https://observed.example","latestReadyRevisionName":"rev-1","traffic":[{"revisionName":"rev-1","percent":100}]}}
 JSON
         ;;
       list)
@@ -52,6 +52,7 @@ if "$sol" cloud-run deploy \
   --project p --region r --service checkout_svc \
   --image repo@sha256:abc123 \
   --unit checkout/checkout_svc \
+  --service-account sol-runtime@example.iam.gserviceaccount.com \
   --issuer https://accounts.google.com \
   --jwks-uri https://www.googleapis.com/oauth2/v3/certs \
   --caller checkout/checkout_svc=103076866099743206289 \
@@ -64,6 +65,7 @@ if ! "$sol" cloud-run deploy \
   --project p --region r --service checkout_svc \
   --image repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --unit checkout/checkout_svc \
+  --service-account sol-runtime@example.iam.gserviceaccount.com \
   --issuer https://accounts.google.com \
   --jwks-uri https://www.googleapis.com/oauth2/v3/certs \
   --caller checkout/checkout_svc=103076866099743206289 \
@@ -83,6 +85,7 @@ if "$sol" cloud-run deploy \
   --project p --region r --service checkout_svc \
   --image repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --unit checkout/checkout_svc \
+  --service-account sol-runtime@example.iam.gserviceaccount.com \
   --issuer https://accounts.google.com \
   --jwks-uri https://www.googleapis.com/oauth2/v3/certs \
   --caller malformed \
@@ -106,6 +109,7 @@ if "$sol" cloud-run deploy \
   --project p --region r --service checkout_svc \
   --image repo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --unit checkout/checkout_svc \
+  --service-account sol-runtime@example.iam.gserviceaccount.com \
   --issuer https://accounts.google.com \
   --jwks-uri https://www.googleapis.com/oauth2/v3/certs \
   --caller checkout/checkout_svc=103076866099743206289 \

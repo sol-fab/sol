@@ -1,4 +1,37 @@
+type capability = Secret_access
+
+let capability_to_string = function
+  | Secret_access -> "secret"
+;;
+
+type requirement =
+  { capability : capability
+  ; resource : string
+  }
+
+type serverless_unit =
+  { unit : string
+  ; requirements : requirement list
+  }
+
+let requirement ~capability ~resource = { capability; resource }
 let secret_capability = "secret"
+let secret_requirement resource = { capability = Secret_access; resource }
+
+let requirement_to_json requirement =
+  `Assoc
+    [ "capability", `String (capability_to_string requirement.capability)
+    ; "resource", `String requirement.resource
+    ]
+;;
+
+let serverless_unit_to_json unit =
+  `Assoc
+    [ "unit", `String unit.unit
+    ; "requirements", `List (List.map requirement_to_json unit.requirements)
+    ]
+;;
+
 let annotation_key = "sol.dev/grants"
 let tag ~capability ~resource = capability ^ "/" ^ resource
 let tag_of_secret_key key = tag ~capability:secret_capability ~resource:key

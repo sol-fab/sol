@@ -14,8 +14,9 @@ variable "environment" {
 }
 
 variable "reconciler_trust_principal" {
-  description = "Principal permitted to impersonate the reconciler service account: the gated CI authorization job's own identity, never the deploy identity."
+  description = "Principal permitted to impersonate the reconciler service account: the gated CI authorization job's own identity, never the deploy identity. Empty establishes only serverless runtime identities."
   type        = string
+  default     = ""
 }
 
 variable "grants" {
@@ -25,6 +26,18 @@ variable "grants" {
     capability = string
     resource   = string
     namespace  = string
+  }))
+  default = []
+}
+
+variable "serverless_units" {
+  description = "Serverless units whose runtime identities and capability grants this target owns."
+  type = list(object({
+    unit = string
+    requirements = list(object({
+      capability = string
+      resource   = string
+    }))
   }))
   default = []
 }

@@ -145,6 +145,7 @@ let request
       ~callers
       ~record
       ~ingress
+      ~service_account
   =
   Sol_cli_cloud_run.
     { project
@@ -154,6 +155,7 @@ let request
     ; image
     ; identity = { unit; callers; issuer; jwks_uri }
     ; ingress
+    ; service_account
     ; record
     }
 ;;
@@ -239,7 +241,28 @@ let common_terms =
     $ callers)
 ;;
 
-let deploy_run project region service image unit issuer jwks_uri callers ingress_value =
+let service_account_arg =
+  Arg.(
+    required
+    & opt (some string) None
+    & info
+        [ "service-account" ]
+        ~docv:"EMAIL"
+        ~doc:"Dedicated Cloud Run runtime service account")
+;;
+
+let deploy_run
+      project
+      region
+      service
+      image
+      unit
+      issuer
+      jwks_uri
+      callers
+      ingress_value
+      service_account
+  =
   let* provider_service = service_is_http service in
   let* ingress = parse_ingress ingress_value in
   let* callers =
@@ -280,6 +303,7 @@ let deploy_run project region service image unit issuer jwks_uri callers ingress
       ~callers
       ~record:None
       ~ingress
+      ~service_account
   in
   let* release =
     Sol_cli_cloud_run.deploy (runner ()) request
@@ -295,7 +319,11 @@ let deploy_cmd =
   let term =
     Term.(
       const
-        (fun (project, region, service, image, unit, issuer, jwks_uri, callers) ingress ->
+        (fun
+            (project, region, service, image, unit, issuer, jwks_uri, callers)
+             ingress
+             service_account
+           ->
            Sol_cli_exit.exit_on
              (deploy_run
                 project
@@ -306,9 +334,11 @@ let deploy_cmd =
                 issuer
                 jwks_uri
                 callers
-                ingress))
+                ingress
+                service_account))
       $ common_terms
-      $ ingress_arg)
+      $ ingress_arg
+      $ service_account_arg)
   in
   Cmd.v (Cmd.info "deploy" ~doc) term
 ;;
@@ -345,6 +375,7 @@ let verify_run
       ~callers:[]
       ~record
       ~ingress
+      ~service_account:""
   in
   let* observed =
     Sol_cli_cloud_run.verify (runner ()) request ~token
@@ -408,9 +439,26 @@ let rollback_run
       jwks_uri
       revision
       token_file
+      record
       ingress_value
   =
   let* provider_service = service_is_http service in
+  let* expected =
+    Sol_cli_cloud_run.read_record ~path:record
+    |> Result.map_error (fun message ->
+      command_error ("rollback requires an ownership record: " ^ message))
+  in
+  let* () =
+    if
+      expected.project = project
+      && expected.region = region
+      && expected.provider_service = provider_service
+    then Ok ()
+    else
+      Error
+        (command_error
+           "ownership record does not match the requested project, region and service")
+  in
   let* ingress = parse_ingress ingress_value in
   let* token =
     match token_file with
@@ -431,6 +479,7 @@ let rollback_run
       ~callers:[]
       ~record:None
       ~ingress
+      ~service_account:expected.service_account
   in
   let* observed =
     Sol_cli_cloud_run.rollback
@@ -444,6 +493,16 @@ let rollback_run
   in
   print_endline (Yojson.Safe.to_string (Sol_cli_cloud_run.observed_json observed));
   Ok ()
+;;
+
+let rollback_record_arg =
+  Arg.(
+    required
+    & opt (some string) None
+    & info
+        [ "record" ]
+        ~docv:"PATH"
+        ~doc:"Ownership record whose runtime identity must match the live service")
 ;;
 
 let rollback_cmd =
@@ -469,6 +528,7 @@ let rollback_cmd =
             (project, region, service, image, unit, issuer, jwks_uri, _)
              revision
              token_file
+             record
              ingress
            ->
            Sol_cli_exit.exit_on
@@ -482,10 +542,12 @@ let rollback_cmd =
                 jwks_uri
                 revision
                 token_file
+                record
                 ingress))
       $ common_terms
       $ revision
       $ token_file
+      $ rollback_record_arg
       $ ingress_arg)
   in
   Cmd.v

@@ -42,6 +42,14 @@ let run_serverless
            "serverless deployment currently supports exactly one -svc or -fn service per \
             target")
   in
+  let* () =
+    match service.primitive with
+    | Sol_cli_manifest.Worker ->
+      Error
+        (Sol_cli_exit.error
+           "target-scoped serverless dispatch does not support -worker on GCP")
+    | Sol_cli_manifest.Svc | Sol_cli_manifest.Fn -> Ok ()
+  in
   let* project =
     match resolved_config.project with
     | Some project when String.trim project <> "" -> Ok project
@@ -58,6 +66,44 @@ let run_serverless
               service.name))
   in
   let record = Filename.concat (Sol_cli_run_log.dir run_log) "serverless-release.json" in
+  let* assets = Cmd_cloud_tf.resolve_assets () in
+  let unit = Sol_cli_serverless_target_common.unit_of_service ~project service in
+  let* facts =
+    Sol_cli_workspace_model.load_cwd ()
+    |> Result.map_error (fun message -> Sol_cli_exit.error message)
+  in
+  let* service_config =
+    match
+      Sol_cli_workspace_model.workloads facts
+      |> List.find_opt (fun (workload : Sol_cli_workspace_model.workload) ->
+        String.equal workload.service.Sol_cli_manifest.name service.name)
+    with
+    | None ->
+      Error
+        (Sol_cli_exit.error (Printf.sprintf "cannot find %s's declarations" service.name))
+    | Some workload ->
+      (match workload.config with
+       | Ok config -> Ok config
+       | Error parse_error ->
+         Error
+           (Sol_cli_exit.error
+              (Printf.sprintf
+                 "cannot read %s's declarations: %s"
+                 service.name
+                 (Sol_cli_toml.parse_error_to_string parse_error))))
+  in
+  let requirements =
+    service_config.secret_keys |> List.map Sol_cli_grant.secret_requirement
+  in
+  let* runtime_service_account =
+    Sol_cli_serverless_lifecycle.ensure_runtime_identity
+      ~assets
+      ~run_log
+      ~target:target_cfg
+      ~unit
+      ~requirements
+    |> Result.map_error Sol_cli_exit.error
+  in
   let* release =
     Sol_cli_serverless_lifecycle.deploy
       ~target:target_cfg
@@ -66,6 +112,7 @@ let run_serverless
       ~service
       ~image
       ~record
+      ~runtime_service_account
     |> Result.map_error Sol_cli_exit.error
   in
   print_endline (Yojson.Safe.to_string release);

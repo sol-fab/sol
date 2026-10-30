@@ -15,6 +15,7 @@ type request =
   ; image : string
   ; identity : identity
   ; ingress : ingress
+  ; service_account : string
   ; record : string option
   }
 
@@ -25,6 +26,7 @@ type observed =
   ; image : string option
   ; provider_service : string
   ; labels : (string * string) list
+  ; service_account : string
   }
 
 type release =
@@ -35,6 +37,7 @@ type release =
   ; revision : string
   ; url : string
   ; image : string
+  ; service_account : string
   }
 
 type failure =

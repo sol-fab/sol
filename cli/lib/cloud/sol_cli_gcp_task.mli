@@ -16,6 +16,7 @@ type request =
   ; region : string
   ; service : string
   ; image : string
+  ; runtime_service_account : string
   ; max_attempts : int
   ; ack_deadline_s : int
   ; dlq_retention_s : int
@@ -37,6 +38,7 @@ type release =
   ; dlq_topic : string
   ; dlq_subscription : string
   ; push_service_account : string
+  ; runtime_service_account : string
   ; max_attempts : int
   ; ack_deadline_s : int
   ; dlq_retention_s : int

@@ -5,6 +5,7 @@ type request =
   ; region : string
   ; service : string
   ; image : string
+  ; runtime_service_account : string
   ; max_attempts : int
   ; ack_deadline_s : int
   ; dlq_retention_s : int
@@ -26,6 +27,7 @@ type release =
   ; dlq_topic : string
   ; dlq_subscription : string
   ; push_service_account : string
+  ; runtime_service_account : string
   ; max_attempts : int
   ; ack_deadline_s : int
   ; dlq_retention_s : int
@@ -333,6 +335,8 @@ let deploy_service (r : request) ~cloud_run_service =
     ; cloud_run_service
     ; "--image"
     ; r.image
+    ; "--service-account"
+    ; r.runtime_service_account
     ; "--no-allow-unauthenticated"
     ; "--port"
     ; "8080"
@@ -374,8 +378,13 @@ let service_details (r : request) ~cloud_run_service =
       |> Result.map_error (fun message -> Sol_cli_cloud_run.Unknown message)
     in
     let labels = labels_of (json_field [ "metadata" ] json) in
+    let service_account =
+      Sol_cli_json.string
+        (json_field [ "spec"; "template"; "spec"; "serviceAccountName" ] json)
+      |> Option.value ~default:""
+    in
     if owns_labels ~service:cloud_run_service labels
-    then Ok (url, revision)
+    then Ok (url, revision, service_account)
     else Error (Sol_cli_cloud_run.Refused "Cloud Run service lacks this adapter's labels")
 ;;
 
@@ -539,6 +548,7 @@ let release_json (r : release) =
     ; "dlq_topic", `String r.dlq_topic
     ; "dlq_subscription", `String r.dlq_subscription
     ; "push_service_account", `String r.push_service_account
+    ; "runtime_service_account", `String r.runtime_service_account
     ; "max_attempts", `Int r.max_attempts
     ; "ack_deadline_s", `Int r.ack_deadline_s
     ; "dlq_retention_s", `Int r.dlq_retention_s
@@ -579,6 +589,7 @@ let read_record ~path =
   let* dlq_topic = field "dlq_topic" in
   let* dlq_subscription = field "dlq_subscription" in
   let* push_service_account = field "push_service_account" in
+  let* runtime_service_account = field "runtime_service_account" in
   let* max_attempts = int_field "max_attempts" in
   let* ack_deadline_s = int_field "ack_deadline_s" in
   let* dlq_retention_s = int_field "dlq_retention_s" in
@@ -596,6 +607,7 @@ let read_record ~path =
     ; dlq_topic
     ; dlq_subscription
     ; push_service_account
+    ; runtime_service_account
     ; max_attempts
     ; ack_deadline_s
     ; dlq_retention_s
@@ -662,7 +674,20 @@ let verify (r : request) ~record =
            "task ownership record is incomplete; the deploy did not finish")
     else Ok ()
   in
-  let* url, _revision = service_details r ~cloud_run_service:expected.cloud_run_service in
+  let* url, _revision, service_account =
+    service_details r ~cloud_run_service:expected.cloud_run_service
+  in
+  let* () =
+    if String.equal service_account expected.runtime_service_account
+    then Ok ()
+    else
+      Error
+        (Sol_cli_cloud_run.Refused
+           (Printf.sprintf
+              "Cloud Run task runs as %S, not the recorded runtime identity %S"
+              service_account
+              expected.runtime_service_account))
+  in
   let* () =
     if url = expected.cloud_run_url
     then Ok ()
@@ -836,8 +861,23 @@ let verify (r : request) ~record =
   Ok expected
 ;;
 
+let valid_runtime_service_account value =
+  String.trim value <> ""
+  && (not (String.equal value "default"))
+  && not (String.ends_with ~suffix:"-compute@developer.gserviceaccount.com" value)
+;;
+
 let deploy (r : request) =
   let* () = validate_settings r in
+  let* () =
+    if valid_runtime_service_account r.runtime_service_account
+    then Ok ()
+    else
+      Error
+        (Sol_cli_cloud_run.Refused
+           "GCP task runtime requires a dedicated per-unit service account, not the \
+            default Compute engine identity")
+  in
   let* () =
     if Sol_cli_image_ref.is_digest r.image
     then Ok ()
@@ -892,6 +932,7 @@ let deploy (r : request) =
     ; dlq_topic
     ; dlq_subscription
     ; push_service_account
+    ; runtime_service_account = r.runtime_service_account
     ; max_attempts = r.max_attempts
     ; ack_deadline_s = r.ack_deadline_s
     ; dlq_retention_s = r.dlq_retention_s
@@ -934,7 +975,7 @@ let deploy (r : request) =
   in
   let* () = ensure_service_account r ~name:push_sa_name ~email:push_service_account in
   let* () = deploy_service r ~cloud_run_service in
-  let* cloud_run_url, revision = service_details r ~cloud_run_service in
+  let* cloud_run_url, revision, _service_account = service_details r ~cloud_run_service in
   let* () =
     write (release ~cloud_run_url ~revision ~image:r.image ~push_service_account)
   in
@@ -1038,7 +1079,20 @@ let rollback (r : request) ~record ~revision =
     | Ok _ -> Ok ()
     | Error message -> Error (Sol_cli_cloud_run.Partial (message, None))
   in
-  let* url, _ = service_details r ~cloud_run_service:expected.cloud_run_service in
+  let* url, _, service_account =
+    service_details r ~cloud_run_service:expected.cloud_run_service
+  in
+  let* () =
+    if String.equal service_account expected.runtime_service_account
+    then Ok ()
+    else
+      Error
+        (Sol_cli_cloud_run.Refused
+           (Printf.sprintf
+              "Cloud Run task runs as %S, not the recorded runtime identity %S"
+              service_account
+              expected.runtime_service_account))
+  in
   let recorded = { expected with revision; cloud_run_url = url } in
   let* () =
     write_record ~path:record recorded
@@ -1084,7 +1138,20 @@ let destroy (r : request) ~record =
     | None -> Ok false
     | Some json ->
       let labels = labels_of (json_field [ "metadata" ] json) in
-      if owns_labels ~service:expected.cloud_run_service labels
+      let service_account =
+        Sol_cli_json.string
+          (json_field [ "spec"; "template"; "spec"; "serviceAccountName" ] json)
+        |> Option.value ~default:""
+      in
+      if not (String.equal service_account expected.runtime_service_account)
+      then
+        Error
+          (Sol_cli_cloud_run.Refused
+             (Printf.sprintf
+                "Cloud Run task runs as %S, not the recorded runtime identity %S"
+                service_account
+                expected.runtime_service_account))
+      else if owns_labels ~service:expected.cloud_run_service labels
       then Ok true
       else
         Error (Sol_cli_cloud_run.Refused "Cloud Run service lacks this adapter's labels")
