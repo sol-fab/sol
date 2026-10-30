@@ -431,6 +431,45 @@ let test_parameter_names_do_not_make_distinct_routes env () =
   | Ok () -> Windtrap.fail "two param-name variants were accepted as distinct routes"
 ;;
 
+let test_error_response_consumes_unread_body env () =
+  Switch.run (fun sw ->
+    with_server env ~sw (fun port ->
+      let flow = Eio.Net.connect ~sw env#net (`Tcp (Eio.Net.Ipaddr.V4.loopback, port)) in
+      let smuggled = "GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n" in
+      let request =
+        Printf.sprintf
+          "POST /missing HTTP/1.1\r\n\
+           Host: 127.0.0.1\r\n\
+           Content-Length: %d\r\n\
+           \r\n\
+           %s           GET /hello HTTP/1.1\r\n\
+           Host: 127.0.0.1\r\n\
+           Connection: close\r\n\
+           \r\n"
+          (String.length smuggled)
+          smuggled
+      in
+      Eio.Flow.copy_string request flow;
+      Eio.Flow.shutdown flow `Send;
+      let response = Eio.Buf_read.of_flow flow ~max_size:65536 |> Eio.Buf_read.take_all in
+      let rec count from total =
+        match String.index_from_opt response from 'H' with
+        | None -> total
+        | Some index ->
+          if
+            String.starts_with
+              ~prefix:"HTTP/1.1"
+              (String.sub response index (String.length response - index))
+          then count (index + 1) (total + 1)
+          else count (index + 1) total
+      in
+      Windtrap.equal
+        Windtrap.int
+        ~msg:"the unread error body was not parsed as a second request"
+        2
+        (count 0 0)))
+;;
+
 let test_duplicate_routes_are_config_errors env () =
   let module H = struct
     let routes =
@@ -738,6 +777,9 @@ let () =
           ; Windtrap.test
               "handler exception → 500, server survives"
               (test_handler_exception env)
+          ; Windtrap.test
+              "an error response consumes its unread body"
+              (test_error_response_consumes_unread_body env)
           ; Windtrap.test
               "every response closes the connection"
               (test_every_response_closes_the_connection env)
