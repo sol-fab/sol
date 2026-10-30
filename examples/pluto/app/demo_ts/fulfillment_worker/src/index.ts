@@ -89,7 +89,10 @@ async function main() {
 
   const consumer = kafka.consumer({ groupId: GROUP_ID });
   await consumer.connect();
-  await consumer.subscribe({ topic: TOPIC_NAME, fromBeginning: false });
+  // Match the OCaml worker: a new or expired consumer group must process the retained
+  // backlog rather than silently starting at the latest offset. Committed offsets still
+  // win; this only decides where a group with no offset begins.
+  await consumer.subscribe({ topic: TOPIC_NAME, fromBeginning: true });
 
   const metricsServer = createServer((req, res) => {
     const path = req.url ?? "";
