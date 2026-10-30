@@ -22,7 +22,18 @@ let gcp_desired_guards ~represented ~guarded ~create_database =
   | Some _ | None -> guarded
 ;;
 
-let gcp_prepare_destroy_result ~guarded run_log infra_dir var_files vars state
+let buckets_with_soft_delete state =
+  Sol_cli_cloud_destroy.resources state
+  |> List.filter (fun (resource : Sol_cli_cloud_destroy.resource) ->
+    String.equal resource.kind "google_storage_bucket")
+  |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+    Option.map
+      (fun seconds -> resource.address, seconds)
+      resource.soft_delete_retention_seconds)
+  |> List.filter (fun (_, seconds) -> seconds > 0)
+;;
+
+let gcp_prepare_destroy_result ~retention ~guarded run_log infra_dir var_files vars state
   : unit Sol_cli_cloud_lifecycle.preparation_outcome
   =
   let open Sol_cli_cloud_lifecycle in
@@ -39,46 +50,72 @@ let gcp_prepare_destroy_result ~guarded run_log infra_dir var_files vars state
         (List.length addresses)
         (String.concat ", " addresses)
   in
-  match substrate_presence state with
-  | Substrate_unknown ->
-    Sol_cli_report.app "  prepare: could not read this target's state; preparing nothing.";
-    failed
-      "the target's Terraform state could not be read, so no deletion guard could be \
-       lowered"
-  | Substrate_present | Substrate_absent ->
-    let represented = addresses state in
-    let desired =
-      gcp_desired_guards
-        ~represented
-        ~guarded
-        ~create_database:
-          (Sol_cli_terraform_vars.resolved "create_database" ~var_files ~vars)
-    in
-    report_unrepresented
-      (Sol_cli_cloud_lifecycle.preparations_unrepresented ~state:represented ~desired);
-    (match Sol_cli_cloud_lifecycle.preparations_eligible ~state:represented ~desired with
-     | [] ->
-       Sol_cli_report.app
-         "  prepare: no guarded resource in this target's state, nothing is targeted.";
-       Nothing_to_prepare
-     | first :: rest ->
-       Sol_cli_report.app
-         "  prepare: disabling the deletion guards on %s..."
-         (String.concat ", " (first :: rest));
-       (match
-          apply_asserted
-            ~run_log
-            ~phase_name:"gcp-destroy-prepare"
-            ~policy:(guard_preparation_policy ~addresses:(first :: rest))
-            ~scope:(Sol_cli_terraform.targets first rest)
-            ~chdir:infra_dir
-            ~var_files
-            ~vars:
-              (vars @ [ "sql_deletion_protection=false"; "gke_deletion_protection=false" ])
-            ()
-        with
-        | Error message -> failed message
-        | Ok () -> Prepared ()))
+  let applied_soft_delete =
+    match retention with
+    | Sol_cli_cloud_lifecycle.Retain_nothing -> buckets_with_soft_delete state
+    | Sol_cli_cloud_lifecycle.Retain_final_snapshot -> []
+  in
+  if applied_soft_delete <> []
+  then
+    Preparation_failed
+      { policy = Sol_cli_cloud_lifecycle.Block_destroy
+      ; reason =
+          Printf.sprintf
+            "destroy_retention is none, but the applied state still gives these storage \
+             buckets a soft-delete window: %s. Re-apply the target with \
+             destroy_retention=none so the buckets are recreated/updated with retention \
+             0, then destroy."
+            (String.concat
+               ", "
+               (List.map
+                  (fun (address, seconds) -> Printf.sprintf "%s (%ds)" address seconds)
+                  applied_soft_delete))
+      }
+  else (
+    match substrate_presence state with
+    | Substrate_unknown ->
+      Sol_cli_report.app
+        "  prepare: could not read this target's state; preparing nothing.";
+      failed
+        "the target's Terraform state could not be read, so no deletion guard could be \
+         lowered"
+    | Substrate_present | Substrate_absent ->
+      let represented = addresses state in
+      let desired =
+        gcp_desired_guards
+          ~represented
+          ~guarded
+          ~create_database:
+            (Sol_cli_terraform_vars.resolved "create_database" ~var_files ~vars)
+      in
+      report_unrepresented
+        (Sol_cli_cloud_lifecycle.preparations_unrepresented ~state:represented ~desired);
+      (match
+         Sol_cli_cloud_lifecycle.preparations_eligible ~state:represented ~desired
+       with
+       | [] ->
+         Sol_cli_report.app
+           "  prepare: no guarded resource in this target's state, nothing is targeted.";
+         Nothing_to_prepare
+       | first :: rest ->
+         Sol_cli_report.app
+           "  prepare: disabling the deletion guards on %s..."
+           (String.concat ", " (first :: rest));
+         (match
+            apply_asserted
+              ~run_log
+              ~phase_name:"gcp-destroy-prepare"
+              ~policy:(guard_preparation_policy ~addresses:(first :: rest))
+              ~scope:(Sol_cli_terraform.targets first rest)
+              ~chdir:infra_dir
+              ~var_files
+              ~vars:
+                (vars
+                 @ [ "sql_deletion_protection=false"; "gke_deletion_protection=false" ])
+              ()
+          with
+          | Error message -> failed message
+          | Ok () -> Prepared ())))
 ;;
 
 let sql_instance_address = "google_sql_database_instance.postgres"
@@ -140,15 +177,27 @@ let verify_gcp_destroy_preparation_result infra_dir =
   Ok ()
 ;;
 
-let observe_retention ~retention =
+let observe_retention ~retention ~pre_destroy =
   match retention with
   | Sol_cli_cloud_lifecycle.Retain_nothing ->
-    Retention_not_required
-      "none declared, and there is no GCP snapshot surface to observe -- Cloud SQL \
-       deletes its backups together with the instance (no final backup is requested), \
-       and the observability buckets were created with soft delete off (retention 0, \
-       INFRA-077), so the verified absence of the instance is the whole guarantee \
-       (destroy_retention = none)"
+    (match buckets_with_soft_delete pre_destroy with
+     | [] ->
+       Retention_not_required
+         "none declared, and there is no GCP snapshot surface to observe -- Cloud SQL \
+          deletes its backups together with the instance (no final backup is requested), \
+          and the observability buckets were created with soft delete off (applied \
+          retention 0 or absent, INFRA-077), so the verified absence of the instance is \
+          the whole guarantee (destroy_retention = none)"
+     | applied ->
+       Retention_unknown
+         (Printf.sprintf
+            "destroy_retention is none, but the applied state still gives these buckets \
+             a soft-delete window: %s"
+            (String.concat
+               ", "
+               (List.map
+                  (fun (address, seconds) -> Printf.sprintf "%s (%ds)" address seconds)
+                  applied))))
   | Sol_cli_cloud_lifecycle.Retain_final_snapshot ->
     Retention_unknown
       "this destroy reached verification with destroy_retention = final-snapshot on GCP, \
@@ -172,6 +221,7 @@ let prepare { run_log; infra_dir; var_files; vars; _ } ~retention ~cluster_name:
   | Sol_cli_cloud_lifecycle.Retain_nothing ->
     (match
        gcp_prepare_destroy_result
+         ~retention
          ~guarded:Sol_cli_provider_capabilities.gcp.guarded_addresses
          run_log
          infra_dir
@@ -196,7 +246,8 @@ let prepare { run_log; infra_dir; var_files; vars; _ } ~retention ~cluster_name:
 let destruction ctx : Sol_cli_destruction.t =
   { prepare = prepare ctx
   ; retention =
-      (fun ~retention ~pre_destroy:_ ~preparation:_ -> observe_retention ~retention)
+      (fun ~retention ~pre_destroy ~preparation:_ ->
+        observe_retention ~retention ~pre_destroy)
   ; residue =
       (fun ?(previously_attributed = [])
         ?(authorization_identities = [])
