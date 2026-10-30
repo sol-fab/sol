@@ -465,6 +465,22 @@ let deploy runner (request : request) =
     | Error (`Unknown message) ->
       Error (Unknown ("could not inspect existing service: " ^ message))
   in
+  (* Write the ownership record before mutating the provider. A gcloud error can still
+     follow a successful resource creation, so writing only after a zero exit status
+     leaves a live service with no record to destroy. If the deploy fails before creating
+     anything, destroy observes absence and the record is harmless. *)
+  let* () =
+    match request.record with
+    | None -> Ok ()
+    | Some path ->
+      write_record ~path (provisional request)
+      |> Result.map_error (fun message ->
+        Partial
+          ( "the service was not deployed because its ownership record could not be \
+             written: "
+            ^ message
+          , None ))
+  in
   match runner.run (deploy_argv request) with
   | Error message ->
     let observed =
@@ -474,17 +490,6 @@ let deploy runner (request : request) =
     in
     Error (Partial (message, observed))
   | Ok _ ->
-    let* () =
-      match request.record with
-      | None -> Ok ()
-      | Some path ->
-        write_record ~path (provisional request)
-        |> Result.map_error (fun message ->
-          Partial
-            ( "the service was deployed but its ownership record could not be written: "
-              ^ message
-            , None ))
-    in
     (match describe runner request with
      | Error (`Unknown message) ->
        Error (Unknown ("could not read the deployed service: " ^ message))
