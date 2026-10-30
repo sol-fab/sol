@@ -117,6 +117,34 @@ def check_aws(root, problems):
         )
 
 
+def check_workload_trust(root, problems):
+    """The workload trust must name the real EKS Pod Identity association ARN.
+
+    The ARN has the standard EKS service and region segments:
+    arn:aws:eks:<region>:<account>:podidentityassociation/<cluster>/<id>. An ARN with an
+    empty service/region segment is a plausible-looking typo that denies every workload
+    assume at runtime and is not caught by an IAM policy simulation (which checks the
+    role policy, not the trust policy).
+    """
+    document = find(root, AWS_ROOT, "data.aws_iam_policy_document.workload_trust", problems)
+    if document is None:
+        return
+    source_arns = []
+    for statement in tfconfig.blocks(document.body, "statement"):
+        for condition in tfconfig.blocks(statement, "condition"):
+            if text(condition.get("variable", "")) == "aws:SourceArn":
+                source_arns.extend(string_list(condition, "values"))
+    if not source_arns:
+        problems.append("the workload trust has no aws:SourceArn condition")
+        return
+    for arn in source_arns:
+        if not arn.startswith("arn:aws:eks:") or ":podidentityassociation/" not in arn:
+            problems.append(
+                "the workload trust aws:SourceArn is not the standard EKS Pod Identity "
+                f"association ARN (got {arn!r})"
+            )
+
+
 def check_gcp(root, problems):
     role = find(root, GCP_ROOT, GCP_ROLE, problems)
     if role is not None:
@@ -155,6 +183,7 @@ def main():
     root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     problems = []
     check_aws(root, problems)
+    check_workload_trust(root, problems)
     check_gcp(root, problems)
     if problems:
         for problem in problems:
