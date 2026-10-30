@@ -1297,11 +1297,12 @@ let destroy_deps
     let open Sol_cli_workload_scope in
     match Sol_cli_config.destination_of_target target_cfg with
     | Error message ->
-      Workloads_not_releasable
-        (Printf.sprintf
-           "the target's cluster could not be addressed, so there is no cluster to \
-            release from (%s)"
-           message)
+      Workloads_unestablished
+        { namespace = ""
+        ; kind = None
+        ; operation = "resolving the cluster"
+        ; reason = message
+        }
     | Ok destination ->
       let ctx = Sol_cli_kube_destination.context_of_destination destination in
       let workspace = workspace_name () in

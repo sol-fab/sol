@@ -338,14 +338,22 @@ let cloud_destroy ~target ~resolved_config ~var_file ~vars ~action ~accept_unrel
       match Sol_cli_config.destination_of_target target_cfg with
       | Error message ->
         (* No destination means no release record can be read. The declared namespaces are
-           still checked; the release layer separately refuses to claim that an unreachable
-           cluster released anything. Preserve the existing warning path here rather than
-           turning a missing optional context into a hard destroy refusal. *)
-        Sol_cli_report.warn
-          "could not read the recorded UID evidence for this workspace (%s); workloads \
-           Sol cannot prove it owns will be retained"
-          message;
-        Ok []
+           not the applied evidence: a service removed after apply can still be running.
+           Proceeding would let the substrate destroy kill it. *)
+        if accept_unreleased
+        then (
+          Sol_cli_report.warn
+            "could not read the recorded UID evidence for this workspace (%s); \
+             --accept-unreleased was given, so destruction will proceed without it"
+            message;
+          Ok [])
+        else
+          refuse
+            (Printf.sprintf
+               "could not read the recorded UID evidence for this workspace (%s); \
+                destruction cannot establish which namespaces were applied. Pass \
+                --accept-unreleased to destroy without that evidence."
+               message)
       | Ok destination ->
         let ctx = Sol_cli_kube_destination.context_of_destination destination in
         (match
