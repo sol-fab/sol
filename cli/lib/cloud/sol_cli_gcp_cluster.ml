@@ -9,7 +9,7 @@ open Result.Syntax
 
 let service_account_id_min_length = 6
 let service_account_id_max_length = 30
-let account_id_suffixes = [ "-cert-manager"; "-provisioner"; "-thanos"; "-loki" ]
+let account_id_suffixes = [ "-cert-manager"; "-provisioner"; "-thanos"; "-loki"; "-node" ]
 
 let longest_account_id_suffix =
   List.fold_left

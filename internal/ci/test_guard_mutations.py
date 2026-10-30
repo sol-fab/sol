@@ -47,19 +47,19 @@ def main():
     mutate(
         tmp,
         "platform/cloud/gcp/cluster/main.tf",
-        'data "google_compute_default_service_account" "default" {',
-        'resource "google_compute_default_service_account" "default" {',
+        'account_id   = "${var.cluster_name}-node"',
+        'account_id   = "default"',
     )
-    cases.append(("a project-wide resource managed by a target again", tmp))
+    cases.append(("a shared default node identity returns", tmp))
 
     tmp = scratch()
     mutate(
         tmp,
         "platform/cloud/gcp/cluster/main.tf",
-        'data "google_compute_default_service_account" "default" {',
-        "",
+        "service_account = google_service_account.node.email",
+        'service_account = "default"',
     )
-    cases.append(("the shared account no longer read at all", tmp))
+    cases.append(("the node pool stops using the dedicated identity", tmp))
 
     failures = 0
     for label, tmp in cases:

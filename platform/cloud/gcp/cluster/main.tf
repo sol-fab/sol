@@ -120,6 +120,19 @@ resource "google_container_cluster" "main" {
   }
 }
 
+resource "google_service_account" "node" {
+  project      = var.project_id
+  account_id   = "${var.cluster_name}-node"
+  display_name = "Sol GKE node identity for ${var.cluster_name}"
+  description  = "Dedicated node identity for ${var.cluster_name}; never the project's shared default Compute Engine service account."
+}
+
+resource "google_project_iam_member" "node_default" {
+  project = var.project_id
+  role    = "roles/container.defaultNodeServiceAccount"
+  member  = "serviceAccount:${google_service_account.node.email}"
+}
+
 resource "google_container_node_pool" "main" {
   name     = "${var.cluster_name}-nodes"
   cluster  = google_container_cluster.main.id
@@ -134,7 +147,8 @@ resource "google_container_node_pool" "main" {
     disk_type    = "pd-balanced"
     image_type   = "COS_CONTAINERD"
 
-    oauth_scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+    service_account = google_service_account.node.email
+    oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
 
     workload_metadata_config {
       mode = "GKE_METADATA"
@@ -159,16 +173,8 @@ resource "google_artifact_registry_repository" "images" {
   description   = "Container images for ${var.cluster_name} Sol workspace"
 }
 
-data "google_compute_default_service_account" "default" {
-  project = var.project_id
-}
-
 locals {
-  gke_node_service_account = (
-    google_container_node_pool.main.node_config[0].service_account == "default"
-    ? data.google_compute_default_service_account.default.email
-    : google_container_node_pool.main.node_config[0].service_account
-  )
+  gke_node_service_account = google_service_account.node.email
 }
 
 resource "google_artifact_registry_repository_iam_member" "gke_pull" {
