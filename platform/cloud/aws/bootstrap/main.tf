@@ -118,6 +118,27 @@ data "aws_iam_policy_document" "provisioner" {
     ]
     resources = ["*"]
   }
+  # The provisioning identity can create EKS access entries for the bounded roles the
+  # cluster root declares, but it must not be able to grant itself the cluster-admin access
+  # policy. `aws:PrincipalArn` is the caller's own ARN; EKS evaluates it against the
+  # `principalArn` being admitted.
+  statement {
+    sid    = "NoSelfClusterAdmin"
+    effect = "Deny"
+    actions = [
+      "eks:CreateAccessEntry",
+      "eks:UpdateAccessEntry",
+      "eks:AssociateAccessPolicy",
+      "eks:DisassociateAccessPolicy",
+    ]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "eks:principalArn"
+      values   = ["$${aws:PrincipalArn}"]
+    }
+  }
+
   statement {
     sid    = "ManageNativeKafkaAuthority"
     effect = "Allow"
