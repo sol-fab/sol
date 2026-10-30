@@ -11,6 +11,7 @@ type resource =
   ; secret_id : string option
   ; email : string option
   ; url : string option
+  ; soft_delete_retention_seconds : int option
   }
 
 type state_read =
@@ -28,6 +29,12 @@ open Result.Syntax
 let string_attr name values =
   match Sol_cli_json.field [ name ] values with
   | `String s when s <> "" -> Some s
+  | _ -> None
+;;
+
+let int_attr name values =
+  match Sol_cli_json.field [ name ] values with
+  | `Int value -> Some value
   | _ -> None
 ;;
 
@@ -59,6 +66,11 @@ let resource_of_json json =
       ; secret_id = string_attr "secret_id" values
       ; email = string_attr "email" values
       ; url = string_attr "url" values
+      ; soft_delete_retention_seconds =
+          (match Sol_cli_json.field [ "soft_delete_policy" ] values with
+           | `List (policy :: _) -> int_attr "retention_duration_seconds" policy
+           | `Assoc _ as policy -> int_attr "retention_duration_seconds" policy
+           | _ -> None)
       }
   | None, _ ->
     Error

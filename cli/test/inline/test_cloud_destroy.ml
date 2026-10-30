@@ -20,6 +20,60 @@ let gcp_binding_inside_the_cluster =
   {|{"address":"kubernetes_cluster_role_binding.provisioner_bootstrap_admin","type":"kubernetes_cluster_role_binding","values":{"metadata":[{"name":"sol-provisioner-bootstrap"}]}}|}
 ;;
 
+let gcp_bucket_with_soft_delete =
+  {|{"address":"google_storage_bucket.loki","type":"google_storage_bucket","values":{"name":"loki","soft_delete_policy":[{"retention_duration_seconds":604800}]}}|}
+;;
+
+let test_gcp_prepare_blocks_applied_soft_delete () =
+  let state = inventory_of_show_json (show_json_resources gcp_bucket_with_soft_delete) in
+  let run_log = Sol_cli_run_log.create ~prefix:"test-gcp-retention" () in
+  match
+    Sol_cli_gcp_destruction.gcp_prepare_destroy_result
+      ~retention:Sol_cli_cloud_lifecycle.Retain_nothing
+      ~guarded:[]
+      run_log
+      ""
+      []
+      []
+      state
+  with
+  | Sol_cli_cloud_lifecycle.Preparation_failed
+      { policy = Sol_cli_cloud_lifecycle.Block_destroy; reason } ->
+    Windtrap.is_true
+      ~msg:"the block names the applied window"
+      (Sol_cli_string.contains ~needle:"604800" reason)
+  | Sol_cli_cloud_lifecycle.Preparation_failed _ ->
+    Windtrap.fail "the applied soft-delete window did not block destroy"
+  | _ -> Windtrap.fail "prepare did not block an applied soft-delete window"
+;;
+
+let test_gcp_applied_soft_delete_is_not_retention_none () =
+  let state = inventory_of_show_json (show_json_resources gcp_bucket_with_soft_delete) in
+  match
+    Sol_cli_gcp_destruction.observe_retention
+      ~retention:Sol_cli_cloud_lifecycle.Retain_nothing
+      ~pre_destroy:state
+  with
+  | Sol_cli_destroy_verification.Retention_unknown message ->
+    Windtrap.is_true
+      ~msg:"the observation names the applied window"
+      (Sol_cli_string.contains ~needle:"604800" message)
+  | Sol_cli_destroy_verification.Retention_not_required _ ->
+    Windtrap.fail "an applied soft-delete window was reported as retention none"
+  | _ -> Windtrap.fail "unexpected retention observation"
+;;
+
+let test_gcp_bucket_soft_delete_is_read_from_state () =
+  match inventory_of_show_json (show_json_resources gcp_bucket_with_soft_delete) with
+  | State_represented [ resource ] ->
+    Windtrap.equal
+      (Windtrap.option Windtrap.int)
+      ~msg:"the applied soft-delete window is carried for retention verification"
+      (Some 604800)
+      resource.soft_delete_retention_seconds
+  | _ -> Windtrap.fail "the bucket fixture was not represented"
+;;
+
 let gcp_postgres_outside_the_cluster =
   {|{"address":"google_sql_database_instance.postgres","type":"google_sql_database_instance","values":{"name":"sol-postgres","deletion_protection":true}}|}
 ;;
@@ -3333,6 +3387,18 @@ let%test "execute: the cluster contents are classified" =
 
 let%test "execute: failed release does not prepare" =
   test_failed_release_does_not_prepare ()
+;;
+
+let%test "state: GCP prepare blocks applied soft delete" =
+  test_gcp_prepare_blocks_applied_soft_delete ()
+;;
+
+let%test "state: GCP applied soft delete is not retention none" =
+  test_gcp_applied_soft_delete_is_not_retention_none ()
+;;
+
+let%test "state: GCP bucket soft-delete window is represented" =
+  test_gcp_bucket_soft_delete_is_read_from_state ()
 ;;
 
 let%test "execute: half-built state" = test_half_built_state_is_destroyable ()

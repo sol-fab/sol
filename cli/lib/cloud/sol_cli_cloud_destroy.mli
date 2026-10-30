@@ -11,6 +11,7 @@ type resource =
   ; secret_id : string option
   ; email : string option
   ; url : string option
+  ; soft_delete_retention_seconds : int option
   }
 
 type state_read =
