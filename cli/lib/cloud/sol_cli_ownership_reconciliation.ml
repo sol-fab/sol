@@ -31,6 +31,13 @@ type disposition =
       ; reason : string
       }
 
+(* Adoption is destructive authority: the post-import state must name exactly the identity
+   that was adopted. A blank identifier is unverified, and substring containment is not an
+   identity match. *)
+let adopted_identity_agrees ~observed ~import_identity =
+  (not (Sol_cli_string.is_blank observed)) && String.equal observed import_identity
+;;
+
 (* Adoption is destructive authority, so the observed name must match the registry entry
    exactly. Detection may be broader (the inventories report every candidate their attribution
    rule finds); recovery must not read that breadth as permission to import. The inventory

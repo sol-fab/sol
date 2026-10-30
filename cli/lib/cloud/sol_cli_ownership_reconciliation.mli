@@ -29,6 +29,8 @@ type disposition =
       ; reason : string
       }
 
+val adopted_identity_agrees : observed:string -> import_identity:string -> bool
+
 val dispositions
   :  entries:Sol_cli_resource_identity.entry list
   -> state_addresses:string list
