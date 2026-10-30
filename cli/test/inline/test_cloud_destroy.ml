@@ -1056,6 +1056,45 @@ let test_an_unreadable_workload_listing_is_an_error () =
      | Ok _ -> false)
 ;;
 
+let test_destroy_observes_declared_and_recorded_namespaces () =
+  let owned namespace name =
+    { Sol_cli_release_id.namespace; resource = "deployments"; name; uid = "uid-" ^ name }
+  in
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"a namespace recorded at apply remains in scope after its service leaves sol.yml"
+    [ "checkout"; "payments"; "payments-old" ]
+    (Sol_cli_workload_scope.release_namespaces
+       ~declared:[ "payments"; "checkout" ]
+       ~evidence:[ owned "payments-old" "legacy-svc"; owned "payments" "charge-svc" ])
+;;
+
+let test_destroy_uses_the_sanitized_workspace_label () =
+  let listing =
+    {|{"items":[
+        {"kind":"Deployment","metadata":{"name":"charge-svc"},
+         "spec":{"template":{"metadata":{"labels":{"workspace":"my-app"}}}}}
+      ]}|}
+  in
+  Windtrap.equal
+    (Windtrap.result (Windtrap.list Windtrap.string) Windtrap.string)
+    ~msg:"a raw directory name selects the sanitized workspace label"
+    (Ok [ "deployment/charge-svc" ])
+    (Sol_cli_workload_scope.workloads_of_json listing ~workspace:"My_App"
+     |> Result.map (List.map Sol_cli_workload_scope.workload_to_string));
+  let wait =
+    Sol_cli_workload_scope.wait_args
+      ~namespace:"payments"
+      ~workspace:"My_App"
+      ~timeout_seconds:30
+  in
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the wait selector uses the same sanitized label"
+    true
+    (List.mem "workspace=my-app" wait)
+;;
+
 let test_the_workload_selection_reads_the_pod_template () =
   let listing =
     {|{"items":[
@@ -3466,6 +3505,14 @@ let%test "verification: degradation preserved when verification fails" =
 
 let%test "verification: an unreadable workload listing is an error" =
   test_an_unreadable_workload_listing_is_an_error ()
+;;
+
+let%test "destruction: declared and recorded namespaces are both in scope" =
+  test_destroy_observes_declared_and_recorded_namespaces ()
+;;
+
+let%test "destruction: the workspace label is sanitized on read and wait" =
+  test_destroy_uses_the_sanitized_workspace_label ()
 ;;
 
 let%test "verification: the workload selection reads the pod template" =

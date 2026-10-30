@@ -638,11 +638,7 @@ let namespaces_of_plan (plan : Sol_cli_deployment_plan.t) =
     declares* is surplus precisely because it is absent from the plan, so its namespace may
     be absent from the plan too. Observing only the plan's namespaces would stop finding it.
     *)
-let namespaces_of_evidence (evidence : Sol_cli_release_id.owned_object list) =
-  evidence
-  |> List.map (fun (owned : Sol_cli_release_id.owned_object) -> owned.namespace)
-  |> List.sort_uniq String.compare
-;;
+let namespaces_of_evidence = Sol_cli_workload_scope.namespaces_of_evidence
 
 (** Observe the workspace's live workloads **in the namespaces this deploy resolved**.
 

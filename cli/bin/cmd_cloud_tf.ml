@@ -200,22 +200,24 @@ let report_degradations = function
 let declared_workload_namespaces () =
   match Sol_cli_workspace_model.load_cwd () with
   | Error message ->
-    Sol_cli_report.warn
-      "warning: the workspace's declared services could not be read (%s), so the \
-       workloads it deployed cannot be released by namespace before the substrate is \
-       destroyed"
-      message;
-    []
+    refuse
+      (Printf.sprintf
+         "the workspace's declared services could not be read (%s). Destruction cannot \
+          establish which namespaces it applied to, so it refuses before touching the \
+          substrate; fix the workspace (or re-run from a complete checkout) and retry."
+         message)
   | Ok facts ->
     let workspace = Sol_cli_workspace.current_name () in
     Sol_cli_workspace_model.services facts
-    |> List.filter_map (fun (service : Sol_cli_manifest.service) ->
-      match Sol_cli_deployment_plan.namespace_name ~workspace ~domain:service.domain with
-      | Ok namespace -> Some namespace
-      | Error message ->
-        Sol_cli_report.warn "warning: %s" message;
-        None)
-    |> List.sort_uniq String.compare
+    |> Sol_cli_result.map_list (fun (service : Sol_cli_manifest.service) ->
+      Sol_cli_deployment_plan.namespace_name ~workspace ~domain:service.domain
+      |> Result.map_error (fun message ->
+        Sol_cli_exit.error
+          (Printf.sprintf
+             "service %s has no resolvable namespace: %s"
+             service.Sol_cli_manifest.name
+             message)))
+    |> Result.map (List.sort_uniq String.compare)
 ;;
 
 (* Destroy consumes the target intent its caller already resolved
@@ -328,12 +330,22 @@ let cloud_destroy ~target ~resolved_config ~var_file ~vars ~action ~accept_unrel
     Printf.printf "\nDone. Re-run with --apply to destroy cloud resources.\n%!";
     Ok ()
   | Apply ->
-    let workload_namespaces = declared_workload_namespaces () in
+    let* declared_namespaces = declared_workload_namespaces () in
     (* The UID evidence the workspace recorded at apply. Workloads it cannot match are
-       retained, not removed (docs/architecture/ownership.md). *)
-    let recorded_evidence =
+       retained, not removed (docs/architecture/ownership.md). An unreadable release
+       record is not evidence that no namespace was applied. *)
+    let* recorded_evidence =
       match Sol_cli_config.destination_of_target target_cfg with
-      | Error _ -> []
+      | Error message ->
+        (* No destination means no release record can be read. The declared namespaces are
+           still checked; the release layer separately refuses to claim that an unreachable
+           cluster released anything. Preserve the existing warning path here rather than
+           turning a missing optional context into a hard destroy refusal. *)
+        Sol_cli_report.warn
+          "could not read the recorded UID evidence for this workspace (%s); workloads \
+           Sol cannot prove it owns will be retained"
+          message;
+        Ok []
       | Ok destination ->
         let ctx = Sol_cli_kube_destination.context_of_destination destination in
         (match
@@ -341,13 +353,18 @@ let cloud_destroy ~target ~resolved_config ~var_file ~vars ~action ~accept_unrel
              ~ctx
              ~workspace:(Sol_cli_workspace.current_name ())
          with
-         | Ok evidence -> evidence
+         | Ok evidence -> Ok evidence
          | Error message ->
-           Sol_cli_report.warn
-             "could not read the recorded UID evidence for this workspace (%s); \
-              workloads Sol cannot prove it owns will be retained"
-             message;
-           [])
+           refuse
+             (Printf.sprintf
+                "could not read the recorded UID evidence for this workspace (%s); \
+                 destruction cannot establish which namespaces were applied"
+                message))
+    in
+    let workload_namespaces =
+      Sol_cli_workload_scope.release_namespaces
+        ~declared:declared_namespaces
+        ~evidence:recorded_evidence
     in
     let deps =
       Sol_cli_cloud_wiring.destroy_deps
