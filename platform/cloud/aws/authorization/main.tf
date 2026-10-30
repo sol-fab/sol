@@ -234,6 +234,20 @@ data "aws_iam_policy_document" "workload_trust" {
       type        = "Service"
       identifiers = ["pods.eks.amazonaws.com"]
     }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [local.account_id]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      # EKS Pod Identity association ARNs omit the service and region segments:
+      # arn:aws::<account>:podidentityassociation/<cluster>/<association-id>.
+      values = ["arn:aws::${local.account_id}:podidentityassociation/${var.cluster_name}/*"]
+    }
   }
 }
 
