@@ -959,6 +959,56 @@ let test_provider_error_after_apply_still_leaves_a_record () =
        | Error message -> check ("provisional record unreadable: " ^ message) false)
 ;;
 
+let test_destroy_refuses_provisional_record_without_image () =
+  let deleted = ref false in
+  let present = ref true in
+  let runner =
+    { Sol_cli_cloud_run.run =
+        (fun argv ->
+          match argv with
+          | "gcloud" :: "run" :: "services" :: "list" :: _ ->
+            Ok (out (if !present then "sol-test" else ""))
+          | "gcloud" :: "run" :: "services" :: "describe" :: _ ->
+            Ok (out (describe_json ~revision:"rev-1" ~percent:100))
+          | "gcloud" :: "run" :: "services" :: "delete" :: _ ->
+            present := false;
+            deleted := true;
+            Ok (out "deleted")
+          | _ -> Error "unexpected")
+    ; http = (fun ~url:_ ~token:_ -> Ok (200, ""))
+    }
+  in
+  let record = Filename.temp_file "sol-cloud-run-empty-image-" ".json" in
+  Fun.protect
+    ~finally:(fun () ->
+      try Sys.remove record with
+      | Sys_error _ -> ())
+    (fun () ->
+       Sol_cli_cloud_run.write_record
+         ~path:record
+         { project = "sol-qualification"
+         ; region = "us-west1"
+         ; service = "sol-test"
+         ; provider_service = "sol-test"
+         ; revision = ""
+         ; url = ""
+         ; image = ""
+         }
+       |> Result.get_ok;
+       match
+         Sol_cli_cloud_run.destroy
+           runner
+           ~project:"sol-qualification"
+           ~region:"us-west1"
+           ~service:"sol-test"
+           ~record
+       with
+       | Error (Refused _) -> check "an empty image record is refused" (not !deleted)
+       | Error e ->
+         check ("unexpected failure " ^ Sol_cli_cloud_run.failure_to_string e) false
+       | Ok () -> check "an empty image record must not delete" false)
+;;
+
 let () =
   test_ingress ();
   test_provider_naming ();
@@ -985,6 +1035,7 @@ let () =
   test_deploy_refuses_unowned_service ();
   test_deploy_writes_provisional_record_before_describe ();
   test_destroy_accepts_provisional_record ();
+  test_destroy_refuses_provisional_record_without_image ();
   test_provider_error_after_apply_still_leaves_a_record ();
   Printf.printf "%d passed, %d failed\n" !passed !failed;
   if !failed > 0 then exit 1
