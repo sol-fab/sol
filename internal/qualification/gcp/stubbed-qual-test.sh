@@ -1397,6 +1397,15 @@ is "prepare refuses when the binding cannot be recorded" "$(cat "$TMP/unrecorded
 has "and names the evidence file it could not write" \
   "prepare: the candidate binding could not be recorded (candidate-binding.txt)" "$TMP/unrecorded.out"
 
+
+printf '\nscenario: the production app target omits the probes\n'
+run_case target-probes prepare
+lacks "the cloud target does not select probe_fn" "probe_fn" "$TMP/target-probes.logs/profile-target.yml"
+lacks "the cloud target does not select probe_ts_fn" "probe_ts_fn" "$TMP/target-probes.logs/profile-target.yml"
+run_case app-target-probes app
+lacks "the app target does not select probe_fn" "probe_fn" "$TMP/app-target-probes.logs/profile-target.yml"
+lacks "the app target does not select probe_ts_fn" "probe_ts_fn" "$TMP/app-target-probes.logs/profile-target.yml"
+
 printf '\nscenario: a spent attempt refuses a second application run\n'
 # The CA evidence store admits one verdict per instance per attempt on every provider;
 # the guard is the phase's, so GCP gets the same refusal AWS had.
