@@ -59,6 +59,7 @@ discoverable from the existing configuration.
 |---|---|---|
 | Alert acknowledgement | AWS G1–G3 and the GCP alert gate require a delivered and acknowledged alert, not just a configured URL | Receiver/owner/runbook are approved for reuse; the synthetic acknowledgement is performed during the authorized campaign |
 | AWS target file refresh | The existing target has no `terraform_var_file`, omits both TypeScript units, and names an old cluster | Must be regenerated/edited with the v0.1 required units and current tfvars |
+| GCP target TypeScript units | The GCP live target currently declares only the OCaml units | The target generator must include `order_svc` and `fulfillment_worker` for full parity |
 | AWS current egress CIDR | `cluster_endpoint_cidr` must be a narrow operator CIDR, not stale or `0.0.0.0/0` | Existing value is `73.98.203.180/32`; confirm it is still the operator's egress |
 | Database password | The AWS procedure requires `TF_VAR_db_password`; GCP setup has its own credential inputs | Operator-controlled; not discoverable |
 | GCP CA-observer kubeconfig/principal | The GCP matrix requires an independent read-only observer | Not present in the inspected inputs |
