@@ -640,12 +640,24 @@ module Make (H : HANDLER) = struct
   (* A duplicate method+pattern silently shadows the later route. An external route before
      an internal one would expose the later handler without its workload-identity check,
      so this is a startup configuration error rather than a first-match lookup decision. *)
+  let normalized_pattern (pattern : Route.pattern) =
+    let segments =
+      pattern.segments
+      |> List.map (function
+        | Route.Literal value -> "L:" ^ value
+        | Route.Param _ -> "P:")
+      |> String.concat "/"
+    in
+    segments ^ if pattern.trailing_slash then "/" else ""
+  ;;
+
   let duplicate_route routes =
     let seen = Hashtbl.create (List.length routes) in
     let rec loop = function
       | [] -> None
       | (route : Route.t) :: rest ->
-        let key = route.method_, Route.pattern_to_string route.pattern in
+        let normalized = normalized_pattern route.pattern in
+        let key = route.method_, normalized in
         if Hashtbl.mem seen key
         then Some (Route.pattern_to_string route.pattern)
         else (

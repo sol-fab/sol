@@ -411,6 +411,26 @@ let test_external_stop_is_prompt env () =
     (elapsed < 1.5)
 ;;
 
+let test_parameter_names_do_not_make_distinct_routes env () =
+  let module H = struct
+    let routes =
+      [ Route.external_ (Route.get "/orders/:id" (fun _ -> Response.ok "first"))
+      ; Route.external_ (Route.get "/orders/:order_id" (fun _ -> Response.ok "second"))
+      ]
+    ;;
+  end
+  in
+  let module S = Service.Make (H) in
+  let stop, stop_r = Promise.create () in
+  Promise.resolve stop_r ();
+  match S.run ~env ~port:0 ~stop ~shutdown_delay_s:0.0 ~drain_timeout_s:0.1 () with
+  | Error (`Config message) ->
+    Windtrap.is_true
+      ~msg:"the refusal names the semantic duplicate"
+      (Sol_runtime.contains_substring ~needle:"/orders" message)
+  | Ok () -> Windtrap.fail "two param-name variants were accepted as distinct routes"
+;;
+
 let test_duplicate_routes_are_config_errors env () =
   let module H = struct
     let routes =
@@ -731,6 +751,9 @@ let () =
           ; Windtrap.test
               "duplicate method+pattern routes are a startup Config error"
               (test_duplicate_routes_are_config_errors env)
+          ; Windtrap.test
+              "parameter names do not make routes distinct"
+              (test_parameter_names_do_not_make_distinct_routes env)
           ; Windtrap.test
               "malformed PORT is a startup Config error"
               (test_malformed_port_is_config_error env)
