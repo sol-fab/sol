@@ -348,7 +348,16 @@ let release_workloads
         match owned with
         | [] ->
           warn_retained ();
-          Ok ()
+          if retained = []
+          then Ok ()
+          else
+            Error
+              (unreleased
+                 scope.namespace
+                 "releasing the workloads it found"
+                 "the namespace contains live workloads that do not match the UIDs \
+                  recorded at apply; destroy cannot establish that its workload release \
+                  succeeded")
         | owned ->
           Sol_cli_report.app "  %s" (to_string { scope with workloads = owned });
           (match
