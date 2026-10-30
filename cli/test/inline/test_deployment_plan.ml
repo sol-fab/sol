@@ -1144,6 +1144,49 @@ let test_to_json_consumer_groups_present () =
     matches_regex re s)
 ;;
 
+let test_duplicate_normalized_provider_names_fail () =
+  let tmp = Filename.temp_dir "sol_test_plan_name_collision" "" in
+  with_cwd tmp (fun () ->
+    mkdirs "app/payments/Foo_svc";
+    mkdirs "app/payments/foo_svc";
+    write_file "app/payments/Foo_svc/sol.toml" "[infra.deploy]\n";
+    write_file "app/payments/foo_svc/sol.toml" "[infra.deploy]\n";
+    let env : Sol_cli_deployment_plan.env_config =
+      { name = "local"
+      ; mode = Sol_cli_deployment_plan.Local
+      ; registry = "sol-registry:5000"
+      ; image_tag = "dev"
+      ; env = None
+      ; region = None
+      ; base_domain = None
+      ; cluster_issuer = "letsencrypt-prod"
+      }
+    in
+    let service name dir : Sol_cli_manifest.service =
+      { domain = "payments"; name; primitive = Sol_cli_manifest.Svc; dir }
+    in
+    match
+      Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
+        ~platform_shape:Sol_cli_profile.Local
+        ~workspace:"myworkspace"
+        ~env
+        ~facts:(facts ())
+        [ service "Foo_svc" "app/payments/Foo_svc"
+        ; service "foo_svc" "app/payments/foo_svc"
+        ]
+    with
+    | Error (Sol_cli_deployment_plan.Invalid_kubernetes_name { message; _ }) ->
+      Windtrap.is_true
+        ~msg:"the refusal names the normalized collision"
+        (Sol_cli_string.contains ~needle:"normalize" message)
+    | Ok _ -> Windtrap.fail "two units normalized to the same provider name"
+    | Error e ->
+      Windtrap.failf
+        "expected a normalized-name refusal, got %s"
+        (Sol_cli_deployment_plan.plan_error_to_string e))
+;;
+
 let test_of_services_result_surfaces_toml_parse_error () =
   let tmp = Filename.temp_dir "sol_test_plan_toml_error" "" in
   with_cwd tmp (fun () ->
@@ -2140,6 +2183,10 @@ let%test
     "consumer_groups: a group the workspace no longer declares is not reported (BUG-088)"
   =
   test_a_group_the_workspace_no_longer_declares_is_not_reported ()
+;;
+
+let%test "of_services: normalized provider-name collisions fail" =
+  test_duplicate_normalized_provider_names_fail ()
 ;;
 
 let%test "of_services: returns typed TOML parse error" =
