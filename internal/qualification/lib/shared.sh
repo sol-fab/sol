@@ -111,6 +111,10 @@ app_k8s_name() { printf '%s' "$1" | tr '_' '-'; }
 # The candidate-bound address of each app unit (the path under app/), taken from the build
 # context candidate-binding.sh materialized. Never the working tree and never a hardcoded
 # service-to-path map: the candidate's own layout is the authority.
+selects_typescript() {
+  app_unit_addresses | grep -qE '^(app/)?demo_ts/'
+}
+
 app_unit_addresses() {
   local unit dir
   if [ ! -d "$APP_BUILD_CONTEXT" ]; then

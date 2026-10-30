@@ -2424,6 +2424,21 @@ is "the default row observes all four Kafka consumers" \
   "$(jq '.consumers | length' "$TMP/ok.logs/kafka-delivery.json")" "4"
 lacks "credential values never enter state evidence" "qual-secret" "$TMP/ok.logs/state/cloud.tfstate"
 
+
+printf '\nscenario: TypeScript units are recognized from candidate-relative addresses\n'
+mkdir -p "$TMP/ts-selection/app/demo_ts/order_svc"
+: >"$TMP/ts-selection/app/demo_ts/order_svc/Dockerfile"
+if ( export APP_BUILD_CONTEXT="$TMP/ts-selection" APP_UNITS=order_svc; source "$REPO/internal/qualification/lib/shared.sh" >/dev/null 2>&1; selects_typescript ); then
+  ok "candidate-relative TypeScript addresses select the language"
+else
+  no "candidate-relative TypeScript addresses select the language" "not selected" "selected"
+fi
+if ( export APP_BUILD_CONTEXT="$TMP/ts-selection" APP_UNITS=order_svc; source "$REPO/internal/qualification/lib/shared.sh" >/dev/null 2>&1; [ "$(app_unit_addresses)" = "demo_ts/order_svc" ] ); then
+  ok "the candidate address is candidate-relative"
+else
+  no "the candidate address is candidate-relative" "wrong address" "demo_ts/order_svc"
+fi
+
 printf '\n'
 printf 'PASSED=%d FAILED=%d EXIT=%d\n' "$pass" "$fail" "$([ "$fail" -gt 0 ] && echo 1 || echo 0)"
 if [ "$fail" -gt 0 ]; then
