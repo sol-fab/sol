@@ -77,7 +77,6 @@ module Q = struct
   let pending_count = (unit ->! int) (Printf.sprintf "SELECT count(*) FROM %s" table)
 end
 
-let publish tx ~key ~ord ~payload ~kind = Pg_db.exec tx Q.insert (kind, key, ord, payload)
 let pending pool ?(limit = 1000) () = Pg_db.collect pool Q.pending_list limit
 
 let pending_count pool =
@@ -86,6 +85,19 @@ let pending_count pool =
 
 let kind_is_selectable kind =
   (not (String.equal kind "")) && not (String.contains kind ',')
+;;
+
+let publish tx ~key ~ord ~payload ~kind =
+  if kind_is_selectable kind
+  then Pg_db.exec tx Q.insert (kind, key, ord, payload)
+  else
+    Error
+      (Pg_error.Query_error
+         (Printf.sprintf
+            "sol-outbox: kind %S is empty or contains a comma, so the \
+             relay's              comma-separated selection can never read it; refusing \
+             to insert an              unselectable event"
+            kind))
 ;;
 
 let validate_kinds kinds =
