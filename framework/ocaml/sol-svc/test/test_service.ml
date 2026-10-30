@@ -463,11 +463,12 @@ let test_error_response_consumes_unread_body env () =
           then count (index + 1) (total + 1)
           else count (index + 1) total
       in
+      let responses = count 0 0 in
       Windtrap.equal
         Windtrap.int
         ~msg:"the unread error body was not parsed as a second request"
         2
-        (count 0 0)))
+        responses))
 ;;
 
 let test_duplicate_routes_are_config_errors env () =
