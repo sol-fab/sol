@@ -12,13 +12,12 @@ gates are recorded below.
 and resolves outside the set below fails preflight before anything is mutated;
 there is no "accepted but unverified" outcome (DEC-026 §4).
 
-The production preflight currently admits a provider or language only when its
-evidence exists. Today it admits AWS and OCaml and refuses GCP and TypeScript.
-That refusal is an **evidence gate, not a support tier**: the README's
-[Support and conformance](../../README.md#support-and-conformance) table records
-which cells are proven, partial or missing. A provider or language is admitted
-when its row becomes production evidence; the contract does not change when that
-happens.
+The production preflight admits both contracted providers (AWS and GCP) and both
+contracted languages (OCaml and TypeScript). Evidence status is tracked
+separately in the README's
+[Support and conformance](../../README.md#support-and-conformance) table; a
+cell that is `live`, `partial`, or `none` is missing qualification evidence, not
+a different support tier and not a preflight refusal.
 
 ## v0.1 contract freeze
 
