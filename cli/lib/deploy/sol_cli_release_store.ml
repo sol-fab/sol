@@ -170,7 +170,11 @@ let current ~ctx ~(workspace : string) : (string option, string) result =
       ~args:
         [ "get"; "configmap"; name; "-n"; "default"; "-o"; "jsonpath={.data.release_id}" ]
   with
-  | Ok release_id -> Ok (Option.bind release_id Sol_cli_string.non_blank)
+  | Ok None -> Ok None
+  | Ok (Some release_id) ->
+    (match Sol_cli_string.non_blank (String.trim release_id) with
+     | Some release_id -> Ok (Some release_id)
+     | None -> Error "current release ConfigMap has no data.release_id")
   | Error e -> Error (Sol_cli_process.error_to_string e)
 ;;
 
@@ -247,17 +251,21 @@ let move_pointer ~ctx (t : Sol_cli_release.t) : (unit, string) result =
     (write_json ~ctx)
 ;;
 
-let retained_for_plan ~ctx ~workspace
+let retained_for_plan ~ctx ~workspace ~whole
   : (Sol_cli_release.recorded_workload list, string) result
   =
-  (* A whole-target deploy records a complete boundary, so it does not need the
-     boundary it is amending: an unreadable current record retains nothing rather
-     than refusing. *)
-  match current ~ctx ~workspace with
-  | Error _ -> Ok []
-  | Ok None -> Ok []
-  | Ok (Some release_id) ->
-    (match get ~ctx ~workspace ~release_id with
-     | Ok record -> Ok record.Sol_cli_release.workloads
-     | Error _ -> Ok [])
+  if whole
+  then Ok []
+  else (
+    (* An unreadable current record is not an empty one. Retaining nothing would drop the
+     inherited workloads' recorded UIDs from the next release, so destroy could no longer
+     release them. A whole-workspace plan does not inherit, but it can only know that
+     after this read succeeds; a first deploy has an absent pointer, which is [Ok None]. *)
+    match current ~ctx ~workspace with
+    | Error message -> Error message
+    | Ok None -> Ok []
+    | Ok (Some release_id) ->
+      (match get ~ctx ~workspace ~release_id with
+       | Ok record -> Ok record.Sol_cli_release.workloads
+       | Error message -> Error message))
 ;;

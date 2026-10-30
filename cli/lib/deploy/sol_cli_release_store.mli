@@ -14,6 +14,7 @@ val record_plan
 val retained_for_plan
   :  ctx:Sol_cli_kube_destination.context
   -> workspace:string
+  -> whole:bool
   -> (Sol_cli_release.recorded_workload list, string) result
 
 val list

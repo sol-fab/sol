@@ -645,7 +645,12 @@ let run_lifecycle
          confirm_consumer_groups ~ctx:cluster ~workspace ~confirm_group_change plan
        in
        let previous = read_previous_release_in ~cluster ~workspace in
-       let* retained = Sol_cli_release_store.retained_for_plan ~ctx:cluster ~workspace in
+       let* retained =
+         Sol_cli_release_store.retained_for_plan
+           ~ctx:cluster
+           ~workspace
+           ~whole:(Sol_cli_deployment_plan.is_whole_workspace plan)
+       in
        (* Unreadable evidence means no recorded UID, so nothing is treated as owned here;
           the warning below may then name a workload Sol actually applied. It reports the
           mismatch rather than guessing. *)
