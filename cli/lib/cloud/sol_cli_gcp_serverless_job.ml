@@ -148,9 +148,22 @@ let labels_of_job json =
   | _ -> []
 ;;
 
+let workspace_label () =
+  Sol_cli_workspace.current_name ()
+  |> String.map (function
+    | ('a' .. 'z' | '0' .. '9' | '-' | '_' | '.') as c -> c
+    | 'A' .. 'Z' as c -> Char.lowercase_ascii c
+    | _ -> '-')
+  |> fun value -> if String.length value > 63 then String.sub value 0 63 else value
+;;
+
 let owns ~job labels =
   List.assoc_opt "sol-owned" labels = Some ownership_tag
   && List.assoc_opt "sol-service" labels = Some job
+  &&
+  match List.assoc_opt "sol-workspace" labels with
+  | Some workspace -> String.equal workspace (workspace_label ())
+  | None -> true
 ;;
 
 let describe_job (r : request) ~job =
@@ -197,7 +210,10 @@ let deploy_argv (r : request) ~job ~image =
   ; "--region"
   ; r.region
   ; "--labels"
-  ; "sol-owned=cloud-run-job-experiment,sol-service=" ^ job
+  ; Printf.sprintf
+      "sol-owned=cloud-run-job-experiment,sol-service=%s,sol-workspace=%s"
+      job
+      (workspace_label ())
   ; "--max-retries"
   ; "0"
   ; "--tasks"
