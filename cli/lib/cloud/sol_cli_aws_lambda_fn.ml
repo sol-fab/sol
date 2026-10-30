@@ -54,6 +54,11 @@ let aws (r : request) args =
 let owns ~function_name tags =
   List.assoc_opt "sol-owned" tags = Some ownership_tag
   && List.assoc_opt "sol-service" tags = Some function_name
+  &&
+  match List.assoc_opt "sol-workspace" tags with
+  | Some workspace ->
+    String.equal workspace (Sol_cli_aws_lambda_common.workspace_label ())
+  | None -> true
 ;;
 
 let preflight (r : request) =
@@ -261,7 +266,11 @@ let deploy (r : request) =
       ~image:r.image
       ~role_arn:r.role_arn
       ~environment:(environment r)
-      ~tags:[ "sol-owned", ownership_tag; "sol-service", r.function_name ]
+      ~tags:
+        [ "sol-owned", ownership_tag
+        ; "sol-service", r.function_name
+        ; "sol-workspace", Sol_cli_aws_lambda_common.workspace_label ()
+        ]
       ~existing
       ()
   in

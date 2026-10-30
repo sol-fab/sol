@@ -33,6 +33,15 @@ type scope =
   ; run : string list -> (output, string) result
   }
 
+let workspace_label () =
+  Sol_cli_workspace.current_name ()
+  |> String.map (function
+    | ('a' .. 'z' | '0' .. '9' | '-' | '_' | '.') as c -> c
+    | 'A' .. 'Z' as c -> Char.lowercase_ascii c
+    | _ -> '-')
+  |> fun value -> if String.length value > 63 then String.sub value 0 63 else value
+;;
+
 let aws ~profile ~region args =
   [ "aws"; "--region"; region; "--output"; "json" ]
   @ (match profile with
