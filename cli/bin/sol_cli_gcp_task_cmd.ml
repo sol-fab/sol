@@ -124,12 +124,15 @@ let deploy_run
   in
   let* assets = Cmd_cloud_tf.resolve_assets () in
   let run_log = Sol_cli_run_log.create ~prefix:"task" () in
-  let* identities =
-    Sol_cli_authorization_stage.apply_serverless_identities
+  let* identities, _scheduler =
+    Sol_cli_authorization_stage.reconcile_target_authorization
       ~assets
       ~run_log
       ~target:config.target
-      [ { Sol_cli_grant.unit = service; requirements = [] } ]
+      { Sol_cli_authorization_stage.grants = []
+      ; serverless_units = [ { Sol_cli_grant.unit = service; requirements = [] } ]
+      ; scheduler_units = []
+      }
     |> Result.map_error Sol_cli_exit.error
   in
   let* runtime_service_account =

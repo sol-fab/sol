@@ -128,43 +128,22 @@ let run_serverless
       in
       Ok (service, image, config, { Sol_cli_grant.unit; requirements }))
   in
-  let units = List.map (fun (_, _, _, unit) -> unit) declared in
   let* assets = Cmd_cloud_tf.resolve_assets () in
-  let* identities =
-    Sol_cli_serverless_lifecycle.ensure_runtime_identities
-      ~assets
-      ~run_log
+  let* serverless_units, scheduler_units =
+    Sol_cli_serverless_lifecycle.complete_units
+      ~config:resolved_config
+      ~project
       ~target:target_cfg
-      ~units
+      ~model:facts
+      ~exclude:None
     |> Result.map_error Sol_cli_exit.error
   in
-  let* scheduler_identities =
-    (* Scheduler identities are target-scoped and owned by the authorization root. Pass
-       every scheduled function in the workspace so removing a declaration, or deploying a
-       different selection, does not leave an orphaned principal behind. *)
-    let* scheduled =
-      Sol_cli_workspace_model.workloads facts
-      |> Sol_cli_result.map_list (fun (workload : Sol_cli_workspace_model.workload) ->
-        match workload.service.primitive, workload.config with
-        | Sol_cli_manifest.Fn, Ok config when Option.is_some config.schedule ->
-          let* function_name =
-            Sol_cli_serverless_lifecycle.scheduler_resource_name
-              ~target:target_cfg
-              workload.service.name
-            |> Result.map_error Sol_cli_exit.error
-          in
-          let unit =
-            Sol_cli_serverless_target_common.unit_of_service ~project workload.service
-          in
-          Ok (Some { Sol_cli_grant.unit; function_name })
-        | _ -> Ok None)
-      |> Result.map (List.filter_map Fun.id)
-    in
-    Sol_cli_serverless_lifecycle.ensure_scheduler_identities
+  let* identities, scheduler_identities =
+    Sol_cli_authorization_stage.reconcile_target_authorization
       ~assets
       ~run_log
       ~target:target_cfg
-      ~units:scheduled
+      { Sol_cli_authorization_stage.grants = []; serverless_units; scheduler_units }
     |> Result.map_error Sol_cli_exit.error
   in
   let single =

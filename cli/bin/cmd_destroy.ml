@@ -13,7 +13,7 @@ open Result.Syntax
    confirmation. Destroy deliberately does not borrow `sol deploy`'s apply-by-default
    posture: deploy is convergent and idempotent, destroy is destructive and not
    recoverable if mistaken, so the destructive confirmation stays explicit. *)
-let serverless_destroy ~target_cfg ~action ~record ~service =
+let serverless_destroy ~config ~target_cfg ~action ~record ~service =
   let* () =
     match action with
     | Cmd_cloud_tf.Plan ->
@@ -34,35 +34,32 @@ let serverless_destroy ~target_cfg ~action ~record ~service =
       record
   in
   let* model = Sol_cli_workspace_model.load_cwd () |> Sol_cli_exit.of_msg in
-  let functions =
-    Sol_cli_workspace_model.workloads model
-    |> List.filter (fun (workload : Sol_cli_workspace_model.workload) ->
-      match workload.service.primitive with
-      | Sol_cli_manifest.Fn -> true
-      | _ -> false)
-  in
-  let* () =
-    if List.length functions <= 1
-    then Ok ()
-    else
-      Error
-        (Sol_cli_exit.error
-           "serverless destroy removes every runtime identity for the target, so it is \
-            refused when the workspace declares more than one function. Destroy the \
-            target's identities explicitly after removing the remaining functions.")
-  in
   let* () =
     Sol_cli_serverless_lifecycle.destroy ~target:target_cfg ~service ~record
     |> Result.map_error Sol_cli_exit.error
   in
   let* assets = Cmd_cloud_tf.resolve_assets () in
   let run_log = Sol_cli_run_log.create ~prefix:"destroy-identities" () in
-  let* _identities =
-    Sol_cli_authorization_stage.apply_serverless_identities
+  let project =
+    match config.Sol_cli_config.project with
+    | Some project when String.trim project <> "" -> project
+    | _ -> service
+  in
+  let* serverless_units, scheduler_units =
+    Sol_cli_serverless_lifecycle.complete_units
+      ~config
+      ~project
+      ~target:target_cfg
+      ~model
+      ~exclude:(Some service)
+    |> Result.map_error Sol_cli_exit.error
+  in
+  let* _ =
+    Sol_cli_authorization_stage.reconcile_target_authorization
       ~assets
       ~run_log
       ~target:target_cfg
-      []
+      { Sol_cli_authorization_stage.grants = []; serverless_units; scheduler_units }
     |> Result.map_error Sol_cli_exit.error
   in
   Ok ()
@@ -75,7 +72,12 @@ let run ~target ~var_file ~vars ~action ~accept_unreleased ~record ~service () =
   in
   match Sol_cli_config.execution_of_target resolved_config.target with
   | Sol_cli_config.Serverless ->
-    serverless_destroy ~target_cfg:resolved_config.target ~action ~record ~service
+    serverless_destroy
+      ~config:resolved_config
+      ~target_cfg:resolved_config.target
+      ~action
+      ~record
+      ~service
   | Sol_cli_config.Kubernetes ->
     let* () =
       if record = None && service = None
