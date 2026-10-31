@@ -14,6 +14,15 @@ type requirement =
   ; resource : string
   }
 
+type target_grant =
+  { unit : string
+  ; capability : string
+  ; resource : string
+  ; namespace : string
+  }
+
+val target_grant_to_json : target_grant -> Yojson.Safe.t
+
 type serverless_unit =
   { unit : string
   ; requirements : requirement list

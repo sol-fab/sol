@@ -31,12 +31,18 @@ val fence
   -> target:Sol_cli_config.target
   -> (outcome, string) result
 
-val apply_serverless_identities
+type target_authorization =
+  { grants : Sol_cli_grant.target_grant list
+  ; serverless_units : Sol_cli_grant.serverless_unit list
+  ; scheduler_units : Sol_cli_grant.scheduler_unit list
+  }
+
+val reconcile_target_authorization
   :  assets:Sol_cli_platform_assets.t
   -> run_log:Sol_cli_run_log.t
   -> target:Sol_cli_config.target
-  -> Sol_cli_grant.serverless_unit list
-  -> ((string * string) list, string) result
+  -> target_authorization
+  -> ((string * string) list * (string * string) list, string) result
 
 val verify_destroyed_state : Sol_cli_cloud_destroy.state_read -> (unit, string) result
 
@@ -64,10 +70,3 @@ val destroy
   -> run_log:Sol_cli_run_log.t
   -> target:Sol_cli_config.target
   -> (outcome, string) result
-
-val apply_scheduler_identities
-  :  assets:Sol_cli_platform_assets.t
-  -> run_log:Sol_cli_run_log.t
-  -> target:Sol_cli_config.target
-  -> Sol_cli_grant.scheduler_unit list
-  -> ((string * string) list, string) result

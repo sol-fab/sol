@@ -25,20 +25,15 @@ val deploy
   -> scheduler_identity:string option
   -> (Yojson.Safe.t, string) result
 
-val ensure_runtime_identities
-  :  assets:Sol_cli_platform_assets.t
-  -> run_log:Sol_cli_run_log.t
+val complete_units
+  :  config:Sol_cli_config.t
+  -> project:string
   -> target:Sol_cli_config.target
-  -> units:Sol_cli_grant.serverless_unit list
-  -> ((string * string) list, string) result
-
-val ensure_runtime_identity
-  :  assets:Sol_cli_platform_assets.t
-  -> run_log:Sol_cli_run_log.t
-  -> target:Sol_cli_config.target
-  -> unit:string
-  -> requirements:Sol_cli_grant.requirement list
-  -> (string option, string) result
+  -> model:Sol_cli_workspace_model.t
+  -> exclude:string option
+  -> ( Sol_cli_grant.serverless_unit list * Sol_cli_grant.scheduler_unit list
+       , string )
+       result
 
 val rollback
   :  target:Sol_cli_config.target
@@ -55,13 +50,6 @@ val destroy
   -> service:string
   -> record:string
   -> (unit, string) result
-
-val ensure_scheduler_identities
-  :  assets:Sol_cli_platform_assets.t
-  -> run_log:Sol_cli_run_log.t
-  -> target:Sol_cli_config.target
-  -> units:Sol_cli_grant.scheduler_unit list
-  -> ((string * string) list, string) result
 
 val scheduler_resource_name
   :  target:Sol_cli_config.target
