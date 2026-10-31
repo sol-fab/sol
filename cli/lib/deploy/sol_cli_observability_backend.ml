@@ -63,3 +63,34 @@ let validate_target (target : Sol_cli_config.target) =
                 self_hosted_durable"
                value)))
 ;;
+
+let export_terraform_secrets (target : Sol_cli_config.target) =
+  match Sol_cli_config.execution_of_target target with
+  | Sol_cli_config.Serverless -> Ok ()
+  | Sol_cli_config.Kubernetes ->
+    (match target.observability_backend with
+     | Some "external" ->
+       let export variable = function
+         | None -> Ok ()
+         | Some name when String.trim name = "" -> Ok ()
+         | Some name ->
+           (match Sys.getenv_opt name with
+            | Some value when String.trim value <> "" ->
+              Unix.putenv variable value;
+              Ok ()
+            | _ ->
+              Error
+                (Printf.sprintf
+                   "%s names the environment variable %S, but it is unset or empty"
+                   variable
+                   name))
+       in
+       let open Result.Syntax in
+       let* () =
+         export "TF_VAR_external_loki_password" target.observability_logs_password_env
+       in
+       export
+         "TF_VAR_external_prometheus_password"
+         target.observability_metrics_password_env
+     | _ -> Ok ())
+;;

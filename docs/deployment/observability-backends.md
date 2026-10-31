@@ -41,8 +41,10 @@ target:
   observability_backend: external
   observability_logs_url: https://logs.example.com/loki/api/v1/push
   observability_logs_username: "123456"
+  observability_logs_password_env: EXTERNAL_LOKI_PASSWORD
   observability_metrics_url: https://metrics.example.com/api/prom/push
   observability_metrics_username: "654321"
+  observability_metrics_password_env: EXTERNAL_PROMETHEUS_PASSWORD
   observability_traces_url: https://otlp.example.com/v1/traces
 ```
 
@@ -57,14 +59,14 @@ to a hosted Grafana Tempo, Datadog OTLP intake, or another OTLP/HTTP-compatible
 backend. The URL is recorded in the deployment config, so do not embed credentials
 in it; header-based authentication is not yet part of the workload trace contract.
 
-For endpoints that require basic auth, supply the credentials as Terraform
-inputs/environment variables; they are deliberately not target-file values:
-
-```sh
-export TF_VAR_external_loki_username=123456
-export TF_VAR_external_loki_password='<api key>'
-export TF_VAR_external_prometheus_username=123456
-export TF_VAR_external_prometheus_password='<api key>'
+```hcl
+observability_backend                = "external"
+external_loki_url                    = "https://logs-prod-000.grafana.net/loki/api/v1/push"
+external_loki_username               = "123456"
+external_loki_password               = "<api key>"
+external_prometheus_remote_write_url = "https://prometheus-prod-000.grafana.net/api/prom/push"
+external_prometheus_username         = "123456"
+external_prometheus_password         = "<api key>"
 ```
 
 For log queries, use the configured Loki/Grafana interface. Sol configures
