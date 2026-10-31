@@ -17,7 +17,9 @@ let target : Sol_cli_config.target =
   ; terraform_var_file = None
   ; observability_backend = Some "self_hosted_durable"
   ; observability_logs_url = None
+  ; observability_logs_username = None
   ; observability_metrics_url = None
+  ; observability_metrics_username = None
   ; observability_traces_url = None
   ; destroy_retention = None
   ; alert_receiver_type = None
@@ -677,6 +679,21 @@ let test_platform_terraform_vars () =
     ~msg:"AWS passes no GCS inputs to a root that does not declare them"
     []
     (prefixed aws "loki_gcs_bucket=" @ prefixed aws "thanos_gcs_bucket=");
+  let external_target = { target with observability_backend = Some "external" } in
+  let external_cloud =
+    Result.get_ok (L.cloud_target ~platform_shape:Sol_cli_profile.Local external_target)
+  in
+  let external_vars =
+    match L.platform_inputs external_cloud aws_cloud with
+    | Ok inputs -> vars inputs
+    | Error message -> Windtrap.fail message
+  in
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"external observability URLs reach the platform root"
+    []
+    (prefixed external_vars "external_loki_url="
+     @ prefixed external_vars "external_prometheus_remote_write_url=");
   let gcp =
     Result.get_ok (L.cloud_target ~platform_shape:Sol_cli_profile.Local (gcp_target ()))
   in

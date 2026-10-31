@@ -16,7 +16,9 @@ let target ?(fields = []) provider =
   ; terraform_var_file = None
   ; observability_backend = None
   ; observability_logs_url = None
+  ; observability_logs_username = None
   ; observability_metrics_url = None
+  ; observability_metrics_username = None
   ; observability_traces_url = None
   ; destroy_retention = None
   ; alert_receiver_type = None

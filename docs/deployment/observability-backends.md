@@ -40,12 +40,15 @@ The target file also names the OTLP/HTTP trace endpoint the workloads receive as
 target:
   observability_backend: external
   observability_logs_url: https://logs.example.com/loki/api/v1/push
+  observability_logs_username: "123456"
   observability_metrics_url: https://metrics.example.com/api/prom/push
+  observability_metrics_username: "654321"
   observability_traces_url: https://otlp.example.com/v1/traces
 ```
 
-The three target URLs are projected into the platform's external backend inputs;
-basic-auth usernames/passwords remain Terraform inputs because they are secrets.
+The target URLs and non-secret basic-auth usernames are projected into the
+platform's external backend inputs. Passwords remain Terraform inputs because
+they are secrets.
 
 If `observability_backend: external` is declared without
 `observability_traces_url`, workloads receive an empty `TEMPO_URL`, which disables

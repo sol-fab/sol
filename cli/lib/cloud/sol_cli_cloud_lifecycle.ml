@@ -63,7 +63,9 @@ type platform_inputs =
   ; cluster_issuer : string option
   ; observability_backend : string option
   ; observability_logs_url : string option
+  ; observability_logs_username : string option
   ; observability_metrics_url : string option
+  ; observability_metrics_username : string option
   ; platform_profile : string
   ; alert_receiver_type : string option
   ; alert_receiver_url : string option
@@ -196,7 +198,9 @@ let platform_inputs (target : cloud_target) (cluster : Sol_cli_cluster.t) =
       ; cluster_issuer = target.target.cluster_issuer
       ; observability_backend = target.target.observability_backend
       ; observability_logs_url = target.target.observability_logs_url
+      ; observability_logs_username = target.target.observability_logs_username
       ; observability_metrics_url = target.target.observability_metrics_url
+      ; observability_metrics_username = target.target.observability_metrics_username
       ; platform_profile = Sol_cli_profile.platform_shape_to_string target.platform_shape
       ; alert_receiver_type = target.target.alert_receiver_type
       ; alert_receiver_url = target.target.alert_receiver_url
