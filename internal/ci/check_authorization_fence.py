@@ -27,7 +27,7 @@ GCP_ROOT = "platform/cloud/gcp/authorization/main.tf"
 AWS_RECONCILER = "data.aws_iam_policy_document.reconciler"
 GCP_ROLE = "google_project_iam_custom_role.authorization"
 GCP_BINDING = "google_project_iam_member.reconciler_authorization"
-BOUNDARY_REFERENCE = "aws_iam_policy.workload_boundary.arn"
+BOUNDARY_REFERENCE = "policy/sol-${var.environment}-*-boundary"
 
 FORBIDDEN_GCP_PREFIXES = ("iam.serviceAccounts.", "resourcemanager.projects.", "iam.roles.create")
 
@@ -78,7 +78,7 @@ def check_aws(root, problems):
                     conditions = tfconfig.blocks(statement, "condition")
                     boundary = any(
                         text(condition.get("variable", "")) == "iam:PermissionsBoundary"
-                        and text(condition.get("test", "")) == "StringEquals"
+                        and text(condition.get("test", "")) == "StringLike"
                         and any(
                             BOUNDARY_REFERENCE in value
                             for value in string_list(condition, "values")

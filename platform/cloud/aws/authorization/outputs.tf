@@ -8,9 +8,9 @@ output "workload_role_path" {
   value       = "/${local.role_path}"
 }
 
-output "permissions_boundary_arn" {
-  description = "Boundary that must be attached to every workload role at creation."
-  value       = aws_iam_policy.workload_boundary.arn
+output "permissions_boundary_arns" {
+  description = "Per-unit boundaries attached to workload roles at creation."
+  value       = { for unit, policy in aws_iam_policy.workload_boundary : unit => policy.arn }
 }
 
 output "established_grants" {

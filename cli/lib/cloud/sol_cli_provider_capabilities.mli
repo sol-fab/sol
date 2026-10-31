@@ -110,6 +110,12 @@ type t =
   ; authorization_destroy_trust_placeholder : string
   ; authorization_root_vars :
       Sol_cli_config.target -> ((string * string) list, string) result
+  ; authorization_target_root_vars :
+      Sol_cli_config.target
+      -> Sol_cli_grant.requirement list
+      -> Sol_cli_grant.serverless_unit list
+      -> Sol_cli_grant.scheduler_unit list
+      -> ((string * string) list, string) result
   ; authorization_serverless_root_vars :
       Sol_cli_config.target
       -> Sol_cli_grant.serverless_unit list

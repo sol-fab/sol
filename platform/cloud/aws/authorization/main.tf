@@ -25,6 +25,7 @@ locals {
 }
 
 data "aws_iam_policy_document" "workload_boundary" {
+  for_each = local.role_units
   statement {
     sid       = "InvokeEnvironmentFunctions"
     effect    = "Allow"
@@ -80,7 +81,7 @@ data "aws_iam_policy_document" "workload_boundary" {
 
   dynamic "statement" {
     for_each = {
-      for grant in local.boundary_external_grants :
+      for grant in lookup(local.boundary_external_by_unit, each.key, []) :
       "${grant.capability}/${grant.resource}" => grant
       if can(regex("^message\\.", grant.capability))
     }
@@ -94,7 +95,7 @@ data "aws_iam_policy_document" "workload_boundary" {
 
   dynamic "statement" {
     for_each = {
-      for grant in local.boundary_external_grants :
+      for grant in lookup(local.boundary_external_by_unit, each.key, []) :
       "${grant.capability}/${grant.resource}" => grant
       if grant.capability == "object.read" || grant.capability == "object.write"
     }
@@ -109,10 +110,11 @@ data "aws_iam_policy_document" "workload_boundary" {
 }
 
 resource "aws_iam_policy" "workload_boundary" {
-  name        = local.boundary_name
+  for_each    = local.role_units
+  name        = "sol-${var.environment}-${replace(each.value, "/", "-")}-boundary"
   path        = "/"
-  description = "Maximum authority any Sol workload role for ${var.environment} may hold (DEC-062)."
-  policy      = data.aws_iam_policy_document.workload_boundary.json
+  description = "Maximum authority the ${each.value} workload role for ${var.environment} may hold (DEC-062)."
+  policy      = data.aws_iam_policy_document.workload_boundary[each.key].json
 }
 
 data "aws_iam_policy_document" "reconciler_trust" {
@@ -137,9 +139,11 @@ data "aws_iam_policy_document" "reconciler" {
     resources = ["arn:aws:iam::${local.account_id}:role/${local.role_path}*"]
 
     condition {
-      test     = "StringEquals"
+      test     = "StringLike"
       variable = "iam:PermissionsBoundary"
-      values   = [aws_iam_policy.workload_boundary.arn]
+      values = [
+        "arn:aws:iam::${local.account_id}:policy/sol-${var.environment}-*-boundary",
+      ]
     }
   }
 
@@ -178,7 +182,7 @@ data "aws_iam_policy_document" "reconciler" {
     sid       = "ReadTheBoundary"
     effect    = "Allow"
     actions   = ["iam:GetPolicy", "iam:GetPolicyVersion"]
-    resources = [aws_iam_policy.workload_boundary.arn]
+    resources = ["arn:aws:iam::${local.account_id}:policy/sol-${var.environment}-*-boundary"]
   }
 
   statement {
@@ -251,24 +255,28 @@ locals {
 
   grant_units = toset([for grant in local.realized_grants : grant.unit])
 
-  boundary_external_grants = concat(
-    [
-      for grant in var.grants : {
-        capability = grant.capability
-        resource   = grant.resource
-      }
-    ],
-    flatten([
-      for unit in var.serverless_units : [
+  serverless_units = toset([for unit in var.serverless_units : unit.unit])
+
+  unit_collision = length(setintersection(local.grant_units, local.serverless_units)) > 0
+
+  boundary_external_by_unit = merge(
+    {
+      for unit in local.grant_units : unit => [
+        for grant in local.realized_grants : {
+          capability = grant.capability
+          resource   = grant.resource
+        } if grant.unit == unit
+      ]
+    },
+    {
+      for unit in var.serverless_units : unit.unit => [
         for requirement in unit.requirements : {
           capability = requirement.capability
           resource   = requirement.resource
         }
       ]
-    ])
+    }
   )
-
-  serverless_units = toset([for unit in var.serverless_units : unit.unit])
 
   scheduler_units = { for unit in var.scheduler_units : unit.unit => unit }
 
@@ -375,11 +383,21 @@ data "aws_iam_policy_document" "workload_trust" {
   }
 }
 
+resource "terraform_data" "unit_collision_guard" {
+  input = var.environment
+  lifecycle {
+    precondition {
+      condition     = !local.unit_collision
+      error_message = "A unit name is declared as both a Kubernetes grant and a serverless function; identities must not share a name."
+    }
+  }
+}
+
 resource "aws_iam_role" "workload" {
   for_each             = local.role_units
   name                 = "sol-${var.environment}-${replace(each.value, "/", "-")}"
   path                 = "/${local.role_path}"
-  permissions_boundary = aws_iam_policy.workload_boundary.arn
+  permissions_boundary = aws_iam_policy.workload_boundary[each.key].arn
   assume_role_policy   = data.aws_iam_policy_document.workload_trust.json
   description          = "Sol workload identity for ${each.value} in ${var.environment} (DEC-062)."
 }
@@ -409,11 +427,28 @@ data "aws_iam_policy_document" "scheduler_trust" {
   }
 }
 
+resource "aws_iam_policy" "scheduler_boundary" {
+  for_each    = local.scheduler_units
+  name        = "sol-${var.environment}-sched-${substr(sha1(each.key), 0, 8)}-boundary"
+  path        = "/"
+  description = "Maximum authority the scheduler role for ${each.key} in ${var.environment} may hold."
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["lambda:InvokeFunction"]
+        Resource = ["arn:aws:lambda:${var.region}:${local.account_id}:function:${each.value.function_name}:live"]
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role" "scheduler" {
   for_each             = local.scheduler_units
   name                 = "sol-${var.environment}-sched-${substr(sha1(each.key), 0, 8)}"
   path                 = "/${local.role_path}"
-  permissions_boundary = aws_iam_policy.workload_boundary.arn
+  permissions_boundary = aws_iam_policy.scheduler_boundary[each.key].arn
   assume_role_policy   = data.aws_iam_policy_document.scheduler_trust.json
   description          = "Dedicated scheduler identity for ${each.key} in ${var.environment}."
 }
