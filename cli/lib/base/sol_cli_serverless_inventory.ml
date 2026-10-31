@@ -73,3 +73,28 @@ let remove ~target ~service =
   let* entries = load ~target in
   write ~target (List.filter (fun (entry : entry) -> entry.service <> service) entries)
 ;;
+
+let destroy_entries ~target ~service ~record ~declared_functions =
+  let open Result.Syntax in
+  match service, record with
+  | Some service, Some record -> Ok [ { service; record } ]
+  | Some service, None ->
+    let* entries = load ~target in
+    (match List.find_opt (fun (entry : entry) -> entry.service = service) entries with
+     | Some entry -> Ok [ entry ]
+     | None ->
+       Error
+         (Printf.sprintf
+            "no serverless ownership record is known for %s in target %s"
+            service
+            target))
+  | None, _ ->
+    let* entries = load ~target in
+    if entries = [] && declared_functions > 0
+    then
+      Error
+        "mixed-target destroy found declared serverless functions but no ownership \
+         inventory; refusing to destroy Kubernetes infrastructure and leave serverless \
+         workloads orphaned"
+    else Ok entries
+;;

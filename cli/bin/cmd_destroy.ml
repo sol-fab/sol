@@ -92,38 +92,12 @@ let run ~target ~var_file ~vars ~action ~accept_unreleased ~record ~service () =
         |> List.length)
     in
     let* entries =
-      match service, record with
-      | Some service, Some record ->
-        Ok [ { Sol_cli_serverless_inventory.service; record } ]
-      | Some service, None ->
-        let* entries =
-          Sol_cli_serverless_inventory.load ~target |> Result.map_error Sol_cli_exit.error
-        in
-        (match
-           List.find_opt
-             (fun (entry : Sol_cli_serverless_inventory.entry) -> entry.service = service)
-             entries
-         with
-         | Some entry -> Ok [ entry ]
-         | None ->
-           Error
-             (Sol_cli_exit.error
-                (Printf.sprintf
-                   "no serverless ownership record is known for %s in target %s"
-                   service
-                   target)))
-      | None, _ ->
-        let* entries =
-          Sol_cli_serverless_inventory.load ~target |> Result.map_error Sol_cli_exit.error
-        in
-        if entries = [] && declared_functions > 0
-        then
-          Error
-            (Sol_cli_exit.error
-               "mixed-target destroy found declared serverless functions but no \
-                ownership inventory; refusing to destroy Kubernetes infrastructure and \
-                leave serverless workloads orphaned")
-        else Ok entries
+      Sol_cli_serverless_inventory.destroy_entries
+        ~target
+        ~service
+        ~record
+        ~declared_functions
+      |> Result.map_error Sol_cli_exit.error
     in
     let* () =
       Sol_cli_result.map_list

@@ -38,3 +38,37 @@ let%test "serverless release inventory records and removes a service" =
     Windtrap.equal Windtrap.int ~msg:"one recorded entry" 1 (List.length entries);
     Windtrap.equal Windtrap.int ~msg:"entry removed" 0 (List.length remaining)
 ;;
+
+let%test "mixed destroy refuses declared functions without inventory" =
+  let root = Filename.temp_file "sol-inventory" "" in
+  Sys.remove root;
+  Unix.mkdir root 0o755;
+  let previous = Sys.getcwd () in
+  Sys.chdir root;
+  let result =
+    Sol_cli_serverless_inventory.destroy_entries
+      ~target:"live/aws/us-east-1"
+      ~service:None
+      ~record:None
+      ~declared_functions:1
+  in
+  Sys.chdir previous;
+  let () =
+    let rec remove path =
+      if Sys.is_directory path
+      then (
+        Sys.readdir path |> Array.iter (fun child -> remove (Filename.concat path child));
+        Unix.rmdir path)
+      else Sys.remove path
+    in
+    remove root
+  in
+  match result with
+  | Ok _ -> Windtrap.fail "mixed destroy accepted no inventory for a declared function"
+  | Error message ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"inventory refusal names orphan risk"
+      true
+      (Sol_cli_string.contains ~needle:"orphaned" message)
+;;
