@@ -80,6 +80,17 @@ let run ~target ~var_file ~vars ~action ~accept_unreleased ~record ~service () =
       ~record
       ~service
   | Sol_cli_config.Mixed ->
+    let* declared_functions =
+      Sol_cli_workspace_model.load_cwd ()
+      |> Result.map_error (fun message -> Sol_cli_exit.error message)
+      |> Result.map (fun model ->
+        Sol_cli_workspace_model.workloads model
+        |> List.filter (fun (workload : Sol_cli_workspace_model.workload) ->
+          match workload.service.primitive with
+          | Sol_cli_manifest.Fn -> true
+          | Svc | Worker -> false)
+        |> List.length)
+    in
     let* entries =
       match service, record with
       | Some service, Some record ->
@@ -102,7 +113,17 @@ let run ~target ~var_file ~vars ~action ~accept_unreleased ~record ~service () =
                    service
                    target)))
       | None, _ ->
-        Sol_cli_serverless_inventory.load ~target |> Result.map_error Sol_cli_exit.error
+        let* entries =
+          Sol_cli_serverless_inventory.load ~target |> Result.map_error Sol_cli_exit.error
+        in
+        if entries = [] && declared_functions > 0
+        then
+          Error
+            (Sol_cli_exit.error
+               "mixed-target destroy found declared serverless functions but no \
+                ownership inventory; refusing to destroy Kubernetes infrastructure and \
+                leave serverless workloads orphaned")
+        else Ok entries
     in
     let* () =
       Sol_cli_result.map_list
