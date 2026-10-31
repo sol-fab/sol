@@ -103,3 +103,38 @@ let%test "excluding a scheduled function removes its scheduler unit only" =
                u.unit = "notifications/notifications_fn")
             serverless)
 ;;
+
+let%test "complete model keeps Kubernetes and serverless units distinct" =
+  let target_grant : Sol_cli_grant.target_grant =
+    { unit = "payments/orders_svc"
+    ; capability = "message.publish"
+    ; resource = "arn:aws:sqs:us-east-1:123456789012:orders"
+    ; namespace = "payments"
+    }
+  in
+  let serverless : Sol_cli_grant.serverless_unit =
+    { unit = "payments/payments_fn"
+    ; requirements =
+        [ { Sol_cli_grant.capability = Sol_cli_grant.Message_publish
+          ; resource = "arn:aws:sqs:us-east-1:123456789012:orders"
+          }
+        ]
+    }
+  in
+  let model : Sol_cli_authorization_stage.target_authorization =
+    { grants = [ target_grant ]; serverless_units = [ serverless ]; scheduler_units = [] }
+  in
+  Windtrap.equal Windtrap.int ~msg:"one Kubernetes grant" 1 (List.length model.grants);
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"one serverless unit"
+    1
+    (List.length model.serverless_units);
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"grant type is preserved"
+    "message.publish"
+    (Sol_cli_grant.target_grant_to_json target_grant
+     |> Yojson.Safe.Util.member "capability"
+     |> Yojson.Safe.Util.to_string)
+;;
