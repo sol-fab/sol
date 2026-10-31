@@ -63,6 +63,13 @@ let write_temp name json =
   path
 ;;
 
+let is_not_found message =
+  let lower = String.lowercase_ascii message in
+  Sol_cli_string.contains ~needle:"resourcenotfound" lower
+  || Sol_cli_string.contains ~needle:"not found" lower
+  || Sol_cli_string.contains ~needle:"does not exist" lower
+;;
+
 let schedule_name (r : request) =
   let digest =
     Digestif.SHA1.digest_string r.unit
@@ -119,7 +126,9 @@ let create_or_update r ~name ~expression ~role_arn ~target_arn ~timezone =
   let* exists =
     match aws r [ "scheduler"; "get-schedule"; "--name"; name ] with
     | Ok _ -> Ok true
-    | Error _ -> Ok false
+    | Error message when is_not_found message -> Ok false
+    | Error message ->
+      Error (Printf.sprintf "could not read existing EventBridge schedule: %s" message)
   in
   if exists
   then aws r (args "update-schedule") |> Result.map (fun _ -> ())
@@ -269,14 +278,18 @@ let deploy (r : request) =
 let destroy_by_unit (r : request) =
   let name = schedule_name r in
   match aws r [ "scheduler"; "get-schedule"; "--name"; name ] with
-  | Error _ -> Ok ()
+  | Error message when is_not_found message -> Ok ()
+  | Error message ->
+    Error (Printf.sprintf "could not read EventBridge schedule: %s" message)
   | Ok _ ->
     aws r [ "scheduler"; "delete-schedule"; "--name"; name ] |> Result.map (fun _ -> ())
 ;;
 
 let destroy (r : request) (release : release) =
   match aws r [ "scheduler"; "get-schedule"; "--name"; release.schedule_name ] with
-  | Error _ -> Ok ()
+  | Error message when is_not_found message -> Ok ()
+  | Error message ->
+    Error (Printf.sprintf "could not read EventBridge schedule: %s" message)
   | Ok _ ->
     aws r [ "scheduler"; "delete-schedule"; "--name"; release.schedule_name ]
     |> Result.map (fun _ -> ())

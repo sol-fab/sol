@@ -47,6 +47,13 @@ let of_json json =
 
 let gcloud (r : request) args = r.runner.run ("gcloud" :: args)
 
+let is_not_found message =
+  let lower = String.lowercase_ascii message in
+  Sol_cli_string.contains ~needle:"not_found" lower
+  || Sol_cli_string.contains ~needle:"not found" lower
+  || Sol_cli_string.contains ~needle:"cannot find" lower
+;;
+
 let name (r : request) =
   let digest =
     Digestif.SHA1.digest_string r.unit
@@ -205,7 +212,9 @@ let destroy_by_unit (r : request) =
   match
     gcloud r [ "scheduler"; "jobs"; "describe"; schedule_name; "--location"; r.region ]
   with
-  | Error _ -> Ok ()
+  | Error message when is_not_found message -> Ok ()
+  | Error message ->
+    Error (Printf.sprintf "could not read Cloud Scheduler job: %s" message)
   | Ok _ ->
     gcloud
       r
@@ -217,7 +226,9 @@ let destroy (r : request) (release : release) =
   match
     gcloud r [ "scheduler"; "jobs"; "describe"; release.name; "--location"; r.region ]
   with
-  | Error _ -> Ok ()
+  | Error message when is_not_found message -> Ok ()
+  | Error message ->
+    Error (Printf.sprintf "could not read Cloud Scheduler job: %s" message)
   | Ok _ ->
     gcloud
       r
