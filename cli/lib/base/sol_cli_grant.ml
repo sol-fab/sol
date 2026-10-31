@@ -1,7 +1,22 @@
-type capability = Secret_access
+type capability =
+  | Secret_access
+  | Message_publish
+  | Message_subscribe
+  | Object_read
+  | Object_write
 
 let capability_to_string = function
   | Secret_access -> "secret"
+  | Message_publish -> "message.publish"
+  | Message_subscribe -> "message.subscribe"
+  | Object_read -> "object.read"
+  | Object_write -> "object.write"
+;;
+
+let resource_capabilities = function
+  | "queue" -> [ Message_publish; Message_subscribe ]
+  | "object_store" -> [ Object_read; Object_write ]
+  | _ -> []
 ;;
 
 type requirement =

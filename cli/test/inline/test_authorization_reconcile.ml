@@ -574,3 +574,38 @@ let%test "grants: a deploy with no declarations records no grants" =
 let%test "grants: the fence root needs the reconciler trust principal" =
   test_fence_vars_require_the_trust_principal ()
 ;;
+
+let test_external_resource_capabilities () =
+  check_string
+    "queue publishes"
+    "message.publish"
+    (Sol_cli_grant.capability_to_string Sol_cli_grant.Message_publish);
+  check_string
+    "queue subscribes"
+    "message.subscribe"
+    (Sol_cli_grant.capability_to_string Sol_cli_grant.Message_subscribe);
+  check_string
+    "object reads"
+    "object.read"
+    (Sol_cli_grant.capability_to_string Sol_cli_grant.Object_read);
+  check_string
+    "object writes"
+    "object.write"
+    (Sol_cli_grant.capability_to_string Sol_cli_grant.Object_write);
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"queue resource capabilities"
+    [ "message.publish"; "message.subscribe" ]
+    (List.map
+       Sol_cli_grant.capability_to_string
+       (Sol_cli_grant.resource_capabilities "queue"));
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"object-store resource capabilities"
+    [ "object.read"; "object.write" ]
+    (List.map
+       Sol_cli_grant.capability_to_string
+       (Sol_cli_grant.resource_capabilities "object_store"))
+;;
+
+let%test "external resource capabilities" = test_external_resource_capabilities ()
