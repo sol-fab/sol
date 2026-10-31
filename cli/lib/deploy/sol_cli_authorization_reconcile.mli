@@ -1,4 +1,4 @@
-type terraform_grant =
+type terraform_grant = Sol_cli_grant.target_grant =
   { unit : string
   ; capability : string
   ; resource : string

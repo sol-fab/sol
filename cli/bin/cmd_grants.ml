@@ -217,14 +217,15 @@ let run ?config ?destination ~action ~target ~var_file ~vars () =
     Ok ()
   | Apply ->
     let* _ =
-      Sol_cli_terraform.apply
-        ~env
-        ~scope:Sol_cli_terraform.whole_root
-        ~chdir:auth_dir
-        ~var_files:(Option.to_list var_file)
-        ~vars:all_vars
-        ()
-      |> Sol_cli_exit.of_error Sol_cli_process.error_to_string
+      Sol_cli_authorization_stage.reconcile_target_authorization
+        ~assets
+        ~run_log
+        ~target:target_cfg
+        { Sol_cli_authorization_stage.grants = terraform_grants
+        ; serverless_units = []
+        ; scheduler_units = []
+        }
+      |> Sol_cli_exit.of_msg
     in
     Sol_cli_report.app "\nDone. Workload authorization is reconciled.";
     Ok ()
