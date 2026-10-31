@@ -110,6 +110,34 @@ let deploy (r : request) =
          authorization root must establish a dedicated scheduler service account"
     else Ok ()
   in
+  let* policy =
+    gcloud
+      r
+      [ "run"
+      ; "jobs"
+      ; "get-iam-policy"
+      ; r.job
+      ; "--project"
+      ; r.project
+      ; "--region"
+      ; r.region
+      ; "--format"
+      ; "json"
+      ]
+    |> Result.map_error (fun message ->
+      Printf.sprintf "could not verify Cloud Run Job IAM: %s" message)
+  in
+  let* () =
+    let member = "serviceAccount:" ^ r.service_account in
+    if
+      Sol_cli_string.contains ~needle:member policy.stdout
+      && Sol_cli_string.contains ~needle:"roles/run.jobsExecutor" policy.stdout
+    then Ok ()
+    else
+      Error
+        "scheduler service account is not granted roles/run.jobsExecutor on this \
+         job;          refusing to create the schedule"
+  in
   let schedule_name = name r in
   let uri = uri r in
   let timezone = timezone r in

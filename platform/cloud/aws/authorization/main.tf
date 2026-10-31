@@ -358,7 +358,7 @@ resource "aws_iam_role" "scheduler" {
 
 resource "aws_iam_role_policy" "scheduler" {
   for_each = local.scheduler_units
-  name     = "sol-${var.environment}-sched-${substr(sha1(each.key), 0, 8)}"
+  name     = "sol-scheduler"
   role     = aws_iam_role.scheduler[each.key].id
   policy = jsonencode({
     Version = "2012-10-17"

@@ -150,6 +150,62 @@ let deploy (r : request) =
       ]
   in
   let target_arn = function_arn ^ ":live" in
+  let role_name =
+    match String.rindex_opt r.role_arn '/' with
+    | Some index ->
+      String.sub r.role_arn (index + 1) (String.length r.role_arn - index - 1)
+    | None -> r.role_arn
+  in
+  let* trust =
+    aws
+      r
+      [ "iam"
+      ; "get-role"
+      ; "--role-name"
+      ; role_name
+      ; "--query"
+      ; "Role.AssumeRolePolicyDocument"
+      ; "--output"
+      ; "json"
+      ]
+    |> Result.map_error (fun message ->
+      Printf.sprintf "could not verify scheduler role trust: %s" message)
+  in
+  let* () =
+    if Sol_cli_string.contains ~needle:"scheduler.amazonaws.com" trust.stdout
+    then Ok ()
+    else
+      Error
+        "scheduler execution role is not trusted by scheduler.amazonaws.com; refusing \
+         to          create the schedule"
+  in
+  let* policy =
+    aws
+      r
+      [ "iam"
+      ; "get-role-policy"
+      ; "--role-name"
+      ; role_name
+      ; "--policy-name"
+      ; "sol-scheduler"
+      ; "--query"
+      ; "PolicyDocument"
+      ; "--output"
+      ; "json"
+      ]
+    |> Result.map_error (fun message ->
+      Printf.sprintf "could not verify scheduler invoke policy: %s" message)
+  in
+  let* () =
+    if
+      Sol_cli_string.contains ~needle:"lambda:InvokeFunction" policy.stdout
+      && Sol_cli_string.contains ~needle:target_arn policy.stdout
+    then Ok ()
+    else
+      Error
+        "scheduler execution role is not scoped to invoke this function; refusing \
+         to          create the schedule"
+  in
   let name = schedule_name r in
   let timezone = timezone r in
   let* () =

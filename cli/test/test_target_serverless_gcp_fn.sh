@@ -41,6 +41,10 @@ cat > "$work/bin/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
 state="$FAKE_GCLOUD_STATE"
+if [[ "$1 $2 $3" == "run jobs get-iam-policy" ]]; then
+  printf '{"bindings":[{"role":"roles/run.jobsExecutor","members":["serviceAccount:sol-scheduler@example.iam.gserviceaccount.com"]}]}\n'
+  exit 0
+fi
 if [[ "$1 $2 $3" == "scheduler jobs describe" ]]; then
   [[ -f "$state/schedule" ]] || { echo "ERROR: NOT_FOUND" >&2; exit 1; }
   cat <<JSON

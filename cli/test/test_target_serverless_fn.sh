@@ -85,6 +85,10 @@ elif [[ "$args" == *"lambda invoke"* ]]; then
   fi
 elif [[ "$args" == *"lambda delete-function"* ]]; then
   rm -f "$FAKE_AWS_STATE/function" "$FAKE_AWS_STATE/alias" "$FAKE_AWS_STATE/version"; printf '{}\n'
+elif [[ "$args" == *"iam get-role-policy"* ]]; then
+  printf '{"Statement":[{"Action":"lambda:InvokeFunction","Resource":"arn:aws:lambda:us-east-1:123:function:checkout-fn:live"}]}\n'
+elif [[ "$args" == *"iam get-role"* ]]; then
+  printf '{"Statement":[{"Principal":{"Service":"scheduler.amazonaws.com"}}]}\n'
 elif [[ "$args" == *"scheduler get-schedule"* ]]; then
   [[ -f "$FAKE_AWS_STATE/schedule" ]] || { echo "ResourceNotFoundException" >&2; exit 254; }
   printf '{"Role":"arn:aws:iam::123:role/scheduler","Arn":"arn:aws:lambda:us-east-1:123:function:checkout-fn:live"}\n'
