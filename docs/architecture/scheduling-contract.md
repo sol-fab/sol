@@ -52,7 +52,12 @@ uses a dedicated service account with `roles/run.jobsExecutor` scoped to the Clo
 Job and Cloud Scheduler OAuth.
 
 Unsupported invocation grants fail closed; provisioning the scheduler must not broaden
-the runtime role.
+the runtime role. `scheduled_concurrency` and `backoff_limit` are Kubernetes-only policy
+today: a serverless target refuses them rather than silently ignoring Kubernetes semantics.
+
+Removing `[service] schedule` from a previously scheduled serverless function deletes the
+provider schedule on the next deploy. The authorization root removes the corresponding
+scheduler principal when it is no longer declared.
 
 ## Lifecycle
 
