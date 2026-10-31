@@ -609,3 +609,23 @@ let test_external_resource_capabilities () =
 ;;
 
 let%test "external resource capabilities" = test_external_resource_capabilities ()
+
+let test_function_invoke_capability () =
+  check_string
+    "function invoke capability"
+    "function.invoke"
+    (Sol_cli_grant.capability_to_string Sol_cli_grant.Function_invoke);
+  let requirement = Sol_cli_grant.invoke_requirement "daily-report_fn" in
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"invocation requirement resource"
+    "daily-report_fn"
+    requirement.resource;
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"invocation requirement capability"
+    "function.invoke"
+    (Sol_cli_grant.capability_to_string requirement.capability)
+;;
+
+let%test "function invoke capability" = test_function_invoke_capability ()

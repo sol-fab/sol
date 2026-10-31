@@ -4,6 +4,7 @@ type capability =
   | Message_subscribe
   | Object_read
   | Object_write
+  | Function_invoke
 
 let capability_to_string = function
   | Secret_access -> "secret"
@@ -11,6 +12,7 @@ let capability_to_string = function
   | Message_subscribe -> "message.subscribe"
   | Object_read -> "object.read"
   | Object_write -> "object.write"
+  | Function_invoke -> "function.invoke"
 ;;
 
 let resource_capabilities = function
@@ -30,6 +32,7 @@ type serverless_unit =
   }
 
 let requirement ~capability ~resource = { capability; resource }
+let invoke_requirement resource = { capability = Function_invoke; resource }
 let secret_capability = "secret"
 let secret_requirement resource = { capability = Secret_access; resource }
 
