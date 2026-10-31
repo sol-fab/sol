@@ -2952,6 +2952,7 @@ let external_storage_config : Sol_cli_config.t =
               ; keys = []
               ; connection =
                   [ "QUEUE_ARN", "arn:aws:sqs:us-east-1:123:jobs"
+                  ; "QUEUE_URL", "https://sqs.example.com/jobs"
                   ; "QUEUE_ENDPOINT", "https://sqs.example.com/jobs"
                   ; "QUEUE_NAME", "jobs"
                   ]

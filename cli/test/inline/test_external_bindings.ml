@@ -57,13 +57,13 @@ let aws_config ?(keys = []) ?(credentials = []) () =
         ~keys
         ~credentials
         "queue"
-        [ "QUEUE_ARN", "arn:aws:sqs:us-east-1:123:jobs" ]
+        [ "QUEUE_ARN", "arn:aws:sqs:us-east-1:123:jobs"; "QUEUE_URL", "https://sqs" ]
         "jobs"
     ; resource
         ~keys
         ~credentials
         "object_store"
-        [ "OBJECT_ARN", "arn:aws:s3:::uploads/*" ]
+        [ "OBJECT_ARN", "arn:aws:s3:::uploads/*"; "OBJECT_BUCKET", "uploads" ]
         "uploads"
     ]
     [ service "charge_svc" [ "jobs"; "uploads" ] ]
@@ -131,7 +131,11 @@ let test_gcp_fails_closed () =
   let config =
     config
       ~target:"sched/gcp/us-west1"
-      [ resource "queue" [ "QUEUE_ARN", "projects/p/topics/t" ] "jobs" ]
+      [ resource
+          "queue"
+          [ "QUEUE_ARN", "arn:aws:sqs:us-east-1:123:jobs"; "QUEUE_URL", "https://pubsub" ]
+          "jobs"
+      ]
       [ service "charge_svc" [ "jobs" ] ]
   in
   let tmp = Filename.temp_file "sol-ext-auth" "" in
