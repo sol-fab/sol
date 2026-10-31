@@ -121,6 +121,24 @@ is correct and needs no change" as a valid conclusion. Investigate proportionate
 failure is worth recording and carrying as stated risk, not necessarily an open-ended hunt or a
 blocker for unrelated work.
 
+### Workspace hygiene
+
+Parallel worktrees multiply Dune build trees: every worktree gets its own `_build`, and repeated
+target/test worktrees can consume tens of gigabytes. Qualification runs also leave
+`.qualification/live-*` directories. Clean these up when a task finishes or when disk pressure
+appears; do not leave generated build trees and stale live-run directories for the next task.
+
+- Remove only worktrees and generated artifacts you created or verified are no longer active.
+  Never delete a worktree with uncommitted changes or a qualification run that is still recording
+  evidence.
+- `_build` is regenerable. A safe sweep when no build is running:
+  `find /home/logan/Code/sol-cloud -type d -name _build -prune -exec rm -rf {} +`
+- Remove stale qualification live directories only after their evidence has been captured or the
+  run is known abandoned:
+  `rm -rf /home/logan/Code/sol-cloud/sol/.qualification/live-*`
+- Remove finished task worktrees with `git worktree remove` rather than leaving them checked out.
+- Do not treat cleanup as permission to delete source, release records, or uncommitted work.
+
 ### Patterns that have cost us twice
 
 Short rules, each paid for by a specific defect. They are not preferences; each one is the
