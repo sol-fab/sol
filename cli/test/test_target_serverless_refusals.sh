@@ -69,6 +69,25 @@ fi
 grep -q 'does not support -worker' "$work/aws-worker.out"
 [[ ! -s "$work/provider.log" ]]
 
+# A scheduled -fn is refused on serverless until a scheduler backend exists.
+ws="$work/aws-fn-schedule"
+workspace "$ws" checkout_fn fn no
+printf '[service]\nschedule = "0 * * * *"\n' > "$ws/app/checkout/checkout_fn/sol.toml"
+cat > "$ws/sol/environments.yml" <<'YAML'
+live:
+  targets:
+    aws/us-east-1:
+      execution: serverless
+      aws:
+        profile: test
+YAML
+cd "$ws"
+if "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/aws-fn-schedule.out" 2>&1; then
+  echo "scheduled serverless -fn was accepted" >&2; exit 1
+fi
+grep -q 'serverless _fn scheduling is not implemented' "$work/aws-fn-schedule.out"
+[[ ! -s "$work/provider.log" ]]
+
 # A -fn with dependencies is refused before provider mutation.
 ws="$work/aws-fn-deps"
 workspace "$ws" checkout_fn fn yes

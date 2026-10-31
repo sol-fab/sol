@@ -19,6 +19,10 @@ The same application contract therefore already supports **explicitly launched
 run-to-completion work** on all three substrates. What it does not provide is a
 provider queue, event-source mapping, delivery retry, or a dead-letter destination.
 
+Serverless targets currently **refuse a `_fn` that declares `[service] schedule`**
+rather than silently deploying an unscheduled function. Kubernetes remains the
+supported scheduled-function backend until the scheduler contract below is implemented.
+
 ## What standalone tasks are
 
 The standalone task lifecycles are queue infrastructure plus a different application
