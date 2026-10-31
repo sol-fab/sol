@@ -5,6 +5,7 @@ examples="${2:-examples/pluto}"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/state" "$work/home" "$work/ws/app/ops"
 cp -R "$examples/app/ops/probe_fn" "$work/ws/app/ops/probe_fn"
+sed -i '/^scheduled_concurrency[[:space:]]*=/d; /^backoff_limit[[:space:]]*=/d' "$work/ws/app/ops/probe_fn/sol.toml"
 cat > "$work/ws/sol.yml" <<'YAML'
 project: pluto
 services:

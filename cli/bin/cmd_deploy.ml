@@ -172,6 +172,27 @@ let run_serverless
                         "the authorization root established no runtime identity for %s"
                         unit.unit))
             in
+            let* () =
+              match config.Sol_cli_toml.schedule with
+              | None -> Ok ()
+              | Some _ ->
+                let unsupported =
+                  (match config.scheduled_concurrency with
+                   | Some (Sol_cli_toml.Forbid | Sol_cli_toml.Replace) -> true
+                   | _ -> false)
+                  || Option.is_some config.backoff_limit
+                in
+                if unsupported
+                then
+                  Error
+                    (Sol_cli_exit.error
+                       (Printf.sprintf
+                          "%s declares Kubernetes-only schedule policy; map it to the \
+                           provider scheduler or remove \
+                           scheduled_concurrency/backoff_limit"
+                          service.name))
+                else Ok ()
+            in
             let* scheduler_identity =
               match config.Sol_cli_toml.schedule with
               | None -> Ok None
