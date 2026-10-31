@@ -13,3 +13,4 @@ val validate_external
   -> (unit, string) result
 
 val validate_target : Sol_cli_config.target -> (unit, string) result
+val export_terraform_secrets : Sol_cli_config.target -> (unit, string) result

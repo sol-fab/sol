@@ -22,8 +22,10 @@ let target ?(fields = []) ?cluster_name ?(region = "us-east-1") provider =
   ; observability_backend = None
   ; observability_logs_url = None
   ; observability_logs_username = None
+  ; observability_logs_password_env = None
   ; observability_metrics_url = None
   ; observability_metrics_username = None
+  ; observability_metrics_password_env = None
   ; observability_traces_url = None
   ; destroy_retention = None
   ; alert_receiver_type = None

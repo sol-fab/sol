@@ -1206,6 +1206,10 @@ let run (req : Sol_cli_command_request.deploy_request) =
     Sol_cli_observability_backend.validate_target target_cfg
     |> Result.map_error Sol_cli_exit.error
   in
+  let* () =
+    Sol_cli_observability_backend.export_terraform_secrets target_cfg
+    |> Result.map_error Sol_cli_exit.error
+  in
   let* deployed =
     Sol_cli_deploy_selection.apply_target
       ~target:req.target

@@ -41,8 +41,10 @@ target:
   observability_backend: external
   observability_logs_url: https://logs.example.com/loki/api/v1/push
   observability_logs_username: "123456"
+  observability_logs_password_env: EXTERNAL_LOKI_PASSWORD
   observability_metrics_url: https://metrics.example.com/api/prom/push
   observability_metrics_username: "654321"
+  observability_metrics_password_env: EXTERNAL_PROMETHEUS_PASSWORD
   observability_traces_url: https://otlp.example.com/v1/traces
 ```
 

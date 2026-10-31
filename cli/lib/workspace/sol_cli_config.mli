@@ -18,8 +18,10 @@ type target =
   ; observability_backend : string option
   ; observability_logs_url : string option
   ; observability_logs_username : string option
+  ; observability_logs_password_env : string option
   ; observability_metrics_url : string option
   ; observability_metrics_username : string option
+  ; observability_metrics_password_env : string option
   ; observability_traces_url : string option
   ; destroy_retention : string option
   ; alert_receiver_type : string option
