@@ -2931,3 +2931,71 @@ let test_telemetry_env_reaches_the_service_spec () =
 let%test "external trace endpoint reaches the workload" =
   test_telemetry_env_reaches_the_service_spec ()
 ;;
+
+let external_storage_config : Sol_cli_config.t =
+  { project = Some "ws"
+  ; target = Result.get_ok (Sol_cli_config.parse_target "prod/aws/us-east-1")
+  ; resources =
+      [ { name = "uploads"
+        ; typ = Some "object_store"
+        ; partition_key = None
+        ; sort_key = None
+        ; indexes = []
+        ; size = None
+        ; omit = false
+        ; binding =
+            Some
+              { Sol_cli_config.ownership = Sol_cli_config.Ownership_external
+              ; store = Some "external"
+              ; keys = []
+              ; connection =
+                  [ "OBJECT_ENDPOINT", "https://objects.example.com"
+                  ; "OBJECT_BUCKET", "uploads"
+                  ]
+              ; credentials = []
+              }
+        }
+      ]
+  ; services =
+      [ { Sol_cli_config.name = "charge_svc"
+        ; typ = None
+        ; path = None
+        ; uses = [ "uploads" ]
+        ; scale_min = None
+        ; scale_max = None
+        ; language = None
+        ; omit = false
+        }
+      ]
+  }
+;;
+
+let test_external_object_store_connection_reaches_the_spec () =
+  let tmp = Filename.temp_dir "sol_test_external_store" "" in
+  with_cwd tmp (fun () ->
+    mkdirs charge_svc_service.dir;
+    write_file (Filename.concat charge_svc_service.dir "sol.toml") "";
+    match
+      Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
+        ~platform_shape:Sol_cli_profile.Local
+        ~workspace:"myworkspace"
+        ~env:deploy_env
+        ~facts:(facts ())
+        ~declared:(Sol_cli_config.declared_of_config external_storage_config)
+        ~inventory:[ charge_svc_service ]
+        [ charge_svc_service ]
+    with
+    | Ok plan ->
+      let spec = List.hd plan.Sol_cli_deployment_plan.services in
+      Windtrap.equal
+        (Windtrap.option Windtrap.string)
+        ~msg:"external object-store endpoint reaches the workload"
+        (Some "https://objects.example.com")
+        (List.assoc_opt "OBJECT_ENDPOINT" spec.config)
+    | Error err -> Windtrap.fail (Sol_cli_deployment_plan.plan_error_to_string err))
+;;
+
+let%test "external object-store connection reaches the workload" =
+  test_external_object_store_connection_reaches_the_spec ()
+;;

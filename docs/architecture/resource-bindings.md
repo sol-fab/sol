@@ -343,3 +343,41 @@ installation-owned projections, and that is an implementation gap, not a model r
 step that writes its class Secrets runs only in a direct apply. An externally bound database emits its
 class `ExternalSecret`s as `<target>-db-prerequisites.yaml` beside the workloads, so a fresh GitOps
 deployment carries the object its units read.
+
+## External queue and object-store bindings
+
+`queue` and `object_store` resources are currently **external-first**. A service that
+declares one in `uses` receives the binding's non-secret `connection` entries as
+environment variables. Examples:
+
+```yaml
+resources:
+  jobs:
+    type: queue
+    binding:
+      ownership: external
+      store: external
+      connection:
+        QUEUE_ENDPOINT: https://sqs.us-east-1.amazonaws.com/123/jobs
+        QUEUE_NAME: jobs
+
+  uploads:
+    type: object_store
+    binding:
+      ownership: external
+      store: external
+      connection:
+        OBJECT_ENDPOINT: https://objects.example.com
+        OBJECT_BUCKET: uploads
+```
+
+Rules:
+
+- managed `queue`/`object_store` bindings are refused until a provider backend and
+  lifecycle are defined;
+- connection values are non-secret; credentials stay in the target's secret mechanism
+  or workload identity;
+- the connection contract does not promise Kafka stream semantics (ordering, replay,
+  consumer groups) for queues;
+- `queue`/`object_store` capabilities are declared and translated provider-side in a
+  later increment; the current implementation delivers the external connection only.

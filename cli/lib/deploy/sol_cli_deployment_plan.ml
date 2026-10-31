@@ -1196,6 +1196,64 @@ let of_services_result
         (Invalid_service_call
            { service = caller; ref; message = "expected domain/service_name" })
   in
+  let external_resource_config service_name =
+    match declared with
+    | None -> Ok []
+    | Some cfg ->
+      let* service =
+        match
+          cfg.Sol_cli_config.services
+          |> List.find_opt (fun (service : Sol_cli_config.service) ->
+            String.equal service.name service_name)
+        with
+        | Some service -> Ok service
+        | None ->
+          Ok
+            { Sol_cli_config.name = service_name
+            ; typ = None
+            ; path = None
+            ; uses = []
+            ; scale_min = None
+            ; scale_max = None
+            ; language = None
+            ; omit = false
+            }
+      in
+      let* pairs =
+        service.Sol_cli_config.uses
+        |> Sol_cli_result.map_list (fun ref ->
+          match Sol_cli_resource_binding.resource_name_of_ref ref with
+          | None -> Ok []
+          | Some name ->
+            (match
+               cfg.Sol_cli_config.resources
+               |> List.find_opt (fun (resource : Sol_cli_config.resource) ->
+                 String.equal resource.name name)
+             with
+             | None -> Ok []
+             | Some resource ->
+               (match resource.typ with
+                | Some ("queue" | "object_store") ->
+                  (match resource.binding with
+                   | Some binding
+                     when binding.ownership = Sol_cli_config.Ownership_external ->
+                     Ok binding.connection
+                   | Some _ ->
+                     Error
+                       (Invalid_resource_binding
+                          (Printf.sprintf
+                             "resource %S is managed; external %s bindings are the \
+                              only                               supported shape today"
+                             name
+                             (Option.value resource.typ ~default:"resource")))
+                   | None ->
+                     Error
+                       (Invalid_resource_binding
+                          (Printf.sprintf "external resource %S has no binding" name)))
+                | _ -> Ok [])))
+      in
+      Ok (List.concat pairs)
+  in
   let to_spec (svc, toml) =
     let* k8s_name = k8s_name_result svc.Sol_cli_manifest.name in
     let* namespace = namespace_result ~workspace ~domain:svc.Sol_cli_manifest.domain in
@@ -1266,6 +1324,7 @@ let of_services_result
       | _ -> []
     in
     let service_config = List.remove_assoc "SOL_KAFKA_DURABILITY" toml.env_config in
+    let* external_config = external_resource_config svc.name in
     let language = sol_yml_language ~declared ~service_name:svc.name in
     let spec =
       { domain = svc.domain
@@ -1279,6 +1338,7 @@ let of_services_result
           kafka_security_config
           @ kafka_durability_config
           @ service_config
+          @ external_config
           @ telemetry_env
           @ List.map (fun (c : service_call) -> c.env_var, c.url) calls
       ; secrets = List.map (fun key -> key, "") toml.secret_keys

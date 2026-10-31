@@ -1,6 +1,12 @@
-type capability = Secret_access
+type capability =
+  | Secret_access
+  | Message_publish
+  | Message_subscribe
+  | Object_read
+  | Object_write
 
 val capability_to_string : capability -> string
+val resource_capabilities : string -> capability list
 
 type requirement =
   { capability : capability
