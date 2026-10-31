@@ -47,9 +47,20 @@ let workload
   { Sol_cli_provider_capabilities.unit; namespace; secrets; external_grants }
 ;;
 
-let aws_run ~decision argv =
+let aws_run
+      ?(boundary = "arn:aws:iam::123456789012:policy/sol-dev-workload-boundary")
+      ?(boundary_document = {|{"Version":"2012-10-17","Statement":[]}|})
+      ~decision
+      argv
+  =
   if List.mem "get-caller-identity" argv
   then Ok "123456789012\n"
+  else if List.mem "get-role" argv
+  then Ok (boundary ^ "\n")
+  else if List.mem "get-policy" argv
+  then Ok "v1\n"
+  else if List.mem "get-policy-version" argv
+  then Ok (boundary_document ^ "\n")
   else if List.mem "simulate-principal-policy" argv
   then Ok (Printf.sprintf {|["%s"]|} decision)
   else Error ("unexpected aws command: " ^ String.concat " " argv)
@@ -315,4 +326,69 @@ let%test "AWS external grant passes" = test_aws_external_grant_passes ()
 
 let%test "AWS external grant denial fails closed" =
   test_aws_external_grant_denied_fails_closed ()
+;;
+
+let test_aws_missing_boundary_fails_closed () =
+  match
+    Sol_cli_provider_capabilities.aws_effective_access
+      ~run:(aws_run ~boundary:"" ~decision:"allowed")
+      (target Sol_cli_provider.Aws)
+      [ workload [ "stripe" ] ]
+  with
+  | Ok () -> Windtrap.fail "a role without a permissions boundary passed verification"
+  | Error message ->
+    check_bool
+      "missing boundary is reported"
+      true
+      (Sol_cli_string.contains ~needle:"no permissions boundary" message)
+;;
+
+let test_aws_unexpected_boundary_fails_closed () =
+  match
+    Sol_cli_provider_capabilities.aws_effective_access
+      ~run:
+        (aws_run
+           ~boundary:"arn:aws:iam::123456789012:policy/unrelated-boundary"
+           ~decision:"allowed")
+      (target Sol_cli_provider.Aws)
+      [ workload [ "stripe" ] ]
+  with
+  | Ok () -> Windtrap.fail "an unexpected permissions boundary passed verification"
+  | Error message ->
+    check_bool
+      "unexpected boundary is reported"
+      true
+      (Sol_cli_string.contains ~needle:"unexpected permissions boundary" message)
+;;
+
+let test_aws_boundary_document_is_included () =
+  let saw_boundary = ref false in
+  let run argv =
+    if List.mem "simulate-principal-policy" argv
+    then (
+      if List.mem "--permissions-boundary-policy-input-list" argv
+      then saw_boundary := true;
+      Ok {|["allowed"]|})
+    else aws_run ~decision:"allowed" argv
+  in
+  match
+    Sol_cli_provider_capabilities.aws_effective_access
+      ~run
+      (target Sol_cli_provider.Aws)
+      [ workload [ "stripe" ] ]
+  with
+  | Error message -> Windtrap.fail message
+  | Ok () -> check_bool "simulation includes the boundary document" true !saw_boundary
+;;
+
+let%test "AWS missing permissions boundary fails closed" =
+  test_aws_missing_boundary_fails_closed ()
+;;
+
+let%test "AWS unexpected permissions boundary fails closed" =
+  test_aws_unexpected_boundary_fails_closed ()
+;;
+
+let%test "AWS simulation includes the boundary document" =
+  test_aws_boundary_document_is_included ()
 ;;

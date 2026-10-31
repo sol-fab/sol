@@ -817,35 +817,6 @@ let aws_effective_access ~run (target : Sol_cli_config.target) workloads =
            | Some account -> Ok account
            | None -> Error "aws sts get-caller-identity returned no account id")
     in
-    let simulate ~role ~actions ~resource =
-      let* decisions =
-        Result.bind
-          (run
-             ([ "aws"
-              ; "iam"
-              ; "simulate-principal-policy"
-              ; "--policy-source-arn"
-              ; role
-              ; "--action-names"
-              ]
-              @ actions
-              @ [ "--resource-arns"
-                ; resource
-                ; "--query"
-                ; "EvaluationResults[*].EvalDecision"
-                ; "--output"
-                ; "json"
-                ]))
-          aws_simulation_decisions
-      in
-      let allowed =
-        decisions <> []
-        && List.for_all
-             (fun decision -> String.equal (String.lowercase_ascii decision) "allowed")
-             decisions
-      in
-      if allowed then Ok () else Error "denied"
-    in
     let check_workload (workload : authorization_workload) =
       let role =
         Printf.sprintf
@@ -854,6 +825,119 @@ let aws_effective_access ~run (target : Sol_cli_config.target) workloads =
           target.env
           target.env
           workload.unit
+      in
+      let role_name = Printf.sprintf "sol-%s-%s" target.env workload.unit in
+      let* boundary_arn =
+        Result.bind
+          (run
+             [ "aws"
+             ; "iam"
+             ; "get-role"
+             ; "--role-name"
+             ; role_name
+             ; "--query"
+             ; "Role.PermissionsBoundary.PermissionsBoundaryArn"
+             ; "--output"
+             ; "text"
+             ])
+          (fun output ->
+             match Sol_cli_string.non_blank_opt (Some (String.trim output)) with
+             | Some arn when not (String.equal arn "None") -> Ok arn
+             | _ ->
+               Error
+                 (Printf.sprintf
+                    "workload role %s has no permissions boundary; refusing to treat its \
+                     effective access as established"
+                    role))
+      in
+      let expected_boundary = "sol-" ^ target.env ^ "-workload-boundary" in
+      let boundary_name =
+        match String.rindex_opt boundary_arn '/' with
+        | Some index ->
+          String.sub boundary_arn (index + 1) (String.length boundary_arn - index - 1)
+        | None -> boundary_arn
+      in
+      let* () =
+        if String.equal boundary_name expected_boundary
+        then Ok ()
+        else
+          Error
+            (Printf.sprintf
+               "workload role %s has unexpected permissions boundary %S; expected %S"
+               role
+               boundary_arn
+               expected_boundary)
+      in
+      let* version =
+        Result.bind
+          (run
+             [ "aws"
+             ; "iam"
+             ; "get-policy"
+             ; "--policy-arn"
+             ; boundary_arn
+             ; "--query"
+             ; "Policy.DefaultVersionId"
+             ; "--output"
+             ; "text"
+             ])
+          (fun output ->
+             match Sol_cli_string.non_blank_opt (Some (String.trim output)) with
+             | Some version -> Ok version
+             | None -> Error ("permissions boundary " ^ boundary_arn ^ " has no version"))
+      in
+      let* boundary_document =
+        Result.bind
+          (run
+             [ "aws"
+             ; "iam"
+             ; "get-policy-version"
+             ; "--policy-arn"
+             ; boundary_arn
+             ; "--version-id"
+             ; version
+             ; "--query"
+             ; "PolicyVersion.Document"
+             ; "--output"
+             ; "json"
+             ])
+          (fun output ->
+             let document = String.trim output in
+             match Yojson.Safe.from_string document with
+             | _ -> Ok document
+             | exception Yojson.Json_error message ->
+               Error ("permissions boundary " ^ boundary_arn ^ " is not JSON: " ^ message))
+      in
+      let simulate ~actions ~resource =
+        let* decisions =
+          Result.bind
+            (run
+               ([ "aws"
+                ; "iam"
+                ; "simulate-principal-policy"
+                ; "--policy-source-arn"
+                ; role
+                ; "--action-names"
+                ]
+                @ actions
+                @ [ "--resource-arns"
+                  ; resource
+                  ; "--permissions-boundary-policy-input-list"
+                  ; boundary_document
+                  ; "--query"
+                  ; "EvaluationResults[*].EvalDecision"
+                  ; "--output"
+                  ; "json"
+                  ]))
+            aws_simulation_decisions
+        in
+        let allowed =
+          decisions <> []
+          && List.for_all
+               (fun decision -> String.equal (String.lowercase_ascii decision) "allowed")
+               decisions
+        in
+        if allowed then Ok () else Error "denied"
       in
       let rec check_keys = function
         | [] -> Ok ()
@@ -867,7 +951,7 @@ let aws_effective_access ~run (target : Sol_cli_config.target) workloads =
               key
           in
           let* () =
-            simulate ~role ~actions:[ "secretsmanager:GetSecretValue" ] ~resource
+            simulate ~actions:[ "secretsmanager:GetSecretValue" ] ~resource
             |> Result.map_error (fun _ ->
               authorization_refusal
                 target
@@ -882,7 +966,7 @@ let aws_effective_access ~run (target : Sol_cli_config.target) workloads =
         | (capability, resource) :: rest ->
           let* actions = actions_of_capability capability in
           let* () =
-            simulate ~role ~actions ~resource
+            simulate ~actions ~resource
             |> Result.map_error (fun _ ->
               authorization_refusal target ~unit:workload.unit ~capability ~resource)
           in
