@@ -424,6 +424,12 @@ targets:
 The target layer replaces the binding atomically. Changing environments changes the
 physical SQS/S3 resource without changing the application's `jobs`/`uploads` references.
 
+Required AWS connection keys:
+
+- `queue`: `QUEUE_ARN` (must be an `arn:aws:sqs:` ARN) and `QUEUE_URL`;
+- `object_store`: `OBJECT_ARN` (must be an `arn:aws:s3:::` object ARN ending in `/*`) and
+  `OBJECT_BUCKET`.
+
 Capabilities translate to AWS IAM actions scoped to those ARNs:
 
 | Capability | AWS action |
