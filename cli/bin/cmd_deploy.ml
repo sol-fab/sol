@@ -119,34 +119,33 @@ let run_serverless
     |> Result.map_error Sol_cli_exit.error
   in
   let* scheduler_identities =
+    (* Scheduler identities are target-scoped and owned by the authorization root. Pass
+       every scheduled function in the workspace so removing a declaration, or deploying a
+       different selection, does not leave an orphaned principal behind. *)
     let* scheduled =
-      List.filter_map
-        (fun (service, _, (config : Sol_cli_toml.t), unit) ->
-           match service.primitive, config.schedule with
-           | Sol_cli_manifest.Fn, Some _ ->
-             let function_name =
-               Sol_cli_serverless_lifecycle.scheduler_resource_name
-                 ~target:target_cfg
-                 service.name
-             in
-             Some (unit, function_name)
-           | _ -> None)
-        declared
-      |> Sol_cli_result.map_list
-           (fun ((unit : Sol_cli_grant.serverless_unit), function_name) ->
-              let* function_name = function_name in
-              Ok { Sol_cli_grant.unit = unit.unit; function_name })
-      |> Result.map_error Sol_cli_exit.error
+      Sol_cli_workspace_model.workloads facts
+      |> Sol_cli_result.map_list (fun (workload : Sol_cli_workspace_model.workload) ->
+        match workload.service.primitive, workload.config with
+        | Sol_cli_manifest.Fn, Ok config when Option.is_some config.schedule ->
+          let* function_name =
+            Sol_cli_serverless_lifecycle.scheduler_resource_name
+              ~target:target_cfg
+              workload.service.name
+            |> Result.map_error Sol_cli_exit.error
+          in
+          let unit =
+            Sol_cli_serverless_target_common.unit_of_service ~project workload.service
+          in
+          Ok (Some { Sol_cli_grant.unit; function_name })
+        | _ -> Ok None)
+      |> Result.map (List.filter_map Fun.id)
     in
-    match scheduled with
-    | [] -> Ok []
-    | units ->
-      Sol_cli_serverless_lifecycle.ensure_scheduler_identities
-        ~assets
-        ~run_log
-        ~target:target_cfg
-        ~units
-      |> Result.map_error Sol_cli_exit.error
+    Sol_cli_serverless_lifecycle.ensure_scheduler_identities
+      ~assets
+      ~run_log
+      ~target:target_cfg
+      ~units:scheduled
+    |> Result.map_error Sol_cli_exit.error
   in
   let single =
     match declared with
