@@ -331,6 +331,46 @@ let validate_external_bindings ~(declared : Sol_cli_config.declared) ~service_na
   |> Result.map (fun _ -> ())
 ;;
 
+let external_connection ~(config : Sol_cli_config.t) ~service_name =
+  let open Result.Syntax in
+  let* service =
+    match
+      config.services
+      |> List.find_opt (fun (service : Sol_cli_config.service) ->
+        String.equal service.name service_name && not service.omit)
+    with
+    | Some service -> Ok service
+    | None ->
+      Ok
+        { Sol_cli_config.name = service_name
+        ; typ = None
+        ; path = None
+        ; uses = []
+        ; scale_min = None
+        ; scale_max = None
+        ; language = None
+        ; omit = false
+        }
+  in
+  let* pairs =
+    service.uses
+    |> Sol_cli_result.map_list (fun ref ->
+      match resource_name_of_ref ref with
+      | None -> Ok []
+      | Some name ->
+        (match
+           config.resources
+           |> List.find_opt (fun (resource : Sol_cli_config.resource) ->
+             String.equal resource.name name && not resource.omit)
+         with
+         | Some { typ = Some ("queue" | "object_store"); binding = Some binding; _ }
+           when binding.ownership = Sol_cli_config.Ownership_external ->
+           Ok binding.connection
+         | _ -> Ok []))
+  in
+  Ok (List.concat pairs)
+;;
+
 let external_requirements ~(config : Sol_cli_config.t) ~service_name =
   let open Result.Syntax in
   let* service =

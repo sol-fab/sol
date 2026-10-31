@@ -133,6 +133,12 @@ let fence ~assets ~run_log ~target =
     Ok Established
 ;;
 
+let identity_scope addresses =
+  match addresses with
+  | first :: rest -> Sol_cli_terraform.targets first rest
+  | [] -> Sol_cli_terraform.whole_root
+;;
+
 let apply_serverless_identities ~assets ~run_log ~target units =
   let open Result.Syntax in
   let* dir, _backend = prepare_root ~assets target in
@@ -143,7 +149,7 @@ let apply_serverless_identities ~assets ~run_log ~target units =
       ~name:"authorization-serverless-identities"
       (fun () ->
          Sol_cli_terraform.apply
-           ~scope:Sol_cli_terraform.whole_root
+           ~scope:(identity_scope (capabilities target).authorization_runtime_addresses)
            ~chdir:dir
            ~var_files:[]
            ~vars:(Sol_cli_terraform.kv_args vars)
@@ -185,7 +191,7 @@ let apply_scheduler_identities ~assets ~run_log ~target units =
       ~name:"authorization-scheduler-identities"
       (fun () ->
          Sol_cli_terraform.apply
-           ~scope:Sol_cli_terraform.whole_root
+           ~scope:(identity_scope (capabilities target).authorization_scheduler_addresses)
            ~chdir:dir
            ~var_files:[]
            ~vars:(Sol_cli_terraform.kv_args vars)

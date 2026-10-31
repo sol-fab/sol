@@ -19,6 +19,7 @@ type request =
   ; schedule : string option
   ; timezone : string option
   ; scheduler_role_arn : string option
+  ; external_env : (string * string) list
   ; record : string option
   ; run : string list -> (Sol_cli_aws_lambda_common.output, string) result
   }

@@ -130,6 +130,8 @@ type t =
       -> ((string * string) list, string) result
   ; authorization_scheduler_output : string
   ; external_resource_auth : bool
+  ; authorization_runtime_addresses : string list
+  ; authorization_scheduler_addresses : string list
   ; authorization_fence_addresses : string list
   ; authorization_reconciler :
       Sol_cli_config.target -> (authorization_reconciler, string) result
@@ -1172,6 +1174,14 @@ let aws : t =
   ; authorization_scheduler_root_vars = aws_scheduler_root_vars
   ; authorization_scheduler_output = "scheduler_role_arns"
   ; external_resource_auth = true
+  ; authorization_runtime_addresses =
+      [ "aws_iam_policy.workload_boundary"
+      ; "aws_iam_role.workload"
+      ; "aws_iam_role_policy.workload"
+      ; "aws_eks_pod_identity_association.workload"
+      ]
+  ; authorization_scheduler_addresses =
+      [ "aws_iam_role.scheduler"; "aws_iam_role_policy.scheduler" ]
   ; authorization_fence_addresses =
       [ "aws_iam_policy.workload_boundary"
       ; "aws_iam_role.reconciler"
@@ -1423,6 +1433,15 @@ let gcp : t =
   ; authorization_scheduler_root_vars = gcp_scheduler_root_vars
   ; authorization_scheduler_output = "scheduler_service_accounts"
   ; external_resource_auth = false
+  ; authorization_runtime_addresses =
+      [ "google_service_account.serverless"
+      ; "google_secret_manager_secret_iam_member.serverless"
+      ]
+  ; authorization_scheduler_addresses =
+      [ "google_service_account.scheduler"
+      ; "google_service_account_iam_member.scheduler_act_as"
+      ; "google_cloud_run_v2_job_iam_member.scheduler"
+      ]
   ; authorization_fence_addresses =
       [ "google_service_account.reconciler"
       ; "google_project_iam_custom_role.authorization"
@@ -1492,6 +1511,8 @@ let byo : t =
   ; authorization_scheduler_root_vars = (fun _ _ -> Error byo_no_root)
   ; authorization_scheduler_output = ""
   ; external_resource_auth = false
+  ; authorization_runtime_addresses = []
+  ; authorization_scheduler_addresses = []
   ; authorization_fence_addresses = []
   ; authorization_reconciler = (fun _ -> Error byo_no_root)
   ; authorization_assumption = (fun _ -> Error byo_no_root)
