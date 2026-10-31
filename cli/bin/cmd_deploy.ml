@@ -1427,22 +1427,7 @@ let run (req : Sol_cli_command_request.deploy_request) =
     (Sol_cli_run_log.run_id run_log)
     (Sol_cli_run_log.dir run_log);
   let serverless_services, kubernetes_services =
-    match Sol_cli_config.execution_of_target target_cfg with
-    | Sol_cli_config.Serverless -> deployed.services, []
-    | Sol_cli_config.Kubernetes -> [], deployed.services
-    | Sol_cli_config.Mixed ->
-      ( List.filter
-          (fun (service : Sol_cli_manifest.service) ->
-             match service.primitive with
-             | Sol_cli_manifest.Fn -> true
-             | Svc | Worker -> false)
-          deployed.services
-      , List.filter
-          (fun (service : Sol_cli_manifest.service) ->
-             match service.primitive with
-             | Sol_cli_manifest.Fn -> false
-             | Svc | Worker -> true)
-          deployed.services )
+    Sol_cli_serverless_target_common.services_by_backend target_cfg deployed.services
   in
   let* () =
     Sol_cli_result.map_list
@@ -1461,7 +1446,7 @@ let run (req : Sol_cli_command_request.deploy_request) =
              match service.primitive with
              | Sol_cli_manifest.Worker -> true
              | Svc | Fn -> false)
-          deployed.services
+          serverless_services
       with
       | None -> Ok ()
       | Some service ->

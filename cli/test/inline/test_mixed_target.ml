@@ -44,3 +44,40 @@ live:
       true
       (Sol_cli_config.execution_of_target config.target = Sol_cli_config.Mixed)
 ;;
+
+let service name primitive : Sol_cli_manifest.service =
+  { domain = "app"; name; primitive; dir = "app/" ^ name }
+;;
+
+let with_execution execution target =
+  { target with
+    Sol_cli_config.provider_fields =
+      (target.Sol_cli_config.provider_fields
+       |> List.filter (fun (provider, _) -> provider <> "sol"))
+      @ [ "sol", [ "execution", execution ] ]
+  }
+;;
+
+let%test "mixed target splits functions from Kubernetes units" =
+  let svc = service "checkout_svc" Sol_cli_manifest.Svc in
+  let fn = service "checkout_fn" Sol_cli_manifest.Fn in
+  let target =
+    Result.get_ok (Sol_cli_config.parse_target "mixed/aws/us-east-1")
+    |> with_execution "mixed"
+  in
+  let serverless, kubernetes =
+    Sol_cli_serverless_target_common.services_by_backend target [ svc; fn ]
+  in
+  Windtrap.equal Windtrap.int ~msg:"one serverless unit" 1 (List.length serverless);
+  Windtrap.equal Windtrap.int ~msg:"one Kubernetes unit" 1 (List.length kubernetes);
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"function backend"
+    "checkout_fn"
+    (List.hd serverless).name;
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"service backend"
+    "checkout_svc"
+    (List.hd kubernetes).name
+;;
