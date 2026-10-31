@@ -45,6 +45,7 @@ type worker_fields = { deployment : deployment_fields }
 
 type fn_fields =
   { schedule : string
+  ; schedule_timezone : string option
   ; cpu : Sol_cli_toml.cpu_quantity
   ; memory : Sol_cli_toml.memory_quantity
   ; scheduled_concurrency : Sol_cli_toml.scheduled_concurrency
@@ -313,7 +314,14 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
                ~ingress_path:"/"
                ~cluster_issuer:"letsencrypt-prod"
                ~deployment
-           | Render_fn { schedule; cpu; memory; scheduled_concurrency; backoff_limit } ->
+           | Render_fn
+               { schedule
+               ; schedule_timezone
+               ; cpu
+               ; memory
+               ; scheduled_concurrency
+               ; backoff_limit
+               } ->
              let concurrency_policy =
                match scheduled_concurrency with
                | Sol_cli_toml.Allow -> "Allow"
@@ -329,6 +337,7 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
                ; name
                ; image = img
                ; schedule
+               ; schedule_timezone
                ; concurrency_policy
                ; backoff_limit
                ; cpu = Sol_cli_toml.cpu_quantity_to_string cpu
@@ -417,6 +426,7 @@ let render_spec
          Ok
            (Render_fn
               { schedule
+              ; schedule_timezone = s.schedule_timezone
               ; cpu = s.cpu
               ; memory = s.memory
               ; scheduled_concurrency = s.scheduled_concurrency

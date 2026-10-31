@@ -51,6 +51,7 @@ type service_spec =
   ; build_secret_keys : string list
   ; volumes : Sol_cli_toml.volume list
   ; schedule : string option
+  ; schedule_timezone : string option
   ; scheduled_concurrency : Sol_cli_toml.scheduled_concurrency
   ; backoff_limit : int
   ; replicas : int
@@ -304,6 +305,7 @@ let release_workload_of_spec (spec : service_spec) : Sol_cli_release_id.workload
         | External { store; key = remote_key } -> Some (key, store, remote_key)
         | Target_kafka _ -> None)
   ; schedule = spec.schedule
+  ; schedule_timezone = spec.schedule_timezone
   ; scheduled_concurrency =
       Sol_cli_toml.scheduled_concurrency_to_string spec.scheduled_concurrency
   ; backoff_limit = spec.backoff_limit
@@ -1346,6 +1348,7 @@ let of_services_result
       ; build_secret_keys = toml.build_secret_keys
       ; volumes = toml.volumes
       ; schedule
+      ; schedule_timezone = toml.schedule_timezone
       ; scheduled_concurrency =
           Option.value toml.scheduled_concurrency ~default:default_scheduled_concurrency
       ; backoff_limit = Option.value toml.backoff_limit ~default:default_backoff_limit

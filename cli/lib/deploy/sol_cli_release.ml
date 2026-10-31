@@ -305,7 +305,7 @@ let rows3_to_json rows =
 ;;
 
 let workload_to_json (w : workload) : Yojson.Safe.t =
-  `Assoc
+  let fields =
     [ "domain", `String w.domain
     ; "name", `String w.name
     ; "primitive", `String w.primitive
@@ -339,6 +339,13 @@ let workload_to_json (w : workload) : Yojson.Safe.t =
     ; "cluster_issuer", `String w.cluster_issuer
     ; "calls", rows_to_json w.calls
     ]
+  in
+  let fields =
+    match w.schedule_timezone with
+    | None -> fields
+    | Some timezone -> fields @ [ "schedule_timezone", `String timezone ]
+  in
+  `Assoc fields
 ;;
 
 let owned_object_to_json (o : Sol_cli_release_id.owned_object) : Yojson.Safe.t =
@@ -508,6 +515,7 @@ let workload_of_json (json : Yojson.Safe.t) : workload =
        | _ -> [])
   ; external_secret_refs = List.map row3 (rows "external_secret_refs" json)
   ; schedule = string_option "schedule" json
+  ; schedule_timezone = string_option "schedule_timezone" json
   ; scheduled_concurrency = str "scheduled_concurrency" json
   ; backoff_limit = int "backoff_limit" json
   ; replicas = int "replicas" json

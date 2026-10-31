@@ -30,6 +30,7 @@ let workload_of_owned (o : Sol_cli_release_id.owned_object) : Sol_cli_release_id
   ; uses = []
   ; external_secret_refs = []
   ; schedule = None
+  ; schedule_timezone = None
   ; scheduled_concurrency = "allow"
   ; backoff_limit = 3
   ; replicas = 1

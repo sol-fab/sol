@@ -58,6 +58,7 @@ type service_spec =
   ; build_secret_keys : string list
   ; volumes : Sol_cli_toml.volume list
   ; schedule : string option
+  ; schedule_timezone : string option
   ; scheduled_concurrency : Sol_cli_toml.scheduled_concurrency
   ; backoff_limit : int
   ; replicas : int

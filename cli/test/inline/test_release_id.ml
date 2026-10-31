@@ -19,6 +19,7 @@ let wl
       ?(ingress_path = None)
       ?(cluster_issuer = "letsencrypt-prod")
       ?(calls = [])
+      ?(schedule_timezone = None)
       ?(scheduled_concurrency = "allow")
       ?(backoff_limit = 3)
       name
@@ -33,6 +34,7 @@ let wl
   ; uses = []
   ; external_secret_refs = []
   ; schedule
+  ; schedule_timezone
   ; scheduled_concurrency
   ; backoff_limit
   ; replicas

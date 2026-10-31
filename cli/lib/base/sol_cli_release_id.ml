@@ -16,6 +16,7 @@ type workload =
     uses : string list
   ; external_secret_refs : (string * string * string) list
   ; schedule : string option
+  ; schedule_timezone : string option
   ; scheduled_concurrency : string
   ; backoff_limit : int
   ; replicas : int
@@ -121,6 +122,9 @@ let enc_workload b (w : workload) =
        (fun (key, store, remote) -> [ key; store; remote ])
        (List.sort compare3 w.external_secret_refs));
   enc_option enc_string b w.schedule;
+  (match w.schedule_timezone with
+   | None -> ()
+   | Some timezone -> enc_string b timezone);
   enc_string b w.scheduled_concurrency;
   enc_int b w.backoff_limit;
   enc_int b w.replicas;

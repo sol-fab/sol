@@ -181,6 +181,7 @@ let decode_workload ~release_id ~workspace (w : Sol_cli_release.workload) =
     ; build_secret_keys = []
     ; volumes
     ; schedule = w.schedule
+    ; schedule_timezone = w.schedule_timezone
     ; scheduled_concurrency
     ; backoff_limit = w.backoff_limit
     ; replicas = w.replicas
