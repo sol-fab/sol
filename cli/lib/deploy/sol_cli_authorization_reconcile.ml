@@ -138,8 +138,19 @@ let workloads ~grants ~namespace_of =
              && String.equal grant.capability Sol_cli_grant.secret_capability)
            |> List.map (fun grant -> grant.resource)
          in
-         Some { Sol_cli_provider_capabilities.unit; namespace = first.namespace; secrets })
-    )
+         let external_grants =
+           mapped
+           |> List.filter (fun grant ->
+             String.equal grant.unit unit
+             && not (String.equal grant.capability Sol_cli_grant.secret_capability))
+           |> List.map (fun grant -> grant.capability, grant.resource)
+         in
+         Some
+           { Sol_cli_provider_capabilities.unit
+           ; namespace = first.namespace
+           ; secrets
+           ; external_grants
+           }))
 ;;
 
 let terraform_var grants =

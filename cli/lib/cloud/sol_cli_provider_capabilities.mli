@@ -30,6 +30,7 @@ type authorization_workload =
   { unit : string
   ; namespace : string
   ; secrets : string list
+  ; external_grants : (string * string) list
   }
 
 type t =

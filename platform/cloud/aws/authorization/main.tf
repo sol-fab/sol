@@ -80,8 +80,8 @@ data "aws_iam_policy_document" "workload_boundary" {
 
   dynamic "statement" {
     for_each = {
-      for grant in var.grants :
-      "${grant.unit}/${grant.capability}/${grant.resource}" => grant
+      for grant in local.boundary_external_grants :
+      "${grant.capability}/${grant.resource}" => grant
       if can(regex("^message\\.", grant.capability))
     }
     content {
@@ -94,8 +94,8 @@ data "aws_iam_policy_document" "workload_boundary" {
 
   dynamic "statement" {
     for_each = {
-      for grant in var.grants :
-      "${grant.unit}/${grant.capability}/${grant.resource}" => grant
+      for grant in local.boundary_external_grants :
+      "${grant.capability}/${grant.resource}" => grant
       if grant.capability == "object.read" || grant.capability == "object.write"
     }
     content {
@@ -250,6 +250,23 @@ locals {
   ]
 
   grant_units = toset([for grant in local.realized_grants : grant.unit])
+
+  boundary_external_grants = concat(
+    [
+      for grant in var.grants : {
+        capability = grant.capability
+        resource   = grant.resource
+      }
+    ],
+    flatten([
+      for unit in var.serverless_units : [
+        for requirement in unit.requirements : {
+          capability = requirement.capability
+          resource   = requirement.resource
+        }
+      ]
+    ])
+  )
 
   serverless_units = toset([for unit in var.serverless_units : unit.unit])
 
