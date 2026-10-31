@@ -9,6 +9,9 @@ val deploy
   -> image:string
   -> record:string
   -> runtime_service_account:string option
+  -> schedule:string option
+  -> schedule_timezone:string option
+  -> scheduler_identity:string option
   -> (Yojson.Safe.t, string) result
 
 val rollback

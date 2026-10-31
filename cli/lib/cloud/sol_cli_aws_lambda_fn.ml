@@ -8,6 +8,9 @@ type request =
   ; image : string
   ; role_arn : string
   ; unit : string
+  ; schedule : string option
+  ; timezone : string option
+  ; scheduler_role_arn : string option
   ; record : string option
   ; run : string list -> (Sol_cli_aws_lambda_common.output, string) result
   }
@@ -28,6 +31,7 @@ type release =
   ; alias : string
   ; image : string
   ; role_arn : string
+  ; scheduler : Sol_cli_aws_scheduler.release option
   }
 
 type failure = Sol_cli_aws_lambda_common.failure =
@@ -92,6 +96,10 @@ let release_json (r : release) =
     ; "alias", `String r.alias
     ; "image", `String r.image
     ; "role_arn", `String r.role_arn
+    ; ( "scheduler"
+      , match r.scheduler with
+        | None -> `Null
+        | Some scheduler -> Sol_cli_aws_scheduler.to_json scheduler )
     ]
 ;;
 
@@ -131,7 +139,16 @@ let read_record ~path =
   let* alias = field "alias" in
   let* image = field "image" in
   let* role_arn = field "role_arn" in
-  Ok { region; service; function_name; version; alias; image; role_arn }
+  let scheduler =
+    match Sol_cli_json.field [ "scheduler" ] json with
+    | `Null -> Ok None
+    | scheduler_json ->
+      Sol_cli_aws_scheduler.of_json scheduler_json
+      |> Result.map Option.some
+      |> Result.map_error (fun message -> "scheduler: " ^ message)
+  in
+  let* scheduler = scheduler in
+  Ok { region; service; function_name; version; alias; image; role_arn; scheduler }
 ;;
 
 (* The observed state is read back from the provider: the alias is the serving identity,
@@ -250,6 +267,7 @@ let deploy (r : request) =
     ; alias = "live"
     ; image = r.image
     ; role_arn = r.role_arn
+    ; scheduler = None
     }
   in
   let* () =
@@ -297,7 +315,32 @@ let deploy (r : request) =
     ; alias = "live"
     ; image = r.image
     ; role_arn = r.role_arn
+    ; scheduler = None
     }
+  in
+  let* release =
+    match r.schedule, r.scheduler_role_arn with
+    | None, _ -> Ok release
+    | Some _, None ->
+      Error
+        (Refused
+           "scheduled serverless function has no provisioned scheduler identity; \
+            the             authorization root must establish a dedicated scheduler role")
+    | Some schedule, Some role_arn ->
+      let* scheduler =
+        Sol_cli_aws_scheduler.deploy
+          { profile = r.profile
+          ; region = r.region
+          ; unit = r.unit
+          ; function_name = r.function_name
+          ; schedule
+          ; timezone = r.timezone
+          ; role_arn
+          ; run = r.run
+          }
+        |> Result.map_error (fun message -> Provider message)
+      in
+      Ok { release with scheduler = Some scheduler }
   in
   (* Record the alias that is now live before invoking it. A first deploy whose
      invocation fails must still leave an ownership record, and an update must not leave
@@ -372,6 +415,23 @@ let destroy (r : request) ~profile ~region ~service ~record =
         ~expected:expected.role_arn
         (scope owned)
         ~function_name:expected.function_name
+    in
+    let* () =
+      match expected.scheduler with
+      | None -> Ok ()
+      | Some scheduler ->
+        Sol_cli_aws_scheduler.destroy
+          { profile = s.profile
+          ; region = s.region
+          ; unit = ""
+          ; function_name = expected.function_name
+          ; schedule = ""
+          ; timezone = None
+          ; role_arn = ""
+          ; run = s.run
+          }
+          scheduler
+        |> Result.map_error (fun message -> Partial message)
     in
     (* Deleting the function also deletes its versions and the live alias. There is no
        Function URL to remove, and no event source mapping is created by this adapter. *)

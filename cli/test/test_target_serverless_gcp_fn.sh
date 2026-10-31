@@ -5,7 +5,6 @@ examples="${2:-examples/pluto}"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/state" "$work/home" "$work/ws/app/ops"
 cp -R "$examples/app/ops/probe_fn" "$work/ws/app/ops/probe_fn"
-sed -i '/^schedule[[:space:]]*=/d; /^scheduled_concurrency[[:space:]]*=/d' "$work/ws/app/ops/probe_fn/sol.toml"
 cat > "$work/ws/sol.yml" <<'YAML'
 project: pluto
 services:
@@ -31,7 +30,7 @@ set -euo pipefail
 case "$*" in
   *"output -json"*)
     printf '%s
-' '{"serverless_service_accounts":{"value":{"ops/probe_fn":"sol-runtime@example.iam.gserviceaccount.com"}}}'
+' '{"serverless_service_accounts":{"value":{"ops/probe_fn":"sol-runtime@example.iam.gserviceaccount.com"}},"scheduler_service_accounts":{"value":{"ops/probe_fn":"sol-scheduler@example.iam.gserviceaccount.com"}}}'
     ;;
 esac
 exit 0
@@ -41,6 +40,24 @@ cat > "$work/bin/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
 state="$FAKE_GCLOUD_STATE"
+if [[ "$1 $2 $3" == "scheduler jobs describe" ]]; then
+  [[ -f "$state/schedule" ]] || { echo "ERROR: NOT_FOUND" >&2; exit 1; }
+  cat <<JSON
+{"schedule":"0 * * * *","timeZone":"UTC","httpTarget":{"uri":"https://run.googleapis.com/v1/projects/example-project/locations/us-west1/jobs/probe-fn:run","oauthToken":{"serviceAccountEmail":"sol-scheduler@example.iam.gserviceaccount.com"}}}
+JSON
+  exit 0
+fi
+if [[ "$1 $2 $3" == "scheduler jobs create" || "$1 $2 $3" == "scheduler jobs update" ]]; then
+  [[ "$*" == *"--oauth-service-account-email sol-scheduler@example.iam.gserviceaccount.com"* ]] || { echo "scheduler lost dedicated identity" >&2; exit 1; }
+  touch "$state/schedule"
+  echo "scheduled"
+  exit 0
+fi
+if [[ "$1 $2 $3" == "scheduler jobs delete" ]]; then
+  rm -f "$state/schedule"
+  echo "deleted"
+  exit 0
+fi
 if [[ "$1 $2 $3" == "run jobs describe" ]]; then
   [[ -f "$state/job" ]] || { echo "ERROR: Cannot find job [probe-fn]." >&2; exit 1; }
   cat <<JSON
@@ -140,6 +157,8 @@ cd "$work/ws"
 grep -q '"kind":"fn"' "$work/deploy-1"
 grep -q '"provider":"gcp"' "$work/deploy-1"
 grep -q '"execution":"projects/example-project/locations/us-west1/jobs/probe-fn/executions/ex-1"' "$work/deploy-1"
+grep -q '"scheduler":{' "$work/deploy-1"
+[[ -f "$work/state/schedule" ]]
 record=$(find "$work/home/.local/share/sol/runs" -name serverless-release.json -type f -print | sort | tail -1)
 [[ -n "$record" ]]
 grep -q '"kind":"fn"' "$record"
@@ -156,6 +175,7 @@ grep -q '"execution":"projects/example-project/locations/us-west1/jobs/probe-fn/
 
 "$sol" destroy live/gcp/us-west1 --apply --service probe_fn --record "$record" > "$work/destroy"
 [[ ! -f "$work/state/job" ]]
+[[ ! -f "$work/state/schedule" ]]
 [[ ! -e "$work/state/executions/ex-1.image" ]]
 [[ ! -e "$work/state/executions/ex-2.image" ]]
 [[ ! -e "$work/state/executions/ex-3.image" ]]

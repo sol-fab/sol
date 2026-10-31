@@ -2,7 +2,18 @@ open Result.Syntax
 
 let ensure_serverless = Sol_cli_serverless_target_common.ensure_serverless
 
-let deploy ~target ~config ~project ~service ~image ~record ~runtime_service_account =
+let deploy
+      ~target
+      ~config
+      ~project
+      ~service
+      ~image
+      ~record
+      ~runtime_service_account
+      ~schedule
+      ~schedule_timezone
+      ~scheduler_identity
+  =
   let* () = ensure_serverless target in
   match target.provider with
   | Sol_cli_provider.Aws ->
@@ -14,6 +25,9 @@ let deploy ~target ~config ~project ~service ~image ~record ~runtime_service_acc
       ~image
       ~record
       ~runtime_service_account
+      ~schedule
+      ~schedule_timezone
+      ~scheduler_identity
   | Sol_cli_provider.Gcp ->
     Sol_cli_gcp_serverless_target.deploy
       ~target
@@ -23,6 +37,9 @@ let deploy ~target ~config ~project ~service ~image ~record ~runtime_service_acc
       ~image
       ~record
       ~runtime_service_account
+      ~schedule
+      ~schedule_timezone
+      ~scheduler_identity
   | Sol_cli_provider.Byo ->
     Error "target-scoped serverless dispatch currently supports AWS and GCP only"
 ;;
@@ -49,6 +66,17 @@ let ensure_runtime_identity ~assets ~run_log ~target ~unit ~requirements =
       (Printf.sprintf
          "the authorization root established no runtime identity for %s"
          unit)
+;;
+
+let scheduler_resource_name ~(target : Sol_cli_config.target) service_name =
+  match target.provider with
+  | Sol_cli_provider.Aws ->
+    Sol_cli_aws_lambda.provider_service_of service_name
+    |> Result.map_error Sol_cli_aws_lambda.failure_to_string
+  | Sol_cli_provider.Gcp ->
+    Sol_cli_cloud_run.provider_service_of service_name
+    |> Result.map_error Sol_cli_cloud_run.failure_to_string
+  | Sol_cli_provider.Byo -> Error "serverless targets support AWS and GCP only"
 ;;
 
 let ensure_scheduler_identities ~assets ~run_log ~(target : Sol_cli_config.target) ~units =

@@ -124,6 +124,9 @@ let deploy_fn
       ~image
       ~record
       ~runtime_service_account
+      ~schedule
+      ~schedule_timezone
+      ~scheduler_identity
   =
   let* () = Sol_cli_serverless_target_common.declared_uses config service in
   let* role_arn =
@@ -148,6 +151,9 @@ let deploy_fn
     ; image
     ; role_arn
     ; unit = Sol_cli_serverless_target_common.unit_of_service ~project service
+    ; schedule
+    ; timezone = schedule_timezone
+    ; scheduler_role_arn = scheduler_identity
     ; record = Some record
     ; run = runner
     }
@@ -167,13 +173,26 @@ let deploy
       ~image
       ~record
       ~runtime_service_account
+      ~schedule
+      ~schedule_timezone
+      ~scheduler_identity
   =
   let* () = ensure_aws target in
   match service.primitive with
   | Sol_cli_manifest.Svc ->
     deploy_svc ~target ~config ~project ~service ~image ~record ~runtime_service_account
   | Sol_cli_manifest.Fn ->
-    deploy_fn ~target ~config ~project ~service ~image ~record ~runtime_service_account
+    deploy_fn
+      ~target
+      ~config
+      ~project
+      ~service
+      ~image
+      ~record
+      ~runtime_service_account
+      ~schedule
+      ~schedule_timezone
+      ~scheduler_identity
   | Sol_cli_manifest.Worker ->
     Error
       "target-scoped serverless dispatch does not support -worker: worker delivery needs \
@@ -258,6 +277,9 @@ let rollback_fn
     ; image = release.image
     ; role_arn = release.role_arn
     ; unit = Sol_cli_serverless_target_common.unit_of_service ~project service
+    ; schedule = None
+    ; timezone = None
+    ; scheduler_role_arn = None
     ; record = None
     ; run = runner
     }
@@ -335,6 +357,9 @@ let destroy ~(target : Sol_cli_config.target) ~service ~record =
       ; image = ""
       ; role_arn = ""
       ; unit = ""
+      ; schedule = None
+      ; timezone = None
+      ; scheduler_role_arn = None
       ; record = None
       ; run = runner
       }

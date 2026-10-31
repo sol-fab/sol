@@ -13,9 +13,13 @@ type request =
   { project : string
   ; region : string
   ; service : string
+  ; unit : string
   ; job : string
   ; image : string
   ; service_account : string
+  ; schedule : string option
+  ; timezone : string option
+  ; scheduler_identity : string option
   ; record : string
   ; runner : Sol_cli_cloud_run.runner
   }
@@ -30,6 +34,7 @@ type release =
   ; generation : int
   ; execution : string
   ; task_timeout_s : int
+  ; scheduler : Sol_cli_gcp_scheduler.release option
   }
 
 type failure = Sol_cli_cloud_run.failure =
@@ -53,6 +58,10 @@ let release_json (r : release) =
     ; "generation", `Int r.generation
     ; "execution", `String r.execution
     ; "task_timeout_s", `Int r.task_timeout_s
+    ; ( "scheduler"
+      , match r.scheduler with
+        | None -> `Null
+        | Some scheduler -> Sol_cli_gcp_scheduler.to_json scheduler )
     ]
 ;;
 
@@ -76,6 +85,14 @@ let read_record path =
       then Ok ()
       else Error "release record is not a GCP Cloud Run Job release"
     in
+    let* scheduler =
+      match Sol_cli_json.field [ "scheduler" ] json with
+      | `Null -> Ok None
+      | scheduler_json ->
+        Sol_cli_gcp_scheduler.of_json scheduler_json
+        |> Result.map Option.some
+        |> Result.map_error (fun message -> "scheduler: " ^ message)
+    in
     let+ project = string "project"
     and+ region = string "region"
     and+ service = string "service"
@@ -92,6 +109,7 @@ let read_record path =
     ; generation = int_or_zero "generation"
     ; execution
     ; task_timeout_s = int_or_zero "task_timeout_s"
+    ; scheduler
     }
   with
   | Sys_error message -> Error message
@@ -371,7 +389,7 @@ let execution_job json =
      | None -> None)
 ;;
 
-let update_record r ~job ~image ~generation ~execution =
+let update_record ?(scheduler = None) r ~job ~image ~generation ~execution =
   write_record
     ~path:r.record
     { project = r.project
@@ -383,6 +401,7 @@ let update_record r ~job ~image ~generation ~execution =
     ; generation
     ; execution
     ; task_timeout_s
+    ; scheduler
     }
 ;;
 
@@ -518,7 +537,7 @@ let deploy (r : request) =
     |> Result.map_error (fun message -> Unknown message)
   in
   let* execution = execute ~r ~job:r.job ~image:r.image ~generation in
-  Ok
+  let release =
     { project = r.project
     ; region = r.region
     ; service = r.service
@@ -528,7 +547,38 @@ let deploy (r : request) =
     ; generation
     ; execution
     ; task_timeout_s
+    ; scheduler = None
     }
+  in
+  let* release =
+    match r.schedule, r.scheduler_identity with
+    | None, _ -> Ok release
+    | Some _, None ->
+      Error
+        (Refused
+           "scheduled serverless function has no provisioned scheduler identity; the \
+            authorization root must establish a dedicated scheduler service account")
+    | Some schedule, Some service_account ->
+      let* scheduler =
+        Sol_cli_gcp_scheduler.deploy
+          { Sol_cli_gcp_scheduler.project = r.project
+          ; region = r.region
+          ; unit = r.unit
+          ; job = r.job
+          ; schedule
+          ; timezone = r.timezone
+          ; service_account
+          ; runner = { run = r.runner.run }
+          }
+        |> Result.map_error (fun message -> Provider message)
+      in
+      Ok { release with scheduler = Some scheduler }
+  in
+  let* () =
+    write_record ~path:r.record release
+    |> Result.map_error (fun message -> Provider message)
+  in
+  Ok release
 ;;
 
 let rollback (r : request) ~record ~execution =
@@ -585,7 +635,13 @@ let rollback (r : request) ~record ~execution =
     | None -> Error (Refused "rollback execution does not record a container image")
   in
   let* () =
-    update_record r ~job:r.job ~image ~generation:recorded.generation ~execution:""
+    update_record
+      ~scheduler:recorded.scheduler
+      r
+      ~job:r.job
+      ~image
+      ~generation:recorded.generation
+      ~execution:""
     |> Result.map_error (fun message -> Unknown message)
   in
   let* () =
@@ -601,6 +657,10 @@ let rollback (r : request) ~record ~execution =
   in
   let generation = job_generation job_json in
   let* execution = execute ~r ~job:r.job ~image ~generation in
+  let* () =
+    update_record ~scheduler:recorded.scheduler r ~job:r.job ~image ~generation ~execution
+    |> Result.map_error (fun message -> Unknown message)
+  in
   Ok
     { project = r.project
     ; region = r.region
@@ -611,6 +671,7 @@ let rollback (r : request) ~record ~execution =
     ; generation
     ; execution
     ; task_timeout_s
+    ; scheduler = recorded.scheduler
     }
 ;;
 
@@ -670,6 +731,23 @@ let destroy (r : request) ~record =
         (Refused
            "release record does not match the target project, region, service, and Cloud \
             Run job")
+  in
+  let* () =
+    match recorded.scheduler with
+    | None -> Ok ()
+    | Some scheduler ->
+      Sol_cli_gcp_scheduler.destroy
+        { Sol_cli_gcp_scheduler.project = r.project
+        ; region = r.region
+        ; unit = r.service
+        ; job = r.job
+        ; schedule = ""
+        ; timezone = None
+        ; service_account = ""
+        ; runner = { run = r.runner.run }
+        }
+        scheduler
+      |> Result.map_error (fun message -> Provider message)
   in
   let* existing = describe_job r ~job:r.job in
   let* () =
