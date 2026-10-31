@@ -83,8 +83,8 @@ yet; do not represent it as one of the existing edges.
 | Database | Sol-managed PostgreSQL, external binding | Contracted through `uses` and resource bindings |
 | Queue | Kafka/Redpanda; standalone SQS/Pub/Sub task lifecycles | Not unified with target-scoped components |
 | Storage | provider/application-specific | No provider-independent resource contract yet |
-| Logs | in-cluster Loki or external Loki | Target URLs/usernames; passwords remain Terraform secrets |
-| Metrics | in-cluster Prometheus or external remote-write | Target URLs/usernames; passwords remain Terraform secrets |
+| Logs | in-cluster Loki or external Loki | Target URLs/usernames; passwords via target-referenced environment secrets |
+| Metrics | in-cluster Prometheus or external remote-write | Target URLs/usernames; passwords via target-referenced environment secrets |
 | Traces | in-cluster Tempo or external OTLP/HTTP | Target URL; header auth via `TEMPO_HEADERS` secret |
 
 External observability is a Kubernetes-platform contract:
@@ -92,7 +92,8 @@ External observability is a Kubernetes-platform contract:
 - `observability_backend`, `observability_logs_url`,
   `observability_metrics_url`, `observability_traces_url`, and the two
   non-secret usernames are target fields;
-- basic-auth passwords remain Terraform secret inputs;
+- basic-auth passwords are referenced by environment variable name and exported
+  as Terraform sensitive inputs;
 - `TEMPO_HEADERS` (comma-separated `Name=Value`) is a unit secret for
   header-authenticated OTLP exporters;
 - empty `observability_traces_url` disables tracing rather than targeting an
