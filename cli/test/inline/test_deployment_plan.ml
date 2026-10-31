@@ -2899,3 +2899,35 @@ let test_kafka_delivery_is_scoped_to_declared_consumers () =
 let%test "Kafka delivery follows only declared consumers, never the profile" =
   test_kafka_delivery_is_scoped_to_declared_consumers ()
 ;;
+
+let test_telemetry_env_reaches_the_service_spec () =
+  let tmp = Filename.temp_dir "sol_test_plan_telemetry" "" in
+  with_cwd tmp (fun () ->
+    mkdirs charge_svc_service.dir;
+    write_file (Filename.concat charge_svc_service.dir "sol.toml") "";
+    match
+      Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
+        ~platform_shape:Sol_cli_profile.Local
+        ~workspace:"myworkspace"
+        ~env:deploy_env
+        ~facts:(facts ())
+        ~inventory:[ charge_svc_service ]
+        ~telemetry_env:[ "TEMPO_URL", "https://otlp.example.com/v1/traces" ]
+        [ charge_svc_service ]
+    with
+    | Ok plan ->
+      let spec = List.hd plan.Sol_cli_deployment_plan.services in
+      (match List.assoc_opt "TEMPO_URL" spec.config with
+       | Some url ->
+         check_string
+           "external trace endpoint reaches the workload"
+           "https://otlp.example.com/v1/traces"
+           url
+       | None -> Windtrap.fail "TEMPO_URL was dropped from the service config")
+    | Error err -> Windtrap.fail (Sol_cli_deployment_plan.plan_error_to_string err))
+;;
+
+let%test "external trace endpoint reaches the workload" =
+  test_telemetry_env_reaches_the_service_spec ()
+;;

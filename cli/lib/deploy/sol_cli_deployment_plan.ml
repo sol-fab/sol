@@ -1074,6 +1074,7 @@ let of_services_result
       ?target
       ~database
       ?kafka
+      ?(telemetry_env = [])
       services
   =
   let* () =
@@ -1278,6 +1279,7 @@ let of_services_result
           kafka_security_config
           @ kafka_durability_config
           @ service_config
+          @ telemetry_env
           @ List.map (fun (c : service_call) -> c.env_var, c.url) calls
       ; secrets = List.map (fun key -> key, "") toml.secret_keys
       ; secret_sources = []

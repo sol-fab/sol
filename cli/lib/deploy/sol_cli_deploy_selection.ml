@@ -433,6 +433,12 @@ let declaration_plan (input : Planning_input.t) =
       ~target
       ~database
       ~kafka
+      ~telemetry_env:
+        (match config.target.observability_backend with
+         | Some "external" ->
+           [ "TEMPO_URL", Option.value config.target.observability_traces_url ~default:""
+           ]
+         | _ -> [])
       services
     |> refused
   in

@@ -697,7 +697,14 @@ let test_target_observability_backend_parsed () =
       {|
 target:
   base_domain: pluto.example.com
-  observability_backend: self_hosted_durable
+  observability_backend: external
+  observability_logs_url: https://logs.example.com/loki/api/v1/push
+  observability_logs_username: "123456"
+  observability_logs_password_env: SOL_TEST_LOKI_PASSWORD
+  observability_metrics_url: https://metrics.example.com/api/prom/push
+  observability_metrics_username: "654321"
+  observability_metrics_password_env: SOL_TEST_PROM_PASSWORD
+  observability_traces_url: https://otlp.example.com/v1/traces
 |};
     match Sol_cli_config.load_for_target ~target:"prod/aws/us-east-1" with
     | Error e -> Windtrap.fail (Sol_cli_config.error_to_string e)
@@ -705,8 +712,36 @@ target:
       let target = cfg.target in
       check_str
         "observability_backend"
-        "self_hosted_durable"
-        (Option.get target.observability_backend))
+        "external"
+        (Option.get target.observability_backend);
+      check_str
+        "observability_logs_url"
+        "https://logs.example.com/loki/api/v1/push"
+        (Option.get target.observability_logs_url);
+      check_str
+        "observability_logs_username"
+        "123456"
+        (Option.get target.observability_logs_username);
+      check_str
+        "observability_metrics_url"
+        "https://metrics.example.com/api/prom/push"
+        (Option.get target.observability_metrics_url);
+      check_str
+        "observability_metrics_username"
+        "654321"
+        (Option.get target.observability_metrics_username);
+      check_str
+        "observability_logs_password_env"
+        "SOL_TEST_LOKI_PASSWORD"
+        (Option.get target.observability_logs_password_env);
+      check_str
+        "observability_metrics_password_env"
+        "SOL_TEST_PROM_PASSWORD"
+        (Option.get target.observability_metrics_password_env);
+      check_str
+        "observability_traces_url"
+        "https://otlp.example.com/v1/traces"
+        (Option.get target.observability_traces_url))
 ;;
 
 let test_target_alert_delivery_parsed () =
