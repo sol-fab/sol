@@ -2938,7 +2938,26 @@ let external_storage_config : Sol_cli_config.t =
   { project = Some "ws"
   ; target = Result.get_ok (Sol_cli_config.parse_target "prod/aws/us-east-1")
   ; resources =
-      [ { name = "uploads"
+      [ { name = "jobs"
+        ; typ = Some "queue"
+        ; partition_key = None
+        ; sort_key = None
+        ; indexes = []
+        ; size = None
+        ; omit = false
+        ; binding =
+            Some
+              { Sol_cli_config.ownership = Sol_cli_config.Ownership_external
+              ; store = Some "external"
+              ; keys = []
+              ; connection =
+                  [ "QUEUE_ENDPOINT", "https://sqs.example.com/jobs"
+                  ; "QUEUE_NAME", "jobs"
+                  ]
+              ; credentials = []
+              }
+        }
+      ; { name = "uploads"
         ; typ = Some "object_store"
         ; partition_key = None
         ; sort_key = None
@@ -2962,7 +2981,7 @@ let external_storage_config : Sol_cli_config.t =
       [ { Sol_cli_config.name = "charge_svc"
         ; typ = None
         ; path = None
-        ; uses = [ "uploads" ]
+        ; uses = [ "jobs"; "uploads" ]
         ; scale_min = None
         ; scale_max = None
         ; language = None
@@ -2996,6 +3015,11 @@ let test_external_object_store_connection_reaches_the_spec () =
         ~msg:"external object-store endpoint reaches the workload"
         (Some "https://objects.example.com")
         (List.assoc_opt "OBJECT_ENDPOINT" spec.config);
+      Windtrap.equal
+        (Windtrap.option Windtrap.string)
+        ~msg:"external queue endpoint reaches the workload"
+        (Some "https://sqs.example.com/jobs")
+        (List.assoc_opt "QUEUE_ENDPOINT" spec.config);
       Windtrap.equal
         (Windtrap.option Windtrap.string)
         ~msg:"observability and storage compose in one spec"
