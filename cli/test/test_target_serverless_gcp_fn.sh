@@ -4,7 +4,8 @@ sol="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 examples="${2:-examples/pluto}"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/state" "$work/home" "$work/ws/app/ops"
-ln -s "$(cd "$examples/app/ops/probe_fn" && pwd)" "$work/ws/app/ops/probe_fn"
+cp -R "$examples/app/ops/probe_fn" "$work/ws/app/ops/probe_fn"
+sed -i '/^schedule[[:space:]]*=/d; /^scheduled_concurrency[[:space:]]*=/d' "$work/ws/app/ops/probe_fn/sol.toml"
 cat > "$work/ws/sol.yml" <<'YAML'
 project: pluto
 services:

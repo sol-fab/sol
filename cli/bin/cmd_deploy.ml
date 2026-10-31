@@ -102,6 +102,28 @@ let run_serverless
                      service.name
                      (Sol_cli_toml.parse_error_to_string parse_error))))
       in
+      let* () =
+        match service.primitive, config.schedule with
+        | Sol_cli_manifest.Fn, Some _ ->
+          Error
+            (Sol_cli_exit.error
+               (Printf.sprintf
+                  "serverless _fn scheduling is not implemented for %s; remove [service] \
+                   schedule or deploy it to a Kubernetes target"
+                  service.name))
+        | _ -> Ok ()
+      in
+      let* () =
+        match service.primitive, config.schedule with
+        | Sol_cli_manifest.Fn, Some _ ->
+          Error
+            (Sol_cli_exit.error
+               (Printf.sprintf
+                  "serverless _fn scheduling is not implemented for %s; remove [service] \
+                   schedule or deploy it to a Kubernetes target"
+                  service.name))
+        | _ -> Ok ()
+      in
       let unit = Sol_cli_serverless_target_common.unit_of_service ~project service in
       let requirements =
         config.secret_keys |> List.map Sol_cli_grant.secret_requirement
