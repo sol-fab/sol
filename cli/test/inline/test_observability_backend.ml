@@ -25,3 +25,47 @@ let test_backend_to_string_roundtrip () =
 let%test "backend_of_string: valid values" = test_backend_of_string_valid ()
 let%test "backend_of_string: invalid value" = test_backend_of_string_invalid ()
 let%test "backend_of_string: roundtrip" = test_backend_to_string_roundtrip ()
+
+let test_external_validation () =
+  let valid =
+    U.validate_external
+      ~logs_url:(Some "https://logs.example.com/loki/api/v1/push")
+      ~metrics_url:(Some "https://metrics.example.com/api/prom/push")
+      ~traces_url:(Some "https://otlp.example.com/v1/traces")
+  in
+  check_bool "complete external backend" true (Result.is_ok valid);
+  check_bool
+    "missing logs refuses"
+    true
+    (Result.is_error
+       (U.validate_external
+          ~logs_url:None
+          ~metrics_url:(Some "https://metrics.example.com/api/prom/push")
+          ~traces_url:None));
+  check_bool
+    "invalid metrics refuses"
+    true
+    (Result.is_error
+       (U.validate_external
+          ~logs_url:(Some "https://logs.example.com/loki/api/v1/push")
+          ~metrics_url:(Some "not-a-url")
+          ~traces_url:None));
+  check_bool
+    "empty traces disables tracing"
+    true
+    (Result.is_ok
+       (U.validate_external
+          ~logs_url:(Some "https://logs.example.com/loki/api/v1/push")
+          ~metrics_url:(Some "https://metrics.example.com/api/prom/push")
+          ~traces_url:(Some "")));
+  check_bool
+    "invalid traces refuses"
+    true
+    (Result.is_error
+       (U.validate_external
+          ~logs_url:(Some "https://logs.example.com/loki/api/v1/push")
+          ~metrics_url:(Some "https://metrics.example.com/api/prom/push")
+          ~traces_url:(Some "ftp://traces")))
+;;
+
+let%test "external observability validation" = test_external_validation ()

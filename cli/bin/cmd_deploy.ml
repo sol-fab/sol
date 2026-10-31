@@ -1202,6 +1202,10 @@ let run (req : Sol_cli_command_request.deploy_request) =
     |> Sol_cli_exit.of_error Sol_cli_config.error_to_string
   in
   let target_cfg = resolved_config.target in
+  let* () =
+    Sol_cli_observability_backend.validate_target target_cfg
+    |> Result.map_error Sol_cli_exit.error
+  in
   let* deployed =
     Sol_cli_deploy_selection.apply_target
       ~target:req.target
