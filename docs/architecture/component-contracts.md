@@ -87,6 +87,19 @@ yet; do not represent it as one of the existing edges.
 | Metrics | in-cluster Prometheus or external remote-write | Target URLs/usernames; passwords remain Terraform secrets |
 | Traces | in-cluster Tempo or external OTLP/HTTP | Target URL; header auth via `TEMPO_HEADERS` secret |
 
+External observability is a Kubernetes-platform contract:
+
+- `observability_backend`, `observability_logs_url`,
+  `observability_metrics_url`, `observability_traces_url`, and the two
+  non-secret usernames are target fields;
+- basic-auth passwords remain Terraform secret inputs;
+- `TEMPO_HEADERS` (comma-separated `Name=Value`) is a unit secret for
+  header-authenticated OTLP exporters;
+- empty `observability_traces_url` disables tracing rather than targeting an
+  absent in-cluster Tempo;
+- serverless targets use provider-native observability and do not apply this
+  Kubernetes-platform validation.
+
 ## 8. What is intentionally not abstracted
 
 - No universal component interface spanning services, jobs, queues, and storage.
