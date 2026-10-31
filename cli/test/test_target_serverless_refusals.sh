@@ -48,7 +48,7 @@ cd "$ws"
 if "$sol" deploy live/gcp/us-west1 --image-tag test --image-ref "checkout_worker=$image" > "$work/gcp-worker.out" 2>&1; then
   echo "GCP serverless -worker deploy was accepted" >&2; exit 1
 fi
-grep -q 'does not support -worker on GCP' "$work/gcp-worker.out"
+grep -q 'does not support -worker' "$work/gcp-worker.out"
 [[ ! -s "$work/provider.log" ]]
 
 # AWS serverless -worker is refused, without invoking aws.

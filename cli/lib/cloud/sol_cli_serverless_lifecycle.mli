@@ -22,6 +22,13 @@ val deploy
   -> runtime_service_account:string option
   -> (Yojson.Safe.t, string) result
 
+val ensure_runtime_identities
+  :  assets:Sol_cli_platform_assets.t
+  -> run_log:Sol_cli_run_log.t
+  -> target:Sol_cli_config.target
+  -> units:Sol_cli_grant.serverless_unit list
+  -> ((string * string) list, string) result
+
 val ensure_runtime_identity
   :  assets:Sol_cli_platform_assets.t
   -> run_log:Sol_cli_run_log.t
