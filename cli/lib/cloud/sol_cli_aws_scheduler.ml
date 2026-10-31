@@ -75,14 +75,17 @@ let schedule_name (r : request) =
 let eventbridge_expression cron =
   match String.split_on_char ' ' (String.trim cron) with
   | [ minute; hour; dom; month; dow ] ->
-    let dom, dow =
+    let* dom, dow =
       if dom = "*" && dow = "*"
-      then "?", "*"
+      then Ok ("?", "*")
       else if dom = "*"
-      then "?", dow
+      then Ok ("?", dow)
       else if dow = "*"
-      then dom, "?"
-      else dom, dow
+      then Ok (dom, "?")
+      else
+        Error
+          "EventBridge Scheduler cannot express both a day-of-month and a day-of-week; \
+           use a Kubernetes target for that cron expression"
     in
     Ok (Printf.sprintf "cron(%s %s %s %s %s *)" minute hour dom month dow)
   | _ ->
