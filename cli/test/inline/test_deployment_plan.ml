@@ -295,6 +295,7 @@ let sample_plan () : Sol_cli_deployment_plan.t =
     ; build_secret_keys = [ "BUILD_REGISTRY_TOKEN" ]
     ; volumes = []
     ; schedule = None
+    ; schedule_timezone = None
     ; scheduled_concurrency = Sol_cli_toml.Allow
     ; backoff_limit = 3
     ; replicas = 2
@@ -762,6 +763,7 @@ let make_worker_spec name domain =
   ; build_secret_keys = []
   ; volumes = []
   ; schedule = None
+  ; schedule_timezone = None
   ; scheduled_concurrency = Sol_cli_toml.Allow
   ; backoff_limit = 3
   ; replicas = 1
@@ -2936,7 +2938,26 @@ let external_storage_config : Sol_cli_config.t =
   { project = Some "ws"
   ; target = Result.get_ok (Sol_cli_config.parse_target "prod/aws/us-east-1")
   ; resources =
-      [ { name = "uploads"
+      [ { name = "jobs"
+        ; typ = Some "queue"
+        ; partition_key = None
+        ; sort_key = None
+        ; indexes = []
+        ; size = None
+        ; omit = false
+        ; binding =
+            Some
+              { Sol_cli_config.ownership = Sol_cli_config.Ownership_external
+              ; store = Some "external"
+              ; keys = []
+              ; connection =
+                  [ "QUEUE_ENDPOINT", "https://sqs.example.com/jobs"
+                  ; "QUEUE_NAME", "jobs"
+                  ]
+              ; credentials = []
+              }
+        }
+      ; { name = "uploads"
         ; typ = Some "object_store"
         ; partition_key = None
         ; sort_key = None
@@ -2960,7 +2981,7 @@ let external_storage_config : Sol_cli_config.t =
       [ { Sol_cli_config.name = "charge_svc"
         ; typ = None
         ; path = None
-        ; uses = [ "uploads" ]
+        ; uses = [ "jobs"; "uploads" ]
         ; scale_min = None
         ; scale_max = None
         ; language = None
@@ -2984,6 +3005,7 @@ let test_external_object_store_connection_reaches_the_spec () =
         ~facts:(facts ())
         ~declared:(Sol_cli_config.declared_of_config external_storage_config)
         ~inventory:[ charge_svc_service ]
+        ~telemetry_env:[ "TEMPO_URL", "https://otlp.example.com" ]
         [ charge_svc_service ]
     with
     | Ok plan ->
@@ -2992,7 +3014,17 @@ let test_external_object_store_connection_reaches_the_spec () =
         (Windtrap.option Windtrap.string)
         ~msg:"external object-store endpoint reaches the workload"
         (Some "https://objects.example.com")
-        (List.assoc_opt "OBJECT_ENDPOINT" spec.config)
+        (List.assoc_opt "OBJECT_ENDPOINT" spec.config);
+      Windtrap.equal
+        (Windtrap.option Windtrap.string)
+        ~msg:"external queue endpoint reaches the workload"
+        (Some "https://sqs.example.com/jobs")
+        (List.assoc_opt "QUEUE_ENDPOINT" spec.config);
+      Windtrap.equal
+        (Windtrap.option Windtrap.string)
+        ~msg:"observability and storage compose in one spec"
+        (Some "https://otlp.example.com")
+        (List.assoc_opt "TEMPO_URL" spec.config)
     | Error err -> Windtrap.fail (Sol_cli_deployment_plan.plan_error_to_string err))
 ;;
 

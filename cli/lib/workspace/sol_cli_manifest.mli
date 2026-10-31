@@ -232,6 +232,7 @@ module Scheduled_workload_spec : sig
     ; projected_identities : Sol_cli_identity_projection.t list
     ; env : string option
     ; schedule : string
+    ; schedule_timezone : string option
     ; concurrency_policy : string
     ; backoff_limit : int
     ; cpu : string

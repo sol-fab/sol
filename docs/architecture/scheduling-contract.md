@@ -21,6 +21,7 @@ Keep the declaration where it is:
 ```toml
 [service]
 schedule = "0 3 * * *"
+schedule_timezone = "America/Denver"   # optional; Kubernetes defaults to UTC
 scheduled_concurrency = "forbid"
 ```
 
@@ -39,6 +40,9 @@ and is not proposed first.
 
 Each backend records the scheduler resource identity in the release record and owns
 create/update/verify/rollback/destroy. Unsupported scheduler combinations fail closed.
+
+`schedule_timezone` is part of the released schedule identity when present; changing it
+creates a new release id and rollback restores the recorded timezone.
 
 ## Open decisions
 

@@ -935,6 +935,7 @@ module Scheduled_workload_spec = struct
     ; projected_identities : Sol_cli_identity_projection.t list
     ; env : string option
     ; schedule : string
+    ; schedule_timezone : string option
     ; concurrency_policy : string
     ; backoff_limit : int
     ; cpu : string
@@ -961,6 +962,7 @@ let cronjob_doc (workload : Scheduled_workload_spec.t) =
       ; projected_identities
       ; env
       ; schedule
+      ; schedule_timezone
       ; concurrency_policy
       ; backoff_limit
       ; cpu
@@ -1119,6 +1121,10 @@ let cronjob_doc (workload : Scheduled_workload_spec.t) =
     ; ( "spec"
       , Y.map
           [ "schedule", Y.quoted schedule
+          ; ( "timeZone"
+            , match schedule_timezone with
+              | Some value -> Y.quoted value
+              | None -> Y.string "UTC" )
           ; "concurrencyPolicy", Y.string concurrency_policy
           ; ( "jobTemplate"
             , Y.map

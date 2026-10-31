@@ -30,6 +30,7 @@ let spec ~domain ~name ~k8s primitive : Sol_cli_deployment_plan.service_spec =
   ; build_secret_keys = []
   ; volumes = []
   ; schedule = None
+  ; schedule_timezone = None
   ; scheduled_concurrency = Sol_cli_toml.Allow
   ; backoff_limit = 3
   ; replicas = 1

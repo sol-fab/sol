@@ -28,6 +28,7 @@ let sample_workload : R.workload =
   ; external_secret_refs =
       [ "PAYMENT_API_KEY", "payments-vault", "production/payment-api" ]
   ; schedule = None
+  ; schedule_timezone = None
   ; scheduled_concurrency = "forbid"
   ; backoff_limit = 0
   ; replicas = 2

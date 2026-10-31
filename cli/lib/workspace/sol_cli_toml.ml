@@ -140,6 +140,7 @@ type t =
   ; extra_labels : (string * string) list
   ; progressive_delivery : progressive_delivery option
   ; schedule : string option
+  ; schedule_timezone : string option
   ; scheduled_concurrency : scheduled_concurrency option
   ; backoff_limit : int option
   ; calls : string list
@@ -163,6 +164,7 @@ let empty =
   ; extra_labels = []
   ; progressive_delivery = None
   ; schedule = None
+  ; schedule_timezone = None
   ; scheduled_concurrency = None
   ; backoff_limit = None
   ; calls = []
@@ -812,6 +814,7 @@ let schema =
   ; ( "service"
     , Table
         [ "schedule", Leaf
+        ; "schedule_timezone", Leaf
         ; "scheduled_concurrency", Leaf
         ; "backoff_limit", Leaf
         ; "calls", Leaf
@@ -1099,6 +1102,9 @@ let load_result path =
                other)
       in
       let schedule = Otoml.Helpers.find_string_opt doc [ "service"; "schedule" ] in
+      let schedule_timezone =
+        Otoml.Helpers.find_string_opt doc [ "service"; "schedule_timezone" ]
+      in
       let* scheduled_concurrency =
         match
           Otoml.Helpers.find_string_opt doc [ "service"; "scheduled_concurrency" ]
@@ -1174,6 +1180,7 @@ let load_result path =
         ; extra_labels
         ; progressive_delivery
         ; schedule
+        ; schedule_timezone
         ; scheduled_concurrency
         ; backoff_limit
         ; calls

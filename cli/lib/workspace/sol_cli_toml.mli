@@ -80,6 +80,7 @@ type t =
   ; extra_labels : (string * string) list
   ; progressive_delivery : progressive_delivery option
   ; schedule : string option
+  ; schedule_timezone : string option
   ; scheduled_concurrency : scheduled_concurrency option
   ; backoff_limit : int option
   ; calls : string list

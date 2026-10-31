@@ -114,6 +114,7 @@ let ledger_spec : Sol_cli_deployment_plan.service_spec =
   ; build_secret_keys = []
   ; volumes = []
   ; schedule = None
+  ; schedule_timezone = None
   ; scheduled_concurrency = Sol_cli_toml.Allow
   ; backoff_limit = 3
   ; replicas = 2
@@ -160,6 +161,7 @@ let billing_spec : Sol_cli_deployment_plan.service_spec =
         }
       ]
   ; schedule = None
+  ; schedule_timezone = None
   ; scheduled_concurrency = Sol_cli_toml.Allow
   ; backoff_limit = 3
   ; replicas = 1
@@ -886,6 +888,7 @@ let fn_spec : Sol_cli_deployment_plan.service_spec =
   ; k8s_name = k8s_name "invoice-fn"
   ; primitive = Sol_cli_deployment_plan.Fn
   ; schedule = Some "0 * * * *"
+  ; schedule_timezone = None
   ; scheduled_concurrency = Sol_cli_toml.Forbid
   ; backoff_limit = 0
   ; replicas = 1

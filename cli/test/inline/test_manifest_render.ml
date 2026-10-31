@@ -149,6 +149,7 @@ let svc_spec : Sol_cli_deployment_plan.service_spec =
   ; build_secret_keys = []
   ; volumes = []
   ; schedule = None
+  ; schedule_timezone = None
   ; scheduled_concurrency = Sol_cli_toml.Allow
   ; backoff_limit = 3
   ; replicas = 2
@@ -200,6 +201,7 @@ let worker_spec : Sol_cli_deployment_plan.service_spec =
   ; build_secret_keys = []
   ; volumes = []
   ; schedule = None
+  ; schedule_timezone = None
   ; replicas = 1
   ; availability = Sol_cli_availability.Single
   ; consumes_kafka = false
@@ -233,6 +235,7 @@ let fn_spec : Sol_cli_deployment_plan.service_spec =
   ; build_secret_keys = []
   ; volumes = []
   ; schedule = Some "0 9 * * 1"
+  ; schedule_timezone = None
   ; scheduled_concurrency = Sol_cli_toml.Allow
   ; backoff_limit = 3
   ; replicas = 1
@@ -436,6 +439,13 @@ let fn_call : Sol_cli_deployment_plan.service_call =
   ; target_name = k8s_name "ledger-svc"
   ; target_namespace = namespace ~workspace:"myapp" ~domain:"payments"
   }
+;;
+
+let test_fn_schedule_timezone_renders () =
+  let fn = { fn_spec with schedule_timezone = Some "America/Denver" } in
+  let _ns, yaml = render_spec_ok fn in
+  let cronjob = extract_kind_block yaml "kind: CronJob" in
+  assert_contains "fn schedule timezone" cronjob "timeZone: \"America/Denver\""
 ;;
 
 let test_fn_calls_render_a_projected_identity () =
@@ -3699,3 +3709,5 @@ let%test "bundle: the ExternalSecret is a prerequisite, not part of the workload
       bundle.prerequisites_yaml
       "kind: Deployment"
 ;;
+
+let%test "fn schedule timezone renders" = test_fn_schedule_timezone_renders ()
