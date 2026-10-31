@@ -115,6 +115,7 @@ let run_serverless
       ~(selection : Sol_cli_deploy_selection.selection)
       ~identities
       ~scheduler_identities
+      ~target_name
       ~run_log
   =
   let* services =
@@ -293,6 +294,13 @@ let run_serverless
                 ~schedule:config.Sol_cli_toml.schedule
                 ~schedule_timezone:config.Sol_cli_toml.schedule_timezone
                 ~scheduler_identity
+              |> Result.map_error Sol_cli_exit.error
+            in
+            let* () =
+              Sol_cli_serverless_inventory.add
+                ~target:target_name
+                ~service:service.name
+                ~record
               |> Result.map_error Sol_cli_exit.error
             in
             print_endline (Yojson.Safe.to_string release);
@@ -1487,6 +1495,7 @@ let run (req : Sol_cli_command_request.deploy_request) =
         ~selection
         ~identities
         ~scheduler_identities
+        ~target_name:req.target
         ~run_log
   in
   if kubernetes_services = []

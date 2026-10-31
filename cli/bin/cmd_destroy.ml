@@ -80,22 +80,45 @@ let run ~target ~var_file ~vars ~action ~accept_unreleased ~record ~service () =
       ~record
       ~service
   | Sol_cli_config.Mixed ->
-    let* () =
+    let* entries =
       match service, record with
-      | Some _, Some _ -> Ok ()
-      | _ ->
-        Error
-          (Sol_cli_exit.error
-             "mixed-target destroy requires --service and --record for each serverless \
-              unit; Kubernetes infrastructure is destroyed after the selected function")
+      | Some service, Some record ->
+        Ok [ { Sol_cli_serverless_inventory.service; record } ]
+      | Some service, None ->
+        let* entries =
+          Sol_cli_serverless_inventory.load ~target |> Result.map_error Sol_cli_exit.error
+        in
+        (match
+           List.find_opt
+             (fun (entry : Sol_cli_serverless_inventory.entry) -> entry.service = service)
+             entries
+         with
+         | Some entry -> Ok [ entry ]
+         | None ->
+           Error
+             (Sol_cli_exit.error
+                (Printf.sprintf
+                   "no serverless ownership record is known for %s in target %s"
+                   service
+                   target)))
+      | None, _ ->
+        Sol_cli_serverless_inventory.load ~target |> Result.map_error Sol_cli_exit.error
     in
     let* () =
-      serverless_destroy
-        ~config:resolved_config
-        ~target_cfg:resolved_config.target
-        ~action
-        ~record
-        ~service
+      Sol_cli_result.map_list
+        (fun (entry : Sol_cli_serverless_inventory.entry) ->
+           let* () =
+             serverless_destroy
+               ~config:resolved_config
+               ~target_cfg:resolved_config.target
+               ~action
+               ~record:(Some entry.record)
+               ~service:(Some entry.service)
+           in
+           Sol_cli_serverless_inventory.remove ~target ~service:entry.service
+           |> Result.map_error Sol_cli_exit.error)
+        entries
+      |> Result.map ignore
     in
     Cmd_cloud_tf.cloud_destroy
       ~target
