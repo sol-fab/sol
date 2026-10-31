@@ -139,6 +139,60 @@ let identity_scope addresses =
   | [] -> Sol_cli_terraform.whole_root
 ;;
 
+type target_authorization =
+  { grants : Sol_cli_grant.requirement list
+  ; serverless_units : Sol_cli_grant.serverless_unit list
+  ; scheduler_units : Sol_cli_grant.scheduler_unit list
+  }
+
+let output_map json field =
+  match Sol_cli_json.field [ field; "value" ] json with
+  | `Assoc entries ->
+    Ok
+      (List.map
+         (fun (unit, value) ->
+            match value with
+            | `String value when String.trim value <> "" -> unit, value
+            | _ -> unit, "")
+         entries)
+  | _ -> Error (Printf.sprintf "authorization output %s is not a map" field)
+;;
+
+let reconcile_target_authorization ~assets ~run_log ~target model =
+  let open Result.Syntax in
+  let* dir, _backend = prepare_root ~assets target in
+  let capabilities = capabilities target in
+  let* vars =
+    capabilities.authorization_target_root_vars
+      target
+      model.grants
+      model.serverless_units
+      model.scheduler_units
+  in
+  let* () =
+    Sol_cli_run_log.run_phase run_log ~name:"authorization-target" (fun () ->
+      Sol_cli_terraform.apply
+        ~scope:Sol_cli_terraform.whole_root
+        ~chdir:dir
+        ~var_files:[]
+        ~vars:(Sol_cli_terraform.kv_args vars)
+        ())
+    |> Result.map ignore
+    |> Result.map_error Sol_cli_process.error_to_string
+  in
+  let* output =
+    Sol_cli_terraform.output_json ~chdir:dir ()
+    |> Result.map_error Sol_cli_process.error_to_string
+  in
+  let* json =
+    Sol_cli_json.decode ~what:"authorization outputs" output.stdout
+    |> Result.map_error (fun message -> "authorization outputs are invalid: " ^ message)
+  in
+  let* serverless = output_map json capabilities.authorization_serverless_output in
+  let* scheduler = output_map json capabilities.authorization_scheduler_output in
+  Ok (serverless, scheduler)
+;;
+
 let apply_serverless_identities ~assets ~run_log ~target units =
   let open Result.Syntax in
   let* dir, _backend = prepare_root ~assets target in

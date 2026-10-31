@@ -119,6 +119,12 @@ type t =
   ; authorization_destroy_trust_placeholder : string
   ; authorization_root_vars :
       Sol_cli_config.target -> ((string * string) list, string) result
+  ; authorization_target_root_vars :
+      Sol_cli_config.target
+      -> Sol_cli_grant.requirement list
+      -> Sol_cli_grant.serverless_unit list
+      -> Sol_cli_grant.scheduler_unit list
+      -> ((string * string) list, string) result
   ; authorization_serverless_root_vars :
       Sol_cli_config.target
       -> Sol_cli_grant.serverless_unit list
@@ -607,6 +613,16 @@ let aws_scheduler_root_vars (target : Sol_cli_config.target) units =
   Ok [ "region", target.region; "environment", target.env; "scheduler_units", units ]
 ;;
 
+let aws_target_root_vars target grants serverless scheduler =
+  let open Result.Syntax in
+  let* base = aws_serverless_root_vars target serverless in
+  let* scheduler_vars = aws_scheduler_root_vars target scheduler in
+  let grants_json =
+    `List (List.map Sol_cli_grant.requirement_to_json grants) |> Yojson.Safe.to_string
+  in
+  Ok (base @ scheduler_vars @ [ "grants", grants_json ])
+;;
+
 let gcp_serverless_root_vars target units =
   let open Result.Syntax in
   let* project = required_field target "project_id" in
@@ -639,6 +655,16 @@ let gcp_scheduler_root_vars (target : Sol_cli_config.target) units =
     ; "project_id", project
     ; "scheduler_units", units
     ]
+;;
+
+let gcp_target_root_vars target grants serverless scheduler =
+  let open Result.Syntax in
+  let* base = gcp_serverless_root_vars target serverless in
+  let* scheduler_vars = gcp_scheduler_root_vars target scheduler in
+  let grants_json =
+    `List (List.map Sol_cli_grant.requirement_to_json grants) |> Yojson.Safe.to_string
+  in
+  Ok (base @ scheduler_vars @ [ "grants", grants_json ])
 ;;
 
 let gcp_authorization_reconciler target =
@@ -1169,6 +1195,7 @@ let aws : t =
   ; authorization_destroy_trust_placeholder =
       "arn:aws:iam::000000000000:role/sol-destroy-placeholder"
   ; authorization_root_vars = aws_authorization_root_vars
+  ; authorization_target_root_vars = aws_target_root_vars
   ; authorization_serverless_root_vars = aws_serverless_root_vars
   ; authorization_serverless_output = "serverless_role_arns"
   ; authorization_scheduler_root_vars = aws_scheduler_root_vars
@@ -1428,6 +1455,7 @@ let gcp : t =
   ; authorization_destroy_trust_placeholder =
       "user:sol-destroy-placeholder@example.invalid"
   ; authorization_root_vars = gcp_authorization_root_vars
+  ; authorization_target_root_vars = gcp_target_root_vars
   ; authorization_serverless_root_vars = gcp_serverless_root_vars
   ; authorization_serverless_output = "serverless_service_accounts"
   ; authorization_scheduler_root_vars = gcp_scheduler_root_vars
@@ -1506,6 +1534,7 @@ let byo : t =
   ; authorization_trust_field = ""
   ; authorization_destroy_trust_placeholder = ""
   ; authorization_root_vars = (fun _ -> Ok [])
+  ; authorization_target_root_vars = (fun _ _ _ _ -> Error byo_no_root)
   ; authorization_serverless_root_vars = (fun _ _ -> Error byo_no_root)
   ; authorization_serverless_output = ""
   ; authorization_scheduler_root_vars = (fun _ _ -> Error byo_no_root)

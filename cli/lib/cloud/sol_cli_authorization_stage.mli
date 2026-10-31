@@ -31,6 +31,19 @@ val fence
   -> target:Sol_cli_config.target
   -> (outcome, string) result
 
+type target_authorization =
+  { grants : Sol_cli_grant.requirement list
+  ; serverless_units : Sol_cli_grant.serverless_unit list
+  ; scheduler_units : Sol_cli_grant.scheduler_unit list
+  }
+
+val reconcile_target_authorization
+  :  assets:Sol_cli_platform_assets.t
+  -> run_log:Sol_cli_run_log.t
+  -> target:Sol_cli_config.target
+  -> target_authorization
+  -> ((string * string) list * (string * string) list, string) result
+
 val apply_serverless_identities
   :  assets:Sol_cli_platform_assets.t
   -> run_log:Sol_cli_run_log.t
