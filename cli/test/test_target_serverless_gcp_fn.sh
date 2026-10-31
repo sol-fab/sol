@@ -6,6 +6,7 @@ work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/state" "$work/home" "$work/ws/app/ops"
 cp -R "$examples/app/ops/probe_fn" "$work/ws/app/ops/probe_fn"
 sed -i '/^scheduled_concurrency[[:space:]]*=/d; /^backoff_limit[[:space:]]*=/d' "$work/ws/app/ops/probe_fn/sol.toml"
+sed -i '/^schedule[[:space:]]*=/a schedule_timezone = "America/Denver"' "$work/ws/app/ops/probe_fn/sol.toml"
 cat > "$work/ws/sol.yml" <<'YAML'
 project: pluto
 services:
@@ -54,6 +55,7 @@ JSON
 fi
 if [[ "$1 $2 $3" == "scheduler jobs create" || "$1 $2 $3" == "scheduler jobs update" ]]; then
   [[ "$*" == *"--oauth-service-account-email sol-scheduler@example.iam.gserviceaccount.com"* ]] || { echo "scheduler lost dedicated identity" >&2; exit 1; }
+  [[ "$*" == *"--time-zone America/Denver"* ]] || { echo "scheduler lost its timezone" >&2; exit 1; }
   touch "$state/schedule"
   echo "scheduled"
   exit 0

@@ -4,7 +4,7 @@ sol="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/state" "$work/home" "$work/ws/app/checkout/checkout_fn"
 printf 'FROM scratch\n' > "$work/ws/app/checkout/checkout_fn/Dockerfile"
-printf '[service]\nschedule = "0 * * * *"\nschedule_timezone = "UTC"\n' > "$work/ws/app/checkout/checkout_fn/sol.toml"
+printf '[service]\nschedule = "0 * * * *"\nschedule_timezone = "America/Denver"\n' > "$work/ws/app/checkout/checkout_fn/sol.toml"
 cat > "$work/ws/sol.yml" <<'YAML'
 project: pluto
 services:
@@ -93,6 +93,7 @@ elif [[ "$args" == *"scheduler get-schedule"* ]]; then
   [[ -f "$FAKE_AWS_STATE/schedule" ]] || { echo "ResourceNotFoundException" >&2; exit 254; }
   printf '{"Role":"arn:aws:iam::123:role/scheduler","Arn":"arn:aws:lambda:us-east-1:123:function:checkout-fn:live"}\n'
 elif [[ "$args" == *"scheduler create-schedule"* || "$args" == *"scheduler update-schedule"* ]]; then
+  [[ "$args" == *"--schedule-expression-timezone America/Denver"* ]] || { echo "schedule lost its timezone" >&2; exit 1; }
   touch "$FAKE_AWS_STATE/schedule"; printf '{}\n'
 elif [[ "$args" == *"scheduler delete-schedule"* ]]; then
   rm -f "$FAKE_AWS_STATE/schedule"; printf '{}\n'
