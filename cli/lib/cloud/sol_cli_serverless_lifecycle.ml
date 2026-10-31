@@ -44,30 +44,6 @@ let deploy
     Error "target-scoped serverless dispatch currently supports AWS and GCP only"
 ;;
 
-let ensure_runtime_identities ~assets ~run_log ~(target : Sol_cli_config.target) ~units =
-  match target.provider with
-  | Sol_cli_provider.Gcp | Sol_cli_provider.Aws ->
-    Sol_cli_authorization_stage.apply_serverless_identities ~assets ~run_log ~target units
-  | Sol_cli_provider.Byo -> Error "serverless targets support AWS and GCP only"
-;;
-
-let ensure_runtime_identity ~assets ~run_log ~target ~unit ~requirements =
-  let* identities =
-    ensure_runtime_identities
-      ~assets
-      ~run_log
-      ~target
-      ~units:[ { Sol_cli_grant.unit; requirements } ]
-  in
-  match List.assoc_opt unit identities with
-  | Some identity when String.trim identity <> "" -> Ok (Some identity)
-  | _ ->
-    Error
-      (Printf.sprintf
-         "the authorization root established no runtime identity for %s"
-         unit)
-;;
-
 let scheduler_resource_name ~(target : Sol_cli_config.target) service_name =
   match target.provider with
   | Sol_cli_provider.Aws ->
@@ -79,11 +55,68 @@ let scheduler_resource_name ~(target : Sol_cli_config.target) service_name =
   | Sol_cli_provider.Byo -> Error "serverless targets support AWS and GCP only"
 ;;
 
-let ensure_scheduler_identities ~assets ~run_log ~(target : Sol_cli_config.target) ~units =
-  match target.provider with
-  | Sol_cli_provider.Gcp | Sol_cli_provider.Aws ->
-    Sol_cli_authorization_stage.apply_scheduler_identities ~assets ~run_log ~target units
-  | Sol_cli_provider.Byo -> Error "serverless targets support AWS and GCP only"
+let complete_units
+      ~(config : Sol_cli_config.t)
+      ~project
+      ~(target : Sol_cli_config.target)
+      ~model
+      ~exclude
+  =
+  let open Result.Syntax in
+  let unsupported workload =
+    Error
+      (Printf.sprintf
+         "serverless function %S has no readable sol.toml, so the complete target \
+          authorization model cannot be constructed"
+         workload.Sol_cli_workspace_model.service.name)
+  in
+  let* units =
+    Sol_cli_workspace_model.workloads model
+    |> Sol_cli_result.map_list (fun (workload : Sol_cli_workspace_model.workload) ->
+      match workload.service.primitive, workload.config with
+      | Sol_cli_manifest.Fn, Ok toml ->
+        if Some workload.service.name = exclude
+        then Ok None
+        else (
+          match
+            Sol_cli_resource_binding.external_requirements
+              ~config
+              ~service_name:workload.service.name
+          with
+          | Error message -> Error message
+          | Ok external_requirements ->
+            let function_result =
+              if Option.is_some toml.schedule
+              then
+                scheduler_resource_name ~target workload.service.name
+                |> Result.map Option.some
+              else Ok None
+            in
+            (match function_result with
+             | Error message -> Error message
+             | Ok function_name ->
+               let unit =
+                 Sol_cli_serverless_target_common.unit_of_service
+                   ~project
+                   workload.service
+               in
+               let requirements =
+                 (toml.secret_keys |> List.map Sol_cli_grant.secret_requirement)
+                 @ external_requirements
+               in
+               Ok
+                 (Some
+                    ( { Sol_cli_grant.unit; requirements }
+                    , Option.map
+                        (fun function_name -> { Sol_cli_grant.unit; function_name })
+                        function_name ))))
+      | Sol_cli_manifest.Fn, Error _ -> unsupported workload
+      | _ -> Ok None)
+    |> Result.map (List.filter_map Fun.id)
+  in
+  let serverless = List.map fst units in
+  let scheduler = List.filter_map snd units in
+  Ok (serverless, scheduler)
 ;;
 
 let rollback ~target ~project ~service ~record ~version ~revision ~token =
