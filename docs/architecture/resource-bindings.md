@@ -453,3 +453,19 @@ Fail-closed cases:
 GCP external queue/object authorization remains unsupported until Pub/Sub/GCS permission
 translation is implemented. Applications still use their native provider SDK; Sol does not
 provide a provider-neutral runtime client.
+
+### Operational limits of the AWS external path
+
+- Serverless deploy propagates the target's external connection entries into the function
+  environment. `sol grants` is Kubernetes-only and refuses serverless targets because its
+  target-wide apply would replace the serverless unit set and could remove unrelated
+  runtime identities.
+- Serverless destroy removes the target's runtime identities. It is refused when the
+  workspace declares more than one function unless the target's identities are removed
+  explicitly; this avoids deleting a sibling function's identity.
+- Terraform state objects for this path are prefix-scoped in S3, but state locking uses a
+  shared DynamoDB table. IAM cannot restrict `PutItem`/`DeleteItem` to a DynamoDB partition
+  key, so a target able to reach the table can interfere with another target's lock. The
+  table is correctness-isolated by unique LockIDs, not security-isolated. Use a dedicated
+  lock table per environment, or Terraform's S3 lockfile support, before treating
+  cross-target lock isolation as a security boundary.

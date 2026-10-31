@@ -105,6 +105,16 @@ let run ?config ?destination ~action ~target ~var_file ~vars () =
     | None -> target_vars ~strict:(action = Apply) target
   in
   let target_cfg = resolved_config.Sol_cli_config.target in
+  let* () =
+    match Sol_cli_config.execution_of_target target_cfg with
+    | Sol_cli_config.Serverless ->
+      refuse
+        "sol grants is a Kubernetes-target command. Serverless runtime identities are \
+         reconciled by the deploy/destroy lifecycle; applying the target-wide grant root \
+         here would replace the serverless unit set and could remove unrelated \
+         identities."
+    | Sol_cli_config.Kubernetes -> Ok ()
+  in
   let provider = target_cfg.Sol_cli_config.provider in
   let* identity =
     Sol_cli_authorization_identity.of_target target_cfg |> Sol_cli_exit.of_msg

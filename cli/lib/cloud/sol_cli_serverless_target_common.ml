@@ -45,7 +45,26 @@ let declared_uses config (service : Sol_cli_manifest.service) =
   in
   if declared.uses = []
   then Ok ()
-  else Error "target-scoped serverless dispatch does not yet support service dependencies"
+  else (
+    let external_resource ref =
+      match Sol_cli_resource_binding.resource_name_of_ref ref with
+      | None -> false
+      | Some name ->
+        (match
+           Sol_cli_config.resources config
+           |> List.find_opt (fun (resource : Sol_cli_config.resource) ->
+             String.equal resource.name name)
+         with
+         | Some { typ = Some ("queue" | "object_store"); binding = Some binding; _ }
+           when binding.ownership = Sol_cli_config.Ownership_external -> true
+         | _ -> false)
+    in
+    if List.for_all external_resource declared.uses
+    then Ok ()
+    else
+      Error
+        "target-scoped serverless dispatch supports only external queue/object-store \
+         dependencies; other service dependencies are not implemented")
 ;;
 
 let require_http_callers (target : Sol_cli_config.target) =

@@ -11,6 +11,7 @@ type request =
   ; schedule : string option
   ; timezone : string option
   ; scheduler_role_arn : string option
+  ; external_env : (string * string) list
   ; record : string option
   ; run : string list -> (Sol_cli_aws_lambda_common.output, string) result
   }
@@ -245,7 +246,9 @@ let invoke (r : request) ~qualifier =
     | Error message -> Error (Unknown message))
 ;;
 
-let environment (r : request) = [ "SOL_UNIT", r.unit; "SOL_PRIMITIVE", "fn" ]
+let environment (r : request) =
+  [ "SOL_UNIT", r.unit; "SOL_PRIMITIVE", "fn" ] @ r.external_env
+;;
 
 let deploy (r : request) =
   let* () = preflight r in

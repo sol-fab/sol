@@ -33,6 +33,24 @@ let serverless_destroy ~target_cfg ~action ~record ~service =
       ~none:(Sol_cli_exit.error "serverless destroy requires --record")
       record
   in
+  let* model = Sol_cli_workspace_model.load_cwd () |> Sol_cli_exit.of_msg in
+  let functions =
+    Sol_cli_workspace_model.workloads model
+    |> List.filter (fun (workload : Sol_cli_workspace_model.workload) ->
+      match workload.service.primitive with
+      | Sol_cli_manifest.Fn -> true
+      | _ -> false)
+  in
+  let* () =
+    if List.length functions <= 1
+    then Ok ()
+    else
+      Error
+        (Sol_cli_exit.error
+           "serverless destroy removes every runtime identity for the target, so it is \
+            refused when the workspace declares more than one function. Destroy the \
+            target's identities explicitly after removing the remaining functions.")
+  in
   let* () =
     Sol_cli_serverless_lifecycle.destroy ~target:target_cfg ~service ~record
     |> Result.map_error Sol_cli_exit.error

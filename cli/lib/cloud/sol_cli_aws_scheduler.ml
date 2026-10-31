@@ -46,7 +46,12 @@ let of_json json =
 ;;
 
 let aws (r : request) args =
-  r.run ("aws" :: "--profile" :: Option.value r.profile ~default:"default" :: args)
+  r.run
+    ([ "aws"; "--region"; r.region ]
+     @ (match r.profile with
+        | None -> []
+        | Some profile -> [ "--profile"; profile ])
+     @ args)
 ;;
 
 let run_trim r args =

@@ -386,7 +386,7 @@ resource "aws_iam_role" "workload" {
 
 resource "aws_iam_role_policy" "workload" {
   for_each = local.role_units
-  name     = "sol-${var.environment}-${each.value}"
+  name     = "sol-${var.environment}-${replace(each.value, "/", "-")}"
   role     = aws_iam_role.workload[each.value].id
   policy = jsonencode({
     Version = "2012-10-17"

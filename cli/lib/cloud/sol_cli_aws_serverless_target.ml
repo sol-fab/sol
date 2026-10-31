@@ -143,6 +143,10 @@ let deploy_fn
      has no incoming HTTP request, and triggers/incoming identity are a separate
      contract. *)
   let* function_name = provider_name service in
+  let* external_env =
+    Sol_cli_resource_binding.external_connection ~config ~service_name:service.name
+    |> Result.map_error (fun message -> message)
+  in
   let request =
     { Sol_cli_aws_lambda_fn.profile = Sol_cli_config.provider_field target "profile"
     ; region = target.region
@@ -154,6 +158,7 @@ let deploy_fn
     ; schedule
     ; timezone = schedule_timezone
     ; scheduler_role_arn = scheduler_identity
+    ; external_env
     ; record = Some record
     ; run = runner
     }
@@ -280,6 +285,7 @@ let rollback_fn
     ; schedule = None
     ; timezone = None
     ; scheduler_role_arn = None
+    ; external_env = []
     ; record = None
     ; run = runner
     }
@@ -360,6 +366,7 @@ let destroy ~(target : Sol_cli_config.target) ~service ~record =
       ; schedule = None
       ; timezone = None
       ; scheduler_role_arn = None
+      ; external_env = []
       ; record = None
       ; run = runner
       }

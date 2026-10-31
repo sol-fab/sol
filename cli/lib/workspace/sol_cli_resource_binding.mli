@@ -91,6 +91,11 @@ val validate_external_bindings
   -> service_name:string
   -> (unit, string) result
 
+val external_connection
+  :  config:Sol_cli_config.t
+  -> service_name:string
+  -> ((string * string) list, string) result
+
 val external_requirements
   :  config:Sol_cli_config.t
   -> service_name:string
