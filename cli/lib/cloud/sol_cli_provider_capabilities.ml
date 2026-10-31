@@ -125,19 +125,9 @@ type t =
       -> Sol_cli_grant.serverless_unit list
       -> Sol_cli_grant.scheduler_unit list
       -> ((string * string) list, string) result
-  ; authorization_serverless_root_vars :
-      Sol_cli_config.target
-      -> Sol_cli_grant.serverless_unit list
-      -> ((string * string) list, string) result
   ; authorization_serverless_output : string
-  ; authorization_scheduler_root_vars :
-      Sol_cli_config.target
-      -> Sol_cli_grant.scheduler_unit list
-      -> ((string * string) list, string) result
   ; authorization_scheduler_output : string
   ; external_resource_auth : bool
-  ; authorization_runtime_addresses : string list
-  ; authorization_scheduler_addresses : string list
   ; authorization_fence_addresses : string list
   ; authorization_reconciler :
       Sol_cli_config.target -> (authorization_reconciler, string) result
@@ -1196,19 +1186,9 @@ let aws : t =
       "arn:aws:iam::000000000000:role/sol-destroy-placeholder"
   ; authorization_root_vars = aws_authorization_root_vars
   ; authorization_target_root_vars = aws_target_root_vars
-  ; authorization_serverless_root_vars = aws_serverless_root_vars
   ; authorization_serverless_output = "serverless_role_arns"
-  ; authorization_scheduler_root_vars = aws_scheduler_root_vars
   ; authorization_scheduler_output = "scheduler_role_arns"
   ; external_resource_auth = true
-  ; authorization_runtime_addresses =
-      [ "aws_iam_policy.workload_boundary"
-      ; "aws_iam_role.workload"
-      ; "aws_iam_role_policy.workload"
-      ; "aws_eks_pod_identity_association.workload"
-      ]
-  ; authorization_scheduler_addresses =
-      [ "aws_iam_role.scheduler"; "aws_iam_role_policy.scheduler" ]
   ; authorization_fence_addresses =
       [ "aws_iam_policy.workload_boundary"
       ; "aws_iam_role.reconciler"
@@ -1456,20 +1436,9 @@ let gcp : t =
       "user:sol-destroy-placeholder@example.invalid"
   ; authorization_root_vars = gcp_authorization_root_vars
   ; authorization_target_root_vars = gcp_target_root_vars
-  ; authorization_serverless_root_vars = gcp_serverless_root_vars
   ; authorization_serverless_output = "serverless_service_accounts"
-  ; authorization_scheduler_root_vars = gcp_scheduler_root_vars
   ; authorization_scheduler_output = "scheduler_service_accounts"
   ; external_resource_auth = false
-  ; authorization_runtime_addresses =
-      [ "google_service_account.serverless"
-      ; "google_secret_manager_secret_iam_member.serverless"
-      ]
-  ; authorization_scheduler_addresses =
-      [ "google_service_account.scheduler"
-      ; "google_service_account_iam_member.scheduler_act_as"
-      ; "google_cloud_run_v2_job_iam_member.scheduler"
-      ]
   ; authorization_fence_addresses =
       [ "google_service_account.reconciler"
       ; "google_project_iam_custom_role.authorization"
@@ -1535,13 +1504,9 @@ let byo : t =
   ; authorization_destroy_trust_placeholder = ""
   ; authorization_root_vars = (fun _ -> Ok [])
   ; authorization_target_root_vars = (fun _ _ _ _ -> Error byo_no_root)
-  ; authorization_serverless_root_vars = (fun _ _ -> Error byo_no_root)
   ; authorization_serverless_output = ""
-  ; authorization_scheduler_root_vars = (fun _ _ -> Error byo_no_root)
   ; authorization_scheduler_output = ""
   ; external_resource_auth = false
-  ; authorization_runtime_addresses = []
-  ; authorization_scheduler_addresses = []
   ; authorization_fence_addresses = []
   ; authorization_reconciler = (fun _ -> Error byo_no_root)
   ; authorization_assumption = (fun _ -> Error byo_no_root)
