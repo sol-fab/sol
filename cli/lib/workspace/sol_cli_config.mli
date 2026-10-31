@@ -16,6 +16,8 @@ type target =
   ; kubeconfig : string option
   ; terraform_var_file : string option
   ; observability_backend : string option
+  ; observability_logs_url : string option
+  ; observability_metrics_url : string option
   ; observability_traces_url : string option
   ; destroy_retention : string option
   ; alert_receiver_type : string option

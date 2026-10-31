@@ -319,6 +319,8 @@ let target ?(fields = []) provider =
   ; kubeconfig = None
   ; terraform_var_file = None
   ; observability_backend = None
+  ; observability_logs_url = None
+  ; observability_metrics_url = None
   ; observability_traces_url = None
   ; destroy_retention = None
   ; alert_receiver_type = None

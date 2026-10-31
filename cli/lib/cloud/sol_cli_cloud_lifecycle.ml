@@ -62,6 +62,8 @@ type platform_inputs =
   ; region : string
   ; cluster_issuer : string option
   ; observability_backend : string option
+  ; observability_logs_url : string option
+  ; observability_metrics_url : string option
   ; platform_profile : string
   ; alert_receiver_type : string option
   ; alert_receiver_url : string option
@@ -193,6 +195,8 @@ let platform_inputs (target : cloud_target) (cluster : Sol_cli_cluster.t) =
       ; region = target.target.region
       ; cluster_issuer = target.target.cluster_issuer
       ; observability_backend = target.target.observability_backend
+      ; observability_logs_url = target.target.observability_logs_url
+      ; observability_metrics_url = target.target.observability_metrics_url
       ; platform_profile = Sol_cli_profile.platform_shape_to_string target.platform_shape
       ; alert_receiver_type = target.target.alert_receiver_type
       ; alert_receiver_url = target.target.alert_receiver_url
@@ -251,6 +255,8 @@ let platform_terraform_vars ?(context = Install) inputs =
     vars
     |> add_opt "cluster_issuer" inputs.cluster_issuer
     |> add_opt "observability_backend" inputs.observability_backend
+    |> add_opt "external_loki_url" inputs.observability_logs_url
+    |> add_opt "external_prometheus_remote_write_url" inputs.observability_metrics_url
     |> add_opt "platform_profile" (Some inputs.platform_profile)
     |> add_opt "alert_receiver_type" inputs.alert_receiver_type
     |> add_opt "alert_receiver_url" inputs.alert_receiver_url
