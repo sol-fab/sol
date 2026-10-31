@@ -3031,3 +3031,68 @@ let test_external_object_store_connection_reaches_the_spec () =
 let%test "external object-store connection reaches the workload" =
   test_external_object_store_connection_reaches_the_spec ()
 ;;
+
+let composed_backend_config : Sol_cli_config.t =
+  { external_storage_config with
+    services =
+      [ { Sol_cli_config.name = "probe_fn"
+        ; typ = None
+        ; path = None
+        ; uses = [ "jobs"; "uploads" ]
+        ; scale_min = None
+        ; scale_max = None
+        ; language = None
+        ; omit = false
+        }
+      ]
+  }
+;;
+
+let test_scheduled_fn_composes_backends () =
+  let tmp = Filename.temp_dir "sol_test_composed_backends" "" in
+  with_cwd tmp (fun () ->
+    let fn =
+      { (worker_unit ~domain:"ops" ~name:"probe_fn") with
+        Sol_cli_manifest.primitive = Sol_cli_manifest.Fn
+      }
+    in
+    mkdirs fn.dir;
+    write_file (Filename.concat fn.dir "sol.toml") "[service]\nschedule = \"0 * * * *\"\n";
+    match
+      Sol_cli_deployment_plan.of_services_result
+        ~database:Sol_cli_resource_binding.No_postgres
+        ~platform_shape:Sol_cli_profile.Local
+        ~workspace:"myworkspace"
+        ~env:deploy_env
+        ~facts:(facts ())
+        ~declared:(Sol_cli_config.declared_of_config composed_backend_config)
+        ~inventory:[ fn ]
+        ~telemetry_env:[ "TEMPO_URL", "https://otlp.example.com" ]
+        [ fn ]
+    with
+    | Ok plan ->
+      let spec = List.hd plan.Sol_cli_deployment_plan.services in
+      Windtrap.equal
+        (Windtrap.option Windtrap.string)
+        ~msg:"scheduled fn keeps its schedule"
+        (Some "0 * * * *")
+        spec.schedule;
+      List.iter
+        (fun key ->
+           Windtrap.equal
+             (Windtrap.option Windtrap.string)
+             ~msg:("scheduled fn receives " ^ key)
+             (Some
+                (if String.equal key "TEMPO_URL"
+                 then "https://otlp.example.com"
+                 else "present"))
+             (List.assoc_opt key spec.config
+              |> Option.map (fun value ->
+                if String.equal key "TEMPO_URL" then value else "present")))
+        [ "TEMPO_URL"; "QUEUE_ENDPOINT"; "OBJECT_ENDPOINT" ]
+    | Error err -> Windtrap.fail (Sol_cli_deployment_plan.plan_error_to_string err))
+;;
+
+let%test "scheduled fn composes queue, storage, and observability" =
+  test_scheduled_fn_composes_backends ()
+;;
