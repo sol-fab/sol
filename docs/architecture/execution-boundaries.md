@@ -1,8 +1,11 @@
 # Execution boundaries
 
 This page maps the execution architecture: workload kinds, their local and
-deployed runtimes, the CLI lifecycle layers, and the provider adapters. It is a
-current-state map, not a new abstraction. The verification map is
+deployed runtimes, the CLI lifecycle layers, and the provider adapters. The
+smaller contract set (requirements, dependencies, configuration, identity,
+lifecycle, provenance, and backend coverage) is
+[component-contracts.md](component-contracts.md). These are current-state maps,
+not a new abstraction. The verification map is
 [`internal/ci/README.md`](../../internal/ci/README.md); the execution-backend
 decision is [ADR 0010](adr/0010-execution-backends.md).
 
