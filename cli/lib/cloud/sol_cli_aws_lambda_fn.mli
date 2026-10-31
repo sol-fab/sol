@@ -16,6 +16,9 @@ type request =
   ; image : string
   ; role_arn : string
   ; unit : string
+  ; schedule : string option
+  ; timezone : string option
+  ; scheduler_role_arn : string option
   ; record : string option
   ; run : string list -> (Sol_cli_aws_lambda_common.output, string) result
   }
@@ -36,6 +39,7 @@ type release =
   ; alias : string
   ; image : string
   ; role_arn : string
+  ; scheduler : Sol_cli_aws_scheduler.release option
   }
 
 type failure = Sol_cli_aws_lambda_common.failure =

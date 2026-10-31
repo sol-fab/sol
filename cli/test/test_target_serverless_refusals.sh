@@ -13,6 +13,15 @@ cat > "$work/bin/gcloud" <<'FAKE'
 printf 'gcloud %s\n' "$*" >> "$FAKE_PROVIDER_LOG"
 exit 99
 FAKE
+cat > "$work/bin/terraform" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"output -json"*) printf '%s\n' '{"serverless_role_arns":{"value":{"checkout/checkout_fn":"arn:aws:iam::123:role/test"}},"scheduler_role_arns":{"value":{}}}' ;;
+esac
+exit 0
+FAKE
+chmod +x "$work/bin/terraform"
 chmod +x "$work/bin/aws" "$work/bin/gcloud"
 unset XDG_DATA_HOME
 export PATH="$work/bin:$PATH" FAKE_PROVIDER_LOG="$work/provider.log" HOME="$work/home"
@@ -78,14 +87,37 @@ live:
   targets:
     aws/us-east-1:
       execution: serverless
+      state_bucket: test-state
       aws:
         profile: test
+        state_lock_table: test-locks
 YAML
 cd "$ws"
 if "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/aws-fn-schedule.out" 2>&1; then
   echo "scheduled serverless -fn was accepted" >&2; exit 1
 fi
-grep -q 'serverless _fn scheduling is not implemented' "$work/aws-fn-schedule.out"
+grep -q 'no scheduler identity' "$work/aws-fn-schedule.out"
+[[ ! -s "$work/provider.log" ]]
+
+# Kubernetes-only scheduled concurrency is refused on serverless before provider mutation.
+ws="$work/aws-fn-schedule-policy"
+workspace "$ws" checkout_fn fn no
+printf '[service]\nschedule = "0 * * * *"\nscheduled_concurrency = "forbid"\n' > "$ws/app/checkout/checkout_fn/sol.toml"
+cat > "$ws/sol/environments.yml" <<'YAML'
+live:
+  targets:
+    aws/us-east-1:
+      execution: serverless
+      state_bucket: test-state
+      aws:
+        profile: test
+        state_lock_table: test-locks
+YAML
+cd "$ws"
+if "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/aws-fn-policy.out" 2>&1; then
+  echo "serverless scheduled -fn accepted Kubernetes-only policy" >&2; exit 1
+fi
+grep -q 'Kubernetes-only schedule policy' "$work/aws-fn-policy.out"
 [[ ! -s "$work/provider.log" ]]
 
 # A -fn with dependencies is refused before provider mutation.

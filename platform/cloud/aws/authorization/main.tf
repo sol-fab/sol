@@ -26,6 +26,13 @@ locals {
 
 data "aws_iam_policy_document" "workload_boundary" {
   statement {
+    sid       = "InvokeEnvironmentFunctions"
+    effect    = "Allow"
+    actions   = ["lambda:InvokeFunction"]
+    resources = ["arn:aws:lambda:${var.region}:${local.account_id}:function:*"]
+  }
+
+  statement {
     sid    = "ReadEnvironmentSecrets"
     effect = "Allow"
     actions = [
@@ -209,6 +216,8 @@ locals {
 
   serverless_units = toset([for unit in var.serverless_units : unit.unit])
 
+  scheduler_units = { for unit in var.scheduler_units : unit.unit => unit }
+
   role_units = setunion(local.grant_units, local.serverless_units)
 
   serverless_requirements_by_unit = {
@@ -323,6 +332,45 @@ resource "aws_iam_role_policy" "workload" {
       lookup(local.grant_statements, each.value, []),
       lookup(local.serverless_statements, each.value, [])
     )
+  })
+}
+
+data "aws_iam_policy_document" "scheduler_trust" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["scheduler.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "scheduler" {
+  for_each             = local.scheduler_units
+  name                 = "sol-${var.environment}-sched-${substr(sha1(each.key), 0, 8)}"
+  path                 = "/${local.role_path}"
+  permissions_boundary = aws_iam_policy.workload_boundary.arn
+  assume_role_policy   = data.aws_iam_policy_document.scheduler_trust.json
+  description          = "Dedicated scheduler identity for ${each.key} in ${var.environment}."
+}
+
+resource "aws_iam_role_policy" "scheduler" {
+  for_each = local.scheduler_units
+  name     = "sol-scheduler"
+  role     = aws_iam_role.scheduler[each.key].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = ["lambda:InvokeFunction"]
+        Resource = [
+          "arn:aws:lambda:${var.region}:${local.account_id}:function:${each.value.function_name}:live"
+        ]
+      }
+    ]
   })
 }
 

@@ -6,9 +6,13 @@ type request =
   { project : string
   ; region : string
   ; service : string
+  ; unit : string
   ; job : string
   ; image : string
   ; service_account : string
+  ; schedule : string option
+  ; timezone : string option
+  ; scheduler_identity : string option
   ; record : string
   ; runner : Sol_cli_cloud_run.runner
   }

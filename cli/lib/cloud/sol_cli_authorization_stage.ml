@@ -175,6 +175,51 @@ let apply_serverless_identities ~assets ~run_log ~target units =
   | _ -> Error "authorization output serverless_service_accounts is not a map"
 ;;
 
+let apply_scheduler_identities ~assets ~run_log ~target units =
+  let open Result.Syntax in
+  let* dir, _backend = prepare_root ~assets target in
+  let* vars = (capabilities target).authorization_scheduler_root_vars target units in
+  let* () =
+    Sol_cli_run_log.run_phase
+      run_log
+      ~name:"authorization-scheduler-identities"
+      (fun () ->
+         Sol_cli_terraform.apply
+           ~scope:Sol_cli_terraform.whole_root
+           ~chdir:dir
+           ~var_files:[]
+           ~vars:(Sol_cli_terraform.kv_args vars)
+           ())
+    |> Result.map ignore
+    |> Result.map_error Sol_cli_process.error_to_string
+  in
+  let* output =
+    Sol_cli_terraform.output_json ~chdir:dir ()
+    |> Result.map_error Sol_cli_process.error_to_string
+  in
+  let* json =
+    Sol_cli_json.decode ~what:"authorization outputs" output.stdout
+    |> Result.map_error (fun message -> "authorization outputs are invalid: " ^ message)
+  in
+  if units = []
+  then Ok []
+  else (
+    match
+      Sol_cli_json.field
+        [ (capabilities target).authorization_scheduler_output; "value" ]
+        json
+    with
+    | `Assoc identities ->
+      Ok
+        (List.map
+           (fun (unit, value) ->
+              match value with
+              | `String identity when String.trim identity <> "" -> unit, identity
+              | _ -> unit, "")
+           identities)
+    | _ -> Error "authorization output scheduler_service_accounts is not a map")
+;;
+
 let verify_destroyed_state state =
   match state with
   | Sol_cli_cloud_destroy.State_empty -> Ok ()

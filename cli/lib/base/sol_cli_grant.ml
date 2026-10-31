@@ -4,6 +4,7 @@ type capability =
   | Message_subscribe
   | Object_read
   | Object_write
+  | Function_invoke
 
 let capability_to_string = function
   | Secret_access -> "secret"
@@ -11,6 +12,7 @@ let capability_to_string = function
   | Message_subscribe -> "message.subscribe"
   | Object_read -> "object.read"
   | Object_write -> "object.write"
+  | Function_invoke -> "function.invoke"
 ;;
 
 let resource_capabilities = function
@@ -29,7 +31,13 @@ type serverless_unit =
   ; requirements : requirement list
   }
 
+type scheduler_unit =
+  { unit : string
+  ; function_name : string
+  }
+
 let requirement ~capability ~resource = { capability; resource }
+let invoke_requirement resource = { capability = Function_invoke; resource }
 let secret_capability = "secret"
 let secret_requirement resource = { capability = Secret_access; resource }
 
@@ -40,11 +48,15 @@ let requirement_to_json requirement =
     ]
 ;;
 
-let serverless_unit_to_json unit =
+let serverless_unit_to_json (unit : serverless_unit) =
   `Assoc
     [ "unit", `String unit.unit
     ; "requirements", `List (List.map requirement_to_json unit.requirements)
     ]
+;;
+
+let scheduler_unit_to_json (unit : scheduler_unit) =
+  `Assoc [ "unit", `String unit.unit; "function_name", `String unit.function_name ]
 ;;
 
 let annotation_key = "sol.dev/grants"

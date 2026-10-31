@@ -20,6 +20,9 @@ val deploy
   -> image:string
   -> record:string
   -> runtime_service_account:string option
+  -> schedule:string option
+  -> schedule_timezone:string option
+  -> scheduler_identity:string option
   -> (Yojson.Safe.t, string) result
 
 val ensure_runtime_identities
@@ -52,3 +55,15 @@ val destroy
   -> service:string
   -> record:string
   -> (unit, string) result
+
+val ensure_scheduler_identities
+  :  assets:Sol_cli_platform_assets.t
+  -> run_log:Sol_cli_run_log.t
+  -> target:Sol_cli_config.target
+  -> units:Sol_cli_grant.scheduler_unit list
+  -> ((string * string) list, string) result
+
+val scheduler_resource_name
+  :  target:Sol_cli_config.target
+  -> string
+  -> (string, string) result

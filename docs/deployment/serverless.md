@@ -21,7 +21,7 @@ needs and independently verifies their absence afterwards.
 | Secrets/dependencies | injected locally | supported | env/identity proven; `uses:` refused | env/identity proven; `uses:` refused |
 | Identity | local explicit | supported | `-svc`: Google workload token, explicit callers; `-fn`: execution service account only, no incoming callers | `-svc`: Google app token, explicit callers; `-fn`: execution role only, no incoming callers |
 | Observability | app logs/metrics | supported | provider/app logs; no Sol acceptance | provider/CloudWatch logs; no Sol acceptance |
-| Target deploy | n/a | supported | `-svc` and `-fn` live; scheduled `-fn` refused | `-svc` and `-fn` live; scheduled `-fn` refused |
+| Target deploy | n/a | supported | `-svc` and `-fn` live, including scheduled `-fn` | `-svc` and `-fn` live, including scheduled `-fn` |
 | Target rollback | n/a | release based | `-svc` live; `-fn` execution-history live | `-svc` and `-fn` live |
 | Target destroy/absence | n/a | supported | `-svc` and `-fn` live | `-svc` and `-fn` live |
 | Plan projection | n/a | supported | fail closed | fail closed |

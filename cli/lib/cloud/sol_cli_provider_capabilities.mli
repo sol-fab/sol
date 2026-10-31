@@ -114,6 +114,11 @@ type t =
       -> Sol_cli_grant.serverless_unit list
       -> ((string * string) list, string) result
   ; authorization_serverless_output : string
+  ; authorization_scheduler_root_vars :
+      Sol_cli_config.target
+      -> Sol_cli_grant.scheduler_unit list
+      -> ((string * string) list, string) result
+  ; authorization_scheduler_output : string
   ; authorization_fence_addresses : string list
   ; authorization_reconciler :
       Sol_cli_config.target -> (authorization_reconciler, string) result

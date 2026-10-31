@@ -112,11 +112,14 @@ let deploy_svc
 let deploy_fn
       ~target
       ~config
-      ~project:_project
+      ~project
       ~(service : Sol_cli_manifest.service)
       ~image
       ~record
       ~runtime_service_account
+      ~schedule
+      ~schedule_timezone
+      ~scheduler_identity
   =
   let* () = ensure_gcp target in
   let* service_account =
@@ -141,9 +144,13 @@ let deploy_fn
     { project = cloud_project
     ; region = target.region
     ; service = service.name
+    ; unit = Sol_cli_serverless_target_common.unit_of_service ~project service
     ; job
     ; image
     ; service_account
+    ; schedule
+    ; timezone = schedule_timezone
+    ; scheduler_identity
     ; record
     ; runner = runner ()
     }
@@ -163,13 +170,26 @@ let deploy
       ~image
       ~record
       ~runtime_service_account
+      ~schedule
+      ~schedule_timezone
+      ~scheduler_identity
   =
   let* () = ensure_gcp target in
   match service.primitive with
   | Sol_cli_manifest.Svc ->
     deploy_svc ~target ~config ~project ~service ~image ~record ~runtime_service_account
   | Sol_cli_manifest.Fn ->
-    deploy_fn ~target ~config ~project ~service ~image ~record ~runtime_service_account
+    deploy_fn
+      ~target
+      ~config
+      ~project
+      ~service
+      ~image
+      ~record
+      ~runtime_service_account
+      ~schedule
+      ~schedule_timezone
+      ~scheduler_identity
   | Sol_cli_manifest.Worker ->
     Error "target-scoped serverless dispatch does not support -worker on GCP"
 ;;
@@ -231,13 +251,7 @@ let rollback_svc
   Ok (Sol_cli_cloud_run.observed_json observed)
 ;;
 
-let rollback_fn
-      ~target
-      ~project:_project
-      ~(service : Sol_cli_manifest.service)
-      ~record
-      ~execution
-  =
+let rollback_fn ~target ~project ~(service : Sol_cli_manifest.service) ~record ~execution =
   let* () = ensure_gcp target in
   let* recorded = Sol_cli_gcp_serverless_job.read_record record in
   let* cloud_project =
@@ -251,9 +265,13 @@ let rollback_fn
     { project = cloud_project
     ; region = target.region
     ; service = service.name
+    ; unit = Sol_cli_serverless_target_common.unit_of_service ~project service
     ; job
     ; image = ""
     ; service_account = Sol_cli_gcp_serverless_job.runtime_service_account recorded
+    ; schedule = None
+    ; timezone = None
+    ; scheduler_identity = None
     ; record
     ; runner = runner ()
     }
@@ -298,9 +316,13 @@ let destroy ~target ~service ~record =
       { project
       ; region = target.region
       ; service
+      ; unit = service
       ; job
       ; image = ""
       ; service_account = ""
+      ; schedule = None
+      ; timezone = None
+      ; scheduler_identity = None
       ; record
       ; runner = runner ()
       }

@@ -102,35 +102,13 @@ let run_serverless
                      service.name
                      (Sol_cli_toml.parse_error_to_string parse_error))))
       in
-      let* () =
-        match service.primitive, config.schedule with
-        | Sol_cli_manifest.Fn, Some _ ->
-          Error
-            (Sol_cli_exit.error
-               (Printf.sprintf
-                  "serverless _fn scheduling is not implemented for %s; remove [service] \
-                   schedule or deploy it to a Kubernetes target"
-                  service.name))
-        | _ -> Ok ()
-      in
-      let* () =
-        match service.primitive, config.schedule with
-        | Sol_cli_manifest.Fn, Some _ ->
-          Error
-            (Sol_cli_exit.error
-               (Printf.sprintf
-                  "serverless _fn scheduling is not implemented for %s; remove [service] \
-                   schedule or deploy it to a Kubernetes target"
-                  service.name))
-        | _ -> Ok ()
-      in
       let unit = Sol_cli_serverless_target_common.unit_of_service ~project service in
       let requirements =
         config.secret_keys |> List.map Sol_cli_grant.secret_requirement
       in
-      Ok (service, image, { Sol_cli_grant.unit; requirements }))
+      Ok (service, image, config, { Sol_cli_grant.unit; requirements }))
   in
-  let units = List.map (fun (_, _, unit) -> unit) declared in
+  let units = List.map (fun (_, _, _, unit) -> unit) declared in
   let* assets = Cmd_cloud_tf.resolve_assets () in
   let* identities =
     Sol_cli_serverless_lifecycle.ensure_runtime_identities
@@ -138,6 +116,35 @@ let run_serverless
       ~run_log
       ~target:target_cfg
       ~units
+    |> Result.map_error Sol_cli_exit.error
+  in
+  let* scheduler_identities =
+    (* Scheduler identities are target-scoped and owned by the authorization root. Pass
+       every scheduled function in the workspace so removing a declaration, or deploying a
+       different selection, does not leave an orphaned principal behind. *)
+    let* scheduled =
+      Sol_cli_workspace_model.workloads facts
+      |> Sol_cli_result.map_list (fun (workload : Sol_cli_workspace_model.workload) ->
+        match workload.service.primitive, workload.config with
+        | Sol_cli_manifest.Fn, Ok config when Option.is_some config.schedule ->
+          let* function_name =
+            Sol_cli_serverless_lifecycle.scheduler_resource_name
+              ~target:target_cfg
+              workload.service.name
+            |> Result.map_error Sol_cli_exit.error
+          in
+          let unit =
+            Sol_cli_serverless_target_common.unit_of_service ~project workload.service
+          in
+          Ok (Some { Sol_cli_grant.unit; function_name })
+        | _ -> Ok None)
+      |> Result.map (List.filter_map Fun.id)
+    in
+    Sol_cli_serverless_lifecycle.ensure_scheduler_identities
+      ~assets
+      ~run_log
+      ~target:target_cfg
+      ~units:scheduled
     |> Result.map_error Sol_cli_exit.error
   in
   let single =
@@ -151,6 +158,7 @@ let run_serverless
          (fun
              ( (service : Sol_cli_manifest.service)
              , image
+             , (config : Sol_cli_toml.t)
              , (unit : Sol_cli_grant.serverless_unit) )
             ->
             let* runtime_service_account =
@@ -162,6 +170,41 @@ let run_serverless
                      (Printf.sprintf
                         "the authorization root established no runtime identity for %s"
                         unit.unit))
+            in
+            let* () =
+              match config.Sol_cli_toml.schedule with
+              | None -> Ok ()
+              | Some _ ->
+                let unsupported =
+                  (match config.scheduled_concurrency with
+                   | Some (Sol_cli_toml.Forbid | Sol_cli_toml.Replace) -> true
+                   | _ -> false)
+                  || Option.is_some config.backoff_limit
+                in
+                if unsupported
+                then
+                  Error
+                    (Sol_cli_exit.error
+                       (Printf.sprintf
+                          "%s declares Kubernetes-only schedule policy; map it to the \
+                           provider scheduler or remove \
+                           scheduled_concurrency/backoff_limit"
+                          service.name))
+                else Ok ()
+            in
+            let* scheduler_identity =
+              match config.Sol_cli_toml.schedule with
+              | None -> Ok None
+              | Some _ ->
+                (match List.assoc_opt unit.unit scheduler_identities with
+                 | Some identity when String.trim identity <> "" -> Ok (Some identity)
+                 | _ ->
+                   Error
+                     (Sol_cli_exit.error
+                        (Printf.sprintf
+                           "the authorization root established no scheduler identity \
+                            for                             %s"
+                           unit.unit)))
             in
             let record =
               if single
@@ -180,6 +223,9 @@ let run_serverless
                 ~image
                 ~record
                 ~runtime_service_account
+                ~schedule:config.Sol_cli_toml.schedule
+                ~schedule_timezone:config.Sol_cli_toml.schedule_timezone
+                ~scheduler_identity
               |> Result.map_error Sol_cli_exit.error
             in
             print_endline (Yojson.Safe.to_string release);

@@ -4,6 +4,7 @@ sol="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/state" "$work/home" "$work/ws/app/checkout/checkout_fn"
 printf 'FROM scratch\n' > "$work/ws/app/checkout/checkout_fn/Dockerfile"
+printf '[service]\nschedule = "0 * * * *"\nschedule_timezone = "America/Denver"\n' > "$work/ws/app/checkout/checkout_fn/sol.toml"
 cat > "$work/ws/sol.yml" <<'YAML'
 project: pluto
 services:
@@ -27,7 +28,7 @@ cat > "$work/bin/terraform" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
 case "$*" in
-  *"output -json"*) printf '%s\n' '{"serverless_role_arns":{"value":{"checkout/checkout_fn":"arn:aws:iam::123:role/test"}}}' ;;
+  *"output -json"*) printf '%s\n' '{"serverless_role_arns":{"value":{"checkout/checkout_fn":"arn:aws:iam::123:role/test"}},"scheduler_role_arns":{"value":{"checkout/checkout_fn":"arn:aws:iam::123:role/scheduler"}}}' ;;
 esac
 exit 0
 FAKE
@@ -61,6 +62,8 @@ elif [[ "$args" == *"lambda create-alias"* || "$args" == *"lambda update-alias"*
   if [[ "${FAKE_ALIAS_ERROR:-0}" == 1 ]]; then echo "simulated alias transport failure" >&2; exit 1; fi
   printf '{}\n'
 elif [[ "$args" == *"lambda get-function-configuration"* ]]; then printf '{"Role":"%s"}\n' "${FAKE_AWS_ROLE:-arn:aws:iam::123:role/test}"
+elif [[ "$args" == *"lambda get-function"* && "$args" == *"--query Configuration.FunctionArn"* ]]; then
+  printf 'arn:aws:lambda:us-east-1:123:function:checkout-fn\n'
 elif [[ "$args" == *"lambda get-function"* ]]; then
   owner="${FAKE_FUNCTION_OWNER:-lambda-fn-experiment}"
   printf '{"Configuration":{"Version":"%s"},"Tags":{"sol-owned":"%s","sol-service":"checkout-fn"}}\n' "$(cat "$FAKE_AWS_STATE/version")" "$owner"
@@ -82,6 +85,18 @@ elif [[ "$args" == *"lambda invoke"* ]]; then
   fi
 elif [[ "$args" == *"lambda delete-function"* ]]; then
   rm -f "$FAKE_AWS_STATE/function" "$FAKE_AWS_STATE/alias" "$FAKE_AWS_STATE/version"; printf '{}\n'
+elif [[ "$args" == *"iam get-role-policy"* ]]; then
+  printf '{"Statement":[{"Action":"lambda:InvokeFunction","Resource":"arn:aws:lambda:us-east-1:123:function:checkout-fn:live"}]}\n'
+elif [[ "$args" == *"iam get-role"* ]]; then
+  printf '{"Statement":[{"Principal":{"Service":"scheduler.amazonaws.com"}}]}\n'
+elif [[ "$args" == *"scheduler get-schedule"* ]]; then
+  [[ -f "$FAKE_AWS_STATE/schedule" ]] || { echo "ResourceNotFoundException" >&2; exit 254; }
+  printf '{"Role":"arn:aws:iam::123:role/scheduler","Arn":"arn:aws:lambda:us-east-1:123:function:checkout-fn:live","Expression":"cron(0 * ? * * *)","TimeZone":"America/Denver"}\n'
+elif [[ "$args" == *"scheduler create-schedule"* || "$args" == *"scheduler update-schedule"* ]]; then
+  [[ "$args" == *"--schedule-expression-timezone America/Denver"* ]] || { echo "schedule lost its timezone" >&2; exit 1; }
+  touch "$FAKE_AWS_STATE/schedule"; printf '{}\n'
+elif [[ "$args" == *"scheduler delete-schedule"* ]]; then
+  rm -f "$FAKE_AWS_STATE/schedule"; printf '{}\n'
 else printf '{}\n'; fi
 FAKE
 chmod +x "$work/bin/aws"
@@ -104,6 +119,9 @@ grep -q '"kind":"fn"' "$work/deploy"
 grep -q '"function_name":"checkout-fn"' "$work/deploy"
 grep -q '"version":"1"' "$work/deploy"
 grep -q '"url"' "$work/deploy" && { echo "fn release record must not carry an HTTP URL" >&2; exit 1; }
+grep -q '"scheduler":{' "$work/deploy"
+grep -q 'scheduler create-schedule' "$FAKE_AWS_LOG"
+[[ -f "$work/state/schedule" ]]
 grep -q 'lambda invoke' "$FAKE_AWS_LOG"
 grep -q 'create-function-url-config' "$FAKE_AWS_LOG" && { echo "fn deploy created a Function URL" >&2; exit 1; }
 [[ "$(cat "$work/state/alias")" == 1 ]]
@@ -170,8 +188,16 @@ if FAKE_AWS_ROLE=arn:aws:iam::123:role/other "$sol" destroy live/aws/us-east-1 -
   echo "destroy accepted a foreign execution role" >&2; exit 1
 fi
 grep -q 'not the recorded execution role' "$work/destroy-role"
+# Removing the schedule declaration removes the provider schedule before destroy.
+printf '[service]\n' > "$work/ws/app/checkout/checkout_fn/sol.toml"
+"$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/deploy-unscheduled"
+grep -q '"scheduler":null' "$work/deploy-unscheduled"
+[[ ! -f "$work/state/schedule" ]]
+record=$(find "$work/home/.local/share/sol/runs" -name serverless-release.json -type f -print | sort | tail -1)
+
 "$sol" destroy live/aws/us-east-1 --apply --service checkout_fn --record "$record" > /dev/null
 [[ ! -f "$work/state/function" ]]
+[[ ! -f "$work/state/schedule" ]]
 grep -q 'delete-function-url-config' "$FAKE_AWS_LOG" && { echo "fn destroy deleted a Function URL" >&2; exit 1; }
 
 # A malformed inventory is not evidence of absence, and must not trigger a create.

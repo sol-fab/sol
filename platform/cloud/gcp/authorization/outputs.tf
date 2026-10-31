@@ -22,3 +22,8 @@ output "serverless_service_accounts" {
   description = "Per-unit serverless runtime identities this target owns."
   value       = { for unit, account in google_service_account.serverless : unit => account.email }
 }
+
+output "scheduler_service_accounts" {
+  description = "Per-unit Cloud Scheduler OAuth service accounts this target owns."
+  value       = { for unit, account in google_service_account.scheduler : unit => account.email }
+}

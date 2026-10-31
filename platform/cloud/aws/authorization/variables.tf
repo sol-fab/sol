@@ -42,3 +42,12 @@ variable "serverless_units" {
   }))
   default = []
 }
+
+variable "scheduler_units" {
+  description = "Scheduled `_fn` units whose dedicated EventBridge Scheduler execution roles this target owns."
+  type = list(object({
+    unit          = string
+    function_name = string
+  }))
+  default = []
+}

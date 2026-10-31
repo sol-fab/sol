@@ -609,3 +609,48 @@ let test_external_resource_capabilities () =
 ;;
 
 let%test "external resource capabilities" = test_external_resource_capabilities ()
+
+let test_function_invoke_capability () =
+  check_string
+    "function invoke capability"
+    "function.invoke"
+    (Sol_cli_grant.capability_to_string Sol_cli_grant.Function_invoke);
+  let requirement = Sol_cli_grant.invoke_requirement "daily-report_fn" in
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"invocation requirement resource"
+    "daily-report_fn"
+    requirement.resource;
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"invocation requirement capability"
+    "function.invoke"
+    (Sol_cli_grant.capability_to_string requirement.capability)
+;;
+
+let%test "function invoke capability" = test_function_invoke_capability ()
+
+let test_scheduler_unit_json () =
+  let json =
+    Sol_cli_grant.scheduler_unit_to_json
+      { Sol_cli_grant.unit = "payments/daily_report_fn"
+      ; function_name = "daily-report-fn"
+      }
+  in
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"scheduler unit"
+    "payments/daily_report_fn"
+    (match Sol_cli_json.field [ "unit" ] json with
+     | `String value -> value
+     | _ -> "");
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"scheduler function"
+    "daily-report-fn"
+    (match Sol_cli_json.field [ "function_name" ] json with
+     | `String value -> value
+     | _ -> "")
+;;
+
+let%test "scheduler unit JSON" = test_scheduler_unit_json ()
