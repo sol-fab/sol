@@ -699,7 +699,9 @@ target:
   base_domain: pluto.example.com
   observability_backend: external
   observability_logs_url: https://logs.example.com/loki/api/v1/push
+  observability_logs_username: "123456"
   observability_metrics_url: https://metrics.example.com/api/prom/push
+  observability_metrics_username: "654321"
   observability_traces_url: https://otlp.example.com/v1/traces
 |};
     match Sol_cli_config.load_for_target ~target:"prod/aws/us-east-1" with
@@ -715,9 +717,17 @@ target:
         "https://logs.example.com/loki/api/v1/push"
         (Option.get target.observability_logs_url);
       check_str
+        "observability_logs_username"
+        "123456"
+        (Option.get target.observability_logs_username);
+      check_str
         "observability_metrics_url"
         "https://metrics.example.com/api/prom/push"
         (Option.get target.observability_metrics_url);
+      check_str
+        "observability_metrics_username"
+        "654321"
+        (Option.get target.observability_metrics_username);
       check_str
         "observability_traces_url"
         "https://otlp.example.com/v1/traces"

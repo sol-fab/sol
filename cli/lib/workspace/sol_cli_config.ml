@@ -17,7 +17,9 @@ type target =
   ; terraform_var_file : string option
   ; observability_backend : string option
   ; observability_logs_url : string option
+  ; observability_logs_username : string option
   ; observability_metrics_url : string option
+  ; observability_metrics_username : string option
   ; observability_traces_url : string option
   ; destroy_retention : string option
   ; alert_receiver_type : string option
@@ -111,7 +113,9 @@ let target_empty =
   ; terraform_var_file = None
   ; observability_backend = None
   ; observability_logs_url = None
+  ; observability_logs_username = None
   ; observability_metrics_url = None
+  ; observability_metrics_username = None
   ; observability_traces_url = None
   ; destroy_retention = None
   ; alert_receiver_type = None
@@ -207,7 +211,9 @@ type target_field =
   | Target_terraform_var_file
   | Target_observability_backend
   | Target_observability_logs_url
+  | Target_observability_logs_username
   | Target_observability_metrics_url
+  | Target_observability_metrics_username
   | Target_observability_traces_url
   | Target_destroy_retention
   | Target_alert_receiver_type
@@ -241,7 +247,9 @@ let target_key_of_string s =
   | "terraform_var_file" -> Target_field Target_terraform_var_file
   | "observability_backend" -> Target_field Target_observability_backend
   | "observability_logs_url" -> Target_field Target_observability_logs_url
+  | "observability_logs_username" -> Target_field Target_observability_logs_username
   | "observability_metrics_url" -> Target_field Target_observability_metrics_url
+  | "observability_metrics_username" -> Target_field Target_observability_metrics_username
   | "observability_traces_url" -> Target_field Target_observability_traces_url
   | "destroy_retention" -> Target_field Target_destroy_retention
   | "alert_receiver_type" -> Target_field Target_alert_receiver_type
@@ -276,7 +284,9 @@ let target_field_name = function
   | Target_terraform_var_file -> "terraform_var_file"
   | Target_observability_backend -> "observability_backend"
   | Target_observability_logs_url -> "observability_logs_url"
+  | Target_observability_logs_username -> "observability_logs_username"
   | Target_observability_metrics_url -> "observability_metrics_url"
+  | Target_observability_metrics_username -> "observability_metrics_username"
   | Target_observability_traces_url -> "observability_traces_url"
   | Target_destroy_retention -> "destroy_retention"
   | Target_alert_receiver_type -> "alert_receiver_type"
@@ -551,8 +561,12 @@ let decode_layer ~path ~context ~top_level (fields : (string * Yaml.yaml) list) 
     | Target_terraform_var_file -> Ok { current with terraform_var_file = Some s }
     | Target_observability_backend -> Ok { current with observability_backend = Some s }
     | Target_observability_logs_url -> Ok { current with observability_logs_url = Some s }
+    | Target_observability_logs_username ->
+      Ok { current with observability_logs_username = Some s }
     | Target_observability_metrics_url ->
       Ok { current with observability_metrics_url = Some s }
+    | Target_observability_metrics_username ->
+      Ok { current with observability_metrics_username = Some s }
     | Target_observability_traces_url ->
       Ok { current with observability_traces_url = Some s }
     | Target_destroy_retention -> Ok { current with destroy_retention = Some s }
@@ -1029,8 +1043,12 @@ let merge_target a b =
   ; terraform_var_file = prefer a.terraform_var_file b.terraform_var_file
   ; observability_backend = prefer a.observability_backend b.observability_backend
   ; observability_logs_url = prefer a.observability_logs_url b.observability_logs_url
+  ; observability_logs_username =
+      prefer a.observability_logs_username b.observability_logs_username
   ; observability_metrics_url =
       prefer a.observability_metrics_url b.observability_metrics_url
+  ; observability_metrics_username =
+      prefer a.observability_metrics_username b.observability_metrics_username
   ; observability_traces_url =
       prefer a.observability_traces_url b.observability_traces_url
   ; destroy_retention = prefer a.destroy_retention b.destroy_retention
@@ -1151,7 +1169,9 @@ let target_of_path s =
           ; terraform_var_file = None
           ; observability_backend = None
           ; observability_logs_url = None
+          ; observability_logs_username = None
           ; observability_metrics_url = None
+          ; observability_metrics_username = None
           ; observability_traces_url = None
           ; destroy_retention = None
           ; alert_receiver_type = None
@@ -1349,7 +1369,9 @@ let layer_keys (l : layer) =
         ; opt "terraform_var_file" t.terraform_var_file
         ; opt "observability_backend" t.observability_backend
         ; opt "observability_logs_url" t.observability_logs_url
+        ; opt "observability_logs_username" t.observability_logs_username
         ; opt "observability_metrics_url" t.observability_metrics_url
+        ; opt "observability_metrics_username" t.observability_metrics_username
         ; opt "observability_traces_url" t.observability_traces_url
         ; opt "destroy_retention" t.destroy_retention
         ; opt "alert_receiver_type" t.alert_receiver_type
