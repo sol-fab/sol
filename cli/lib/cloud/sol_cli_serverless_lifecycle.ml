@@ -27,43 +27,28 @@ let deploy ~target ~config ~project ~service ~image ~record ~runtime_service_acc
     Error "target-scoped serverless dispatch currently supports AWS and GCP only"
 ;;
 
-let ensure_runtime_identity
+let ensure_runtime_identities ~assets ~run_log ~(target : Sol_cli_config.target) ~units =
+  match target.provider with
+  | Sol_cli_provider.Gcp | Sol_cli_provider.Aws ->
+    Sol_cli_authorization_stage.apply_serverless_identities ~assets ~run_log ~target units
+  | Sol_cli_provider.Byo -> Error "serverless targets support AWS and GCP only"
+;;
+
+let ensure_runtime_identity ~assets ~run_log ~target ~unit ~requirements =
+  let* identities =
+    ensure_runtime_identities
       ~assets
       ~run_log
-      ~(target : Sol_cli_config.target)
-      ~unit
-      ~requirements
-  =
-  match target.provider with
-  | Sol_cli_provider.Gcp ->
-    let* identities =
-      Sol_cli_authorization_stage.apply_serverless_identities
-        ~assets
-        ~run_log
-        ~target
-        [ { Sol_cli_grant.unit; requirements } ]
-    in
-    (match List.assoc_opt unit identities with
-     | Some email when String.trim email <> "" -> Ok (Some email)
-     | _ ->
-       Error
-         (Printf.sprintf
-            "the authorization root established no runtime identity for %s"
-            unit))
-  | Sol_cli_provider.Aws ->
-    let* identities =
-      Sol_cli_authorization_stage.apply_serverless_identities
-        ~assets
-        ~run_log
-        ~target
-        [ { Sol_cli_grant.unit; requirements } ]
-    in
-    (match List.assoc_opt unit identities with
-     | Some role when String.trim role <> "" -> Ok (Some role)
-     | _ ->
-       Error
-         (Printf.sprintf "the authorization root established no runtime role for %s" unit))
-  | Sol_cli_provider.Byo -> Error "serverless targets support AWS and GCP only"
+      ~target
+      ~units:[ { Sol_cli_grant.unit; requirements } ]
+  in
+  match List.assoc_opt unit identities with
+  | Some identity when String.trim identity <> "" -> Ok (Some identity)
+  | _ ->
+    Error
+      (Printf.sprintf
+         "the authorization root established no runtime identity for %s"
+         unit)
 ;;
 
 let rollback ~target ~project ~service ~record ~version ~revision ~token =

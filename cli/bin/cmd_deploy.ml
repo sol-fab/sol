@@ -31,95 +31,138 @@ let run_serverless
       ~(selection : Sol_cli_deploy_selection.selection)
       ~run_log
   =
-  let* service =
+  let* services =
     match deployed.services with
-    | [ service ] -> Ok service
-    | [] ->
-      Error (Sol_cli_exit.error "serverless deployment requires one -svc or -fn service")
-    | _ ->
-      Error
-        (Sol_cli_exit.error
-           "serverless deployment currently supports exactly one -svc or -fn service per \
-            target")
+    | [] -> Error (Sol_cli_exit.error "serverless deployment requires a service")
+    | services -> Ok services
   in
   let* () =
-    match service.primitive with
-    | Sol_cli_manifest.Worker ->
+    match
+      List.find_opt
+        (fun (service : Sol_cli_manifest.service) ->
+           match service.primitive with
+           | Sol_cli_manifest.Worker -> true
+           | Sol_cli_manifest.Svc | Sol_cli_manifest.Fn -> false)
+        services
+    with
+    | None -> Ok ()
+    | Some service ->
       Error
         (Sol_cli_exit.error
-           "target-scoped serverless dispatch does not support -worker on GCP")
-    | Sol_cli_manifest.Svc | Sol_cli_manifest.Fn -> Ok ()
+           (Printf.sprintf
+              "target-scoped serverless dispatch does not support -worker (%s)"
+              service.name))
   in
   let* project =
     match resolved_config.project with
     | Some project when String.trim project <> "" -> Ok project
     | _ -> Error (Sol_cli_exit.error "serverless deployment requires sol.yml project")
   in
-  let* image =
-    match List.assoc_opt service.name selection.Sol_cli_deploy_selection.image_refs with
-    | Some image -> Ok image
-    | None ->
-      Error
-        (Sol_cli_exit.error
-           (Printf.sprintf
-              "serverless deployment requires --image-ref %s=REPO@sha256:DIGEST"
-              service.name))
-  in
-  let record = Filename.concat (Sol_cli_run_log.dir run_log) "serverless-release.json" in
-  let* () =
-    Sol_cli_serverless_target_common.declared_uses resolved_config service
-    |> Result.map_error Sol_cli_exit.error
-  in
-  let* assets = Cmd_cloud_tf.resolve_assets () in
-  let unit = Sol_cli_serverless_target_common.unit_of_service ~project service in
   let* facts =
     Sol_cli_workspace_model.load_cwd ()
     |> Result.map_error (fun message -> Sol_cli_exit.error message)
   in
-  let* service_config =
-    match
-      Sol_cli_workspace_model.workloads facts
-      |> List.find_opt (fun (workload : Sol_cli_workspace_model.workload) ->
-        String.equal workload.service.Sol_cli_manifest.name service.name)
-    with
-    | None ->
-      Error
-        (Sol_cli_exit.error (Printf.sprintf "cannot find %s's declarations" service.name))
-    | Some workload ->
-      (match workload.config with
-       | Ok config -> Ok config
-       | Error parse_error ->
-         Error
-           (Sol_cli_exit.error
-              (Printf.sprintf
-                 "cannot read %s's declarations: %s"
-                 service.name
-                 (Sol_cli_toml.parse_error_to_string parse_error))))
+  let* declared =
+    services
+    |> Sol_cli_result.map_list (fun (service : Sol_cli_manifest.service) ->
+      let* image =
+        match
+          List.assoc_opt service.name selection.Sol_cli_deploy_selection.image_refs
+        with
+        | Some image -> Ok image
+        | None ->
+          Error
+            (Sol_cli_exit.error
+               (Printf.sprintf
+                  "serverless deployment requires --image-ref %s=REPO@sha256:DIGEST"
+                  service.name))
+      in
+      let* () =
+        Sol_cli_serverless_target_common.declared_uses resolved_config service
+        |> Result.map_error Sol_cli_exit.error
+      in
+      let* config =
+        match
+          Sol_cli_workspace_model.workloads facts
+          |> List.find_opt (fun (workload : Sol_cli_workspace_model.workload) ->
+            String.equal workload.service.Sol_cli_manifest.name service.name)
+        with
+        | None ->
+          Error
+            (Sol_cli_exit.error
+               (Printf.sprintf "cannot find %s's declarations" service.name))
+        | Some workload ->
+          (match workload.config with
+           | Ok config -> Ok config
+           | Error parse_error ->
+             Error
+               (Sol_cli_exit.error
+                  (Printf.sprintf
+                     "cannot read %s's declarations: %s"
+                     service.name
+                     (Sol_cli_toml.parse_error_to_string parse_error))))
+      in
+      let unit = Sol_cli_serverless_target_common.unit_of_service ~project service in
+      let requirements =
+        config.secret_keys |> List.map Sol_cli_grant.secret_requirement
+      in
+      Ok (service, image, { Sol_cli_grant.unit; requirements }))
   in
-  let requirements =
-    service_config.secret_keys |> List.map Sol_cli_grant.secret_requirement
-  in
-  let* runtime_service_account =
-    Sol_cli_serverless_lifecycle.ensure_runtime_identity
+  let units = List.map (fun (_, _, unit) -> unit) declared in
+  let* assets = Cmd_cloud_tf.resolve_assets () in
+  let* identities =
+    Sol_cli_serverless_lifecycle.ensure_runtime_identities
       ~assets
       ~run_log
       ~target:target_cfg
-      ~unit
-      ~requirements
+      ~units
     |> Result.map_error Sol_cli_exit.error
   in
-  let* release =
-    Sol_cli_serverless_lifecycle.deploy
-      ~target:target_cfg
-      ~config:resolved_config
-      ~project
-      ~service
-      ~image
-      ~record
-      ~runtime_service_account
-    |> Result.map_error Sol_cli_exit.error
+  let single =
+    match declared with
+    | [ _ ] -> true
+    | _ -> false
   in
-  print_endline (Yojson.Safe.to_string release);
+  let* _ =
+    declared
+    |> Sol_cli_result.map_list
+         (fun
+             ( (service : Sol_cli_manifest.service)
+             , image
+             , (unit : Sol_cli_grant.serverless_unit) )
+            ->
+            let* runtime_service_account =
+              match List.assoc_opt unit.unit identities with
+              | Some identity when String.trim identity <> "" -> Ok (Some identity)
+              | _ ->
+                Error
+                  (Sol_cli_exit.error
+                     (Printf.sprintf
+                        "the authorization root established no runtime identity for %s"
+                        unit.unit))
+            in
+            let record =
+              if single
+              then Filename.concat (Sol_cli_run_log.dir run_log) "serverless-release.json"
+              else
+                Filename.concat
+                  (Sol_cli_run_log.dir run_log)
+                  ("serverless-release-" ^ service.name ^ ".json")
+            in
+            let* release =
+              Sol_cli_serverless_lifecycle.deploy
+                ~target:target_cfg
+                ~config:resolved_config
+                ~project
+                ~service
+                ~image
+                ~record
+                ~runtime_service_account
+              |> Result.map_error Sol_cli_exit.error
+            in
+            print_endline (Yojson.Safe.to_string release);
+            Ok ())
+  in
   Ok ()
 ;;
 
