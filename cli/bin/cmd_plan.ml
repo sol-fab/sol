@@ -66,7 +66,7 @@ let run target_name image_refs var_file vars =
   let target = cfg.target in
   let* () =
     match Sol_cli_config.execution_of_target target with
-    | Sol_cli_config.Kubernetes -> Ok ()
+    | Sol_cli_config.Kubernetes | Sol_cli_config.Mixed -> Ok ()
     | Sol_cli_config.Serverless ->
       Error
         (Sol_cli_exit.error

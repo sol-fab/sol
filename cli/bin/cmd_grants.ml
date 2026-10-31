@@ -113,7 +113,7 @@ let run ?config ?destination ~action ~target ~var_file ~vars () =
          reconciled by the deploy/destroy lifecycle; applying the target-wide grant root \
          here would replace the serverless unit set and could remove unrelated \
          identities."
-    | Sol_cli_config.Kubernetes -> Ok ()
+    | Sol_cli_config.Kubernetes | Sol_cli_config.Mixed -> Ok ()
   in
   let provider = target_cfg.Sol_cli_config.provider in
   let* identity =

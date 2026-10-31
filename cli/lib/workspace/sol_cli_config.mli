@@ -1,6 +1,7 @@
 type execution =
   | Kubernetes
   | Serverless
+  | Mixed
 
 type target =
   { name : string

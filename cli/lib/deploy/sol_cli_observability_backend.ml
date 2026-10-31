@@ -45,7 +45,7 @@ let validate_external ~logs_url ~metrics_url ~traces_url =
 let validate_target (target : Sol_cli_config.target) =
   match Sol_cli_config.execution_of_target target with
   | Sol_cli_config.Serverless -> Ok ()
-  | Sol_cli_config.Kubernetes ->
+  | Sol_cli_config.Kubernetes | Sol_cli_config.Mixed ->
     (match target.observability_backend with
      | None -> Ok ()
      | Some value ->
@@ -67,7 +67,7 @@ let validate_target (target : Sol_cli_config.target) =
 let export_terraform_secrets (target : Sol_cli_config.target) =
   match Sol_cli_config.execution_of_target target with
   | Sol_cli_config.Serverless -> Ok ()
-  | Sol_cli_config.Kubernetes ->
+  | Sol_cli_config.Kubernetes | Sol_cli_config.Mixed ->
     (match target.observability_backend with
      | Some "external" ->
        let export variable = function

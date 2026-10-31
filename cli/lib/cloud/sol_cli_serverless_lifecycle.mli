@@ -31,6 +31,7 @@ val complete_units
   -> target:Sol_cli_config.target
   -> model:Sol_cli_workspace_model.t
   -> exclude:string option
+  -> serverless_all:bool
   -> ( Sol_cli_grant.serverless_unit list * Sol_cli_grant.scheduler_unit list
        , string )
        result
