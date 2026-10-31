@@ -26,6 +26,13 @@ type requirement =
   ; resource : string
   }
 
+type target_grant =
+  { unit : string
+  ; capability : string
+  ; resource : string
+  ; namespace : string
+  }
+
 type serverless_unit =
   { unit : string
   ; requirements : requirement list
@@ -36,12 +43,21 @@ type scheduler_unit =
   ; function_name : string
   }
 
+let target_grant_to_json (grant : target_grant) =
+  `Assoc
+    [ "unit", `String grant.unit
+    ; "capability", `String grant.capability
+    ; "resource", `String grant.resource
+    ; "namespace", `String grant.namespace
+    ]
+;;
+
 let requirement ~capability ~resource = { capability; resource }
 let invoke_requirement resource = { capability = Function_invoke; resource }
 let secret_capability = "secret"
 let secret_requirement resource = { capability = Secret_access; resource }
 
-let requirement_to_json requirement =
+let requirement_to_json (requirement : requirement) =
   `Assoc
     [ "capability", `String (capability_to_string requirement.capability)
     ; "resource", `String requirement.resource

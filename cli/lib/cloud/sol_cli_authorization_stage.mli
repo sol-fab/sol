@@ -32,7 +32,7 @@ val fence
   -> (outcome, string) result
 
 type target_authorization =
-  { grants : Sol_cli_grant.requirement list
+  { grants : Sol_cli_grant.target_grant list
   ; serverless_units : Sol_cli_grant.serverless_unit list
   ; scheduler_units : Sol_cli_grant.scheduler_unit list
   }

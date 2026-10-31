@@ -121,7 +121,7 @@ type t =
       Sol_cli_config.target -> ((string * string) list, string) result
   ; authorization_target_root_vars :
       Sol_cli_config.target
-      -> Sol_cli_grant.requirement list
+      -> Sol_cli_grant.target_grant list
       -> Sol_cli_grant.serverless_unit list
       -> Sol_cli_grant.scheduler_unit list
       -> ((string * string) list, string) result
@@ -618,7 +618,7 @@ let aws_target_root_vars target grants serverless scheduler =
   let* base = aws_serverless_root_vars target serverless in
   let* scheduler_vars = aws_scheduler_root_vars target scheduler in
   let grants_json =
-    `List (List.map Sol_cli_grant.requirement_to_json grants) |> Yojson.Safe.to_string
+    `List (List.map Sol_cli_grant.target_grant_to_json grants) |> Yojson.Safe.to_string
   in
   Ok (base @ scheduler_vars @ [ "grants", grants_json ])
 ;;
@@ -662,7 +662,7 @@ let gcp_target_root_vars target grants serverless scheduler =
   let* base = gcp_serverless_root_vars target serverless in
   let* scheduler_vars = gcp_scheduler_root_vars target scheduler in
   let grants_json =
-    `List (List.map Sol_cli_grant.requirement_to_json grants) |> Yojson.Safe.to_string
+    `List (List.map Sol_cli_grant.target_grant_to_json grants) |> Yojson.Safe.to_string
   in
   Ok (base @ scheduler_vars @ [ "grants", grants_json ])
 ;;
