@@ -43,20 +43,23 @@ let validate_external ~logs_url ~metrics_url ~traces_url =
 ;;
 
 let validate_target (target : Sol_cli_config.target) =
-  match target.observability_backend with
-  | None -> Ok ()
-  | Some value ->
-    (match backend_of_string value with
-     | Some External ->
-       validate_external
-         ~logs_url:target.observability_logs_url
-         ~metrics_url:target.observability_metrics_url
-         ~traces_url:target.observability_traces_url
-     | Some (Local | Self_hosted_durable) -> Ok ()
-     | None ->
-       Error
-         (Printf.sprintf
-            "observability_backend %S is not one of local, external,              \
-             self_hosted_durable"
-            value))
+  match Sol_cli_config.execution_of_target target with
+  | Sol_cli_config.Serverless -> Ok ()
+  | Sol_cli_config.Kubernetes ->
+    (match target.observability_backend with
+     | None -> Ok ()
+     | Some value ->
+       (match backend_of_string value with
+        | Some External ->
+          validate_external
+            ~logs_url:target.observability_logs_url
+            ~metrics_url:target.observability_metrics_url
+            ~traces_url:target.observability_traces_url
+        | Some (Local | Self_hosted_durable) -> Ok ()
+        | None ->
+          Error
+            (Printf.sprintf
+               "observability_backend %S is not one of local, external, \
+                self_hosted_durable"
+               value)))
 ;;
