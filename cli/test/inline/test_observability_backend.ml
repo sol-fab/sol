@@ -69,3 +69,41 @@ let test_external_validation () =
 ;;
 
 let%test "external observability validation" = test_external_validation ()
+
+let test_unknown_backend_is_refused () =
+  let target : Sol_cli_config.target =
+    { Sol_cli_config.name = "dev/aws/us-east-1"
+    ; env = "dev"
+    ; provider = Sol_cli_provider.Aws
+    ; region = "us-east-1"
+    ; registry = None
+    ; base_domain = None
+    ; cluster_issuer = None
+    ; letsencrypt_email = None
+    ; cluster_name = None
+    ; kube_context = None
+    ; kubeconfig = None
+    ; terraform_var_file = None
+    ; observability_backend = Some "datadog"
+    ; observability_logs_url = None
+    ; observability_metrics_url = None
+    ; observability_traces_url = None
+    ; destroy_retention = None
+    ; alert_receiver_type = None
+    ; alert_receiver_url = None
+    ; alert_owner = None
+    ; alert_runbook_url = None
+    ; state_bucket = None
+    ; cluster_endpoint_cidr = None
+    ; dns_zone_ownership = None
+    ; node_failure_headroom_nodes = None
+    ; profile = None
+    ; shape = None
+    ; provider_fields = []
+    ; secret_authorities = []
+    }
+  in
+  check_bool "unknown backend refused" true (Result.is_error (U.validate_target target))
+;;
+
+let%test "unknown observability backend refused" = test_unknown_backend_is_refused ()
