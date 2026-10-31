@@ -103,8 +103,28 @@ let run_serverless
                      (Sol_cli_toml.parse_error_to_string parse_error))))
       in
       let unit = Sol_cli_serverless_target_common.unit_of_service ~project service in
+      let* external_requirements =
+        Sol_cli_resource_binding.external_requirements
+          ~config:resolved_config
+          ~service_name:service.name
+        |> Result.map_error Sol_cli_exit.error
+      in
+      let* () =
+        match external_requirements with
+        | _ :: _
+          when not
+                 (Sol_cli_provider_capabilities.capabilities_of target_cfg.provider)
+                   .external_resource_auth ->
+          Error
+            (Sol_cli_exit.error
+               (Printf.sprintf
+                  "external queue/object capabilities are not implemented for provider %s"
+                  (Sol_cli_provider.to_string target_cfg.provider)))
+        | _ -> Ok ()
+      in
       let requirements =
-        config.secret_keys |> List.map Sol_cli_grant.secret_requirement
+        (config.secret_keys |> List.map Sol_cli_grant.secret_requirement)
+        @ external_requirements
       in
       Ok (service, image, config, { Sol_cli_grant.unit; requirements }))
   in
@@ -884,7 +904,9 @@ let verify_effective_access
       ~target_cfg
   =
   let open Result.Syntax in
-  let* grants = Sol_cli_authorization_reconcile.desired planning.facts in
+  let* grants =
+    Sol_cli_authorization_reconcile.desired ~binding_config:planning.config planning.facts
+  in
   let* namespace_of = namespace_of_facts ~workspace:planning.workspace planning.facts in
   let* workloads = Sol_cli_authorization_reconcile.workloads ~grants ~namespace_of in
   (Sol_cli_provider_capabilities.capabilities_of target_cfg.Sol_cli_config.provider)

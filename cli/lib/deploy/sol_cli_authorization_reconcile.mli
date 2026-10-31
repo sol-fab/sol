@@ -8,7 +8,8 @@ type terraform_grant =
 val unit_name : Sol_cli_manifest.service -> (string, string) result
 
 val desired
-  :  Sol_cli_workspace_model.t
+  :  ?binding_config:Sol_cli_config.t
+  -> Sol_cli_workspace_model.t
   -> (Sol_cli_authorization.grant list, string) result
 
 val terraform_grants

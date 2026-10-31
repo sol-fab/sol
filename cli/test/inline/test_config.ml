@@ -2936,3 +2936,69 @@ let%test "resource binding: external credentials are per class" =
 let%test "resource binding: more than one database is refused whatever the ownership" =
   test_more_than_one_database_is_refused ()
 ;;
+
+let test_target_supplies_logical_external_bindings () =
+  with_temp_dir (fun () ->
+    write
+      "sol.yml"
+      {|
+project: logical
+resources:
+  jobs:
+    type: queue
+  uploads:
+    type: object_store
+services:
+  notify_worker:
+    type: worker
+    path: app/comms/notify_worker
+    uses: [jobs, uploads]
+|};
+    mkdir_p "sol/prod/aws";
+    Targets_fixture.write
+      ~target:"prod/aws/us-east-1"
+      {|
+target:
+  resources:
+    jobs:
+      binding:
+        ownership: external
+        store: external
+        connection:
+          QUEUE_ARN: arn:aws:sqs:us-east-1:123:jobs
+          QUEUE_URL: https://sqs.us-east-1.amazonaws.com/123/jobs
+    uploads:
+      binding:
+        ownership: external
+        store: external
+        connection:
+          OBJECT_ARN: arn:aws:s3:::uploads/*
+          OBJECT_BUCKET: uploads
+|};
+    match Sol_cli_config.load_for_target ~target:"prod/aws/us-east-1" with
+    | Error error -> Windtrap.fail (Sol_cli_config.error_to_string error)
+    | Ok config ->
+      (match
+         Sol_cli_resource_binding.external_requirements
+           ~config
+           ~service_name:"notify_worker"
+       with
+       | Error message -> Windtrap.fail message
+       | Ok requirements ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"logical resources resolve to target physical bindings"
+           [ "message.publish|arn:aws:sqs:us-east-1:123:jobs"
+           ; "message.subscribe|arn:aws:sqs:us-east-1:123:jobs"
+           ; "object.read|arn:aws:s3:::uploads/*"
+           ; "object.write|arn:aws:s3:::uploads/*"
+           ]
+           (List.map
+              (fun (r : Sol_cli_grant.requirement) ->
+                 Sol_cli_grant.capability_to_string r.capability ^ "|" ^ r.resource)
+              requirements)))
+;;
+
+let%test "target supplies logical external queue/object bindings" =
+  test_target_supplies_logical_external_bindings ()
+;;

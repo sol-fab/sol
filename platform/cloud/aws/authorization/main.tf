@@ -77,6 +77,35 @@ data "aws_iam_policy_document" "workload_boundary" {
       "arn:aws:s3:::sol-${var.environment}-*/*",
     ]
   }
+
+  dynamic "statement" {
+    for_each = {
+      for grant in local.boundary_external_grants :
+      "${grant.capability}/${grant.resource}" => grant
+      if can(regex("^message\\.", grant.capability))
+    }
+    content {
+      sid       = "ExternalQueue${substr(sha1(statement.key), 0, 8)}"
+      effect    = "Allow"
+      actions   = local.capability_actions[statement.value.capability]
+      resources = [statement.value.resource]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = {
+      for grant in local.boundary_external_grants :
+      "${grant.capability}/${grant.resource}" => grant
+      if grant.capability == "object.read" || grant.capability == "object.write"
+    }
+    content {
+      sid       = "ExternalObject${substr(sha1(statement.key), 0, 8)}"
+      effect    = "Allow"
+      actions   = local.capability_actions[statement.value.capability]
+      resources = [statement.value.resource]
+    }
+  }
+
 }
 
 resource "aws_iam_policy" "workload_boundary" {
@@ -205,6 +234,14 @@ locals {
       "secretsmanager:GetSecretValue",
       "secretsmanager:DescribeSecret",
     ]
+    "message.publish" = ["sqs:SendMessage"]
+    "message.subscribe" = [
+      "sqs:ReceiveMessage",
+      "sqs:DeleteMessage",
+      "sqs:ChangeMessageVisibility",
+    ]
+    "object.read"  = ["s3:GetObject"]
+    "object.write" = ["s3:PutObject"]
   }
 
   realized_grants = [
@@ -213,6 +250,23 @@ locals {
   ]
 
   grant_units = toset([for grant in local.realized_grants : grant.unit])
+
+  boundary_external_grants = concat(
+    [
+      for grant in var.grants : {
+        capability = grant.capability
+        resource   = grant.resource
+      }
+    ],
+    flatten([
+      for unit in var.serverless_units : [
+        for requirement in unit.requirements : {
+          capability = requirement.capability
+          resource   = requirement.resource
+        }
+      ]
+    ])
+  )
 
   serverless_units = toset([for unit in var.serverless_units : unit.unit])
 
@@ -243,6 +297,14 @@ locals {
         } if requirement.capability == "secret"
       ],
       [
+        for i, requirement in local.serverless_requirements_by_unit[unit] : {
+          Sid      = "SolCapability${i}"
+          Effect   = "Allow"
+          Action   = local.capability_actions[requirement.capability]
+          Resource = [requirement.resource]
+        } if contains(keys(local.capability_actions), requirement.capability) && requirement.capability != "secret"
+      ],
+      [
         {
           Sid    = "SolLambdaLogs"
           Effect = "Allow"
@@ -268,7 +330,7 @@ locals {
         Resource = (
           grant.capability == "secret"
           ? ["arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:sol/${var.environment}/${grant.resource}*"]
-          : ["*"]
+          : [grant.resource]
         )
       }
     ]
