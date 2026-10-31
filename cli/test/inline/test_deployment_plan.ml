@@ -2986,6 +2986,7 @@ let test_external_object_store_connection_reaches_the_spec () =
         ~facts:(facts ())
         ~declared:(Sol_cli_config.declared_of_config external_storage_config)
         ~inventory:[ charge_svc_service ]
+        ~telemetry_env:[ "TEMPO_URL", "https://otlp.example.com" ]
         [ charge_svc_service ]
     with
     | Ok plan ->
@@ -2994,7 +2995,12 @@ let test_external_object_store_connection_reaches_the_spec () =
         (Windtrap.option Windtrap.string)
         ~msg:"external object-store endpoint reaches the workload"
         (Some "https://objects.example.com")
-        (List.assoc_opt "OBJECT_ENDPOINT" spec.config)
+        (List.assoc_opt "OBJECT_ENDPOINT" spec.config);
+      Windtrap.equal
+        (Windtrap.option Windtrap.string)
+        ~msg:"observability and storage compose in one spec"
+        (Some "https://otlp.example.com")
+        (List.assoc_opt "TEMPO_URL" spec.config)
     | Error err -> Windtrap.fail (Sol_cli_deployment_plan.plan_error_to_string err))
 ;;
 
