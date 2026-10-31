@@ -207,6 +207,14 @@ let deploy (r : request) =
   Ok release
 ;;
 
+let destroy_by_unit (r : request) =
+  let name = schedule_name r in
+  match aws r [ "scheduler"; "get-schedule"; "--name"; name ] with
+  | Error _ -> Ok ()
+  | Ok _ ->
+    aws r [ "scheduler"; "delete-schedule"; "--name"; name ] |> Result.map (fun _ -> ())
+;;
+
 let destroy (r : request) (release : release) =
   match aws r [ "scheduler"; "get-schedule"; "--name"; release.schedule_name ] with
   | Error _ -> Ok ()

@@ -513,6 +513,22 @@ let deploy (r : request) =
              "Cloud Run job exists without this adapter's ownership labels; refusing to \
               adopt it")
   in
+  let* () =
+    match r.schedule with
+    | Some _ -> Ok ()
+    | None ->
+      Sol_cli_gcp_scheduler.destroy_by_unit
+        { Sol_cli_gcp_scheduler.project = r.project
+        ; region = r.region
+        ; unit = r.unit
+        ; job = r.job
+        ; schedule = ""
+        ; timezone = None
+        ; service_account = ""
+        ; runner = { run = r.runner.run }
+        }
+      |> Result.map_error (fun message -> Provider message)
+  in
   (* Record the intended resource before mutation: a partially created job or a
      failed execution must remain destroyable. *)
   let* () =

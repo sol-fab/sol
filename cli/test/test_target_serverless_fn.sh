@@ -183,6 +183,13 @@ if FAKE_AWS_ROLE=arn:aws:iam::123:role/other "$sol" destroy live/aws/us-east-1 -
   echo "destroy accepted a foreign execution role" >&2; exit 1
 fi
 grep -q 'not the recorded execution role' "$work/destroy-role"
+# Removing the schedule declaration removes the provider schedule before destroy.
+printf '[service]\n' > "$work/ws/app/checkout/checkout_fn/sol.toml"
+"$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/deploy-unscheduled"
+grep -q '"scheduler":null' "$work/deploy-unscheduled"
+[[ ! -f "$work/state/schedule" ]]
+record=$(find "$work/home/.local/share/sol/runs" -name serverless-release.json -type f -print | sort | tail -1)
+
 "$sol" destroy live/aws/us-east-1 --apply --service checkout_fn --record "$record" > /dev/null
 [[ ! -f "$work/state/function" ]]
 [[ ! -f "$work/state/schedule" ]]

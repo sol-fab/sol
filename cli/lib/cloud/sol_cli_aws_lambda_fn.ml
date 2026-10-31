@@ -278,6 +278,22 @@ let deploy (r : request) =
       |> Result.map_error (fun m -> Provider ("provisional ownership record: " ^ m))
   in
   let* () =
+    match r.schedule with
+    | Some _ -> Ok ()
+    | None ->
+      Sol_cli_aws_scheduler.destroy_by_unit
+        { profile = r.profile
+        ; region = r.region
+        ; unit = r.unit
+        ; function_name = r.function_name
+        ; schedule = ""
+        ; timezone = None
+        ; role_arn = ""
+        ; run = r.run
+        }
+      |> Result.map_error (fun message -> Provider message)
+  in
+  let* () =
     Sol_cli_aws_lambda_common.ensure_function
       (scope r)
       ~function_name:r.function_name

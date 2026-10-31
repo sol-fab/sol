@@ -173,6 +173,12 @@ grep -q '"image":"'"$image_a"'"' "$work/rollback"
 grep -q '"execution":"projects/example-project/locations/us-west1/jobs/probe-fn/executions/ex-3"' "$work/rollback"
 [[ "$(cat "$work/state/image")" == "$image_a" ]]
 
+# Removing the schedule declaration removes the provider schedule.
+sed -i '/^schedule[[:space:]]*=/d; /^scheduled_concurrency[[:space:]]*=/d' "$work/ws/app/ops/probe_fn/sol.toml"
+"$sol" deploy live/gcp/us-west1 --image-tag test --image-ref "probe_fn=$image_a" > "$work/deploy-unscheduled"
+grep -q '"scheduler":null' "$work/deploy-unscheduled"
+[[ ! -f "$work/state/schedule" ]]
+
 "$sol" destroy live/gcp/us-west1 --apply --service probe_fn --record "$record" > "$work/destroy"
 [[ ! -f "$work/state/job" ]]
 [[ ! -f "$work/state/schedule" ]]

@@ -172,6 +172,19 @@ let deploy (r : request) =
     }
 ;;
 
+let destroy_by_unit (r : request) =
+  let schedule_name = name r in
+  match
+    gcloud r [ "scheduler"; "jobs"; "describe"; schedule_name; "--location"; r.region ]
+  with
+  | Error _ -> Ok ()
+  | Ok _ ->
+    gcloud
+      r
+      [ "scheduler"; "jobs"; "delete"; schedule_name; "--location"; r.region; "--quiet" ]
+    |> Result.map (fun _ -> ())
+;;
+
 let destroy (r : request) (release : release) =
   match
     gcloud r [ "scheduler"; "jobs"; "describe"; release.name; "--location"; r.region ]

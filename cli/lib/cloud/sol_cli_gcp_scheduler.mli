@@ -23,3 +23,4 @@ val to_json : release -> Yojson.Safe.t
 val of_json : Yojson.Safe.t -> (release, string) result
 val deploy : request -> (release, string) result
 val destroy : request -> release -> (unit, string) result
+val destroy_by_unit : request -> (unit, string) result
