@@ -247,3 +247,28 @@ let%test "missing external resource identifier fails closed" = test_missing_iden
 let%test "external secret references fail closed" = test_secret_references_fail_closed ()
 let%test "unsupported external provider fails closed" = test_gcp_fails_closed ()
 let%test "external grants reach authorization" = test_authorization_grants ()
+
+let test_plan_validation_missing_identifier () =
+  let declared =
+    Sol_cli_config.declared_of_config
+      (config
+         [ resource "queue" [ "QUEUE_URL", "https://sqs" ] "jobs" ]
+         [ service "charge_svc" [ "jobs" ] ])
+  in
+  match
+    Sol_cli_resource_binding.validate_external_bindings
+      ~declared
+      ~service_name:"charge_svc"
+  with
+  | Ok () -> Windtrap.fail "planning accepted a queue without QUEUE_ARN"
+  | Error message ->
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"planning names the missing identifier"
+      true
+      (Sol_cli_string.contains ~needle:"QUEUE_ARN" message)
+;;
+
+let%test "plan validation refuses missing external identifier" =
+  test_plan_validation_missing_identifier ()
+;;

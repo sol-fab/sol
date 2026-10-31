@@ -86,6 +86,11 @@ val postgres_use_ca_target : postgres_use -> string option
     Target resolution validates cloud references before these projections are used. *)
 val resource_name_of_ref : string -> string option
 
+val validate_external_bindings
+  :  declared:Sol_cli_config.declared
+  -> service_name:string
+  -> (unit, string) result
+
 val external_requirements
   :  config:Sol_cli_config.t
   -> service_name:string

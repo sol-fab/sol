@@ -750,12 +750,10 @@ let decode_layer ~path ~context ~top_level (fields : (string * Yaml.yaml) list) 
       match store, keys, credentials with
       | None, _, _ ->
         refuse (Printf.sprintf "%s: an external binding requires store" what)
-      | Some _, [], [] ->
+      | Some _, [], [] when connection = [] ->
         refuse
           (Printf.sprintf
-             "%s: an external binding requires keys or credentials — a remote path per \
-              sensitive contract key, or per credential class for a contract that has \
-              classes"
+             "%s: an external binding requires keys or credentials, or a connection"
              what)
       | Some _, _, _ -> Ok ()
     in

@@ -1202,6 +1202,10 @@ let of_services_result
     match declared with
     | None -> Ok []
     | Some cfg ->
+      let* () =
+        Sol_cli_resource_binding.validate_external_bindings ~declared:cfg ~service_name
+        |> Result.map_error (fun message -> Invalid_resource_binding message)
+      in
       let* service =
         match
           cfg.Sol_cli_config.services

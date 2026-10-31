@@ -382,27 +382,47 @@ Rules:
 ### AWS authorization
 
 AWS is the first implemented provider for external queue/object-store capabilities.
-The binding must provide the provider identifier used by the granted resource:
+The application declares only the logical resource; the target supplies the physical
+binding:
 
 ```yaml
+# sol.yml - application contract, no provider identifier
 resources:
   jobs:
     type: queue
-    binding:
-      ownership: external
-      store: external
-      connection:
-        QUEUE_ARN: arn:aws:sqs:us-east-1:123456789012:jobs
-        QUEUE_URL: https://sqs.us-east-1.amazonaws.com/123456789012/jobs
   uploads:
     type: object_store
-    binding:
-      ownership: external
-      store: external
-      connection:
-        OBJECT_ARN: arn:aws:s3:::uploads/*
-        OBJECT_BUCKET: uploads
+
+services:
+  notify_worker:
+    type: worker
+    path: app/comms/notify_worker
+    uses: [jobs, uploads]
 ```
+
+```yaml
+# sol/environments.yml - target-specific physical binding
+targets:
+  aws/us-east-1:
+    resources:
+      jobs:
+        binding:
+          ownership: external
+          store: external
+          connection:
+            QUEUE_ARN: arn:aws:sqs:us-east-1:123456789012:jobs
+            QUEUE_URL: https://sqs.us-east-1.amazonaws.com/123456789012/jobs
+      uploads:
+        binding:
+          ownership: external
+          store: external
+          connection:
+            OBJECT_ARN: arn:aws:s3:::uploads/*
+            OBJECT_BUCKET: uploads
+```
+
+The target layer replaces the binding atomically. Changing environments changes the
+physical SQS/S3 resource without changing the application's `jobs`/`uploads` references.
 
 Capabilities translate to AWS IAM actions scoped to those ARNs:
 

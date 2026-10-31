@@ -200,6 +200,85 @@ let resource_name_of_ref ref =
   | [] -> None
 ;;
 
+let validate_external_bindings ~(declared : Sol_cli_config.declared) ~service_name =
+  let open Result.Syntax in
+  let* service =
+    match
+      declared.services
+      |> List.find_opt (fun (service : Sol_cli_config.service) ->
+        String.equal service.name service_name && not service.omit)
+    with
+    | Some service -> Ok service
+    | None ->
+      Ok
+        { Sol_cli_config.name = service_name
+        ; typ = None
+        ; path = None
+        ; uses = []
+        ; scale_min = None
+        ; scale_max = None
+        ; language = None
+        ; omit = false
+        }
+  in
+  service.uses
+  |> Sol_cli_result.map_list (fun ref ->
+    match resource_name_of_ref ref with
+    | None -> Ok ()
+    | Some name ->
+      (match
+         declared.resources
+         |> List.find_opt (fun (resource : Sol_cli_config.resource) ->
+           String.equal resource.name name && not resource.omit)
+       with
+       | None -> Ok ()
+       | Some resource ->
+         (match resource.typ with
+          | Some (("queue" | "object_store") as typ) ->
+            let* binding =
+              match resource.binding with
+              | Some binding when binding.ownership = Sol_cli_config.Ownership_external ->
+                Ok binding
+              | Some _ ->
+                Error
+                  (Printf.sprintf
+                     "resource %S is managed; external %s bindings are the only \
+                      supported shape"
+                     name
+                     typ)
+              | None -> Error (Printf.sprintf "external resource %S has no binding" name)
+            in
+            let* () =
+              if binding.keys = [] && binding.credentials = []
+              then Ok ()
+              else
+                Error
+                  (Printf.sprintf
+                     "external resource %S declares secret references, but \
+                      secret-reference authentication is not implemented for external \
+                      queue/object-store"
+                     name)
+            in
+            let identifier =
+              match typ with
+              | "queue" -> "QUEUE_ARN"
+              | "object_store" -> "OBJECT_ARN"
+              | _ -> assert false
+            in
+            (match List.assoc_opt identifier binding.connection with
+             | Some value when String.trim value <> "" -> Ok ()
+             | _ ->
+               Error
+                 (Printf.sprintf
+                    "external %s resource %S has no %s in binding.connection, so \
+                     its                      provider permissions cannot be scoped"
+                    typ
+                    name
+                    identifier))
+          | _ -> Ok ())))
+  |> Result.map (fun _ -> ())
+;;
+
 let external_requirements ~(config : Sol_cli_config.t) ~service_name =
   let open Result.Syntax in
   let* service =
