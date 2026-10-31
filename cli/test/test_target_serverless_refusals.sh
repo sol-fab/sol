@@ -135,7 +135,7 @@ cd "$ws"
 if "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/aws-fn-deps.out" 2>&1; then
   echo "AWS serverless -fn with dependencies was accepted" >&2; exit 1
 fi
-grep -q 'does not yet support service dependencies' "$work/aws-fn-deps.out"
+grep -q 'supports only external queue/object-store dependencies' "$work/aws-fn-deps.out"
 [[ ! -s "$work/provider.log" ]]
 
 echo "serverless unsupported-combination refusals passed"
