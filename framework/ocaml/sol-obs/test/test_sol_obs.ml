@@ -1,9 +1,12 @@
+let last_request_headers : (string * string) list ref = ref []
+
 let with_mock_server env f =
   Eio.Switch.run
   @@ fun sw ->
   let body_p, body_r = Eio.Promise.create () in
   let stop, stop_r = Eio.Promise.create () in
-  let callback _conn _req body =
+  let callback _conn req body =
+    last_request_headers := Cohttp.Header.to_list (Cohttp.Request.headers req);
     let captured =
       let buf = Eio.Buf_read.of_flow body ~max_size:(256 * 1024) in
       Eio.Buf_read.take_all buf
@@ -314,6 +317,41 @@ let test_tempo_url_wires_tempo_backend () =
            (String.length body > 0)))
 ;;
 
+let test_tempo_headers_are_forwarded () =
+  Eio_main.run
+  @@ fun env ->
+  Eio.Switch.run
+  @@ fun sw ->
+  with_mock_server env (fun ~port ~body_promise ->
+    with_env
+      [ "LOKI_URL", ""
+      ; "TEMPO_URL", local_url port
+      ; "TEMPO_HEADERS", "dd-api-key=secret, X-Scope-OrgID=tenant"
+      ]
+      (fun () ->
+         let obs =
+           Sol_obs.of_env
+             ~sw
+             ~net:env#net
+             ~clock:env#clock
+             ~mono_clock:env#mono_clock
+             ~service:"test-svc"
+             ()
+         in
+         Sol_obs.with_span obs "op" (fun _sp -> ());
+         let _ = Eio.Promise.await body_promise in
+         Windtrap.equal
+           (Windtrap.option Windtrap.string)
+           ~msg:"API-key header reaches the OTLP receiver"
+           (Some "secret")
+           (List.assoc_opt "dd-api-key" !last_request_headers);
+         Windtrap.equal
+           (Windtrap.option Windtrap.string)
+           ~msg:"tenant header reaches the OTLP receiver"
+           (Some "tenant")
+           (List.assoc_opt "X-Scope-OrgID" !last_request_headers)))
+;;
+
 let test_metrics_renderer_matches_backend_and_renderer () =
   Eio_main.run
   @@ fun env ->
@@ -568,6 +606,7 @@ let () =
             "?context is promoted to Loki stream labels"
             test_context_promoted_to_loki_stream_labels
         ; test "TEMPO_URL wires the Tempo backend" test_tempo_url_wires_tempo_backend
+        ; test "TEMPO_HEADERS forwards OTLP auth headers" test_tempo_headers_are_forwarded
         ]
     ; Windtrap.group
         "workload identity (DEC-064)"

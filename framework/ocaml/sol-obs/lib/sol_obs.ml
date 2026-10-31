@@ -22,6 +22,23 @@ let setting name =
      | trimmed -> Some trimmed)
 ;;
 
+let tempo_headers () =
+  match setting "TEMPO_HEADERS" with
+  | None -> []
+  | Some raw ->
+    raw
+    |> String.split_on_char ','
+    |> List.filter_map (fun pair ->
+      match String.index_opt pair '=' with
+      | None -> None
+      | Some at ->
+        let key = String.sub pair 0 at |> String.trim in
+        let value =
+          String.sub pair (at + 1) (String.length pair - at - 1) |> String.trim
+        in
+        if key = "" then None else Some (key, value))
+;;
+
 let stdout_logs =
   { Obs_eio.stdout with emit_metric = (fun _ -> ()); declare_metric = (fun _ -> ()) }
 ;;
@@ -80,7 +97,7 @@ let of_env ~sw ~net ~clock ~mono_clock ~service ?(context = []) () =
     match setting "TEMPO_URL" with
     | None -> backend, []
     | Some url ->
-      let tempo = Obs_tempo.create ~sw ~net ~clock ~url () in
+      let tempo = Obs_tempo.create ~sw ~net ~clock ~url ~headers:(tempo_headers ()) () in
       ( Obs_eio.compose backend (Obs_tempo.backend tempo)
       , [ (fun timeout -> Obs_tempo.flush ~timeout tempo) ] )
   in
