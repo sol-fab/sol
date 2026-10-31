@@ -123,6 +123,11 @@ type t =
       -> Sol_cli_grant.serverless_unit list
       -> ((string * string) list, string) result
   ; authorization_serverless_output : string
+  ; authorization_scheduler_root_vars :
+      Sol_cli_config.target
+      -> Sol_cli_grant.scheduler_unit list
+      -> ((string * string) list, string) result
+  ; authorization_scheduler_output : string
   ; authorization_fence_addresses : string list
   ; authorization_reconciler :
       Sol_cli_config.target -> (authorization_reconciler, string) result
@@ -591,6 +596,13 @@ let aws_serverless_root_vars target units =
     ]
 ;;
 
+let aws_scheduler_root_vars (target : Sol_cli_config.target) units =
+  let units =
+    `List (List.map Sol_cli_grant.scheduler_unit_to_json units) |> Yojson.Safe.to_string
+  in
+  Ok [ "region", target.region; "environment", target.env; "scheduler_units", units ]
+;;
+
 let gcp_serverless_root_vars target units =
   let open Result.Syntax in
   let* project = required_field target "project_id" in
@@ -608,6 +620,20 @@ let gcp_serverless_root_vars target units =
     ; "project_id", project
     ; "reconciler_trust_principal", existing_trust
     ; "serverless_units", units
+    ]
+;;
+
+let gcp_scheduler_root_vars (target : Sol_cli_config.target) units =
+  let open Result.Syntax in
+  let* project = required_field target "project_id" in
+  let units =
+    `List (List.map Sol_cli_grant.scheduler_unit_to_json units) |> Yojson.Safe.to_string
+  in
+  Ok
+    [ "region", target.region
+    ; "environment", target.env
+    ; "project_id", project
+    ; "scheduler_units", units
     ]
 ;;
 
@@ -1030,6 +1056,8 @@ let aws : t =
   ; authorization_root_vars = aws_authorization_root_vars
   ; authorization_serverless_root_vars = aws_serverless_root_vars
   ; authorization_serverless_output = "serverless_role_arns"
+  ; authorization_scheduler_root_vars = aws_scheduler_root_vars
+  ; authorization_scheduler_output = "scheduler_role_arns"
   ; authorization_fence_addresses =
       [ "aws_iam_policy.workload_boundary"
       ; "aws_iam_role.reconciler"
@@ -1278,6 +1306,8 @@ let gcp : t =
   ; authorization_root_vars = gcp_authorization_root_vars
   ; authorization_serverless_root_vars = gcp_serverless_root_vars
   ; authorization_serverless_output = "serverless_service_accounts"
+  ; authorization_scheduler_root_vars = gcp_scheduler_root_vars
+  ; authorization_scheduler_output = "scheduler_service_accounts"
   ; authorization_fence_addresses =
       [ "google_service_account.reconciler"
       ; "google_project_iam_custom_role.authorization"
@@ -1344,6 +1374,8 @@ let byo : t =
   ; authorization_root_vars = (fun _ -> Ok [])
   ; authorization_serverless_root_vars = (fun _ _ -> Error byo_no_root)
   ; authorization_serverless_output = ""
+  ; authorization_scheduler_root_vars = (fun _ _ -> Error byo_no_root)
+  ; authorization_scheduler_output = ""
   ; authorization_fence_addresses = []
   ; authorization_reconciler = (fun _ -> Error byo_no_root)
   ; authorization_assumption = (fun _ -> Error byo_no_root)

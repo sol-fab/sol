@@ -25,3 +25,8 @@ output "serverless_role_arns" {
     if contains(local.serverless_units, unit)
   }
 }
+
+output "scheduler_role_arns" {
+  description = "Per-unit EventBridge Scheduler execution roles this target owns."
+  value       = { for unit, role in aws_iam_role.scheduler : unit => role.arn }
+}

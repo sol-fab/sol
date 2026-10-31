@@ -51,6 +51,13 @@ let ensure_runtime_identity ~assets ~run_log ~target ~unit ~requirements =
          unit)
 ;;
 
+let ensure_scheduler_identities ~assets ~run_log ~(target : Sol_cli_config.target) ~units =
+  match target.provider with
+  | Sol_cli_provider.Gcp | Sol_cli_provider.Aws ->
+    Sol_cli_authorization_stage.apply_scheduler_identities ~assets ~run_log ~target units
+  | Sol_cli_provider.Byo -> Error "serverless targets support AWS and GCP only"
+;;
+
 let rollback ~target ~project ~service ~record ~version ~revision ~token =
   let* () = ensure_serverless target in
   match target.provider with

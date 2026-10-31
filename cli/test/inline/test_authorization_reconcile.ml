@@ -629,3 +629,28 @@ let test_function_invoke_capability () =
 ;;
 
 let%test "function invoke capability" = test_function_invoke_capability ()
+
+let test_scheduler_unit_json () =
+  let json =
+    Sol_cli_grant.scheduler_unit_to_json
+      { Sol_cli_grant.unit = "payments/daily_report_fn"
+      ; function_name = "daily-report-fn"
+      }
+  in
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"scheduler unit"
+    "payments/daily_report_fn"
+    (match Sol_cli_json.field [ "unit" ] json with
+     | `String value -> value
+     | _ -> "");
+  Windtrap.equal
+    Windtrap.string
+    ~msg:"scheduler function"
+    "daily-report-fn"
+    (match Sol_cli_json.field [ "function_name" ] json with
+     | `String value -> value
+     | _ -> "")
+;;
+
+let%test "scheduler unit JSON" = test_scheduler_unit_json ()

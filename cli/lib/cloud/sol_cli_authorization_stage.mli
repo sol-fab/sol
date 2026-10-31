@@ -64,3 +64,10 @@ val destroy
   -> run_log:Sol_cli_run_log.t
   -> target:Sol_cli_config.target
   -> (outcome, string) result
+
+val apply_scheduler_identities
+  :  assets:Sol_cli_platform_assets.t
+  -> run_log:Sol_cli_run_log.t
+  -> target:Sol_cli_config.target
+  -> Sol_cli_grant.scheduler_unit list
+  -> ((string * string) list, string) result
