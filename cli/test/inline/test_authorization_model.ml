@@ -51,6 +51,7 @@ let units exclude =
       ~target
       ~model
       ~exclude
+      ~serverless_all:false
   in
   let () =
     let rec remove path =

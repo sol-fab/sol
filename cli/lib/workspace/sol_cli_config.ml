@@ -1,6 +1,7 @@
 type execution =
   | Kubernetes
   | Serverless
+  | Mixed
 
 type target =
   { name : string
@@ -552,7 +553,7 @@ let decode_layer ~path ~context ~top_level (fields : (string * Yaml.yaml) list) 
     match field with
     | Target_execution ->
       (match String.lowercase_ascii s with
-       | "kubernetes" | "serverless" ->
+       | "kubernetes" | "serverless" | "mixed" ->
          let provider_fields =
            current.provider_fields
            |> List.filter (fun (provider, _) -> provider <> "sol")
@@ -562,7 +563,9 @@ let decode_layer ~path ~context ~top_level (fields : (string * Yaml.yaml) list) 
        | other ->
          Error
            (error
-              (Printf.sprintf "execution %S is not one of kubernetes, serverless" other)))
+              (Printf.sprintf
+                 "execution %S is not one of kubernetes, serverless, mixed"
+                 other)))
     | Target_registry -> Ok { current with registry = Some s }
     | Target_base_domain -> Ok { current with base_domain = Some s }
     | Target_cluster_issuer -> Ok { current with cluster_issuer = Some s }
@@ -1030,7 +1033,10 @@ let execution_of_target (target : target) =
     |> List.assoc_opt "execution"
   with
   | Some value ->
-    if String.lowercase_ascii value = "serverless" then Serverless else Kubernetes
+    (match String.lowercase_ascii value with
+     | "serverless" -> Serverless
+     | "mixed" -> Mixed
+     | _ -> Kubernetes)
   | None -> Kubernetes
 ;;
 
