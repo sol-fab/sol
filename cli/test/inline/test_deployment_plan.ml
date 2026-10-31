@@ -2951,7 +2951,8 @@ let external_storage_config : Sol_cli_config.t =
               ; store = Some "external"
               ; keys = []
               ; connection =
-                  [ "QUEUE_ENDPOINT", "https://sqs.example.com/jobs"
+                  [ "QUEUE_ARN", "arn:aws:sqs:us-east-1:123:jobs"
+                  ; "QUEUE_ENDPOINT", "https://sqs.example.com/jobs"
                   ; "QUEUE_NAME", "jobs"
                   ]
               ; credentials = []
@@ -2970,7 +2971,8 @@ let external_storage_config : Sol_cli_config.t =
               ; store = Some "external"
               ; keys = []
               ; connection =
-                  [ "OBJECT_ENDPOINT", "https://objects.example.com"
+                  [ "OBJECT_ARN", "arn:aws:s3:::uploads/*"
+                  ; "OBJECT_ENDPOINT", "https://objects.example.com"
                   ; "OBJECT_BUCKET", "uploads"
                   ]
               ; credentials = []

@@ -375,9 +375,55 @@ Rules:
 
 - managed `queue`/`object_store` bindings are refused until a provider backend and
   lifecycle are defined;
-- connection values are non-secret; credentials stay in the target's secret mechanism
-  or workload identity;
+- connection values are non-secret;
 - the connection contract does not promise Kafka stream semantics (ordering, replay,
-  consumer groups) for queues;
-- `queue`/`object_store` capabilities are declared and translated provider-side in a
-  later increment; the current implementation delivers the external connection only.
+  consumer groups) for queues.
+
+### AWS authorization
+
+AWS is the first implemented provider for external queue/object-store capabilities.
+The binding must provide the provider identifier used by the granted resource:
+
+```yaml
+resources:
+  jobs:
+    type: queue
+    binding:
+      ownership: external
+      store: external
+      connection:
+        QUEUE_ARN: arn:aws:sqs:us-east-1:123456789012:jobs
+        QUEUE_URL: https://sqs.us-east-1.amazonaws.com/123456789012/jobs
+  uploads:
+    type: object_store
+    binding:
+      ownership: external
+      store: external
+      connection:
+        OBJECT_ARN: arn:aws:s3:::uploads/*
+        OBJECT_BUCKET: uploads
+```
+
+Capabilities translate to AWS IAM actions scoped to those ARNs:
+
+| Capability | AWS action |
+|---|---|
+| `message.publish` | `sqs:SendMessage` |
+| `message.subscribe` | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility` |
+| `object.read` | `s3:GetObject` |
+| `object.write` | `s3:PutObject` |
+
+The workload uses its Sol-managed AWS identity (EKS Pod Identity or Lambda execution
+role), so no provider SDK credentials are emitted as plain environment variables.
+
+Fail-closed cases:
+
+- a missing `QUEUE_ARN` or `OBJECT_ARN`;
+- `binding.keys` or `binding.credentials` (secret-reference authentication is not
+  implemented for external queue/object-store yet);
+- a non-AWS target;
+- a managed binding.
+
+GCP external queue/object authorization remains unsupported until Pub/Sub/GCS permission
+translation is implemented. Applications still use their native provider SDK; Sol does not
+provide a provider-neutral runtime client.

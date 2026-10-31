@@ -128,6 +128,7 @@ type t =
       -> Sol_cli_grant.scheduler_unit list
       -> ((string * string) list, string) result
   ; authorization_scheduler_output : string
+  ; external_resource_auth : bool
   ; authorization_fence_addresses : string list
   ; authorization_reconciler :
       Sol_cli_config.target -> (authorization_reconciler, string) result
@@ -1058,6 +1059,7 @@ let aws : t =
   ; authorization_serverless_output = "serverless_role_arns"
   ; authorization_scheduler_root_vars = aws_scheduler_root_vars
   ; authorization_scheduler_output = "scheduler_role_arns"
+  ; external_resource_auth = true
   ; authorization_fence_addresses =
       [ "aws_iam_policy.workload_boundary"
       ; "aws_iam_role.reconciler"
@@ -1308,6 +1310,7 @@ let gcp : t =
   ; authorization_serverless_output = "serverless_service_accounts"
   ; authorization_scheduler_root_vars = gcp_scheduler_root_vars
   ; authorization_scheduler_output = "scheduler_service_accounts"
+  ; external_resource_auth = false
   ; authorization_fence_addresses =
       [ "google_service_account.reconciler"
       ; "google_project_iam_custom_role.authorization"
@@ -1376,6 +1379,7 @@ let byo : t =
   ; authorization_serverless_output = ""
   ; authorization_scheduler_root_vars = (fun _ _ -> Error byo_no_root)
   ; authorization_scheduler_output = ""
+  ; external_resource_auth = false
   ; authorization_fence_addresses = []
   ; authorization_reconciler = (fun _ -> Error byo_no_root)
   ; authorization_assumption = (fun _ -> Error byo_no_root)

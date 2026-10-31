@@ -113,7 +113,10 @@ let run ?config ?destination ~action ~target ~var_file ~vars () =
   let* model = Sol_cli_workspace_model.load_cwd () |> Sol_cli_exit.of_msg in
   let workspace = Sol_cli_workspace.current_name () in
   let* namespace_of = namespace_of_workspace ~workspace model |> Sol_cli_exit.of_msg in
-  let* desired = Sol_cli_authorization_reconcile.desired model |> Sol_cli_exit.of_msg in
+  let* desired =
+    Sol_cli_authorization_reconcile.desired ~binding_config:resolved_config model
+    |> Sol_cli_exit.of_msg
+  in
   let var_file =
     resolve_var_file ~flag:var_file ~target:target_cfg.Sol_cli_config.terraform_var_file
   in

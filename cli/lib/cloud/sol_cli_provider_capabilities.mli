@@ -119,6 +119,7 @@ type t =
       -> Sol_cli_grant.scheduler_unit list
       -> ((string * string) list, string) result
   ; authorization_scheduler_output : string
+  ; external_resource_auth : bool
   ; authorization_fence_addresses : string list
   ; authorization_reconciler :
       Sol_cli_config.target -> (authorization_reconciler, string) result

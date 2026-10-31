@@ -40,32 +40,65 @@ let unit_name (service : Sol_cli_manifest.service) =
       message)
 ;;
 
-let desired workspace =
+let desired ?binding_config workspace =
+  let open Result.Syntax in
+  let one (workload : Sol_cli_workspace_model.workload) =
+    let* config =
+      match workload.config with
+      | Ok config -> Ok config
+      | Error parse_error ->
+        Error
+          (Printf.sprintf
+             "cannot read %s's declarations (%s), so its grants cannot be computed; an \
+              authorization plan is never built from an incomplete workspace"
+             workload.service.Sol_cli_manifest.name
+             (Sol_cli_toml.parse_error_to_string parse_error))
+    in
+    let* unit = unit_name workload.service in
+    let* keys =
+      Sol_cli_result.map_list
+        (fun key ->
+           validate_secret_resource key
+           |> Result.map (fun () -> key)
+           |> Result.map_error (fun message ->
+             Printf.sprintf "unit %s declares %S: %s" unit key message))
+        config.Sol_cli_toml.secret_keys
+    in
+    let* external_requirements =
+      match binding_config with
+      | None -> Ok []
+      | Some cfg ->
+        Sol_cli_resource_binding.external_requirements
+          ~config:cfg
+          ~service_name:workload.service.Sol_cli_manifest.name
+        |> Result.map_error (fun message -> Printf.sprintf "unit %s: %s" unit message)
+    in
+    let* () =
+      match binding_config, external_requirements with
+      | Some cfg, _ :: _
+        when not
+               (Sol_cli_provider_capabilities.capabilities_of cfg.target.provider)
+                 .external_resource_auth ->
+        Error
+          (Printf.sprintf
+             "unit %s declares external queue/object capabilities, but provider %s has \
+              no implemented authorization translation"
+             unit
+             (Sol_cli_provider.to_string cfg.target.provider))
+      | _ -> Ok ()
+    in
+    Ok
+      (List.map (fun key -> secret_grant ~unit ~key) keys
+       @ List.map
+           (fun (requirement : Sol_cli_grant.requirement) ->
+              { Sol_cli_authorization.unit
+              ; capability = Sol_cli_grant.capability_to_string requirement.capability
+              ; resource = requirement.resource
+              })
+           external_requirements)
+  in
   Sol_cli_workspace_model.workloads workspace
-  |> Sol_cli_result.map_list (fun (workload : Sol_cli_workspace_model.workload) ->
-    match workload.config with
-    | Error parse_error ->
-      Error
-        (Printf.sprintf
-           "cannot read %s's declarations (%s), so its grants cannot be computed; an \
-            authorization plan is never built from an incomplete workspace"
-           workload.service.Sol_cli_manifest.name
-           (Sol_cli_toml.parse_error_to_string parse_error))
-    | Ok config ->
-      (match unit_name workload.service with
-       | Error message -> Error message
-       | Ok unit ->
-         (match
-            Sol_cli_result.map_list
-              (fun key ->
-                 validate_secret_resource key
-                 |> Result.map (fun () -> key)
-                 |> Result.map_error (fun message ->
-                   Printf.sprintf "unit %s declares %S: %s" unit key message))
-              config.Sol_cli_toml.secret_keys
-          with
-          | Error message -> Error message
-          | Ok keys -> Ok (List.map (fun key -> secret_grant ~unit ~key) keys))))
+  |> Sol_cli_result.map_list one
   |> Result.map List.concat
 ;;
 
