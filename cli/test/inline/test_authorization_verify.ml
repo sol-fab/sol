@@ -38,8 +38,13 @@ let target ?(fields = []) provider =
   }
 ;;
 
-let workload ?(unit = "payments-api") ?(namespace = "payments") secrets =
-  { Sol_cli_provider_capabilities.unit; namespace; secrets }
+let workload
+      ?(unit = "payments-api")
+      ?(namespace = "payments")
+      ?(external_grants = [])
+      secrets
+  =
+  { Sol_cli_provider_capabilities.unit; namespace; secrets; external_grants }
 ;;
 
 let aws_run ~decision argv =
@@ -275,4 +280,39 @@ let%test "verify: declared grants are grouped by unit for observation" =
 
 let%test "verify: the observation path never mutates IAM" =
   test_observation_is_read_only ()
+;;
+
+let test_aws_external_grant_passes () =
+  match
+    Sol_cli_provider_capabilities.aws_effective_access
+      ~run:(aws_run ~decision:"allowed")
+      (target Sol_cli_provider.Aws)
+      [ workload
+          ~external_grants:[ "message.publish", "arn:aws:sqs:us-east-1:123:jobs" ]
+          []
+      ]
+  with
+  | Ok () -> ()
+  | Error message -> Windtrap.fail message
+;;
+
+let test_aws_external_grant_denied_fails_closed () =
+  match
+    Sol_cli_provider_capabilities.aws_effective_access
+      ~run:(aws_run ~decision:"implicitDeny")
+      (target Sol_cli_provider.Aws)
+      [ workload ~external_grants:[ "object.read", "arn:aws:s3:::uploads/*" ] [] ]
+  with
+  | Ok () -> Windtrap.fail "a denied external capability passed verification"
+  | Error message ->
+    check_bool
+      "external capability is named"
+      true
+      (Sol_cli_string.contains ~needle:"object.read" message)
+;;
+
+let%test "AWS external grant passes" = test_aws_external_grant_passes ()
+
+let%test "AWS external grant denial fails closed" =
+  test_aws_external_grant_denied_fails_closed ()
 ;;

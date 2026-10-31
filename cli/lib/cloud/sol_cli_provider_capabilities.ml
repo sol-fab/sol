@@ -52,6 +52,7 @@ type authorization_workload =
   { unit : string
   ; namespace : string
   ; secrets : string list
+  ; external_grants : (string * string) list
   }
 
 type t =
@@ -128,6 +129,7 @@ type t =
       -> Sol_cli_grant.scheduler_unit list
       -> ((string * string) list, string) result
   ; authorization_scheduler_output : string
+  ; external_resource_auth : bool
   ; authorization_fence_addresses : string list
   ; authorization_reconciler :
       Sol_cli_config.target -> (authorization_reconciler, string) result
@@ -783,7 +785,18 @@ let aws_simulation_decisions output =
 let aws_effective_access ~run (target : Sol_cli_config.target) workloads =
   let open Result.Syntax in
   let workloads =
-    List.filter (fun (w : authorization_workload) -> w.secrets <> []) workloads
+    List.filter
+      (fun (w : authorization_workload) -> w.secrets <> [] || w.external_grants <> [])
+      workloads
+  in
+  let actions_of_capability = function
+    | "message.publish" -> Ok [ "sqs:SendMessage" ]
+    | "message.subscribe" ->
+      Ok [ "sqs:ReceiveMessage"; "sqs:DeleteMessage"; "sqs:ChangeMessageVisibility" ]
+    | "object.read" -> Ok [ "s3:GetObject" ]
+    | "object.write" -> Ok [ "s3:PutObject" ]
+    | capability ->
+      Error (Printf.sprintf "no AWS action mapping for capability %S" capability)
   in
   match workloads with
   | [] -> Ok ()
@@ -803,6 +816,35 @@ let aws_effective_access ~run (target : Sol_cli_config.target) workloads =
            match Sol_cli_string.non_blank_opt (Some (String.trim output)) with
            | Some account -> Ok account
            | None -> Error "aws sts get-caller-identity returned no account id")
+    in
+    let simulate ~role ~actions ~resource =
+      let* decisions =
+        Result.bind
+          (run
+             ([ "aws"
+              ; "iam"
+              ; "simulate-principal-policy"
+              ; "--policy-source-arn"
+              ; role
+              ; "--action-names"
+              ]
+              @ actions
+              @ [ "--resource-arns"
+                ; resource
+                ; "--query"
+                ; "EvaluationResults[*].EvalDecision"
+                ; "--output"
+                ; "json"
+                ]))
+          aws_simulation_decisions
+      in
+      let allowed =
+        decisions <> []
+        && List.for_all
+             (fun decision -> String.equal (String.lowercase_ascii decision) "allowed")
+             decisions
+      in
+      if allowed then Ok () else Error "denied"
     in
     let check_workload (workload : authorization_workload) =
       let role =
@@ -824,43 +866,30 @@ let aws_effective_access ~run (target : Sol_cli_config.target) workloads =
               target.env
               key
           in
-          let* decisions =
-            Result.bind
-              (run
-                 [ "aws"
-                 ; "iam"
-                 ; "simulate-principal-policy"
-                 ; "--policy-source-arn"
-                 ; role
-                 ; "--action-names"
-                 ; "secretsmanager:GetSecretValue"
-                 ; "--resource-arns"
-                 ; resource
-                 ; "--query"
-                 ; "EvaluationResults[*].EvalDecision"
-                 ; "--output"
-                 ; "json"
-                 ])
-              aws_simulation_decisions
+          let* () =
+            simulate ~role ~actions:[ "secretsmanager:GetSecretValue" ] ~resource
+            |> Result.map_error (fun _ ->
+              authorization_refusal
+                target
+                ~unit:workload.unit
+                ~capability:"secret"
+                ~resource:key)
           in
-          let allowed =
-            decisions <> []
-            && List.for_all
-                 (fun decision ->
-                    String.equal (String.lowercase_ascii decision) "allowed")
-                 decisions
-          in
-          if allowed
-          then check_keys rest
-          else
-            Error
-              (authorization_refusal
-                 target
-                 ~unit:workload.unit
-                 ~capability:"secret"
-                 ~resource:key)
+          check_keys rest
       in
-      check_keys workload.secrets
+      let rec check_external = function
+        | [] -> Ok ()
+        | (capability, resource) :: rest ->
+          let* actions = actions_of_capability capability in
+          let* () =
+            simulate ~role ~actions ~resource
+            |> Result.map_error (fun _ ->
+              authorization_refusal target ~unit:workload.unit ~capability ~resource)
+          in
+          check_external rest
+      in
+      let* () = check_keys workload.secrets in
+      check_external workload.external_grants
     in
     Sol_cli_result.map_list check_workload workloads |> Result.map ignore
 ;;
@@ -1058,6 +1087,7 @@ let aws : t =
   ; authorization_serverless_output = "serverless_role_arns"
   ; authorization_scheduler_root_vars = aws_scheduler_root_vars
   ; authorization_scheduler_output = "scheduler_role_arns"
+  ; external_resource_auth = true
   ; authorization_fence_addresses =
       [ "aws_iam_policy.workload_boundary"
       ; "aws_iam_role.reconciler"
@@ -1308,6 +1338,7 @@ let gcp : t =
   ; authorization_serverless_output = "serverless_service_accounts"
   ; authorization_scheduler_root_vars = gcp_scheduler_root_vars
   ; authorization_scheduler_output = "scheduler_service_accounts"
+  ; external_resource_auth = false
   ; authorization_fence_addresses =
       [ "google_service_account.reconciler"
       ; "google_project_iam_custom_role.authorization"
@@ -1376,6 +1407,7 @@ let byo : t =
   ; authorization_serverless_output = ""
   ; authorization_scheduler_root_vars = (fun _ _ -> Error byo_no_root)
   ; authorization_scheduler_output = ""
+  ; external_resource_auth = false
   ; authorization_fence_addresses = []
   ; authorization_reconciler = (fun _ -> Error byo_no_root)
   ; authorization_assumption = (fun _ -> Error byo_no_root)
