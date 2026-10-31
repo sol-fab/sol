@@ -49,7 +49,7 @@ fi
 if [[ "$1 $2 $3" == "scheduler jobs describe" ]]; then
   [[ -f "$state/schedule" ]] || { echo "ERROR: NOT_FOUND" >&2; exit 1; }
   cat <<JSON
-{"schedule":"0 * * * *","timeZone":"UTC","httpTarget":{"uri":"https://run.googleapis.com/v1/projects/example-project/locations/us-west1/jobs/probe-fn:run","oauthToken":{"serviceAccountEmail":"sol-scheduler@example.iam.gserviceaccount.com"}}}
+{"schedule":"0 * * * *","timeZone":"America/Denver","httpTarget":{"uri":"https://run.googleapis.com/v1/projects/example-project/locations/us-west1/jobs/probe-fn:run","oauthToken":{"serviceAccountEmail":"sol-scheduler@example.iam.gserviceaccount.com"}}}
 JSON
   exit 0
 fi

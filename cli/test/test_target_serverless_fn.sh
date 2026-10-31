@@ -91,7 +91,7 @@ elif [[ "$args" == *"iam get-role"* ]]; then
   printf '{"Statement":[{"Principal":{"Service":"scheduler.amazonaws.com"}}]}\n'
 elif [[ "$args" == *"scheduler get-schedule"* ]]; then
   [[ -f "$FAKE_AWS_STATE/schedule" ]] || { echo "ResourceNotFoundException" >&2; exit 254; }
-  printf '{"Role":"arn:aws:iam::123:role/scheduler","Arn":"arn:aws:lambda:us-east-1:123:function:checkout-fn:live"}\n'
+  printf '{"Role":"arn:aws:iam::123:role/scheduler","Arn":"arn:aws:lambda:us-east-1:123:function:checkout-fn:live","Expression":"cron(0 * ? * * *)","TimeZone":"America/Denver"}\n'
 elif [[ "$args" == *"scheduler create-schedule"* || "$args" == *"scheduler update-schedule"* ]]; then
   [[ "$args" == *"--schedule-expression-timezone America/Denver"* ]] || { echo "schedule lost its timezone" >&2; exit 1; }
   touch "$FAKE_AWS_STATE/schedule"; printf '{}\n'

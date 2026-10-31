@@ -233,7 +233,7 @@ let deploy (r : request) =
       ; "--name"
       ; name
       ; "--query"
-      ; "{Role:Target.RoleArn,Arn:Target.Arn}"
+      ; "{Role:Target.RoleArn,Arn:Target.Arn,Expression:ScheduleExpression,TimeZone:ScheduleExpressionTimezone}"
       ; "--output"
       ; "json"
       ]
@@ -251,6 +251,14 @@ let deploy (r : request) =
   let* actual_target =
     Sol_cli_json.string (Sol_cli_json.field [ "Arn" ] json)
     |> Option.to_result ~none:"EventBridge schedule has no target ARN"
+  in
+  let* actual_expression =
+    Sol_cli_json.string (Sol_cli_json.field [ "Expression" ] json)
+    |> Option.to_result ~none:"EventBridge schedule has no expression"
+  in
+  let* actual_timezone =
+    Sol_cli_json.string (Sol_cli_json.field [ "TimeZone" ] json)
+    |> Option.to_result ~none:"EventBridge schedule has no timezone"
   in
   let* () =
     if String.equal actual_role r.role_arn
@@ -271,6 +279,18 @@ let deploy (r : request) =
            "EventBridge schedule target is %S, expected %S"
            actual_target
            target_arn)
+  in
+  let* () =
+    if String.equal actual_expression expression && String.equal actual_timezone timezone
+    then Ok ()
+    else
+      Error
+        (Printf.sprintf
+           "EventBridge schedule is %S/%S, expected %S/%S"
+           actual_expression
+           actual_timezone
+           expression
+           timezone)
   in
   Ok release
 ;;
