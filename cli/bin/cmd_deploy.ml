@@ -1460,6 +1460,91 @@ let run (req : Sol_cli_command_request.deploy_request) =
                 service.name)))
     else Ok ()
   in
+  let run_kubernetes () =
+    if kubernetes_services = []
+    then Ok ()
+    else (
+      let services = kubernetes_services in
+      let emit_intent =
+        match req.action with
+        | Sol_cli_command_request.Deploy_dry_run { emit_to } -> emit_to
+        | Sol_cli_command_request.Deploy_emit_to dir -> Some dir
+        | Sol_cli_command_request.Deploy_apply -> None
+      in
+      let await_delegation = Option.value req.await_delegation ~default:300 in
+      let planning : Sol_cli_deploy_selection.Target_plan_input.t =
+        { workspace
+        ; registry
+        ; sha
+        ; emit_to = emit_intent
+        ; config = resolved_config
+        ; facts
+        ; inventory
+        ; image_refs
+        ; services
+        }
+      in
+      let context_of ~destination : Sol_cli_deploy_run.context =
+        { execution =
+            Sol_cli_execution.context
+              ~cluster:(Sol_cli_kube_destination.context_of_destination destination)
+              ~workspace
+              ~env:target_cfg.env
+              ()
+        ; sha
+        ; registry
+        ; facts
+        ; emit_plan_to = req.emit_plan_to
+        ; target_cfg
+        ; resolved_config
+        ; services
+        ; inventory
+        ; image_refs
+        ; target_name = req.target
+        ; run_log
+        ; keep_releases = req.keep_releases
+        }
+      in
+      match req.action with
+      | Sol_cli_command_request.Deploy_apply ->
+        run_apply
+          ~planning
+          ~context_of
+          ~target:req.target
+          ~run_log
+          ~confirm_group_change:req.confirm_group_change
+          ~confirm_ecr_removal:req.confirm_ecr_removal
+          ~accept_unresolved:req.accept_unresolved
+          ~loki_push_url:req.loki_push_url
+          ~await_delegation
+          ()
+      | Deploy_dry_run { emit_to } ->
+        let* destination, _, _ =
+          destination_or_environment_stage
+            ~planning
+            ~target:req.target
+            ~run_log
+            ~action:(Sol_cli_command_request.Deploy_dry_run { emit_to })
+            ~await_delegation
+            ~confirm_ecr_removal:req.confirm_ecr_removal
+            ~accept_unresolved:req.accept_unresolved
+            ()
+        in
+        run_dry_run (context_of ~destination) ~emit_to ~await_delegation
+      | Deploy_emit_to dir ->
+        let* destination, _, _ =
+          destination_or_environment_stage
+            ~planning
+            ~target:req.target
+            ~run_log
+            ~action:(Sol_cli_command_request.Deploy_emit_to dir)
+            ~await_delegation
+            ~confirm_ecr_removal:req.confirm_ecr_removal
+            ~accept_unresolved:req.accept_unresolved
+            ()
+        in
+        run_emit (context_of ~destination) ~dir)
+  in
   let identities = ref [] in
   let scheduler_identities = ref [] in
   let* () =
@@ -1497,92 +1582,12 @@ let run (req : Sol_cli_command_request.deploy_request) =
             ~target_name:req.target
             ~run_log
           |> Result.map_error (fun (failure : Sol_cli_exit.failure) -> failure.text))
-      ~kubernetes:(fun _ -> Ok ())
+      ~kubernetes:(fun _ ->
+        run_kubernetes ()
+        |> Result.map_error (fun (failure : Sol_cli_exit.failure) -> failure.text))
     |> Result.map_error Sol_cli_exit.error
   in
-  if kubernetes_services = []
-  then Ok ()
-  else (
-    let services = kubernetes_services in
-    let emit_intent =
-      match req.action with
-      | Sol_cli_command_request.Deploy_dry_run { emit_to } -> emit_to
-      | Sol_cli_command_request.Deploy_emit_to dir -> Some dir
-      | Sol_cli_command_request.Deploy_apply -> None
-    in
-    let await_delegation = Option.value req.await_delegation ~default:300 in
-    let planning : Sol_cli_deploy_selection.Target_plan_input.t =
-      { workspace
-      ; registry
-      ; sha
-      ; emit_to = emit_intent
-      ; config = resolved_config
-      ; facts
-      ; inventory
-      ; image_refs
-      ; services
-      }
-    in
-    let context_of ~destination : Sol_cli_deploy_run.context =
-      { execution =
-          Sol_cli_execution.context
-            ~cluster:(Sol_cli_kube_destination.context_of_destination destination)
-            ~workspace
-            ~env:target_cfg.env
-            ()
-      ; sha
-      ; registry
-      ; facts
-      ; emit_plan_to = req.emit_plan_to
-      ; target_cfg
-      ; resolved_config
-      ; services
-      ; inventory
-      ; image_refs
-      ; target_name = req.target
-      ; run_log
-      ; keep_releases = req.keep_releases
-      }
-    in
-    match req.action with
-    | Sol_cli_command_request.Deploy_apply ->
-      run_apply
-        ~planning
-        ~context_of
-        ~target:req.target
-        ~run_log
-        ~confirm_group_change:req.confirm_group_change
-        ~confirm_ecr_removal:req.confirm_ecr_removal
-        ~accept_unresolved:req.accept_unresolved
-        ~loki_push_url:req.loki_push_url
-        ~await_delegation
-        ()
-    | Deploy_dry_run { emit_to } ->
-      let* destination, _, _ =
-        destination_or_environment_stage
-          ~planning
-          ~target:req.target
-          ~run_log
-          ~action:(Sol_cli_command_request.Deploy_dry_run { emit_to })
-          ~await_delegation
-          ~confirm_ecr_removal:req.confirm_ecr_removal
-          ~accept_unresolved:req.accept_unresolved
-          ()
-      in
-      run_dry_run (context_of ~destination) ~emit_to ~await_delegation
-    | Deploy_emit_to dir ->
-      let* destination, _, _ =
-        destination_or_environment_stage
-          ~planning
-          ~target:req.target
-          ~run_log
-          ~action:(Sol_cli_command_request.Deploy_emit_to dir)
-          ~await_delegation
-          ~confirm_ecr_removal:req.confirm_ecr_removal
-          ~accept_unresolved:req.accept_unresolved
-          ()
-      in
-      run_emit (context_of ~destination) ~dir)
+  Ok ()
 ;;
 
 let target_arg =
