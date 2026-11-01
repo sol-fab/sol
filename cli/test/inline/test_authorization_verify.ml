@@ -84,6 +84,22 @@ let test_aws_effective_grant_passes () =
   | Error message -> Windtrap.fail message
 ;;
 
+let test_aws_serverless_identity_grant_passes () =
+  match
+    Sol_cli_provider_capabilities.aws_effective_access
+      ~run:(aws_run ~decision:"allowed")
+      (target Sol_cli_provider.Aws)
+      [ workload
+          ~identity:
+            "arn:aws:iam::123456789012:role/sol/extqual-1/sol-extqual-1-extqual_fn"
+          ~external_grants:[ "object.read", "arn:aws:s3:::uploads/*" ]
+          []
+      ]
+  with
+  | Ok () -> ()
+  | Error message -> Windtrap.fail message
+;;
+
 let test_aws_ineffective_grant_refuses_at_plan_time () =
   match
     Sol_cli_provider_capabilities.aws_effective_access
@@ -449,4 +465,8 @@ let%test "verify: GCP external bucket read with wrong member fails" =
 
 let%test "verify: GCP serverless service-account identity is used" =
   test_gcp_serverless_identity_is_used ()
+;;
+
+let%test "verify: AWS serverless runtime role is accepted" =
+  test_aws_serverless_identity_grant_passes ()
 ;;

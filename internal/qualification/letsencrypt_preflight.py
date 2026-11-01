@@ -178,6 +178,9 @@ def fetch(host: str, base: str, attempts: int = 3) -> object:
     raise PreflightError(f"could not read CT history for {host}: {last}")
 
 
+now_utc = lambda: dt.datetime.now(dt.timezone.utc)
+
+
 def check(
     base_domain: str,
     issuer: str,
@@ -188,7 +191,7 @@ def check(
 ) -> tuple[bool, list[str]]:
     if issuer != "letsencrypt-prod":
         return True, [f"issuer {issuer} is not letsencrypt-prod; ACME quota preflight skipped"]
-    now = dt.datetime.now(dt.timezone.utc)
+    now = now_utc()
     lines: list[str] = []
     ok = True
     blocked = blocked_path(ledger)
