@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import uuid
 
 from google.api_core.exceptions import Forbidden, PermissionDenied
@@ -16,12 +17,17 @@ def main():
     bucket = storage_client.bucket(os.environ["BUCKET"])
     marker = "extqual-gcp-" + uuid.uuid4().hex
     message_id = publisher.publish(topic, marker.encode()).result(timeout=30)
-    response = subscriber.pull(
-        request={"subscription": subscription, "max_messages": 1}, timeout=30
-    )
-    if not response.received_messages:
+    received = None
+    for _ in range(5):
+        response = subscriber.pull(
+            request={"subscription": subscription, "max_messages": 1}, timeout=30
+        )
+        if response.received_messages:
+            received = response.received_messages[0]
+            break
+        time.sleep(2)
+    if received is None:
         raise SystemExit("no message received")
-    received = response.received_messages[0]
     if received.message.data.decode() != marker:
         raise SystemExit("unexpected message")
     subscriber.acknowledge(request={"subscription": subscription, "ack_ids": [received.ack_id]})
