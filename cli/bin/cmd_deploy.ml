@@ -1426,8 +1426,11 @@ let run (req : Sol_cli_command_request.deploy_request) =
     "\nRun: %s\n  log: %s/\n"
     (Sol_cli_run_log.run_id run_log)
     (Sol_cli_run_log.dir run_log);
-  let serverless_services, kubernetes_services =
-    Sol_cli_serverless_target_common.services_by_backend target_cfg deployed.services
+  let { Sol_cli_mixed_lifecycle.serverless = serverless_services
+      ; kubernetes = kubernetes_services
+      }
+    =
+    Sol_cli_mixed_lifecycle.split target_cfg deployed.services
   in
   let* () =
     Sol_cli_result.map_list
