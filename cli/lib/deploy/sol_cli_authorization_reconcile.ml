@@ -150,6 +150,7 @@ let workloads ~grants ~namespace_of =
            ; namespace = first.namespace
            ; secrets
            ; external_grants
+           ; identity = None
            }))
 ;;
 

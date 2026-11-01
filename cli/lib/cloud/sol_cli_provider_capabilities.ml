@@ -53,6 +53,7 @@ type authorization_workload =
   ; namespace : string
   ; secrets : string list
   ; external_grants : (string * string) list
+  ; identity : string option
   }
 
 type t =
@@ -839,14 +840,28 @@ let aws_effective_access ~run (target : Sol_cli_config.target) workloads =
     in
     let check_workload (workload : authorization_workload) =
       let role =
-        Printf.sprintf
-          "arn:aws:iam::%s:role/sol/%s/sol-%s-%s"
-          account
-          target.env
-          target.env
-          workload.unit
+        match workload.identity with
+        | Some role -> role
+        | None ->
+          Printf.sprintf
+            "arn:aws:iam::%s:role/sol/%s/sol-%s-%s"
+            account
+            target.env
+            target.env
+            workload.unit
       in
-      let role_name = Printf.sprintf "sol-%s-%s" target.env workload.unit in
+      let role_name =
+        match workload.identity with
+        | Some arn ->
+          (match String.rindex_opt arn '/' with
+           | Some index -> String.sub arn (index + 1) (String.length arn - index - 1)
+           | None -> arn)
+        | None ->
+          Printf.sprintf
+            "sol-%s-%s"
+            target.env
+            (String.map (fun c -> if c = '/' then '-' else c) workload.unit)
+      in
       let* boundary_arn =
         Result.bind
           (run
@@ -1084,11 +1099,14 @@ let gcp_effective_access ~run (target : Sol_cli_config.target) workloads =
     in
     let check_workload (workload : authorization_workload) =
       let member =
-        Printf.sprintf
-          "serviceAccount:%s.svc.id.goog[%s/%s]"
-          project
-          workload.namespace
-          workload.unit
+        match workload.identity with
+        | Some email -> "serviceAccount:" ^ email
+        | None ->
+          Printf.sprintf
+            "serviceAccount:%s.svc.id.goog[%s/%s]"
+            project
+            workload.namespace
+            workload.unit
       in
       let check_secret key =
         let secret = Printf.sprintf "sol-%s-%s" target.env key in
