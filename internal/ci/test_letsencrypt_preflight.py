@@ -35,6 +35,8 @@ def record(serial: str, host: str, when: dt.datetime, issuer: str = "C=US, O=Let
 
 
 def main() -> int:
+    original_now = preflight.now
+    preflight.now = lambda: NOW
     host = "argocd.qual.example.dev"
     check("exact host is counted", len(preflight.issued_for(host, [
         record("a", host, NOW - dt.timedelta(days=1)),
