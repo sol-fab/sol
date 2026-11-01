@@ -6,7 +6,7 @@ set -euo pipefail
 : "${RUNTIME_SERVICE_ACCOUNT:?set RUNTIME_SERVICE_ACCOUNT to the function identity}"
 PROJECT=sol-qualification
 REGION=us-central1
-JOB=sol-extqual-gcp-1-fn
+JOB=extqual-gcp-fn
 REPOSITORY=sol-extqual-gcp-1
 TOPIC=sol-extqual-gcp-1-jobs
 SUBSCRIPTION=sol-extqual-gcp-1-jobs-worker
