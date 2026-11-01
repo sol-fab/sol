@@ -402,6 +402,29 @@ let%test "AWS simulation includes the boundary document" =
   test_aws_boundary_document_is_included ()
 ;;
 
+let test_gcp_external_bucket_read_wrong_member_refuses () =
+  let target = target ~fields:[ "project_id", "my-project" ] Sol_cli_provider.Gcp in
+  match
+    Sol_cli_provider_capabilities.gcp_effective_access
+      ~run:
+        (gcp_run
+           ~role:"roles/storage.objectViewer"
+           ~members:{|"serviceAccount:someone-else"|})
+      target
+      [ workload ~external_grants:[ "object.read", "gcs_bucket:uploads" ] [] ]
+  with
+  | Ok () -> Windtrap.fail "an ineffective GCP external grant passed verification"
+  | Error message ->
+    check_bool
+      "names the GCP external grant"
+      true
+      (Sol_cli_string.contains ~needle:"object.read" message)
+;;
+
 let%test "verify: GCP external bucket read passes" =
   test_gcp_external_bucket_read_passes ()
+;;
+
+let%test "verify: GCP external bucket read with wrong member fails" =
+  test_gcp_external_bucket_read_wrong_member_refuses ()
 ;;
