@@ -10,7 +10,7 @@ def main():
     publisher = pubsub_v1.PublisherClient()
     subscriber = pubsub_v1.SubscriberClient()
     storage_client = storage.Client()
-    project = os.environ["GOOGLE_CLOUD_PROJECT"]
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT") or storage_client.project
     topic = publisher.topic_path(project, os.environ["TOPIC"])
     subscription = subscriber.subscription_path(project, os.environ["SUBSCRIPTION"])
     bucket = storage_client.bucket(os.environ["BUCKET"])
