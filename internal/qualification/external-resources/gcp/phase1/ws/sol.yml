@@ -1,0 +1,12 @@
+project: extqual-gcp
+
+resources:
+  jobs:
+    type: queue
+  uploads:
+    type: object_store
+
+services:
+  extqual_gcp_fn:
+    type: fn
+    path: app/extqual/extqual_gcp_fn
