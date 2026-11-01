@@ -261,7 +261,7 @@ let validate_external_connection
     Error
       "external GCP object-store authorization for Cloud Storage is not implemented yet; \
        it fails closed"
-  | _ -> Ok ()
+  | (Sol_cli_provider.Aws | Sol_cli_provider.Gcp | Sol_cli_provider.Byo), _ -> Ok ()
 ;;
 
 let validate_external_bindings
