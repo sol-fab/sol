@@ -200,7 +200,12 @@ let resource_name_of_ref ref =
   | [] -> None
 ;;
 
-let validate_external_connection ~typ ~name (binding : Sol_cli_config.resource_binding) =
+let validate_external_connection
+      ~provider
+      ~typ
+      ~name
+      (binding : Sol_cli_config.resource_binding)
+  =
   let open Result.Syntax in
   let required key =
     match List.assoc_opt key binding.connection with
@@ -229,29 +234,49 @@ let validate_external_connection ~typ ~name (binding : Sol_cli_config.resource_b
            value
            prefix)
   in
+  let _ = provider in
   match typ with
   | "queue" ->
-    let* _ = require_prefix "QUEUE_ARN" "arn:aws:sqs:" in
-    let* _ = required "QUEUE_URL" in
-    Ok ()
+    if
+      List.mem_assoc "QUEUE_ARN" binding.connection
+      || List.mem_assoc "QUEUE_URL" binding.connection
+    then
+      let* _ = require_prefix "QUEUE_ARN" "arn:aws:sqs:" in
+      let* _ = required "QUEUE_URL" in
+      Ok ()
+    else
+      let* _ = required "TOPIC" in
+      let* _ = required "SUBSCRIPTION" in
+      Ok ()
   | "object_store" ->
-    let* arn = require_prefix "OBJECT_ARN" "arn:aws:s3:::" in
-    let* () =
-      if String.length arn > 2 && String.sub arn (String.length arn - 2) 2 = "/*"
-      then Ok ()
-      else
-        Error
-          (Printf.sprintf
-             "external object_store resource %S must bind OBJECT_ARN to an object \
-              ARN               ending in /* (for example arn:aws:s3:::bucket/*)"
-             name)
-    in
-    let* _ = required "OBJECT_BUCKET" in
-    Ok ()
+    if
+      List.mem_assoc "OBJECT_ARN" binding.connection
+      || List.mem_assoc "OBJECT_BUCKET" binding.connection
+    then
+      let* arn = require_prefix "OBJECT_ARN" "arn:aws:s3:::" in
+      let* () =
+        if String.length arn > 2 && String.sub arn (String.length arn - 2) 2 = "/*"
+        then Ok ()
+        else
+          Error
+            (Printf.sprintf
+               "external object_store resource %S must bind OBJECT_ARN to an object ARN \
+                ending in /*"
+               name)
+      in
+      let* _ = required "OBJECT_BUCKET" in
+      Ok ()
+    else
+      let* _ = required "BUCKET" in
+      Ok ()
   | _ -> Ok ()
 ;;
 
-let validate_external_bindings ~(declared : Sol_cli_config.declared) ~service_name =
+let validate_external_bindings
+      ~provider
+      ~(declared : Sol_cli_config.declared)
+      ~service_name
+  =
   let open Result.Syntax in
   let* service =
     match
@@ -310,23 +335,26 @@ let validate_external_bindings ~(declared : Sol_cli_config.declared) ~service_na
                       queue/object-store"
                      name)
             in
-            let* () = validate_external_connection ~typ ~name binding in
-            let identifier =
-              match typ with
-              | "queue" -> "QUEUE_ARN"
-              | "object_store" -> "OBJECT_ARN"
-              | _ -> assert false
-            in
-            (match List.assoc_opt identifier binding.connection with
-             | Some value when String.trim value <> "" -> Ok ()
-             | _ ->
-               Error
-                 (Printf.sprintf
-                    "external %s resource %S has no %s in binding.connection, so \
-                     its                      provider permissions cannot be scoped"
-                    typ
-                    name
-                    identifier))
+            let* () = validate_external_connection ~provider ~typ ~name binding in
+            (match provider with
+             | Sol_cli_provider.Aws ->
+               let identifier =
+                 match typ with
+                 | "queue" -> "QUEUE_ARN"
+                 | "object_store" -> "OBJECT_ARN"
+                 | _ -> assert false
+               in
+               (match List.assoc_opt identifier binding.connection with
+                | Some value when String.trim value <> "" -> Ok ()
+                | _ ->
+                  Error
+                    (Printf.sprintf
+                       "external %s resource %S has no %s in binding.connection, so its \
+                        provider permissions cannot be scoped"
+                       typ
+                       name
+                       identifier))
+             | Sol_cli_provider.Gcp | Sol_cli_provider.Byo -> Ok ())
           | _ -> Ok ())))
   |> Result.map (fun _ -> ())
 ;;
@@ -372,6 +400,7 @@ let external_connection ~(config : Sol_cli_config.t) ~service_name =
 ;;
 
 let external_requirements ~(config : Sol_cli_config.t) ~service_name =
+  let provider = config.target.provider in
   let open Result.Syntax in
   let* service =
     match
@@ -430,29 +459,63 @@ let external_requirements ~(config : Sol_cli_config.t) ~service_name =
                       external authentication model today"
                      name)
             in
-            let* () = validate_external_connection ~typ ~name binding in
-            let identifier =
-              match typ with
-              | "queue" -> "QUEUE_ARN"
-              | "object_store" -> "OBJECT_ARN"
-              | _ -> assert false
-            in
+            let* () = validate_external_connection ~provider ~typ ~name binding in
             let* resource_id =
-              match List.assoc_opt identifier binding.connection with
-              | Some value when String.trim value <> "" -> Ok value
-              | _ ->
-                Error
-                  (Printf.sprintf
-                     "external %s resource %S has no %s in binding.connection, so \
-                      its                       provider permissions cannot be scoped"
-                     typ
-                     name
-                     identifier)
+              match provider with
+              | Sol_cli_provider.Aws ->
+                let identifier =
+                  match typ with
+                  | "queue" -> "QUEUE_ARN"
+                  | "object_store" -> "OBJECT_ARN"
+                  | _ -> assert false
+                in
+                (match List.assoc_opt identifier binding.connection with
+                 | Some value when String.trim value <> "" -> Ok value
+                 | _ ->
+                   Error
+                     (Printf.sprintf
+                        "external %s resource %S has no %s in binding.connection, so its \
+                         provider permissions cannot be scoped"
+                        typ
+                        name
+                        identifier))
+              | Sol_cli_provider.Gcp | Sol_cli_provider.Byo -> Ok ""
             in
-            Ok
-              (Sol_cli_grant.resource_capabilities typ
-               |> List.map (fun capability ->
-                 Sol_cli_grant.requirement ~capability ~resource:resource_id))
+            (match provider, typ with
+             | Sol_cli_provider.Gcp, "queue" ->
+               (match
+                  ( List.assoc_opt "TOPIC" binding.connection
+                  , List.assoc_opt "SUBSCRIPTION" binding.connection )
+                with
+                | Some topic, Some subscription ->
+                  Ok
+                    [ Sol_cli_grant.requirement
+                        ~capability:Sol_cli_grant.Message_publish
+                        ~resource:("pubsub_topic:" ^ topic)
+                    ; Sol_cli_grant.requirement
+                        ~capability:Sol_cli_grant.Message_subscribe
+                        ~resource:("pubsub_subscription:" ^ subscription)
+                    ]
+                | _ -> Error "external GCP queue requires TOPIC and SUBSCRIPTION")
+             | Sol_cli_provider.Gcp, "object_store" ->
+               (match List.assoc_opt "BUCKET" binding.connection with
+                | Some bucket ->
+                  Ok
+                    [ Sol_cli_grant.requirement
+                        ~capability:Sol_cli_grant.Object_read
+                        ~resource:("gcs_bucket:" ^ bucket)
+                    ; Sol_cli_grant.requirement
+                        ~capability:Sol_cli_grant.Object_write
+                        ~resource:("gcs_bucket:" ^ bucket)
+                    ]
+                | None -> Error "external GCP object_store requires BUCKET")
+             | Sol_cli_provider.Aws, _ ->
+               Ok
+                 (Sol_cli_grant.resource_capabilities typ
+                  |> List.map (fun capability ->
+                    Sol_cli_grant.requirement ~capability ~resource:resource_id))
+             | (Sol_cli_provider.Gcp | Sol_cli_provider.Byo), _ ->
+               Error "external queue/object authorization requires AWS or GCP")
           | _ -> Ok [])))
   |> Result.map List.concat
 ;;

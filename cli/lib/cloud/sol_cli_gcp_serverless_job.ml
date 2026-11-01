@@ -20,6 +20,7 @@ type request =
   ; schedule : string option
   ; timezone : string option
   ; scheduler_identity : string option
+  ; external_env : (string * string) list
   ; record : string
   ; runner : Sol_cli_cloud_run.runner
   }
@@ -249,6 +250,13 @@ let deploy_argv (r : request) ~job ~image =
   ; "600s"
   ; "--quiet"
   ]
+  @
+  match r.external_env with
+  | [] -> []
+  | variables ->
+    [ "--set-env-vars"
+    ; String.concat "," (List.map (fun (key, value) -> key ^ "=" ^ value) variables)
+    ]
 ;;
 
 let execute_argv (r : request) ~job =

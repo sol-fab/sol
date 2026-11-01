@@ -13,6 +13,7 @@ type request =
   ; schedule : string option
   ; timezone : string option
   ; scheduler_identity : string option
+  ; external_env : (string * string) list
   ; record : string
   ; runner : Sol_cli_cloud_run.runner
   }

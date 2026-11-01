@@ -143,3 +143,105 @@ resource "google_secret_manager_secret_iam_member" "serverless" {
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.serverless[each.value.unit].email}"
 }
+
+locals {
+  external_grants = concat(
+    [
+      for grant in var.grants : {
+        unit       = grant.unit
+        namespace  = grant.namespace
+        capability = grant.capability
+        resource   = grant.resource
+        key        = "${grant.unit}/${grant.namespace}/${grant.capability}/${grant.resource}"
+      }
+    ],
+    flatten([
+      for unit in var.serverless_units : [
+        for requirement in unit.requirements : {
+          unit       = unit.unit
+          namespace  = ""
+          capability = requirement.capability
+          resource   = requirement.resource
+          key        = "${unit.unit}//${requirement.capability}/${requirement.resource}"
+        }
+      ]
+    ])
+  )
+
+  pubsub_topics = {
+    for grant in local.external_grants :
+    grant.key => grant
+    if grant.capability == "message.publish" && startswith(grant.resource, "pubsub_topic:")
+  }
+
+  pubsub_subscriptions = {
+    for grant in local.external_grants :
+    grant.key => grant
+    if grant.capability == "message.subscribe" && startswith(grant.resource, "pubsub_subscription:")
+  }
+
+  gcs_reads = {
+    for grant in local.external_grants :
+    grant.key => grant
+    if grant.capability == "object.read" && startswith(grant.resource, "gcs_bucket:")
+  }
+
+  gcs_writes = {
+    for grant in local.external_grants :
+    grant.key => grant
+    if grant.capability == "object.write" && startswith(grant.resource, "gcs_bucket:")
+  }
+}
+
+resource "google_pubsub_topic_iam_member" "publisher" {
+  for_each = local.pubsub_topics
+  project  = var.project_id
+  topic    = split(":", each.value.resource)[1]
+  role     = "roles/pubsub.publisher"
+  member = (
+    each.value.namespace == ""
+    ? "serviceAccount:${google_service_account.serverless[each.value.unit].email}"
+    : "serviceAccount:${var.project_id}.svc.id.goog[${each.value.namespace}/${each.value.unit}]"
+  )
+}
+
+resource "google_pubsub_subscription_iam_member" "subscriber" {
+  for_each     = local.pubsub_subscriptions
+  project      = var.project_id
+  subscription = split(":", each.value.resource)[1]
+  role         = "roles/pubsub.subscriber"
+  member = (
+    each.value.namespace == ""
+    ? "serviceAccount:${google_service_account.serverless[each.value.unit].email}"
+    : "serviceAccount:${var.project_id}.svc.id.goog[${each.value.namespace}/${each.value.unit}]"
+  )
+}
+
+resource "google_project_iam_custom_role" "object_writer" {
+  role_id     = "sol_${replace(var.environment, "-", "_")}_object_writer"
+  title       = "Sol ${var.environment} GCS object writer"
+  description = "Create and update GCS objects without delete or bucket administration."
+  permissions = ["storage.objects.create", "storage.objects.update"]
+}
+
+resource "google_storage_bucket_iam_member" "object_reader" {
+  for_each = local.gcs_reads
+  bucket   = split(":", each.value.resource)[1]
+  role     = "roles/storage.objectViewer"
+  member = (
+    each.value.namespace == ""
+    ? "serviceAccount:${google_service_account.serverless[each.value.unit].email}"
+    : "serviceAccount:${var.project_id}.svc.id.goog[${each.value.namespace}/${each.value.unit}]"
+  )
+}
+
+resource "google_storage_bucket_iam_member" "object_writer" {
+  for_each = local.gcs_writes
+  bucket   = split(":", each.value.resource)[1]
+  role     = google_project_iam_custom_role.object_writer.id
+  member = (
+    each.value.namespace == ""
+    ? "serviceAccount:${google_service_account.serverless[each.value.unit].email}"
+    : "serviceAccount:${var.project_id}.svc.id.goog[${each.value.namespace}/${each.value.unit}]"
+  )
+}

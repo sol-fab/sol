@@ -127,6 +127,38 @@ let test_secret_references_fail_closed () =
       (Sol_cli_string.contains ~needle:"secret references" message)
 ;;
 
+let test_gcp_external_requirements () =
+  let config =
+    config
+      ~target:"sched/gcp/us-west1"
+      [ resource "queue" [ "TOPIC", "orders"; "SUBSCRIPTION", "orders-worker" ] "jobs"
+      ; resource "object_store" [ "BUCKET", "uploads" ] "uploads"
+      ]
+      [ service "charge_svc" [ "jobs"; "uploads" ] ]
+  in
+  match
+    Sol_cli_resource_binding.external_requirements ~config ~service_name:"charge_svc"
+  with
+  | Error message -> Windtrap.fail message
+  | Ok requirements ->
+    Windtrap.equal Windtrap.int ~msg:"four GCP requirements" 4 (List.length requirements);
+    Windtrap.equal
+      Windtrap.string
+      ~msg:"topic resource"
+      "pubsub_topic:orders"
+      (List.nth requirements 0).resource;
+    Windtrap.equal
+      Windtrap.string
+      ~msg:"subscription resource"
+      "pubsub_subscription:orders-worker"
+      (List.nth requirements 1).resource;
+    Windtrap.equal
+      Windtrap.string
+      ~msg:"bucket resource"
+      "gcs_bucket:uploads"
+      (List.nth requirements 2).resource
+;;
+
 let test_gcp_fails_closed () =
   let config =
     config
@@ -183,9 +215,7 @@ let test_gcp_fails_closed () =
            Windtrap.bool
            ~msg:"unsupported provider is named"
            true
-           (Sol_cli_string.contains
-              ~needle:"no implemented authorization translation"
-              message))
+           (Sol_cli_string.contains ~needle:"requires TOPIC" message))
 ;;
 
 let test_authorization_grants () =
@@ -261,6 +291,7 @@ let test_plan_validation_missing_identifier () =
   in
   match
     Sol_cli_resource_binding.validate_external_bindings
+      ~provider:Sol_cli_provider.Aws
       ~declared
       ~service_name:"charge_svc"
   with
@@ -275,4 +306,8 @@ let test_plan_validation_missing_identifier () =
 
 let%test "plan validation refuses missing external identifier" =
   test_plan_validation_missing_identifier ()
+;;
+
+let%test "GCP external queue/object requirements are native" =
+  test_gcp_external_requirements ()
 ;;

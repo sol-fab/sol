@@ -87,7 +87,8 @@ val postgres_use_ca_target : postgres_use -> string option
 val resource_name_of_ref : string -> string option
 
 val validate_external_bindings
-  :  declared:Sol_cli_config.declared
+  :  provider:Sol_cli_provider.t
+  -> declared:Sol_cli_config.declared
   -> service_name:string
   -> (unit, string) result
 
