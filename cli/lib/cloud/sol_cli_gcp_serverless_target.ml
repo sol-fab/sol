@@ -140,6 +140,9 @@ let deploy_fn
     Sol_cli_cloud_run.provider_service_of service.name
     |> Result.map_error Sol_cli_cloud_run.failure_to_string
   in
+  let* external_env =
+    Sol_cli_resource_binding.external_connection ~config ~service_name:service.name
+  in
   let request : Sol_cli_gcp_serverless_job.request =
     { project = cloud_project
     ; region = target.region
@@ -151,6 +154,7 @@ let deploy_fn
     ; schedule
     ; timezone = schedule_timezone
     ; scheduler_identity
+    ; external_env
     ; record
     ; runner = runner ()
     }
@@ -272,6 +276,7 @@ let rollback_fn ~target ~project ~(service : Sol_cli_manifest.service) ~record ~
     ; schedule = None
     ; timezone = None
     ; scheduler_identity = None
+    ; external_env = []
     ; record
     ; runner = runner ()
     }
@@ -323,6 +328,7 @@ let destroy ~target ~service ~record =
       ; schedule = None
       ; timezone = None
       ; scheduler_identity = None
+      ; external_env = []
       ; record
       ; runner = runner ()
       }

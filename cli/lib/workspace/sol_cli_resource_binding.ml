@@ -253,14 +253,15 @@ let validate_external_connection
     in
     let* _ = required "OBJECT_BUCKET" in
     Ok ()
-  | (Sol_cli_provider.Gcp | Sol_cli_provider.Byo), "queue" ->
-    Error
-      "external GCP queue authorization for Pub/Sub is not implemented yet; it fails \
-       closed"
-  | (Sol_cli_provider.Gcp | Sol_cli_provider.Byo), "object_store" ->
-    Error
-      "external GCP object-store authorization for Cloud Storage is not implemented yet; \
-       it fails closed"
+  | Sol_cli_provider.Gcp, "queue" ->
+    let* _ = required "TOPIC" in
+    let* _ = required "SUBSCRIPTION" in
+    Ok ()
+  | Sol_cli_provider.Gcp, "object_store" ->
+    let* _ = required "BUCKET" in
+    Ok ()
+  | Sol_cli_provider.Byo, ("queue" | "object_store") ->
+    Error "external queue/object authorization requires AWS or GCP"
   | (Sol_cli_provider.Aws | Sol_cli_provider.Gcp | Sol_cli_provider.Byo), _ -> Ok ()
 ;;
 
@@ -328,22 +329,25 @@ let validate_external_bindings
                      name)
             in
             let* () = validate_external_connection ~provider ~typ ~name binding in
-            let identifier =
-              match typ with
-              | "queue" -> "QUEUE_ARN"
-              | "object_store" -> "OBJECT_ARN"
-              | _ -> assert false
-            in
-            (match List.assoc_opt identifier binding.connection with
-             | Some value when String.trim value <> "" -> Ok ()
-             | _ ->
-               Error
-                 (Printf.sprintf
-                    "external %s resource %S has no %s in binding.connection, so \
-                     its                      provider permissions cannot be scoped"
-                    typ
-                    name
-                    identifier))
+            (match provider with
+             | Sol_cli_provider.Aws ->
+               let identifier =
+                 match typ with
+                 | "queue" -> "QUEUE_ARN"
+                 | "object_store" -> "OBJECT_ARN"
+                 | _ -> assert false
+               in
+               (match List.assoc_opt identifier binding.connection with
+                | Some value when String.trim value <> "" -> Ok ()
+                | _ ->
+                  Error
+                    (Printf.sprintf
+                       "external %s resource %S has no %s in binding.connection, so its \
+                        provider permissions cannot be scoped"
+                       typ
+                       name
+                       identifier))
+             | Sol_cli_provider.Gcp | Sol_cli_provider.Byo -> Ok ())
           | _ -> Ok ())))
   |> Result.map (fun _ -> ())
 ;;
@@ -449,28 +453,56 @@ let external_requirements ~(config : Sol_cli_config.t) ~service_name =
                      name)
             in
             let* () = validate_external_connection ~provider ~typ ~name binding in
-            let identifier =
-              match typ with
-              | "queue" -> "QUEUE_ARN"
-              | "object_store" -> "OBJECT_ARN"
-              | _ -> assert false
-            in
             let* resource_id =
-              match List.assoc_opt identifier binding.connection with
-              | Some value when String.trim value <> "" -> Ok value
-              | _ ->
-                Error
-                  (Printf.sprintf
-                     "external %s resource %S has no %s in binding.connection, so \
-                      its                       provider permissions cannot be scoped"
-                     typ
-                     name
-                     identifier)
+              match provider with
+              | Sol_cli_provider.Aws ->
+                let identifier =
+                  match typ with
+                  | "queue" -> "QUEUE_ARN"
+                  | "object_store" -> "OBJECT_ARN"
+                  | _ -> assert false
+                in
+                (match List.assoc_opt identifier binding.connection with
+                 | Some value when String.trim value <> "" -> Ok value
+                 | _ ->
+                   Error
+                     (Printf.sprintf
+                        "external %s resource %S has no %s in binding.connection, so its \
+                         provider permissions cannot be scoped"
+                        typ
+                        name
+                        identifier))
+              | Sol_cli_provider.Gcp | Sol_cli_provider.Byo -> Ok ""
             in
-            Ok
-              (Sol_cli_grant.resource_capabilities typ
-               |> List.map (fun capability ->
-                 Sol_cli_grant.requirement ~capability ~resource:resource_id))
+            (match provider, typ with
+             | Sol_cli_provider.Gcp, "queue" ->
+               let topic = List.assoc "TOPIC" binding.connection in
+               let subscription = List.assoc "SUBSCRIPTION" binding.connection in
+               Ok
+                 [ Sol_cli_grant.requirement
+                     ~capability:Sol_cli_grant.Message_publish
+                     ~resource:("pubsub_topic:" ^ topic)
+                 ; Sol_cli_grant.requirement
+                     ~capability:Sol_cli_grant.Message_subscribe
+                     ~resource:("pubsub_subscription:" ^ subscription)
+                 ]
+             | Sol_cli_provider.Gcp, "object_store" ->
+               let bucket = List.assoc "BUCKET" binding.connection in
+               Ok
+                 [ Sol_cli_grant.requirement
+                     ~capability:Sol_cli_grant.Object_read
+                     ~resource:("gcs_bucket:" ^ bucket)
+                 ; Sol_cli_grant.requirement
+                     ~capability:Sol_cli_grant.Object_write
+                     ~resource:("gcs_bucket:" ^ bucket)
+                 ]
+             | Sol_cli_provider.Aws, _ ->
+               Ok
+                 (Sol_cli_grant.resource_capabilities typ
+                  |> List.map (fun capability ->
+                    Sol_cli_grant.requirement ~capability ~resource:resource_id))
+             | (Sol_cli_provider.Gcp | Sol_cli_provider.Byo), _ ->
+               Error "external queue/object authorization requires AWS or GCP")
           | _ -> Ok [])))
   |> Result.map List.concat
 ;;
