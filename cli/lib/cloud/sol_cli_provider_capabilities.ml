@@ -850,7 +850,18 @@ let aws_effective_access ~run (target : Sol_cli_config.target) workloads =
             target.env
             workload.unit
       in
-      let role_name = Printf.sprintf "sol-%s-%s" target.env workload.unit in
+      let role_name =
+        match workload.identity with
+        | Some arn ->
+          (match String.rindex_opt arn '/' with
+           | Some index -> String.sub arn (index + 1) (String.length arn - index - 1)
+           | None -> arn)
+        | None ->
+          Printf.sprintf
+            "sol-%s-%s"
+            target.env
+            (String.map (fun c -> if c = '/' then '-' else c) workload.unit)
+      in
       let* boundary_arn =
         Result.bind
           (run
