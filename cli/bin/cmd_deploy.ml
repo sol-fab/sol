@@ -1460,31 +1460,45 @@ let run (req : Sol_cli_command_request.deploy_request) =
                 service.name)))
     else Ok ()
   in
-  let* identities, scheduler_identities =
-    match Sol_cli_config.execution_of_target target_cfg with
-    | Sol_cli_config.Kubernetes -> Ok ([], [])
-    | Sol_cli_config.Serverless | Sol_cli_config.Mixed ->
-      target_authorization
-        ~resolved_config
-        ~target_cfg
-        ~facts
-        ~serverless_all:
-          (Sol_cli_config.execution_of_target target_cfg = Sol_cli_config.Serverless)
-        ~run_log
-  in
+  let identities = ref [] in
+  let scheduler_identities = ref [] in
   let* () =
-    if serverless_services = []
-    then Ok ()
-    else
-      run_serverless
-        ~resolved_config
-        ~target_cfg
-        ~deployed:{ deployed with services = serverless_services }
-        ~selection
-        ~identities
-        ~scheduler_identities
-        ~target_name:req.target
-        ~run_log
+    Sol_cli_mixed_lifecycle.run
+      ~target:target_cfg
+      ~services:deployed.services
+      ~authorize:(fun () ->
+        match Sol_cli_config.execution_of_target target_cfg with
+        | Sol_cli_config.Kubernetes -> Ok ()
+        | Sol_cli_config.Serverless | Sol_cli_config.Mixed ->
+          let* identities', scheduler_identities' =
+            target_authorization
+              ~resolved_config
+              ~target_cfg
+              ~facts
+              ~serverless_all:
+                (Sol_cli_config.execution_of_target target_cfg = Sol_cli_config.Serverless)
+              ~run_log
+            |> Result.map_error (fun (failure : Sol_cli_exit.failure) -> failure.text)
+          in
+          identities := identities';
+          scheduler_identities := scheduler_identities';
+          Ok ())
+      ~serverless:(fun services ->
+        if services = []
+        then Ok ()
+        else
+          run_serverless
+            ~resolved_config
+            ~target_cfg
+            ~deployed:{ deployed with services }
+            ~selection
+            ~identities:!identities
+            ~scheduler_identities:!scheduler_identities
+            ~target_name:req.target
+            ~run_log
+          |> Result.map_error (fun (failure : Sol_cli_exit.failure) -> failure.text))
+      ~kubernetes:(fun _ -> Ok ())
+    |> Result.map_error Sol_cli_exit.error
   in
   if kubernetes_services = []
   then Ok ()
