@@ -1022,15 +1022,66 @@ let gcp_secret_accessor_members output =
     Error ("gcloud secrets get-iam-policy returned invalid JSON: " ^ message)
 ;;
 
+let gcp_iam_binding_members ~role output =
+  let bindings =
+    match Yojson.Safe.from_string output with
+    | `Assoc fields ->
+      (match List.assoc_opt "bindings" fields with
+       | Some (`List bindings) -> bindings
+       | _ -> [])
+    | `List bindings -> bindings
+    | _ -> []
+    | exception Yojson.Json_error _ -> []
+  in
+  Ok
+    (bindings
+     |> List.concat_map (function
+       | `Assoc fields ->
+         (match List.assoc_opt "role" fields, List.assoc_opt "members" fields with
+          | Some (`String actual), Some (`List members) when actual = role ->
+            List.filter_map
+              (function
+                | `String m -> Some m
+                | _ -> None)
+              members
+          | _ -> [])
+       | _ -> []))
+;;
+
+let gcp_external_resource resource =
+  match String.index_opt resource ':' with
+  | Some i ->
+    Some
+      ( String.sub resource 0 i
+      , String.sub resource (i + 1) (String.length resource - i - 1) )
+  | None -> None
+;;
+
 let gcp_effective_access ~run (target : Sol_cli_config.target) workloads =
   let open Result.Syntax in
   let workloads =
-    List.filter (fun (w : authorization_workload) -> w.secrets <> []) workloads
+    List.filter
+      (fun (w : authorization_workload) -> w.secrets <> [] || w.external_grants <> [])
+      workloads
   in
   match workloads with
   | [] -> Ok ()
   | _ ->
     let* project = required_field target "project_id" in
+    let custom_writer =
+      Printf.sprintf
+        "projects/%s/roles/sol_%s_object_writer"
+        project
+        (String.map (fun c -> if c = '-' then '_' else c) target.env)
+    in
+    let role_for = function
+      | "message.publish" -> Ok "roles/pubsub.publisher"
+      | "message.subscribe" -> Ok "roles/pubsub.subscriber"
+      | "object.read" -> Ok "roles/storage.objectViewer"
+      | "object.write" -> Ok custom_writer
+      | capability ->
+        Error (Printf.sprintf "no GCP role mapping for capability %S" capability)
+    in
     let check_workload (workload : authorization_workload) =
       let member =
         Printf.sprintf
@@ -1039,35 +1090,99 @@ let gcp_effective_access ~run (target : Sol_cli_config.target) workloads =
           workload.namespace
           workload.unit
       in
-      let rec check_keys = function
-        | [] -> Ok ()
-        | key :: rest ->
-          let secret = Printf.sprintf "sol-%s-%s" target.env key in
-          let* members =
+      let check_secret key =
+        let secret = Printf.sprintf "sol-%s-%s" target.env key in
+        let* members =
+          Result.bind
+            (run
+               [ "gcloud"
+               ; "secrets"
+               ; "get-iam-policy"
+               ; secret
+               ; "--project"
+               ; project
+               ; "--format"
+               ; "json"
+               ])
+            gcp_secret_accessor_members
+        in
+        if List.mem member members
+        then Ok ()
+        else
+          Error
+            (authorization_refusal
+               target
+               ~unit:workload.unit
+               ~capability:"secret"
+               ~resource:key)
+      in
+      let check_external (capability, resource) =
+        let* role = role_for capability in
+        let* members =
+          match gcp_external_resource resource with
+          | Some ("pubsub_topic", topic) ->
             Result.bind
               (run
                  [ "gcloud"
-                 ; "secrets"
+                 ; "pubsub"
+                 ; "topics"
                  ; "get-iam-policy"
-                 ; secret
+                 ; topic
                  ; "--project"
                  ; project
                  ; "--format"
                  ; "json"
                  ])
-              gcp_secret_accessor_members
-          in
-          if List.mem member members
-          then check_keys rest
-          else
-            Error
-              (authorization_refusal
-                 target
-                 ~unit:workload.unit
-                 ~capability:"secret"
-                 ~resource:key)
+              (gcp_iam_binding_members ~role)
+          | Some ("pubsub_subscription", subscription) ->
+            Result.bind
+              (run
+                 [ "gcloud"
+                 ; "pubsub"
+                 ; "subscriptions"
+                 ; "get-iam-policy"
+                 ; subscription
+                 ; "--project"
+                 ; project
+                 ; "--format"
+                 ; "json"
+                 ])
+              (gcp_iam_binding_members ~role)
+          | Some ("gcs_bucket", bucket) ->
+            Result.bind
+              (run
+                 [ "gcloud"
+                 ; "storage"
+                 ; "buckets"
+                 ; "get-iam-policy"
+                 ; "gs://" ^ bucket
+                 ; "--project"
+                 ; project
+                 ; "--format"
+                 ; "json"
+                 ])
+              (gcp_iam_binding_members ~role)
+          | _ -> Error ("unrecognized GCP external resource " ^ resource)
+        in
+        if List.mem member members
+        then Ok ()
+        else
+          Error (authorization_refusal target ~unit:workload.unit ~capability ~resource)
       in
-      check_keys workload.secrets
+      let rec check_secrets = function
+        | [] -> Ok ()
+        | key :: rest ->
+          let* () = check_secret key in
+          check_secrets rest
+      in
+      let rec check_externals = function
+        | [] -> Ok ()
+        | grant :: rest ->
+          let* () = check_external grant in
+          check_externals rest
+      in
+      let* () = check_secrets workload.secrets in
+      check_externals workload.external_grants
     in
     Sol_cli_result.map_list check_workload workloads |> Result.map ignore
 ;;

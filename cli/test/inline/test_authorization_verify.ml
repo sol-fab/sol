@@ -66,13 +66,9 @@ let aws_run
   else Error ("unexpected aws command: " ^ String.concat " " argv)
 ;;
 
-let gcp_run ~members argv =
+let gcp_run ?(role = "roles/secretmanager.secretAccessor") ~members argv =
   if List.mem "get-iam-policy" argv
-  then
-    Ok
-      (Printf.sprintf
-         {|{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":[%s]}]}|}
-         members)
+  then Ok (Printf.sprintf {|{"bindings":[{"role":"%s","members":[%s]}]}|} role members)
   else Error ("unexpected gcloud command: " ^ String.concat " " argv)
 ;;
 
@@ -150,6 +146,19 @@ let test_gcp_effective_grant_passes () =
       ~run:(gcp_run ~members:member)
       target
       [ workload [ "stripe" ] ]
+  with
+  | Ok () -> ()
+  | Error message -> Windtrap.fail message
+;;
+
+let test_gcp_external_bucket_read_passes () =
+  let target = target ~fields:[ "project_id", "my-project" ] Sol_cli_provider.Gcp in
+  let member = {|"serviceAccount:my-project.svc.id.goog[payments/payments-api]"|} in
+  match
+    Sol_cli_provider_capabilities.gcp_effective_access
+      ~run:(gcp_run ~role:"roles/storage.objectViewer" ~members:member)
+      target
+      [ workload ~external_grants:[ "object.read", "gcs_bucket:uploads" ] [] ]
   with
   | Ok () -> ()
   | Error message -> Windtrap.fail message
@@ -391,4 +400,8 @@ let%test "AWS unexpected permissions boundary fails closed" =
 
 let%test "AWS simulation includes the boundary document" =
   test_aws_boundary_document_is_included ()
+;;
+
+let%test "verify: GCP external bucket read passes" =
+  test_gcp_external_bucket_read_passes ()
 ;;
