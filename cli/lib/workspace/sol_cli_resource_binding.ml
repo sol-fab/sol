@@ -200,7 +200,12 @@ let resource_name_of_ref ref =
   | [] -> None
 ;;
 
-let validate_external_connection ~typ ~name (binding : Sol_cli_config.resource_binding) =
+let validate_external_connection
+      ~provider
+      ~typ
+      ~name
+      (binding : Sol_cli_config.resource_binding)
+  =
   let open Result.Syntax in
   let required key =
     match List.assoc_opt key binding.connection with
@@ -229,12 +234,12 @@ let validate_external_connection ~typ ~name (binding : Sol_cli_config.resource_b
            value
            prefix)
   in
-  match typ with
-  | "queue" ->
+  match provider, typ with
+  | Sol_cli_provider.Aws, "queue" ->
     let* _ = require_prefix "QUEUE_ARN" "arn:aws:sqs:" in
     let* _ = required "QUEUE_URL" in
     Ok ()
-  | "object_store" ->
+  | Sol_cli_provider.Aws, "object_store" ->
     let* arn = require_prefix "OBJECT_ARN" "arn:aws:s3:::" in
     let* () =
       if String.length arn > 2 && String.sub arn (String.length arn - 2) 2 = "/*"
@@ -242,16 +247,28 @@ let validate_external_connection ~typ ~name (binding : Sol_cli_config.resource_b
       else
         Error
           (Printf.sprintf
-             "external object_store resource %S must bind OBJECT_ARN to an object \
-              ARN               ending in /* (for example arn:aws:s3:::bucket/*)"
+             "external object_store resource %S must bind OBJECT_ARN to an object ARN \
+              ending in /* (for example arn:aws:s3:::bucket/*)"
              name)
     in
     let* _ = required "OBJECT_BUCKET" in
     Ok ()
+  | (Sol_cli_provider.Gcp | Sol_cli_provider.Byo), "queue" ->
+    Error
+      "external GCP queue authorization for Pub/Sub is not implemented yet; it fails \
+       closed"
+  | (Sol_cli_provider.Gcp | Sol_cli_provider.Byo), "object_store" ->
+    Error
+      "external GCP object-store authorization for Cloud Storage is not implemented yet; \
+       it fails closed"
   | _ -> Ok ()
 ;;
 
-let validate_external_bindings ~(declared : Sol_cli_config.declared) ~service_name =
+let validate_external_bindings
+      ~provider
+      ~(declared : Sol_cli_config.declared)
+      ~service_name
+  =
   let open Result.Syntax in
   let* service =
     match
@@ -310,7 +327,7 @@ let validate_external_bindings ~(declared : Sol_cli_config.declared) ~service_na
                       queue/object-store"
                      name)
             in
-            let* () = validate_external_connection ~typ ~name binding in
+            let* () = validate_external_connection ~provider ~typ ~name binding in
             let identifier =
               match typ with
               | "queue" -> "QUEUE_ARN"
@@ -372,6 +389,7 @@ let external_connection ~(config : Sol_cli_config.t) ~service_name =
 ;;
 
 let external_requirements ~(config : Sol_cli_config.t) ~service_name =
+  let provider = config.target.provider in
   let open Result.Syntax in
   let* service =
     match
@@ -430,7 +448,7 @@ let external_requirements ~(config : Sol_cli_config.t) ~service_name =
                       external authentication model today"
                      name)
             in
-            let* () = validate_external_connection ~typ ~name binding in
+            let* () = validate_external_connection ~provider ~typ ~name binding in
             let identifier =
               match typ with
               | "queue" -> "QUEUE_ARN"

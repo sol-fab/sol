@@ -1203,7 +1203,10 @@ let of_services_result
     | None -> Ok []
     | Some cfg ->
       let* () =
-        Sol_cli_resource_binding.validate_external_bindings ~declared:cfg ~service_name
+        Sol_cli_resource_binding.validate_external_bindings
+          ~provider:Sol_cli_provider.Aws
+          ~declared:cfg
+          ~service_name
         |> Result.map_error (fun message -> Invalid_resource_binding message)
       in
       let* service =

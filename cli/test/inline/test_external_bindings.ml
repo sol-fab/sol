@@ -183,9 +183,7 @@ let test_gcp_fails_closed () =
            Windtrap.bool
            ~msg:"unsupported provider is named"
            true
-           (Sol_cli_string.contains
-              ~needle:"no implemented authorization translation"
-              message))
+           (Sol_cli_string.contains ~needle:"not implemented" message))
 ;;
 
 let test_authorization_grants () =
@@ -261,6 +259,7 @@ let test_plan_validation_missing_identifier () =
   in
   match
     Sol_cli_resource_binding.validate_external_bindings
+      ~provider:Sol_cli_provider.Aws
       ~declared
       ~service_name:"charge_svc"
   with
