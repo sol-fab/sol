@@ -31,6 +31,9 @@ approved.
 6. Delete the job, repository/image, bucket/objects, subscription, topic, service account, IAM bindings, and state objects.
 7. Independently verify absence.
 
+`cleanup.sh` performs the deletions and absence checks, but only with
+`APPROVED=1` and the runtime service account explicitly supplied.
+
 ## Expected cost
 
 Under $1 for a short run; operational ceiling $2.
