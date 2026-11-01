@@ -234,35 +234,42 @@ let validate_external_connection
            value
            prefix)
   in
-  match provider, typ with
-  | Sol_cli_provider.Aws, "queue" ->
-    let* _ = require_prefix "QUEUE_ARN" "arn:aws:sqs:" in
-    let* _ = required "QUEUE_URL" in
-    Ok ()
-  | Sol_cli_provider.Aws, "object_store" ->
-    let* arn = require_prefix "OBJECT_ARN" "arn:aws:s3:::" in
-    let* () =
-      if String.length arn > 2 && String.sub arn (String.length arn - 2) 2 = "/*"
-      then Ok ()
-      else
-        Error
-          (Printf.sprintf
-             "external object_store resource %S must bind OBJECT_ARN to an object ARN \
-              ending in /* (for example arn:aws:s3:::bucket/*)"
-             name)
-    in
-    let* _ = required "OBJECT_BUCKET" in
-    Ok ()
-  | Sol_cli_provider.Gcp, "queue" ->
-    let* _ = required "TOPIC" in
-    let* _ = required "SUBSCRIPTION" in
-    Ok ()
-  | Sol_cli_provider.Gcp, "object_store" ->
-    let* _ = required "BUCKET" in
-    Ok ()
-  | Sol_cli_provider.Byo, ("queue" | "object_store") ->
-    Error "external queue/object authorization requires AWS or GCP"
-  | (Sol_cli_provider.Aws | Sol_cli_provider.Gcp | Sol_cli_provider.Byo), _ -> Ok ()
+  let _ = provider in
+  match typ with
+  | "queue" ->
+    if
+      List.mem_assoc "QUEUE_ARN" binding.connection
+      || List.mem_assoc "QUEUE_URL" binding.connection
+    then
+      let* _ = require_prefix "QUEUE_ARN" "arn:aws:sqs:" in
+      let* _ = required "QUEUE_URL" in
+      Ok ()
+    else
+      let* _ = required "TOPIC" in
+      let* _ = required "SUBSCRIPTION" in
+      Ok ()
+  | "object_store" ->
+    if
+      List.mem_assoc "OBJECT_ARN" binding.connection
+      || List.mem_assoc "OBJECT_BUCKET" binding.connection
+    then
+      let* arn = require_prefix "OBJECT_ARN" "arn:aws:s3:::" in
+      let* () =
+        if String.length arn > 2 && String.sub arn (String.length arn - 2) 2 = "/*"
+        then Ok ()
+        else
+          Error
+            (Printf.sprintf
+               "external object_store resource %S must bind OBJECT_ARN to an object ARN \
+                ending in /*"
+               name)
+      in
+      let* _ = required "OBJECT_BUCKET" in
+      Ok ()
+    else
+      let* _ = required "BUCKET" in
+      Ok ()
+  | _ -> Ok ()
 ;;
 
 let validate_external_bindings
@@ -476,26 +483,32 @@ let external_requirements ~(config : Sol_cli_config.t) ~service_name =
             in
             (match provider, typ with
              | Sol_cli_provider.Gcp, "queue" ->
-               let topic = List.assoc "TOPIC" binding.connection in
-               let subscription = List.assoc "SUBSCRIPTION" binding.connection in
-               Ok
-                 [ Sol_cli_grant.requirement
-                     ~capability:Sol_cli_grant.Message_publish
-                     ~resource:("pubsub_topic:" ^ topic)
-                 ; Sol_cli_grant.requirement
-                     ~capability:Sol_cli_grant.Message_subscribe
-                     ~resource:("pubsub_subscription:" ^ subscription)
-                 ]
+               (match
+                  ( List.assoc_opt "TOPIC" binding.connection
+                  , List.assoc_opt "SUBSCRIPTION" binding.connection )
+                with
+                | Some topic, Some subscription ->
+                  Ok
+                    [ Sol_cli_grant.requirement
+                        ~capability:Sol_cli_grant.Message_publish
+                        ~resource:("pubsub_topic:" ^ topic)
+                    ; Sol_cli_grant.requirement
+                        ~capability:Sol_cli_grant.Message_subscribe
+                        ~resource:("pubsub_subscription:" ^ subscription)
+                    ]
+                | _ -> Error "external GCP queue requires TOPIC and SUBSCRIPTION")
              | Sol_cli_provider.Gcp, "object_store" ->
-               let bucket = List.assoc "BUCKET" binding.connection in
-               Ok
-                 [ Sol_cli_grant.requirement
-                     ~capability:Sol_cli_grant.Object_read
-                     ~resource:("gcs_bucket:" ^ bucket)
-                 ; Sol_cli_grant.requirement
-                     ~capability:Sol_cli_grant.Object_write
-                     ~resource:("gcs_bucket:" ^ bucket)
-                 ]
+               (match List.assoc_opt "BUCKET" binding.connection with
+                | Some bucket ->
+                  Ok
+                    [ Sol_cli_grant.requirement
+                        ~capability:Sol_cli_grant.Object_read
+                        ~resource:("gcs_bucket:" ^ bucket)
+                    ; Sol_cli_grant.requirement
+                        ~capability:Sol_cli_grant.Object_write
+                        ~resource:("gcs_bucket:" ^ bucket)
+                    ]
+                | None -> Error "external GCP object_store requires BUCKET")
              | Sol_cli_provider.Aws, _ ->
                Ok
                  (Sol_cli_grant.resource_capabilities typ

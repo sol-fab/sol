@@ -215,7 +215,7 @@ let test_gcp_fails_closed () =
            Windtrap.bool
            ~msg:"unsupported provider is named"
            true
-           (Sol_cli_string.contains ~needle:"no TOPIC" message))
+           (Sol_cli_string.contains ~needle:"requires TOPIC" message))
 ;;
 
 let test_authorization_grants () =
