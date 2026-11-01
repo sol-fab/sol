@@ -72,3 +72,46 @@ let%test "mixed destroy refuses declared functions without inventory" =
       true
       (Sol_cli_string.contains ~needle:"orphaned" message)
 ;;
+
+let%test "mixed destroy enumerates every recorded serverless function" =
+  let root = Filename.temp_file "sol-inventory" "" in
+  Sys.remove root;
+  Unix.mkdir root 0o755;
+  let previous = Sys.getcwd () in
+  Sys.chdir root;
+  let result =
+    let open Result.Syntax in
+    let* () =
+      Sol_cli_serverless_inventory.add
+        ~target:"live/aws/us-east-1"
+        ~service:"notify_fn"
+        ~record:"/tmp/notify.json"
+    in
+    let* () =
+      Sol_cli_serverless_inventory.add
+        ~target:"live/aws/us-east-1"
+        ~service:"audit_fn"
+        ~record:"/tmp/audit.json"
+    in
+    Sol_cli_serverless_inventory.destroy_entries
+      ~target:"live/aws/us-east-1"
+      ~service:None
+      ~record:None
+      ~declared_functions:2
+  in
+  Sys.chdir previous;
+  let () =
+    let rec remove path =
+      if Sys.is_directory path
+      then (
+        Sys.readdir path |> Array.iter (fun child -> remove (Filename.concat path child));
+        Unix.rmdir path)
+      else Sys.remove path
+    in
+    remove root
+  in
+  match result with
+  | Error message -> Windtrap.fail message
+  | Ok entries ->
+    Windtrap.equal Windtrap.int ~msg:"both functions destroyed" 2 (List.length entries)
+;;
