@@ -61,6 +61,7 @@ let complete_units
       ~(target : Sol_cli_config.target)
       ~model
       ~exclude
+      ~serverless_all
   =
   let open Result.Syntax in
   let unsupported workload =
@@ -74,7 +75,8 @@ let complete_units
     Sol_cli_workspace_model.workloads model
     |> Sol_cli_result.map_list (fun (workload : Sol_cli_workspace_model.workload) ->
       match workload.service.primitive, workload.config with
-      | Sol_cli_manifest.Fn, Ok toml ->
+      | (Sol_cli_manifest.Fn | Svc | Worker), Ok toml
+        when serverless_all || workload.service.primitive = Sol_cli_manifest.Fn ->
         if Some workload.service.name = exclude
         then Ok None
         else (
@@ -110,7 +112,7 @@ let complete_units
                     , Option.map
                         (fun function_name -> { Sol_cli_grant.unit; function_name })
                         function_name ))))
-      | Sol_cli_manifest.Fn, Error _ -> unsupported workload
+      | (Sol_cli_manifest.Fn | Svc | Worker), Error _ -> unsupported workload
       | _ -> Ok None)
     |> Result.map (List.filter_map Fun.id)
   in

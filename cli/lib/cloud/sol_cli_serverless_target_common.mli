@@ -17,6 +17,11 @@ val unit_of_service : project:string -> Sol_cli_manifest.service -> string
 
 (** The lifecycle dispatcher establishes this once. Provider adapters may be called only
     through that dispatcher. *)
+val services_by_backend
+  :  Sol_cli_config.target
+  -> Sol_cli_manifest.service list
+  -> Sol_cli_manifest.service list * Sol_cli_manifest.service list
+
 val ensure_serverless : Sol_cli_config.target -> (unit, string) result
 
 (** Refuse a service that declares resource dependencies; serverless projection does not

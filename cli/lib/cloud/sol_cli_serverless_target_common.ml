@@ -31,6 +31,25 @@ let unit_of_service ~project (service : Sol_cli_manifest.service) =
   | _ -> project ^ "/" ^ service.name
 ;;
 
+let services_by_backend (target : Sol_cli_config.target) services =
+  match Sol_cli_config.execution_of_target target with
+  | Sol_cli_config.Serverless -> services, []
+  | Sol_cli_config.Kubernetes -> [], services
+  | Sol_cli_config.Mixed ->
+    ( List.filter
+        (fun (service : Sol_cli_manifest.service) ->
+           match service.primitive with
+           | Sol_cli_manifest.Fn -> true
+           | Svc | Worker -> false)
+        services
+    , List.filter
+        (fun (service : Sol_cli_manifest.service) ->
+           match service.primitive with
+           | Sol_cli_manifest.Fn -> false
+           | Svc | Worker -> true)
+        services )
+;;
+
 let ensure_serverless (target : Sol_cli_config.target) =
   if Sol_cli_config.execution_of_target target = Sol_cli_config.Serverless
   then Ok ()

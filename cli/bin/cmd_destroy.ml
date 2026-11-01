@@ -52,6 +52,7 @@ let serverless_destroy ~config ~target_cfg ~action ~record ~service =
       ~target:target_cfg
       ~model
       ~exclude:(Some service)
+      ~serverless_all:false
     |> Result.map_error Sol_cli_exit.error
   in
   let* _ =
@@ -78,6 +79,50 @@ let run ~target ~var_file ~vars ~action ~accept_unreleased ~record ~service () =
       ~action
       ~record
       ~service
+  | Sol_cli_config.Mixed ->
+    let* declared_functions =
+      Sol_cli_workspace_model.load_cwd ()
+      |> Result.map_error (fun message -> Sol_cli_exit.error message)
+      |> Result.map (fun model ->
+        Sol_cli_workspace_model.workloads model
+        |> List.filter (fun (workload : Sol_cli_workspace_model.workload) ->
+          match workload.service.primitive with
+          | Sol_cli_manifest.Fn -> true
+          | Svc | Worker -> false)
+        |> List.length)
+    in
+    let* entries =
+      Sol_cli_serverless_inventory.destroy_entries
+        ~target
+        ~service
+        ~record
+        ~declared_functions
+      |> Result.map_error Sol_cli_exit.error
+    in
+    let* () =
+      Sol_cli_result.map_list
+        (fun (entry : Sol_cli_serverless_inventory.entry) ->
+           let* () =
+             serverless_destroy
+               ~config:resolved_config
+               ~target_cfg:resolved_config.target
+               ~action
+               ~record:(Some entry.record)
+               ~service:(Some entry.service)
+           in
+           Sol_cli_serverless_inventory.remove ~target ~service:entry.service
+           |> Result.map_error Sol_cli_exit.error)
+        entries
+      |> Result.map ignore
+    in
+    Cmd_cloud_tf.cloud_destroy
+      ~target
+      ~resolved_config
+      ~var_file
+      ~vars
+      ~action
+      ~accept_unreleased
+      ()
   | Sol_cli_config.Kubernetes ->
     let* () =
       if record = None && service = None

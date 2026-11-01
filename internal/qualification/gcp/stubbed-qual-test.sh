@@ -10,6 +10,11 @@ TMP="$(mktemp -d)"
 source "$REPO/internal/qualification/common.sh"
 export ATTEMPT="${ATTEMPT:-qual-self-test}"
 export TARGET="${TARGET:-qual/gcp/us-central1}"
+# This suite has no real cluster. The harness defaults to waiting 30 minutes for
+# cluster credentials; a stubbed run that reaches that waiter would hang CI for the
+# whole wait. Cases that exercise the waiter override these explicitly.
+export CLUSTER_WAIT_TIMEOUT_S="${CLUSTER_WAIT_TIMEOUT_S:-15}"
+export CLUSTER_KUBECONFIG_POLL_S="${CLUSTER_KUBECONFIG_POLL_S:-1}"
 
 # Run the harness from a scratch root so the database-contract verifier can be a
 # stub, exactly as the AWS row's test does. The harness resolves everything from

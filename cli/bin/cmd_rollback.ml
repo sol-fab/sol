@@ -334,7 +334,7 @@ let serverless_rollback ~target ~record ~to_version ~to_revision ~token_file ~se
   let* () =
     match Sol_cli_config.execution_of_target target_cfg with
     | Sol_cli_config.Serverless -> Ok ()
-    | Sol_cli_config.Kubernetes ->
+    | Sol_cli_config.Kubernetes | Sol_cli_config.Mixed ->
       Error (Sol_cli_exit.error "target does not select execution: serverless")
   in
   let* record =
@@ -467,7 +467,7 @@ let cmd =
               ~to_revision
               ~token_file
               ~service
-          | Sol_cli_config.Kubernetes ->
+          | Sol_cli_config.Kubernetes | Sol_cli_config.Mixed ->
             let* release_id =
               Option.to_result
                 ~none:

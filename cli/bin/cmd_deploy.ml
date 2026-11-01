@@ -24,11 +24,98 @@ let print_header ~workspace ~sha ?mode_line () =
   Printf.printf "\n%!"
 ;;
 
+let target_authorization
+      ~resolved_config
+      ~(target_cfg : Sol_cli_config.target)
+      ~facts
+      ~serverless_all
+      ~run_log
+  =
+  let open Result.Syntax in
+  if
+    not
+      (Sol_cli_provider_capabilities.capabilities_of target_cfg.provider)
+        .authorization_supported
+  then Ok ([], [])
+  else
+    let* project =
+      match resolved_config.Sol_cli_config.project with
+      | Some project when String.trim project <> "" -> Ok project
+      | _ -> Error (Sol_cli_exit.error "serverless deployment requires sol.yml project")
+    in
+    let workspace = Sol_cli_workspace.current_name () in
+    let* namespace_of =
+      Sol_cli_workspace_model.workloads facts
+      |> Sol_cli_result.map_list (fun (workload : Sol_cli_workspace_model.workload) ->
+        let* unit = Sol_cli_authorization_reconcile.unit_name workload.service in
+        Sol_cli_deployment_plan.namespace_name
+          ~workspace
+          ~domain:workload.service.Sol_cli_manifest.domain
+        |> Result.map (fun namespace -> unit, namespace))
+      |> Result.map (fun pairs -> fun unit -> List.assoc_opt unit pairs)
+      |> Result.map_error Sol_cli_exit.error
+    in
+    let* desired =
+      Sol_cli_authorization_reconcile.desired ~binding_config:resolved_config facts
+      |> Result.map_error Sol_cli_exit.error
+    in
+    let k8s_units =
+      Sol_cli_workspace_model.workloads facts
+      |> List.filter_map (fun (workload : Sol_cli_workspace_model.workload) ->
+        match workload.service.primitive with
+        | Sol_cli_manifest.Fn -> None
+        | Sol_cli_manifest.Svc | Sol_cli_manifest.Worker ->
+          (match Sol_cli_authorization_reconcile.unit_name workload.service with
+           | Ok unit -> Some unit
+           | Error _ -> None))
+    in
+    let* grants =
+      Sol_cli_authorization_reconcile.terraform_grants ~grants:desired ~namespace_of
+      |> Result.map_error Sol_cli_exit.error
+    in
+    let grants =
+      List.filter
+        (fun (grant : Sol_cli_grant.target_grant) -> List.mem grant.unit k8s_units)
+        grants
+    in
+    let serverless_authorization =
+      match Sol_cli_config.execution_of_target target_cfg with
+      | Sol_cli_config.Serverless -> true
+      | Sol_cli_config.Mixed ->
+        (Sol_cli_provider_capabilities.capabilities_of target_cfg.provider)
+          .serverless_supported
+      | Sol_cli_config.Kubernetes -> false
+    in
+    let* serverless_units, scheduler_units =
+      if not serverless_authorization
+      then Ok ([], [])
+      else
+        Sol_cli_serverless_lifecycle.complete_units
+          ~config:resolved_config
+          ~project
+          ~target:target_cfg
+          ~model:facts
+          ~exclude:None
+          ~serverless_all
+        |> Result.map_error Sol_cli_exit.error
+    in
+    let* assets = Cmd_cloud_tf.resolve_assets () in
+    Sol_cli_authorization_stage.reconcile_target_authorization
+      ~assets
+      ~run_log
+      ~target:target_cfg
+      { Sol_cli_authorization_stage.grants; serverless_units; scheduler_units }
+    |> Result.map_error Sol_cli_exit.error
+;;
+
 let run_serverless
       ~(resolved_config : Sol_cli_config.t)
       ~(target_cfg : Sol_cli_config.target)
       ~(deployed : Sol_cli_deploy_selection.deployed)
       ~(selection : Sol_cli_deploy_selection.selection)
+      ~identities
+      ~scheduler_identities
+      ~target_name
       ~run_log
   =
   let* services =
@@ -128,24 +215,6 @@ let run_serverless
       in
       Ok (service, image, config, { Sol_cli_grant.unit; requirements }))
   in
-  let* assets = Cmd_cloud_tf.resolve_assets () in
-  let* serverless_units, scheduler_units =
-    Sol_cli_serverless_lifecycle.complete_units
-      ~config:resolved_config
-      ~project
-      ~target:target_cfg
-      ~model:facts
-      ~exclude:None
-    |> Result.map_error Sol_cli_exit.error
-  in
-  let* identities, scheduler_identities =
-    Sol_cli_authorization_stage.reconcile_target_authorization
-      ~assets
-      ~run_log
-      ~target:target_cfg
-      { Sol_cli_authorization_stage.grants = []; serverless_units; scheduler_units }
-    |> Result.map_error Sol_cli_exit.error
-  in
   let single =
     match declared with
     | [ _ ] -> true
@@ -225,6 +294,13 @@ let run_serverless
                 ~schedule:config.Sol_cli_toml.schedule
                 ~schedule_timezone:config.Sol_cli_toml.schedule_timezone
                 ~scheduler_identity
+              |> Result.map_error Sol_cli_exit.error
+            in
+            let* () =
+              Sol_cli_serverless_inventory.add
+                ~target:target_name
+                ~service:service.name
+                ~record
               |> Result.map_error Sol_cli_exit.error
             in
             print_endline (Yojson.Safe.to_string release);
@@ -1225,18 +1301,6 @@ let run_apply
       ()
   in
   let target_cfg = planning.Sol_cli_deploy_selection.Target_plan_input.config.target in
-  let* () =
-    match pending_artifacts with
-    | None -> Ok ()
-    | Some profile ->
-      print_guided
-        [ ""
-        ; "Deployment incomplete."
-        ; Sol_cli_profile_preflight.pending_artifacts_report ~target ~profile plan
-        ];
-      Error (Sol_cli_exit.reported ~code:1 ())
-  in
-  print_plan_preflight_passed plan;
   let authorization = Sol_cli_provider_capabilities.capabilities_of target_cfg.provider in
   let reconciler_declared =
     match
@@ -1246,7 +1310,9 @@ let run_apply
     | None -> false
   in
   let* () =
-    if not reconciler_declared
+    if
+      (not reconciler_declared)
+      || Sol_cli_config.execution_of_target target_cfg = Sol_cli_config.Mixed
     then Ok ()
     else
       Cmd_grants.run
@@ -1260,6 +1326,18 @@ let run_apply
       |> Result.map_error (fun (failure : Sol_cli_exit.failure) ->
         Sol_cli_exit.failure failure.text)
   in
+  let* () =
+    match pending_artifacts with
+    | None -> Ok ()
+    | Some profile ->
+      print_guided
+        [ ""
+        ; "Deployment incomplete."
+        ; Sol_cli_profile_preflight.pending_artifacts_report ~target ~profile plan
+        ];
+      Error (Sol_cli_exit.reported ~code:1 ())
+  in
+  print_plan_preflight_passed plan;
   let ctx : Sol_cli_deploy_run.context = context_of ~destination in
   let* plan = project_trusted_workload_issuer ctx.target_cfg plan in
   let database_setup ~setup_image () =
@@ -1335,7 +1413,6 @@ let run (req : Sol_cli_command_request.deploy_request) =
   in
   List.iter print_endline deployed.notes;
   let { Sol_cli_deploy_selection.image_refs; _ } = selection in
-  let services = deployed.services in
   let registry =
     match req.registry with
     | Some r -> r
@@ -1349,99 +1426,146 @@ let run (req : Sol_cli_command_request.deploy_request) =
     "\nRun: %s\n  log: %s/\n"
     (Sol_cli_run_log.run_id run_log)
     (Sol_cli_run_log.dir run_log);
-  (match Sol_cli_config.execution_of_target target_cfg with
-   | Sol_cli_config.Serverless ->
-     (match req.action with
-      | Sol_cli_command_request.Deploy_apply ->
-        Sol_cli_exit.exit_on
-          (run_serverless ~resolved_config ~target_cfg ~deployed ~selection ~run_log);
-        Stdlib.exit 0
-      | Deploy_dry_run _ | Deploy_emit_to _ ->
-        Sol_cli_exit.exit_on
-          (Error
-             (Sol_cli_exit.error
-                "serverless target dispatch supports apply only; dry-run/emit are not \
-                 implemented for this execution backend")))
-   | Sol_cli_config.Kubernetes -> ());
-  let emit_intent =
+  let serverless_services, kubernetes_services =
+    Sol_cli_serverless_target_common.services_by_backend target_cfg deployed.services
+  in
+  let* () =
+    Sol_cli_result.map_list
+      (fun (service : Sol_cli_manifest.service) ->
+         Sol_cli_serverless_target_common.declared_uses resolved_config service
+         |> Result.map_error Sol_cli_exit.error)
+      serverless_services
+    |> Result.map ignore
+  in
+  let* () =
+    if Sol_cli_config.execution_of_target target_cfg = Sol_cli_config.Serverless
+    then (
+      match
+        List.find_opt
+          (fun (service : Sol_cli_manifest.service) ->
+             match service.primitive with
+             | Sol_cli_manifest.Worker -> true
+             | Svc | Fn -> false)
+          serverless_services
+      with
+      | None -> Ok ()
+      | Some service ->
+        Error
+          (Sol_cli_exit.error
+             (Printf.sprintf
+                "target-scoped serverless dispatch does not support -worker (%s)"
+                service.name)))
+    else Ok ()
+  in
+  let* identities, scheduler_identities =
+    match Sol_cli_config.execution_of_target target_cfg with
+    | Sol_cli_config.Kubernetes -> Ok ([], [])
+    | Sol_cli_config.Serverless | Sol_cli_config.Mixed ->
+      target_authorization
+        ~resolved_config
+        ~target_cfg
+        ~facts
+        ~serverless_all:
+          (Sol_cli_config.execution_of_target target_cfg = Sol_cli_config.Serverless)
+        ~run_log
+  in
+  let* () =
+    if serverless_services = []
+    then Ok ()
+    else
+      run_serverless
+        ~resolved_config
+        ~target_cfg
+        ~deployed:{ deployed with services = serverless_services }
+        ~selection
+        ~identities
+        ~scheduler_identities
+        ~target_name:req.target
+        ~run_log
+  in
+  if kubernetes_services = []
+  then Ok ()
+  else (
+    let services = kubernetes_services in
+    let emit_intent =
+      match req.action with
+      | Sol_cli_command_request.Deploy_dry_run { emit_to } -> emit_to
+      | Sol_cli_command_request.Deploy_emit_to dir -> Some dir
+      | Sol_cli_command_request.Deploy_apply -> None
+    in
+    let await_delegation = Option.value req.await_delegation ~default:300 in
+    let planning : Sol_cli_deploy_selection.Target_plan_input.t =
+      { workspace
+      ; registry
+      ; sha
+      ; emit_to = emit_intent
+      ; config = resolved_config
+      ; facts
+      ; inventory
+      ; image_refs
+      ; services
+      }
+    in
+    let context_of ~destination : Sol_cli_deploy_run.context =
+      { execution =
+          Sol_cli_execution.context
+            ~cluster:(Sol_cli_kube_destination.context_of_destination destination)
+            ~workspace
+            ~env:target_cfg.env
+            ()
+      ; sha
+      ; registry
+      ; facts
+      ; emit_plan_to = req.emit_plan_to
+      ; target_cfg
+      ; resolved_config
+      ; services
+      ; inventory
+      ; image_refs
+      ; target_name = req.target
+      ; run_log
+      ; keep_releases = req.keep_releases
+      }
+    in
     match req.action with
-    | Sol_cli_command_request.Deploy_dry_run { emit_to } -> emit_to
-    | Sol_cli_command_request.Deploy_emit_to dir -> Some dir
-    | Sol_cli_command_request.Deploy_apply -> None
-  in
-  let await_delegation = Option.value req.await_delegation ~default:300 in
-  let planning : Sol_cli_deploy_selection.Target_plan_input.t =
-    { workspace
-    ; registry
-    ; sha
-    ; emit_to = emit_intent
-    ; config = resolved_config
-    ; facts
-    ; inventory
-    ; image_refs
-    ; services
-    }
-  in
-  let context_of ~destination : Sol_cli_deploy_run.context =
-    { execution =
-        Sol_cli_execution.context
-          ~cluster:(Sol_cli_kube_destination.context_of_destination destination)
-          ~workspace
-          ~env:target_cfg.env
+    | Sol_cli_command_request.Deploy_apply ->
+      run_apply
+        ~planning
+        ~context_of
+        ~target:req.target
+        ~run_log
+        ~confirm_group_change:req.confirm_group_change
+        ~confirm_ecr_removal:req.confirm_ecr_removal
+        ~accept_unresolved:req.accept_unresolved
+        ~loki_push_url:req.loki_push_url
+        ~await_delegation
+        ()
+    | Deploy_dry_run { emit_to } ->
+      let* destination, _, _ =
+        destination_or_environment_stage
+          ~planning
+          ~target:req.target
+          ~run_log
+          ~action:(Sol_cli_command_request.Deploy_dry_run { emit_to })
+          ~await_delegation
+          ~confirm_ecr_removal:req.confirm_ecr_removal
+          ~accept_unresolved:req.accept_unresolved
           ()
-    ; sha
-    ; registry
-    ; facts
-    ; emit_plan_to = req.emit_plan_to
-    ; target_cfg
-    ; resolved_config
-    ; services
-    ; inventory
-    ; image_refs
-    ; target_name = req.target
-    ; run_log
-    ; keep_releases = req.keep_releases
-    }
-  in
-  match req.action with
-  | Sol_cli_command_request.Deploy_apply ->
-    run_apply
-      ~planning
-      ~context_of
-      ~target:req.target
-      ~run_log
-      ~confirm_group_change:req.confirm_group_change
-      ~confirm_ecr_removal:req.confirm_ecr_removal
-      ~accept_unresolved:req.accept_unresolved
-      ~loki_push_url:req.loki_push_url
-      ~await_delegation
-      ()
-  | Deploy_dry_run { emit_to } ->
-    let* destination, _, _ =
-      destination_or_environment_stage
-        ~planning
-        ~target:req.target
-        ~run_log
-        ~action:(Sol_cli_command_request.Deploy_dry_run { emit_to })
-        ~await_delegation
-        ~confirm_ecr_removal:req.confirm_ecr_removal
-        ~accept_unresolved:req.accept_unresolved
-        ()
-    in
-    run_dry_run (context_of ~destination) ~emit_to ~await_delegation
-  | Deploy_emit_to dir ->
-    let* destination, _, _ =
-      destination_or_environment_stage
-        ~planning
-        ~target:req.target
-        ~run_log
-        ~action:(Sol_cli_command_request.Deploy_emit_to dir)
-        ~await_delegation
-        ~confirm_ecr_removal:req.confirm_ecr_removal
-        ~accept_unresolved:req.accept_unresolved
-        ()
-    in
-    run_emit (context_of ~destination) ~dir
+      in
+      run_dry_run (context_of ~destination) ~emit_to ~await_delegation
+    | Deploy_emit_to dir ->
+      let* destination, _, _ =
+        destination_or_environment_stage
+          ~planning
+          ~target:req.target
+          ~run_log
+          ~action:(Sol_cli_command_request.Deploy_emit_to dir)
+          ~await_delegation
+          ~confirm_ecr_removal:req.confirm_ecr_removal
+          ~accept_unresolved:req.accept_unresolved
+          ()
+      in
+      run_emit (context_of ~destination) ~dir)
 ;;
 
 let target_arg =
