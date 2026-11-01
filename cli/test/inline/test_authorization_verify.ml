@@ -42,9 +42,10 @@ let workload
       ?(unit = "payments-api")
       ?(namespace = "payments")
       ?(external_grants = [])
+      ?identity
       secrets
   =
-  { Sol_cli_provider_capabilities.unit; namespace; secrets; external_grants }
+  { Sol_cli_provider_capabilities.unit; namespace; secrets; external_grants; identity }
 ;;
 
 let aws_run
@@ -421,10 +422,31 @@ let test_gcp_external_bucket_read_wrong_member_refuses () =
       (Sol_cli_string.contains ~needle:"object.read" message)
 ;;
 
+let test_gcp_serverless_identity_is_used () =
+  let target = target ~fields:[ "project_id", "my-project" ] Sol_cli_provider.Gcp in
+  let member = {|"serviceAccount:runtime@p.example.iam.gserviceaccount.com"|} in
+  match
+    Sol_cli_provider_capabilities.gcp_effective_access
+      ~run:(gcp_run ~role:"roles/storage.objectViewer" ~members:member)
+      target
+      [ workload
+          ~identity:"runtime@p.example.iam.gserviceaccount.com"
+          ~external_grants:[ "object.read", "gcs_bucket:uploads" ]
+          []
+      ]
+  with
+  | Ok () -> ()
+  | Error message -> Windtrap.fail message
+;;
+
 let%test "verify: GCP external bucket read passes" =
   test_gcp_external_bucket_read_passes ()
 ;;
 
 let%test "verify: GCP external bucket read with wrong member fails" =
   test_gcp_external_bucket_read_wrong_member_refuses ()
+;;
+
+let%test "verify: GCP serverless service-account identity is used" =
+  test_gcp_serverless_identity_is_used ()
 ;;

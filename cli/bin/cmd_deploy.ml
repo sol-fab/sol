@@ -215,6 +215,38 @@ let run_serverless
       in
       Ok (service, image, config, { Sol_cli_grant.unit; requirements }))
   in
+  let* () =
+    let workloads =
+      declared
+      |> List.map
+           (fun
+               ( (service : Sol_cli_manifest.service)
+               , _
+               , (config : Sol_cli_toml.t)
+               , (unit : Sol_cli_grant.serverless_unit) )
+              ->
+              let _ = service in
+              { Sol_cli_provider_capabilities.unit = unit.unit
+              ; namespace = ""
+              ; secrets = config.secret_keys
+              ; external_grants =
+                  unit.requirements
+                  |> List.filter_map (fun (requirement : Sol_cli_grant.requirement) ->
+                    if requirement.capability = Sol_cli_grant.Secret_access
+                    then None
+                    else
+                      Some
+                        ( Sol_cli_grant.capability_to_string requirement.capability
+                        , requirement.resource ))
+              ; identity = List.assoc_opt unit.unit identities
+              })
+    in
+    (Sol_cli_provider_capabilities.capabilities_of target_cfg.provider)
+      .authorization_effective_access
+      target_cfg
+      workloads
+    |> Result.map_error Sol_cli_exit.error
+  in
   let single =
     match declared with
     | [ _ ] -> true

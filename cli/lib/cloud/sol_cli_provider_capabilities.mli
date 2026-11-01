@@ -31,6 +31,7 @@ type authorization_workload =
   ; namespace : string
   ; secrets : string list
   ; external_grants : (string * string) list
+  ; identity : string option
   }
 
 type t =
