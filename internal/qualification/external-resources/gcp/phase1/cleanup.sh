@@ -26,6 +26,7 @@ for role in $(gcloud projects get-iam-policy "$PROJECT" \
     --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role="$role" --quiet || true
 done
 gcloud iam service-accounts delete "$RUNTIME_SERVICE_ACCOUNT" --project "$PROJECT" --quiet || true
+gcloud iam roles delete sol_extqual_gcp_1_object_writer --project "$PROJECT" --quiet || true
 gcloud storage rm --recursive --quiet "$STATE" || true
 
 gcloud run jobs describe "$JOB" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1 && exit 1 || true
@@ -34,4 +35,5 @@ gcloud storage ls "gs://$BUCKET" >/dev/null 2>&1 && exit 1 || true
 gcloud pubsub subscriptions describe "$SUBSCRIPTION" --project "$PROJECT" >/dev/null 2>&1 && exit 1 || true
 gcloud pubsub topics describe "$TOPIC" --project "$PROJECT" >/dev/null 2>&1 && exit 1 || true
 gcloud iam service-accounts describe "$RUNTIME_SERVICE_ACCOUNT" --project "$PROJECT" >/dev/null 2>&1 && exit 1 || true
+gcloud iam roles describe sol_extqual_gcp_1_object_writer --project "$PROJECT" >/dev/null 2>&1 && exit 1 || true
 echo "Phase 1 GCP resources and extqual-gcp-1 state are absent"
