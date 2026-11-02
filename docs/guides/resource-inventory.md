@@ -40,6 +40,21 @@ A clean-looking inventory is not a clean verdict. Check
 before treating a result as complete. `--state-only` is an inspection mode, not a
 presence/absence gate.
 
+## Authorization coverage today
+
+The inventory independently observes most authorization-root classes:
+
+- **AWS:** reconciler role, all workload and scheduler roles, every per-unit boundary
+  policy, and every inline role policy. EKS pod identity associations are recorded but do
+  not yet have an independent probe.
+- **GCP:** reconciler, scheduler and serverless service accounts, the custom role, the
+  reconciler project binding, and secret IAM bindings. Service-account IAM members and
+  Cloud Run job IAM members are recorded but do not yet have an independent probe.
+
+An unprobed class is reported as `recorded`/unobserved and makes the verdict
+`incomplete`; it is never silently treated as owned. This list is a coverage statement,
+not a reason to lower the completeness contract.
+
 ## Status and recovery are different
 
 A provider object can be observed accurately while Sol cannot restore Terraform ownership

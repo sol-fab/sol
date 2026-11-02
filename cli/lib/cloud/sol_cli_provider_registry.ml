@@ -357,15 +357,43 @@ let inventory_auth_class provider (resource : Sol_cli_cloud_destroy.resource) =
   let address_starts prefix = String.starts_with ~prefix resource.address in
   match provider, resource.kind with
   | Sol_cli_provider.Aws, "aws_iam_policy"
-    when address_starts "aws_iam_policy.workload_boundary" ->
+    when address_starts "aws_iam_policy.workload_boundary"
+         || address_starts "aws_iam_policy.scheduler_boundary" ->
     Some ("authorization IAM policy", Sol_cli_cloud_destroy.resource_name resource)
   | Sol_cli_provider.Aws, "aws_iam_role" when address_starts "aws_iam_role.reconciler" ->
     Some ("authorization IAM role", Sol_cli_cloud_destroy.resource_name resource)
   | Sol_cli_provider.Aws, "aws_iam_role" when address_starts "aws_iam_role.workload" ->
     Some ("authorization workload role", Sol_cli_cloud_destroy.resource_name resource)
+  | Sol_cli_provider.Aws, "aws_iam_role" when address_starts "aws_iam_role.scheduler" ->
+    Some ("authorization workload role", Sol_cli_cloud_destroy.resource_name resource)
+  | Sol_cli_provider.Aws, "aws_iam_role_policy" ->
+    let identity =
+      match resource.role, resource.name with
+      | Some role, Some name -> Some (role ^ " -> " ^ name)
+      | _ -> None
+    in
+    Some ("authorization inline policy", identity)
   | Sol_cli_provider.Gcp, "google_service_account"
     when address_starts "google_service_account.reconciler" ->
     Some ("authorization service account", Sol_cli_cloud_destroy.resource_name resource)
+  | Sol_cli_provider.Gcp, "google_service_account"
+    when address_starts "google_service_account.scheduler" ->
+    Some
+      ( "authorization scheduler service account"
+      , Sol_cli_cloud_destroy.resource_name resource )
+  | Sol_cli_provider.Gcp, "google_service_account"
+    when address_starts "google_service_account.serverless" ->
+    Some
+      ( "authorization serverless service account"
+      , Sol_cli_cloud_destroy.resource_name resource )
+  | Sol_cli_provider.Gcp, "google_secret_manager_secret_iam_member" ->
+    let identity =
+      match resource.secret_id, resource.role, resource.member with
+      | Some secret, Some role, Some member ->
+        Some (Printf.sprintf "%s: %s -> %s" (Filename.basename secret) role member)
+      | _ -> None
+    in
+    Some ("authorization secret IAM binding", identity)
   | Sol_cli_provider.Gcp, "google_project_iam_custom_role"
     when address_starts "google_project_iam_custom_role.authorization" ->
     Some ("authorization custom role", Sol_cli_cloud_destroy.resource_name resource)

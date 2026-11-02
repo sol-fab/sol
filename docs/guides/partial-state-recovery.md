@@ -111,6 +111,27 @@ including any previously captured identities. Present, pending deletion and
 unobservable resources must not become verified absence. Record retained resources
 under their explicit retention contract.
 
+## Inventory sequence for a disposable interrupted apply
+
+This sequence is the qualification procedure, not authorization to run the mutating
+steps. A disposable target and explicit operator authorization are required.
+
+1. Before recovery, run `sol resources <target> --json` and pass it to
+   `internal/qualification/inventory_contract.py --expect attention`. The result must
+   identify the orphan as `unrecorded` with a `recoverable` disposition; it must not be
+   `reconciled`.
+2. Run `sol target reconcile <target> --dry-run --explain`. The same orphan must be the
+   exact import candidate; an `unrecoverable` or `unmapped` row is not adoptable.
+3. Perform the authorized reconcile, then re-run `sol resources <target> --json`. The
+   adopted row must be `owned` and the verdict `reconciled` or `incomplete` for a named
+   coverage gap. A second `--expect attention` would be a failure.
+4. Keep the before/after JSON and validation output with the attempt. The inventory output
+   is evidence only; `sol target reconcile` must never consume it as adoption authority.
+
+The remaining evidence is a live disposable target that demonstrates this sequence end to
+end. Offline tests cover the verdict/status/recovery join and the reconcile fail-closed
+checks, but they do not prove provider-side interruption behavior.
+
 ## Evidence still required
 
 Keep #1119 open until a disposable target demonstrates orphan detection, exact

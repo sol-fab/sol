@@ -1,20 +1,23 @@
 {
   "schema": 1,
   "target": "probe/gcp/us-central1",
-  "verdict": "unknown",
+  "verdict": "reconciled",
   "coverage": {
     "inventory": {
       "complete": true,
       "roots": [ "bootstrap", "cluster", "platform", "authorization" ]
     },
     "verification": {
-      "complete": false,
+      "complete": true,
       "required_classes": [
         "Artifact Registry repository", "Cloud NAT", "Cloud Router",
         "Cloud SQL instance", "GKE cluster", "GKE node pool",
         "Kafka credential secret", "VPC network",
         "authorization custom role", "authorization project IAM binding",
-        "authorization secret IAM binding", "authorization service account",
+        "authorization scheduler service account",
+        "authorization secret IAM binding",
+        "authorization serverless service account",
+        "authorization service account",
         "cert-manager DNS discovery project IAM binding", "custom role",
         "firewall rule", "forwarding rule", "google_dns_managed_zone",
         "google_storage_bucket", "persistent disk",
@@ -24,10 +27,14 @@
         "subnetwork"
       ],
       "observed_classes": [
-        "Artifact Registry repository", "Cloud Router", "Cloud SQL instance",
-        "GKE cluster", "Kafka credential secret", "VPC network",
+        "Artifact Registry repository", "Cloud NAT", "Cloud Router",
+        "Cloud SQL instance", "GKE cluster", "GKE node pool",
+        "Kafka credential secret", "VPC network",
         "authorization custom role", "authorization project IAM binding",
-        "authorization secret IAM binding", "authorization service account",
+        "authorization scheduler service account",
+        "authorization secret IAM binding",
+        "authorization serverless service account",
+        "authorization service account",
         "cert-manager DNS discovery project IAM binding", "custom role",
         "firewall rule", "forwarding rule", "persistent disk",
         "provisioner project IAM binding", "regional address",
@@ -40,7 +47,7 @@
         "google_dns_managed_zone", "google_storage_bucket"
       ],
       "unobserved_classes": [],
-      "failed_classes": [ "Cloud NAT", "GKE node pool" ],
+      "failed_classes": [],
       "recorded_unverified": []
     }
   },
@@ -126,50 +133,6 @@
       "checked_with": null,
       "lifetime": "installation",
       "deletion_protection": null
-    },
-    {
-      "layer": "cloud",
-      "root": "cluster",
-      "address": null,
-      "resource_class": "Cloud NAT",
-      "name": "",
-      "identity": "",
-      "observed_as": "",
-      "ownership_kind": null,
-      "import_identity": null,
-      "status": "unknown",
-      "status_reason": "ERROR: (gcloud.compute.routers.nats.list) HTTPError 404: The resource 'projects/sol-qualification/regions/us-central1/routers/sol-qual-preflight-router' was not found. This command is authenticated as lbendtlynielsen@gmail.com which is the active account specified by the [core/account] property",
-      "recovery": { "disposition": "not_applicable" },
-      "observation": "failed",
-      "record": "not_recorded",
-      "provider": "unobservable",
-      "action": "investigate",
-      "reason": "ERROR: (gcloud.compute.routers.nats.list) HTTPError 404: The resource 'projects/sol-qualification/regions/us-central1/routers/sol-qual-preflight-router' was not found. This command is authenticated as lbendtlynielsen@gmail.com which is the active account specified by the [core/account] property",
-      "checked_with": null,
-      "lifetime": "target",
-      "deletion_protection": null
-    },
-    {
-      "layer": "cloud",
-      "root": "cluster",
-      "address": null,
-      "resource_class": "GKE node pool",
-      "name": "",
-      "identity": "",
-      "observed_as": "",
-      "ownership_kind": null,
-      "import_identity": null,
-      "status": "unknown",
-      "status_reason": "ERROR: (gcloud.container.node-pools.list) ResponseError: code=404, message=Not found: projects/sol-qualification/locations/us-central1/clusters/sol-qual-preflight. This command is authenticated as lbendtlynielsen@gmail.com which is the active account specified by the [core/account] property.",
-      "recovery": { "disposition": "not_applicable" },
-      "observation": "failed",
-      "record": "not_recorded",
-      "provider": "unobservable",
-      "action": "investigate",
-      "reason": "ERROR: (gcloud.container.node-pools.list) ResponseError: code=404, message=Not found: projects/sol-qualification/locations/us-central1/clusters/sol-qual-preflight. This command is authenticated as lbendtlynielsen@gmail.com which is the active account specified by the [core/account] property.",
-      "checked_with": null,
-      "lifetime": "target",
-      "deletion_protection": null
     }
   ],
   "summary": {
@@ -181,10 +144,7 @@
     "in_cluster": 0,
     "synthetic": 0,
     "uid_mismatch": 0,
-    "unknown": 2
+    "unknown": 0
   },
-  "unknowns": [
-    "Cloud NAT: ERROR: (gcloud.compute.routers.nats.list) HTTPError 404: The resource 'projects/sol-qualification/regions/us-central1/routers/sol-qual-preflight-router' was not found. This command is authenticated as lbendtlynielsen@gmail.com which is the active account specified by the [core/account] property",
-    "GKE node pool: ERROR: (gcloud.container.node-pools.list) ResponseError: code=404, message=Not found: projects/sol-qualification/locations/us-central1/clusters/sol-qual-preflight. This command is authenticated as lbendtlynielsen@gmail.com which is the active account specified by the [core/account] property."
-  ]
+  "unknowns": []
 }

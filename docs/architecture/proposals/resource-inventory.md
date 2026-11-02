@@ -720,7 +720,7 @@ The implementation resolved these:
 1. **Required-class list.** It is the provider's executable probe set ∪ the identity registry's non-empty classes ∪ the provider's required controller-created classes. A state class with no registry entry is added as `Unobserved`; `By_contract` classes are not required. Authorization classes are required only through the executable probe set; per-address authorization coverage remains partial (see §18).
 2. **ADR.** [ADR 0012](../adr/0012-resource-inventory-and-bounded-recovery.md) records the read-only projection and the bounded stale-state recovery exception, and ADR 0005 links to it.
 3. **Verdict precedence.** Implemented as `unknown` → `unverified` (state-only) → `attention_required` → `incomplete` → `reconciled`. A confirmed discrepancy outranks a coverage gap; a failed read and state-only mode outrank both.
-4. **M1 delivery shape.** Delivered with the honest `incomplete` verdict for unobserved required classes; no fake verification. A read-only live GCP run after teardown reported `unknown` because two existing provider probes return 404 after their parent is absent; the inventory correctly refused to call those absence (§18).
+4. **M1 delivery shape.** Delivered with the honest `incomplete` verdict for unobserved required classes; no fake verification. A read-only live GCP run after teardown reached `reconciled` with both axes complete once the explicit parent-child absence contract was applied (§18).
 
 Remaining work is recorded as limitations in §18, not as unresolved design choices.
 
@@ -806,27 +806,27 @@ behaviour. The design is unchanged; this records what landed and what remains.
   inventory.
 - Read-only live evidence on `probe/gcp/us-central1` (checkout binary):
   - after the target was torn down, `sol resources --json` read all four roots and
-    returned `verdict: unknown`, `coverage.inventory.complete: true`,
-    `coverage.verification.complete: false`, exit `1`. Twenty-two classes were observed;
-    `Cloud NAT` and `GKE node pool` returned provider 404s because their parent was
-    absent. The inventory correctly reported `unknown` rather than absence;
-    evidence: `internal/qualification/records/2026-11-02-resource-inventory-live-gcp/`;
+    returned `verdict: reconciled`, both coverage axes complete, 26 classes observed, no
+    discrepancies, exit `0`; evidence:
+    `internal/qualification/records/2026-11-02-resource-inventory-live-gcp/`;
   - `--state-only` returned `verdict: unverified`, verification incomplete, exit `1`,
     with no provider probe.
-- The Artifact Registry probe was corrected at its owning boundary where the live run
-  exposed a benign listing notice on stderr. The Cloud NAT/GKE node pool 404s remain
-  unknown by design: the existing absence contract refuses to turn a failed enumeration
-  into absence. A parent-child absence rule would be a separate provider-contract
-  decision with its own tests and live qualification.
+- Explicit parent-child absence contract: a Cloud NAT is a child of a Cloud Router, and
+  a GKE node pool is a child of a GKE cluster. A **positively absent** parent proves the
+  child absent even if the child enumeration returns 404; a present/unknown parent leaves
+  the child unknown. This is derived from the parent observation, never from the child's
+  error text; tests cover both sides. The Artifact Registry benign listing notice was also
+  accepted at the probe boundary.
 
 ### Limitations
 
-- **Authorization per-address mapping is partial.** The probes and identities exist and
-  are threaded, but only the reconciler role, workload-boundary policy, workload roles,
-  reconciler service account/role/binding are mapped to state addresses. Scheduler,
-  serverless runtime identities, secret IAM members, and role policies remain recorded
-  but unobserved until a later mapping; that makes a deployed target `incomplete`, not
-  falsely `reconciled`.
+- **Authorization coverage is incremental.** AWS now observes the reconciler role, all
+  workload/scheduler roles, every per-unit boundary policy, and every inline role policy;
+  GCP observes the reconciler, scheduler and serverless service accounts, the custom role,
+  the reconciler project binding, and secret IAM bindings. The remaining recorded classes
+  — AWS EKS pod identity associations, GCP service-account IAM members, and GCP Cloud Run
+  job IAM members — have no independent probe yet and keep a target `incomplete` rather
+  than falsely `reconciled`.
 - **Platform custom Terraform** is reported as `recorded`/unverified unless its type is
   by-contract. Workspace overlays that add arbitrary provider resources therefore keep
   verification incomplete.
@@ -838,13 +838,12 @@ behaviour. The design is unchanged; this records what landed and what remains.
   apply is a destructive live qualification that requires explicit operator
   authorization. The existing `docs/guides/partial-state-recovery.md` now includes the
   `sol resources` observation before and after `sol target reconcile`.
-- **GCP post-destroy absence probes.** `Cloud NAT` and `GKE node pool` return 404 when
-  their router/cluster is already absent, so the live inventory reports `unknown` for a
-  fully torn-down GCP target. The existing absence contract intentionally does not read a
-  failed enumeration as absence; fixing this requires a separately qualified parent-child
-  absence rule. Until then `live-qual.sh inventory --expect reconciled` cannot pass on
-  such a target.
-- **AWS live read-only evidence** was not run in this environment; the command and
-  offline tests are provider-neutral and the AWS probes are the existing ones.
+- **GCP parent-child absence** is limited to the explicit pairs Cloud Router→Cloud NAT
+  and GKE Cluster→GKE NodePool. Other controller-created children still rely on their
+  own probes; an absent parent does not generally prove an arbitrary child absent.
+- **AWS live read-only evidence was not run.** The available `sol-qual` SSO session had
+  expired (`Token has expired and refresh failed`), and refreshing it requires an
+  interactive operator login. Offline command tests and the AWS absence tests cover the
+  provider path, but they are not live evidence.
 - `--state-only` still needs state-backend credentials and network; it is not an offline
   mode.

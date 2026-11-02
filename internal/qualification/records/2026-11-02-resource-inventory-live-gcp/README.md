@@ -1,8 +1,8 @@
 # Read-only resource inventory — GCP (2026-11-02)
 
-**Scope:** a read-only run of the new `sol resources` command against an existing
-qualification target after its resources were torn down. No provider mutation, no
-Terraform state change, no adoption.
+**Scope:** a read-only run of `sol resources` against an existing qualification target
+after its resources were torn down. No provider mutation, no Terraform state change, no
+adoption.
 
 **Target:** `probe/gcp/us-central1` (project `sol-qualification`, region `us-central1`).
 The target's state bucket was `sol-qualification-tfstate`.
@@ -14,18 +14,19 @@ sol resources probe/gcp/us-central1 --json
 sol resources probe/gcp/us-central1 --state-only --json
 ```
 
-**Results:**
+**Results after the parent-child absence contract:**
 
-- Live mode: `verdict: unknown`, `coverage.inventory.complete: true`,
-  `coverage.verification.complete: false`, exit `1`. The inventory read every root and
-  observed 22 classes; two required probes returned provider 404s:
-  - `Cloud NAT`: the router was not found.
-  - `GKE node pool`: the cluster was not found.
-  These are reported as `unknown`, not absence. The existing GCP absence contract
-  deliberately keeps a failed enumeration unknown even when its text says "not found";
-  a parent-child absence rule would be a separate provider-contract decision.
+- Live mode: `verdict: reconciled`, `coverage.inventory.complete: true`,
+  `coverage.verification.complete: true`, 26 classes observed, no failures, no
+  discrepancies, exit `0`.
 - State-only mode: `verdict: unverified`, verification incomplete, exit `1`, and no
   provider probe ran.
+
+The provider contract exercised here: a Cloud NAT is a child of a Cloud Router, and a GKE
+node pool is a child of a GKE cluster. A **positively absent** parent proves the child
+absent even when the child enumeration returns 404; a present/unknown parent keeps the
+child unknown. This derives from the parent observation, never from the child's error
+text. See ADR 0012.
 
 **Evidence:**
 
@@ -35,9 +36,7 @@ sol resources probe/gcp/us-central1 --state-only --json
 - `resource-inventory-state-only.err` — state-only diagnostics.
 - `validation.txt` — `inventory_contract.py` results for both.
 
-**Limit:** this run establishes the read-only contract against real provider state and
-correctly refuses to call the two 404s absence. It does not establish a reconciled
-post-destroy verdict for GCP, and it does not establish interrupted-apply recovery
-(separately authorized destructive qualification). It was run from a source checkout, not
-a released bundle; the live qualification phase in `gcp/live-qual.sh` runs the installed
-candidate.
+**Limit:** this establishes the read-only contract and parent-child absence against real
+provider state. It does not establish interrupted-apply recovery (separately authorized
+destructive qualification). It was run from a checkout binary, not a released bundle; the
+live qualification phase in `gcp/live-qual.sh` runs the installed candidate.

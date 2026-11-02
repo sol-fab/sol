@@ -6,7 +6,15 @@ let target provider =
   | Error error -> failwith (Sol_cli_config.error_to_string error)
 ;;
 
-let resource ?(kind = "aws_db_instance") ?(name = Some "sol-postgres") address =
+let resource
+      ?(kind = "aws_db_instance")
+      ?(name = Some "sol-postgres")
+      ?role
+      ?member
+      ?secret_id
+      ?email
+      address
+  =
   { Sol_cli_cloud_destroy.address
   ; kind
   ; name
@@ -14,10 +22,10 @@ let resource ?(kind = "aws_db_instance") ?(name = Some "sol-postgres") address =
   ; deletion_protection = None
   ; final_snapshot_identifier = None
   ; skip_final_snapshot = None
-  ; role = None
-  ; member = None
-  ; secret_id = None
-  ; email = None
+  ; role
+  ; member
+  ; secret_id
+  ; email
   ; url = None
   ; soft_delete_retention_seconds = None
   }
@@ -195,6 +203,88 @@ let%test "state-only is unverified even when state is readable" =
     ~msg:"state-only cannot establish presence or absence"
     (Some "unverified")
     (Some (I.verdict_to_string inventory.verdict))
+;;
+
+let%test "authorization state resources map to observed classes" =
+  let open Sol_cli_provider_registry in
+  let aws_policy =
+    resource
+      ~kind:"aws_iam_policy"
+      ~name:(Some "sol-prod-orders-boundary")
+      "aws_iam_policy.scheduler_boundary[\"orders_svc\"]"
+  in
+  Windtrap.equal
+    (Windtrap.option (Windtrap.pair Windtrap.string (Windtrap.option Windtrap.string)))
+    ~msg:"scheduler boundary policy maps to the broadened authorization policy class"
+    (Some ("authorization IAM policy", Some "sol-prod-orders-boundary"))
+    (inventory_auth_class Sol_cli_provider.Aws aws_policy);
+  let aws_role_policy =
+    resource
+      ~kind:"aws_iam_role_policy"
+      ~name:(Some "sol-prod-orders-svc")
+      ~role:"sol-prod-orders-svc"
+      "aws_iam_role_policy.workload[\"orders_svc\"]"
+  in
+  Windtrap.equal
+    (Windtrap.option (Windtrap.pair Windtrap.string (Windtrap.option Windtrap.string)))
+    ~msg:"inline role policy has an exact role -> policy identity"
+    (Some
+       ("authorization inline policy", Some "sol-prod-orders-svc -> sol-prod-orders-svc"))
+    (inventory_auth_class Sol_cli_provider.Aws aws_role_policy);
+  let gcp_scheduler =
+    resource
+      ~kind:"google_service_account"
+      ~name:None
+      ~email:"sol-prod-sched-abc@example.iam.gserviceaccount.com"
+      "google_service_account.scheduler[\"orders_svc\"]"
+  in
+  Windtrap.equal
+    (Windtrap.option (Windtrap.pair Windtrap.string (Windtrap.option Windtrap.string)))
+    ~msg:"scheduler service account maps to its observed class"
+    (Some
+       ( "authorization scheduler service account"
+       , Some "sol-prod-sched-abc@example.iam.gserviceaccount.com" ))
+    (inventory_auth_class Sol_cli_provider.Gcp gcp_scheduler);
+  let gcp_secret =
+    resource
+      ~kind:"google_secret_manager_secret_iam_member"
+      ~name:None
+      ~secret_id:"projects/p/secrets/sol-prod-api-key"
+      ~role:"roles/secretmanager.secretAccessor"
+      ~member:"serviceAccount:sol-prod-rt@example.iam.gserviceaccount.com"
+      "google_secret_manager_secret_iam_member.serverless[\"api\"]"
+  in
+  Windtrap.equal
+    (Windtrap.option (Windtrap.pair Windtrap.string (Windtrap.option Windtrap.string)))
+    ~msg:"secret IAM member maps to the existing secret-binding observation"
+    (Some
+       ( "authorization secret IAM binding"
+       , Some
+           "sol-prod-api-key: roles/secretmanager.secretAccessor -> \
+            serviceAccount:sol-prod-rt@example.iam.gserviceaccount.com" ))
+    (inventory_auth_class Sol_cli_provider.Gcp gcp_secret)
+;;
+
+let%test "the new authorization probes are advertised" =
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"AWS inline role policies have a probe"
+    true
+    (List.mem "authorization inline policy" (Sol_cli_aws_absence.observed_classes ()));
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"GCP scheduler identities have a probe"
+    true
+    (List.mem
+       "authorization scheduler service account"
+       (Sol_cli_gcp_absence.observed_classes ()));
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"GCP serverless identities have a probe"
+    true
+    (List.mem
+       "authorization serverless service account"
+       (Sol_cli_gcp_absence.observed_classes ()))
 ;;
 
 let%test "json keeps status and recovery distinct" =

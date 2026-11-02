@@ -38,7 +38,18 @@ let target : Sol_cli_config.target =
   }
 ;;
 
-let fake_aws ~log ~sts_out ~list_out ~list_exit ~tags_out ~tags_exit =
+let fake_aws
+      ?(iam_roles_out = "")
+      ?(iam_role_policies_out = "")
+      ?(iam_policies_out = "")
+      ~log
+      ~sts_out
+      ~list_out
+      ~list_exit
+      ~tags_out
+      ~tags_exit
+      ()
+  =
   Printf.sprintf
     {|#!/bin/sh
 printf '%%s\n' "$*" >> %s
@@ -55,6 +66,18 @@ case "$1 $2" in
     printf '%%s' %s%s
     exit %d
     ;;
+  "iam list-roles")
+    printf '%%s' %s
+    exit 0
+    ;;
+  "iam list-role-policies")
+    printf '%%s' %s
+    exit 0
+    ;;
+  "iam list-policies")
+    printf '%%s' %s
+    exit 0
+    ;;
 esac
 exit 0
 |}
@@ -66,16 +89,41 @@ exit 0
     (Filename.quote tags_out)
     (if tags_exit = 0 then "" else " >&2")
     tags_exit
+    (Filename.quote iam_roles_out)
+    (Filename.quote iam_role_policies_out)
+    (Filename.quote iam_policies_out)
 ;;
 
-let with_fake_aws ~sts_out ~list_out ~list_exit ~tags_out ~tags_exit f =
+let with_fake_aws
+      ?(iam_roles_out = "")
+      ?(iam_role_policies_out = "")
+      ?(iam_policies_out = "")
+      ~sts_out
+      ~list_out
+      ~list_exit
+      ~tags_out
+      ~tags_exit
+      f
+  =
   let dir = Filename.temp_file "sol-fake-aws-" "" in
   Sys.remove dir;
   Unix.mkdir dir 0o755;
   let log = Filename.concat dir "calls.log" in
   let bin = Filename.concat dir "aws" in
   let oc = open_out bin in
-  output_string oc (fake_aws ~log ~sts_out ~list_out ~list_exit ~tags_out ~tags_exit);
+  output_string
+    oc
+    (fake_aws
+       ~iam_roles_out
+       ~iam_role_policies_out
+       ~iam_policies_out
+       ~log
+       ~sts_out
+       ~list_out
+       ~list_exit
+       ~tags_out
+       ~tags_exit
+       ());
   close_out oc;
   Unix.chmod bin 0o755;
   let old_path =
@@ -119,21 +167,38 @@ let load_balancer observations =
 let with_calls
       ?(sts_out = "111122223333\n")
       ?(list_exit = 0)
+      ?(iam_roles_out = "")
+      ?(iam_role_policies_out = "")
+      ?(iam_policies_out = "")
+      ?(authorization_identities = [])
       ~list_out
       ~tags_out
       ~tags_exit
       f
   =
-  with_fake_aws ~sts_out ~list_out ~list_exit ~tags_out ~tags_exit (fun () ->
-    let observations =
-      Sol_cli_aws_absence.observations target ~cluster_name:"acme-prod"
-    in
-    let log =
-      match Sys.getenv_opt "PATH" with
-      | Some path -> Filename.concat (List.hd (String.split_on_char ':' path)) "calls.log"
-      | None -> Windtrap.fail "PATH is unset"
-    in
-    f ~log ~observations)
+  with_fake_aws
+    ~iam_roles_out
+    ~iam_role_policies_out
+    ~iam_policies_out
+    ~sts_out
+    ~list_out
+    ~list_exit
+    ~tags_out
+    ~tags_exit
+    (fun () ->
+       let observations =
+         Sol_cli_aws_absence.observations
+           target
+           ~cluster_name:"acme-prod"
+           ~authorization_identities
+       in
+       let log =
+         match Sys.getenv_opt "PATH" with
+         | Some path ->
+           Filename.concat (List.hd (String.split_on_char ':' path)) "calls.log"
+         | None -> Windtrap.fail "PATH is unset"
+       in
+       f ~log ~observations)
 ;;
 
 let observation_of class_name observations =
@@ -1030,4 +1095,47 @@ let%test
       Windtrap.fail
         "empty state and an absent cluster must not turn an orphaned OIDC provider into \
          absence")
+;;
+
+let%test "ABAC: inline role policies are independently observed" =
+  with_calls
+    ~iam_roles_out:"sol-prod-orders-svc\n"
+    ~iam_role_policies_out:"sol-prod-orders-svc\n"
+    ~authorization_identities:
+      [ "authorization inline policy", [ "sol-prod-orders-svc -> sol-prod-orders-svc" ] ]
+    ~list_out:"[]"
+    ~tags_out:"[]"
+    ~tags_exit:0
+    (fun ~log:_ ~observations ->
+       match observation_of "authorization inline policy" observations with
+       | Sol_cli_absence.Present present ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the role policy identity is the role and policy name"
+           [ "sol-prod-orders-svc -> sol-prod-orders-svc" ]
+           present.found
+       | Sol_cli_absence.Unobservable unknown ->
+         Windtrap.failf "the inline policy probe failed: %s" unknown.reason
+       | _ -> Windtrap.fail "the inline role policy must be Present")
+;;
+
+let%test "ABAC: every environment boundary policy is observed" =
+  with_calls
+    ~iam_policies_out:"sol-prod-orders-boundary\n"
+    ~authorization_identities:
+      [ "authorization IAM policy", [ "sol-prod-orders-boundary" ] ]
+    ~list_out:"[]"
+    ~tags_out:"[]"
+    ~tags_exit:0
+    (fun ~log:_ ~observations ->
+       match observation_of "authorization IAM policy" observations with
+       | Sol_cli_absence.Present present ->
+         Windtrap.equal
+           (Windtrap.list Windtrap.string)
+           ~msg:"the per-unit boundary policy is attributed, not only the workload one"
+           [ "sol-prod-orders-boundary" ]
+           present.found
+       | Sol_cli_absence.Unobservable unknown ->
+         Windtrap.failf "the boundary policy probe failed: %s" unknown.reason
+       | _ -> Windtrap.fail "the boundary policy must be Present")
 ;;

@@ -225,6 +225,43 @@ exit 0
 let gcp_auth_identity = "sol-prod-authorization@acme-project.iam.gserviceaccount.com\n"
 let gcp_auth_role = "projects/acme-project/roles/sol_prod_authorization\n"
 
+let%test "authorization: GCP scheduler and serverless identities are observed" =
+  let scheduler = "sol-prod-sched-abc@acme-project.iam.gserviceaccount.com\n" in
+  let serverless = "sol-prod-rt-def@acme-project.iam.gserviceaccount.com\n" in
+  with_fake_command
+    "gcloud"
+    (gcp_script
+       ~service_accounts:(gcp_auth_identity ^ scheduler ^ serverless)
+       ~roles:gcp_auth_role
+       ())
+  @@ fun () ->
+  let observations =
+    Sol_cli_gcp_absence.observations
+      ~authorization_identities:
+        [ "authorization scheduler service account", [ scheduler ]
+        ; "authorization serverless service account", [ serverless ]
+        ]
+      gcp_target
+      ~cluster_name:"acme-prod"
+  in
+  (match find_class "authorization scheduler service account" observations with
+   | Some (Sol_cli_absence.Present present) ->
+     Windtrap.equal
+       (Windtrap.list Windtrap.string)
+       ~msg:"the scheduler identity is independently observed"
+       [ String.trim scheduler ]
+       present.found
+   | _ -> Windtrap.fail "the scheduler service account was not observed");
+  match find_class "authorization serverless service account" observations with
+  | Some (Sol_cli_absence.Present present) ->
+    Windtrap.equal
+      (Windtrap.list Windtrap.string)
+      ~msg:"the serverless identity is independently observed"
+      [ String.trim serverless ]
+      present.found
+  | _ -> Windtrap.fail "the serverless service account was not observed"
+;;
+
 let%test "authorization: GCP identity residue is observed by its environment name" =
   with_fake_command
     "gcloud"
@@ -483,6 +520,8 @@ let%test "authorization: GCP state preserves every provider identity representat
   Windtrap.equal
     (Windtrap.list (Windtrap.pair Windtrap.string (Windtrap.list Windtrap.string)))
     [ "authorization service account", [ String.trim gcp_auth_identity ]
+    ; "authorization scheduler service account", []
+    ; "authorization serverless service account", []
     ; "authorization custom role", [ String.trim gcp_auth_role ]
     ; ( "authorization project IAM binding"
       , [ "projects/acme-project/roles/sol_prod_authorization\tserviceAccount:sol-prod-authorization@acme-project.iam.gserviceaccount.com"

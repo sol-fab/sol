@@ -394,6 +394,58 @@ let durable_observations ~(target : Sol_cli_config.target) ~cluster_name =
   ]
 ;;
 
+(* A Cloud NAT is a child of a Cloud Router and a GKE node pool is a child of a
+   GKE cluster. A positively absent parent proves the child absent even when the
+   child enumeration failed: no NAT can exist without its router, and no node pool
+   can exist without its cluster. This derives from a positive parent observation,
+   never from the child's error text. A present/unknown parent leaves the child's
+   failure as UNKNOWN. *)
+let derived_by_router ~cluster_name observations =
+  let router_absent =
+    List.find_opt
+      (function
+        | Absent { resource_class = "Cloud Router"; _ } -> true
+        | _ -> false)
+      observations
+  in
+  match router_absent with
+  | Some (Absent { attribution; checked_with; _ }) ->
+    observations
+    |> List.map (function
+      | Unobservable { resource_class = "Cloud NAT"; _ } ->
+        Absent
+          { resource_class = "Cloud NAT"
+          ; identity = cluster_name ^ "-nat"
+          ; attribution
+          ; checked_with
+          }
+      | other -> other)
+  | None | Some _ -> observations
+;;
+
+let derived_by_cluster ~cluster_name observations =
+  let cluster_absent =
+    List.find_opt
+      (function
+        | Absent { resource_class = "GKE cluster"; _ } -> true
+        | _ -> false)
+      observations
+  in
+  match cluster_absent with
+  | Some (Absent { attribution; checked_with; _ }) ->
+    observations
+    |> List.map (function
+      | Unobservable { resource_class = "GKE node pool"; _ } ->
+        Absent
+          { resource_class = "GKE node pool"
+          ; identity = cluster_name ^ "-*"
+          ; attribution
+          ; checked_with
+          }
+      | other -> other)
+  | None | Some _ -> observations
+;;
+
 let derived_by_vpc ~cluster_name observations =
   let vpc_observation =
     List.find_opt
@@ -450,6 +502,42 @@ let authorization_checks ~project ~environment =
         (Named_for_target
            "the target's environment names the authorization reconciler identity")
       ~attributable:(fun line -> line = email)
+      ~normalize:(fun line -> line)
+      [ "--project"
+      ; project
+      ; "iam"
+      ; "service-accounts"
+      ; "list"
+      ; "--format"
+      ; "value(email)"
+      ]
+  ; identity_check
+      ~resource_class:"authorization scheduler service account"
+      ~identity:(Printf.sprintf "sol-%s-sched-*" environment)
+      ~attribution:
+        (Named_for_target
+           "the target's environment names scheduler identities with the             \
+            sol-<environment>-sched- prefix")
+      ~attributable:(fun line ->
+        String.starts_with ~prefix:(Printf.sprintf "sol-%s-sched-" environment) line)
+      ~normalize:(fun line -> line)
+      [ "--project"
+      ; project
+      ; "iam"
+      ; "service-accounts"
+      ; "list"
+      ; "--format"
+      ; "value(email)"
+      ]
+  ; identity_check
+      ~resource_class:"authorization serverless service account"
+      ~identity:(Printf.sprintf "sol-%s-rt-*" environment)
+      ~attribution:
+        (Named_for_target
+           "the target's environment names serverless runtime identities with \
+            the             sol-<environment>-rt- prefix")
+      ~attributable:(fun line ->
+        String.starts_with ~prefix:(Printf.sprintf "sol-%s-rt-" environment) line)
       ~normalize:(fun line -> line)
       [ "--project"
       ; project
@@ -1029,7 +1117,11 @@ let observations
            ~cluster_name
            ~environment:target.env)
     in
-    derived_by_vpc ~cluster_name observations @ durable_observations ~target ~cluster_name
+    observations
+    |> derived_by_vpc ~cluster_name
+    |> derived_by_router ~cluster_name
+    |> derived_by_cluster ~cluster_name
+    |> fun observations -> observations @ durable_observations ~target ~cluster_name
 ;;
 
 let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
@@ -1044,7 +1136,7 @@ let substrate_absence (target : Sol_cli_config.target) ~cluster_name =
 
 let unresolved = Sol_cli_absence.unresolved
 
-let authorization_state_identities ~target:_ (state : Sol_cli_cloud_destroy.state_read) =
+let authorization_state_identities ~target (state : Sol_cli_cloud_destroy.state_read) =
   let resources = Sol_cli_cloud_destroy.resources state in
   let service_accounts =
     resources
@@ -1079,7 +1171,24 @@ let authorization_state_identities ~target:_ (state : Sol_cli_cloud_destroy.stat
         | _ -> None)
       else None)
   in
-  [ "authorization service account", service_accounts
+  let project =
+    match project_of target with
+    | Some project -> project
+    | None -> ""
+  in
+  let reconciler =
+    Printf.sprintf "sol-%s-authorization@%s.iam.gserviceaccount.com" target.env project
+  in
+  let is_reconciler email = String.equal email reconciler in
+  let is_scheduler email =
+    String.starts_with ~prefix:(Printf.sprintf "sol-%s-sched-" target.env) email
+  in
+  let is_serverless email =
+    String.starts_with ~prefix:(Printf.sprintf "sol-%s-rt-" target.env) email
+  in
+  [ "authorization service account", List.filter is_reconciler service_accounts
+  ; "authorization scheduler service account", List.filter is_scheduler service_accounts
+  ; "authorization serverless service account", List.filter is_serverless service_accounts
   ; "authorization custom role", custom_roles
   ; "authorization project IAM binding", project_bindings
   ; "authorization secret IAM binding", secret_bindings

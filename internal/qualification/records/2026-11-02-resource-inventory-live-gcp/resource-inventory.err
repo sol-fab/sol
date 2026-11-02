@@ -1,5 +1,5 @@
   credentials: Google Application Default Credentials resolved
-[terraform-init] ok (4.9s)
-[terraform-init] ok (9.5s)
-[terraform-init] ok (9.6s)
-[terraform-init] ok (4.3s)
+[terraform-init] ok (1.9s)
+[terraform-init] ok (3.9s)
+[terraform-init] ok (2.9s)
+[terraform-init] ok (1.7s)

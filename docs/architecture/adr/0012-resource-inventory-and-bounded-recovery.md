@@ -69,6 +69,23 @@ the product and the ADR in tension.
    contents as ownership evidence; a future parser would be a separate decision with
    provenance, redaction and conflict rules.
 
+### Provider parent-child absence
+
+A child whose provider lifecycle is strictly owned by a parent may be declared absent
+from a **positively absent** parent observation, even when the child enumeration itself
+failed with 404. The two pairs currently encoded are:
+
+| Parent | Child | Reason |
+|---|---|---|
+| Cloud Router | Cloud NAT | a NAT gateway cannot exist without its router |
+| GKE cluster | GKE node pool | node pools are deleted with their cluster |
+
+The derivation uses the parent's `Absent` observation and its attribution/evidence; it
+does not read the child's error text. A `Present` or `Unobservable` parent leaves the
+child's failure `unknown`. Each pair has a test for both the absent-parent proof and the
+present-parent refusal, and the GCP live run after teardown exercises the absent case.
+This is a narrow provider contract, not a general "children follow parents" rule.
+
 ## Consequences
 
 - An operator can distinguish a clean inventory from one that merely lacks evidence,

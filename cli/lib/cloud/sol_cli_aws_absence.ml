@@ -614,15 +614,20 @@ let ecr_probe ~region ~repositories ~prefix =
 ;;
 
 let authorization_checks ~environment =
-  let policy_name = "sol-" ^ environment ^ "-workload-boundary" in
+  let policy_prefix = "sol-" ^ environment ^ "-" in
+  let is_boundary_policy line =
+    String.starts_with ~prefix:policy_prefix line
+    && String.ends_with ~suffix:"-boundary" line
+  in
   let role_name = "sol-" ^ environment ^ "-authorization" in
   [ check
       ~resource_class:"authorization IAM policy"
-      ~identity:policy_name
+      ~identity:(policy_prefix ^ "*-boundary")
       ~attribution:
         (Named_for_target
-           "the target's environment names the authorization workload boundary")
-      ~attributable:(fun line -> line = policy_name)
+           "the target's environment names every authorization boundary policy with the \
+            sol-<environment>-*-boundary prefix")
+      ~attributable:is_boundary_policy
       [ "iam"
       ; "list-policies"
       ; "--scope"
@@ -665,6 +670,83 @@ let authorization_checks ~environment =
       ; "text"
       ]
   ]
+;;
+
+(* Inline role policies have no independent provider identity separate from their
+   role, but they do have an exact policy name inside the role. Enumerate the roles
+   under the target's path and read each role's inline policy names. A failed role
+   or policy read is UNKNOWN; an empty successful set is absence. *)
+let authorization_inline_policies ~environment ~resource_class =
+  let checked_with =
+    Printf.sprintf
+      "aws iam list-roles for /sol/%s/, then aws iam list-role-policies for each role"
+      environment
+  in
+  let identity = Printf.sprintf "inline policies on roles under /sol/%s/" environment in
+  let attribution =
+    Named_for_target
+      (Printf.sprintf
+         "the target's environment places every scope role under /sol/%s/"
+         environment)
+  in
+  let roles_argv =
+    [ "iam"
+    ; "list-roles"
+    ; "--query"
+    ; Printf.sprintf "Roles[?Path=='/sol/%s/'].RoleName" environment
+    ; "--output"
+    ; "text"
+    ]
+  in
+  let reason_of = function
+    | `NotFound reason | `Failed reason -> String.trim reason
+  in
+  match run_argv roles_argv with
+  | Error (`NotFound reason) | Error (`Failed reason) ->
+    Unobservable { resource_class; reason = String.trim reason; checked_with }
+  | Ok roles ->
+    let rec read acc = function
+      | [] -> Ok (List.rev acc)
+      | role :: rest ->
+        let argv =
+          [ "iam"
+          ; "list-role-policies"
+          ; "--role-name"
+          ; role
+          ; "--query"
+          ; "PolicyNames[]"
+          ; "--output"
+          ; "text"
+          ]
+        in
+        (match run_argv argv with
+         | Ok names ->
+           let found =
+             List.fold_left (fun acc name -> (role ^ " -> " ^ name) :: acc) acc names
+           in
+           read found rest
+         | Error error -> Error (role, reason_of error))
+    in
+    (match read [] roles with
+     | Error (role, reason) ->
+       Unobservable
+         { resource_class
+         ; reason = Printf.sprintf "role %s: %s" role reason
+         ; checked_with
+         }
+     | Ok [] -> Absent { resource_class; identity; attribution; checked_with }
+     | Ok found -> Present { resource_class; identity; found; attribution; checked_with })
+;;
+
+let strict_authorization observation =
+  match observation with
+  | Unobservable u ->
+    Unobservable
+      { u with
+        resource_class = Sol_cli_absence.scope_class
+      ; reason = u.resource_class ^ ": " ^ u.reason
+      }
+  | observation -> observation
 ;;
 
 let strict_authorization_observation ~check =
@@ -878,6 +960,13 @@ let probes
              strict_authorization_observation ~check
              |> filter_to_prior authorization_identities ))
       (authorization_checks ~environment)
+  @ [ (let resource_class = "authorization inline policy" in
+       ( Some resource_class
+       , fun () ->
+           strict_authorization
+             (authorization_inline_policies ~environment ~resource_class)
+           |> filter_to_prior authorization_identities ))
+    ]
 ;;
 
 let observed_classes () =
@@ -941,10 +1030,21 @@ let authorization_state_identities
   in
   let reconciler = "sol-" ^ target.env ^ "-authorization" in
   let roles = names "aws_iam_role" in
+  let inline_policies =
+    resources
+    |> List.filter_map (fun (resource : Sol_cli_cloud_destroy.resource) ->
+      if String.equal resource.kind "aws_iam_role_policy"
+      then (
+        match resource.role, resource.name with
+        | Some role, Some name -> Some (role ^ " -> " ^ name)
+        | _ -> None)
+      else None)
+  in
   [ "authorization IAM role", List.filter (String.equal reconciler) roles
   ; ( "authorization workload role"
     , List.filter (fun name -> not (String.equal reconciler name)) roles )
   ; "authorization IAM policy", names "aws_iam_policy"
+  ; "authorization inline policy", inline_policies
   ]
 ;;
 
