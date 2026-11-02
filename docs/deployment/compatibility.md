@@ -149,6 +149,8 @@ does not need `$SOL_HOME` or a Sol source checkout to build.
 | Kubernetes (EKS) | 1.36 | `platform/cloud/aws/cluster/variables.tf` (`kubernetes_version`) |
 | Kubernetes (GKE) | `REGULAR` release channel; the exact version is observed at run time and is not yet a pinned qualification input | `platform/cloud/gcp/cluster/main.tf` (`release_channel`) |
 | Provider module | AWS and GCP (`platform/cloud/aws/cluster/`, `platform/cloud/gcp/cluster/`) | `Sol_cli_provider_capabilities`, the provider roots |
+| Secrets Store CSI (AWS) | EKS add-on `aws-secrets-store-csi-driver-provider`, `most_recent`; rotation polling 2m; not yet a pinned qualification input | `platform/cloud/aws/cluster/main.tf` |
+| Secret Manager add-on (GKE) | cluster add-on enabled with a 2m rotation interval; requires `secretmanager.googleapis.com` enabled and Workload Identity | `platform/cloud/gcp/cluster/main.tf` |
 | cert-manager chart | v1.14.4 | `platform/cloud/modules/platform/main.tf` |
 | ingress-nginx chart | 4.10.1 | `platform/shared/components.json` (`versions`) |
 | Argo CD chart | 6.7.3 | `platform/cloud/modules/platform/main.tf` |
@@ -162,6 +164,11 @@ does not need `$SOL_HOME` or a Sol source checkout to build.
 | TypeScript framework | `@sol-fab/svc` 0.3.0, `@sol-fab/worker` 0.2.0, `@sol-fab/fn` 0.1.0, `@sol-fab/kafka` 0.5.2, `@sol-fab/obs` 0.4.0, `@sol-fab/jobs` 0.1.2, `@sol-fab/outbox` 0.2.0, `@sol-fab/retry` 0.1.0 | the workspace manifests; all are published on npm |
 | TypeScript `-fn` | `@sol-fab/fn` 0.1.0 is published; a generated workspace installs and builds, but no CronJob scenario has run | tracked in the README support table |
 | Workspace framework deps | per-workspace immutable pins (DEC-025) | the workspace's `dune-project`, `*.opam`, `package-lock.json` |
+
+Provider-backed application secrets are mounted by the Secrets Store CSI driver and the
+provider's own Secret Manager. Their live behavior — pod-identity authorization, file refresh
+after a rotation, and absence after deletion — is qualification work (#1118, #1360), not a
+claim established by the pinned versions above.
 
 `dev` runs the same charts at single-replica scale, so the component versions
 above are the ones local development exercises too. The shared charts' versions

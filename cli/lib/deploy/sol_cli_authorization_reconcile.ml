@@ -5,10 +5,14 @@ type terraform_grant = Sol_cli_grant.target_grant =
   ; namespace : string
   }
 
-let secret_grant ~unit ~key =
+(* A secret grant names the provider secret's path **inside the environment**:
+   [units/<domain>/<unit>/<KEY>], matching the provider secret's identity. The provider
+   root prefixes the environment and target, so two units that declare the same key
+   receive two distinct authorities rather than one shared secret. *)
+let secret_grant ~domain ~unit ~key =
   { Sol_cli_authorization.unit
   ; capability = Sol_cli_grant.secret_capability
-  ; resource = key
+  ; resource = Printf.sprintf "units/%s/%s/%s" domain unit key
   }
 ;;
 
@@ -88,7 +92,10 @@ let desired ?binding_config workspace =
       | _ -> Ok ()
     in
     Ok
-      (List.map (fun key -> secret_grant ~unit ~key) keys
+      (List.map
+         (fun key ->
+            secret_grant ~domain:workload.service.Sol_cli_manifest.domain ~unit ~key)
+         keys
        @ List.map
            (fun (requirement : Sol_cli_grant.requirement) ->
               { Sol_cli_authorization.unit

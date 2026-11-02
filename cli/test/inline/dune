@@ -13,6 +13,7 @@
   windtrap
   sol_cli
   sol_cli_test_support
+  sol_runtime
   unix
   yojson
   str

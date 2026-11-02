@@ -93,6 +93,7 @@ let kafka_secret_name (spec : Sol_cli_deployment_plan.service_spec) =
     (fun key ->
        match List.assoc_opt key spec.secret_sources with
        | Some (Sol_cli_manifest.Target_kafka { secret }) -> Some secret
+       | Some (Provider _) -> None
        | Some (External _) ->
          Some
            (Sol_cli_manifest.external_secret_name

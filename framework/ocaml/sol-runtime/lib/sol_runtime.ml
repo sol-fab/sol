@@ -79,6 +79,48 @@ let setting name =
      | trimmed -> Some trimmed)
 ;;
 
+let strip_line_ending value =
+  let value =
+    if String.ends_with ~suffix:"\n" value
+    then String.sub value 0 (String.length value - 1)
+    else value
+  in
+  if String.ends_with ~suffix:"\r" value
+  then String.sub value 0 (String.length value - 1)
+  else value
+;;
+
+let mounted_secrets_dir = "/var/run/sol/secrets"
+
+let secret_file ~name =
+  match setting (name ^ "_FILE") with
+  | Some path -> Some path
+  | None ->
+    let dir = Option.value (setting "SOL_SECRETS_DIR") ~default:mounted_secrets_dir in
+    let path = Filename.concat dir name in
+    if Sys.file_exists path then Some path else None
+;;
+
+let read_secret_file path =
+  try
+    let value = In_channel.with_open_bin path In_channel.input_all |> strip_line_ending in
+    if String.equal value "" then Ok None else Ok (Some value)
+  with
+  | Sys_error message -> Error (Printf.sprintf "could not read %s: %s" path message)
+;;
+
+let secret_result name =
+  match secret_file ~name with
+  | Some path -> read_secret_file path
+  | None -> Ok (setting name)
+;;
+
+let secret name =
+  match secret_result name with
+  | Ok value -> value
+  | Error _ -> None
+;;
+
 let contains_substring ~needle haystack =
   let needle_length = String.length needle
   and haystack_length = String.length haystack in

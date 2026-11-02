@@ -632,12 +632,26 @@ let verify_workload_secret ~ctx (spec : Sol_cli_deployment_plan.service_spec) =
            key)
         unit_secret_name)
   in
-  verify_required_keys
-    ~ctx
-    ~namespace:(Sol_cli_deployment_plan.namespace_to_string spec.namespace)
-    ~secret_name:unit_secret_name
-    ~required_keys:required
-    ()
+  let* () =
+    if required = []
+    then Ok ()
+    else
+      verify_required_keys
+        ~ctx
+        ~namespace:(Sol_cli_deployment_plan.namespace_to_string spec.namespace)
+        ~secret_name:unit_secret_name
+        ~required_keys:required
+        ()
+  in
+  (* Provider-backed keys are not in the unit Secret. Their precondition is the provider
+     authority itself: present, Sol-owned, and carrying a readable current version. *)
+  spec.secret_sources
+  |> List.filter_map (fun (_, source) ->
+    match source with
+    | Sol_cli_manifest.Provider { secret } -> Some secret
+    | Sol_managed | External _ | Target_kafka _ -> None)
+  |> Sol_cli_result.map_list Sol_cli_secret_authority.verify_has_value
+  |> Result.map ignore
 ;;
 
 let json_object = function
@@ -828,7 +842,7 @@ let verify_external_secret_ready
     spec.secret_sources
     |> List.filter_map (fun (key, source) ->
       match source with
-      | Sol_cli_manifest.Sol_managed -> None
+      | Sol_cli_manifest.Sol_managed | Provider _ -> None
       | External _ -> Some key
       | Target_kafka _ -> None)
   in
@@ -1022,7 +1036,7 @@ let verify_external_secret_destination ~ctx (spec : Sol_cli_deployment_plan.serv
     spec.secret_sources
     |> List.filter_map (fun (key, source) ->
       match source with
-      | Sol_cli_manifest.Sol_managed -> None
+      | Sol_cli_manifest.Sol_managed | Provider _ -> None
       | External _ -> Some key
       | Target_kafka _ -> None)
   in
@@ -1097,4 +1111,61 @@ let unit_secret_keys ~ctx ~namespace ~secret_name =
     (match json with
      | None -> []
      | Some json -> List.map fst (data_keys json))
+;;
+
+(** Read one key from a Secret Sol owns, for the provider migration. [Ok None] is "the
+    Secret or the key is not there"; a Secret that exists but is not Sol's is an error,
+    because adopting a value from it would take another writer's credential. *)
+let read_owned_key ~ctx ~namespace ~secret_name ~key =
+  let* json = get_named_secret_json ~ctx ~name:secret_name namespace in
+  let* () = verify_sol_managed_secret json in
+  match json with
+  | None -> Ok None
+  | Some json ->
+    (match List.assoc_opt key (data_keys json) with
+     | None -> Ok None
+     | Some (`String encoded) ->
+       (try Ok (Some (Base64.decode_exn encoded)) with
+        | _ ->
+          Error
+            (Printf.sprintf
+               "Secret %s/%s key %s is not valid base64"
+               namespace
+               secret_name
+               key))
+     | Some _ ->
+       Error
+         (Printf.sprintf
+            "Secret %s/%s key %s is not a stored string"
+            namespace
+            secret_name
+            key))
+;;
+
+(** The provider projection object is Sol's. A foreign [SecretProviderClass] with the same
+    name would be overwritten by the bundle's prerequisite apply, so it is refused before
+    anything is applied. The object may be absent (first deploy). *)
+let verify_provider_secret_class_destination
+      ~ctx
+      (spec : Sol_cli_deployment_plan.service_spec)
+  =
+  let has_provider =
+    List.exists
+      (fun (_, source) ->
+         match source with
+         | Sol_cli_manifest.Provider _ -> true
+         | Sol_managed | External _ | Target_kafka _ -> false)
+      spec.secret_sources
+  in
+  if not has_provider
+  then Ok ()
+  else (
+    let namespace = Sol_cli_deployment_plan.namespace_to_string spec.namespace in
+    let name =
+      Sol_cli_deployment_plan.k8s_name_to_string spec.k8s_name ^ "-provider-secrets"
+    in
+    let* existing =
+      get_named_object_json ~ctx ~resource:"secretproviderclass" ~namespace ~name
+    in
+    verify_sol_managed_secret existing)
 ;;

@@ -192,7 +192,7 @@ Pipeline:
 - `--emit-to DIR` — GitOps mode: write one `<ns>-<name>.yaml` per service to DIR, plus the release artifact (`sol-release-<id>.yaml` and `sol-current-release.yaml`, both derived from the plan's release id)
 - `--emit-plan-to FILE` — write plan JSON to FILE (experimental)
 - `--dry-run` — print YAML, no cluster contact
-- Secret authorities are resolved per declared unit key. Sol-owned values use the unit's `-secrets` object; external values use a namespaced ESO `ExternalSecret` targeting `-external-secrets`. Direct and GitOps rendering use the same references and never emit placeholders or secret values.
+- Secret authorities are resolved per declared unit key. On a local target a Sol-owned value uses the unit's `-secrets` object; on a durable AWS/GCP target it is authoritative in the provider store and mounted through a `SecretProviderClass` as files, with no Kubernetes Secret mirror. External values use a namespaced ESO `ExternalSecret` targeting `-external-secrets`. Direct and GitOps rendering use the same references and never emit placeholders or secret values.
 
 ---
 

@@ -297,7 +297,7 @@ let validate_resource_requirements
          (String.concat ", " missing))
 ;;
 
-let service_specs_of_release ?database ?kafka (release : Sol_cli_release.t) =
+let service_specs_of_release ?database ?kafka ?config (release : Sol_cli_release.t) =
   (* A rollback restores the release's **recorded** requirements against the **current** target's
      authorities and bindings. The release answers "what did this version require?"; the target
      answers "where does that credential come from today?". Neither is asked the other's question,
@@ -360,6 +360,39 @@ let service_specs_of_release ?database ?kafka (release : Sol_cli_release.t) =
         in
         Ok { spec with Sol_cli_deployment_plan.config; secret_sources })
   in
+  (* The release records requirements, not the current provider spelling. A Sol-managed
+     application key on a provider-backed target is restored through the current target's
+     provider authority; otherwise rollback would look for a Kubernetes Secret the deploy
+     no longer writes. Resource-owned keys are excluded: their delivery is restored by the
+     database/Kafka path above, not by application authority. *)
+  let restore_provider (spec : Sol_cli_deployment_plan.service_spec) =
+    match config with
+    | None -> spec
+    | Some config ->
+      if not (Sol_cli_secret_authority.provider_backed config)
+      then spec
+      else (
+        let unit_address = spec.domain ^ "/" ^ spec.source_name in
+        let transport = Sol_cli_manifest.kafka_transport_of_config spec.config in
+        let db_uses =
+          Option.is_some (Sol_cli_resource_binding.postgres_use_target spec.database)
+        in
+        let resource_keys =
+          Sol_cli_manifest.kafka_required_secret_keys transport
+          @ if db_uses then [ Sol_cli_manifest.postgres_url_key ] else []
+        in
+        let provider_sources =
+          spec.secrets
+          |> List.filter_map (fun (key, _) ->
+            if List.mem_assoc key spec.secret_sources || List.mem key resource_keys
+            then None
+            else (
+              match Sol_cli_secret_authority.application ~config ~unit_address ~key with
+              | Ok secret -> Some (key, Sol_cli_manifest.Provider { secret })
+              | Error _ -> None))
+        in
+        { spec with secret_sources = spec.secret_sources @ provider_sources })
+  in
   let rec go acc = function
     | [] -> Ok (List.rev acc)
     | (w : Sol_cli_release.recorded_workload) :: rest ->
@@ -372,6 +405,7 @@ let service_specs_of_release ?database ?kafka (release : Sol_cli_release.t) =
       (* The requirement is the *record's*; the resolution is the current target's. *)
       let database = database_targets w.spec.uses in
       let* spec = restore_kafka w { spec with database } in
+      let spec = restore_provider spec in
       go (spec :: acc) rest
   in
   let* specs = go [] release.workloads in

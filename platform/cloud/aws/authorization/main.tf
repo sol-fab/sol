@@ -33,14 +33,22 @@ data "aws_iam_policy_document" "workload_boundary" {
     resources = ["arn:aws:lambda:${var.region}:${local.account_id}:function:*"]
   }
 
-  statement {
-    sid    = "ReadEnvironmentSecrets"
-    effect = "Allow"
-    actions = [
-      "secretsmanager:GetSecretValue",
-      "secretsmanager:DescribeSecret",
-    ]
-    resources = ["arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:sol/${var.environment}/*"]
+  # A unit may read only the provider secret authorities it declares. The permissions
+  # boundary is the maximum authority its role can hold, so it is narrowed here as well as
+  # in the role policy: a later policy change cannot widen this workload to a sibling
+  # unit's secrets. Serverless secret requirements keep their own key-scoped names until a
+  # serverless delivery path exists.
+  dynamic "statement" {
+    for_each = length(lookup(local.boundary_secret_resources, each.key, [])) == 0 ? [] : [1]
+    content {
+      sid    = "ReadDeclaredEnvironmentSecrets"
+      effect = "Allow"
+      actions = [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret",
+      ]
+      resources = lookup(local.boundary_secret_resources, each.key, [])
+    }
   }
 
   statement {
@@ -282,6 +290,21 @@ locals {
 
   role_units = setunion(local.grant_units, local.serverless_units)
 
+  boundary_secret_resources = {
+    for unit in setunion(local.grant_units, local.serverless_units) : unit => distinct(concat(
+      [
+        for grant in lookup(local.grants_by_unit, unit, []) :
+        "arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:sol/${var.environment}/${var.target_name}/${join("/", slice(split("/", grant.resource), 0, 3))}/*"
+        if grant.capability == "secret"
+      ],
+      [
+        for requirement in lookup(local.serverless_requirements_by_unit, unit, []) :
+        "arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:sol/${var.environment}/${requirement.resource}*"
+        if requirement.capability == "secret"
+      ]
+    ))
+  }
+
   serverless_requirements_by_unit = {
     for unit in var.serverless_units : unit.unit => unit.requirements
   }
@@ -337,7 +360,7 @@ locals {
         Action = local.capability_actions[grant.capability]
         Resource = (
           grant.capability == "secret"
-          ? ["arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:sol/${var.environment}/${grant.resource}*"]
+          ? ["arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:sol/${var.environment}/${var.target_name}/${grant.resource}*"]
           : [grant.resource]
         )
       }

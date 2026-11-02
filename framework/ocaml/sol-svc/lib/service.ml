@@ -424,8 +424,10 @@ let refuse_non_https_jwks metrics_auth =
 ;;
 
 let api_key_reader ~env ~required =
-  match Sol_runtime.setting "SOL_API_KEY_FILE", Sol_runtime.setting "SOL_API_KEY" with
-  | Some path, _ ->
+  (* One routing rule for provider-backed and environment values: an explicit
+     [SOL_API_KEY_FILE], then the mounted secrets directory, then the environment. *)
+  match Sol_runtime.secret_file ~name:"SOL_API_KEY" with
+  | Some path ->
     (try
        let key = String.trim (Eio.Path.load Eio.Path.(env#fs / path)) in
        if key = ""
@@ -436,12 +438,13 @@ let api_key_reader ~env ~required =
      | (Out_of_memory | Stack_overflow | Sys.Break) as exn -> raise exn
      | exn ->
        Error
-         (`Config
-             ("could not read SOL_API_KEY_FILE " ^ path ^ ": " ^ Printexc.to_string exn)))
-  | None, Some key -> Ok (fun () -> Some key)
-  | None, _ when required ->
-    Error (`Config "API key auth configured but SOL_API_KEY/SOL_API_KEY_FILE is not set")
-  | None, _ -> Ok (fun () -> None)
+         (`Config ("could not read API key file " ^ path ^ ": " ^ Printexc.to_string exn)))
+  | None ->
+    (match Sol_runtime.setting "SOL_API_KEY" with
+     | Some key -> Ok (fun () -> Some key)
+     | None when required ->
+       Error (`Config "API key auth configured but SOL_API_KEY is not set")
+     | None -> Ok (fun () -> None))
 ;;
 
 let workload_identity_requested routes metrics_auth =

@@ -150,12 +150,16 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
       secret_sources
       |> List.filter_map (fun (key, source) ->
         match source with
-        | Sol_cli_manifest.Sol_managed -> None
-        | External { store; key = remote_key } -> Some (key, store, remote_key)
-        | Target_kafka _ -> None)
+        | Sol_cli_manifest.Sol_managed | Provider _ | Target_kafka _ -> None
+        | External { store; key = remote_key } -> Some (key, store, remote_key))
       |> function
       | [] -> None
       | secret_refs -> Some (external_secret_doc ~secret_refs ~ns ~name)
+    in
+    let provider_secret_resource =
+      match provider_sources ~secret_sources with
+      | [] -> None
+      | sources -> Some (provider_secret_class_doc ~ns ~name ~sources)
     in
     Result.map
       (fun () ->
@@ -163,6 +167,7 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
            [ service_account_doc ~ns ~name
            ; configmap_doc ~cluster_env:base_cluster_env ~extra_env:config ~ns ~name ()
            ]
+           @ Option.to_list provider_secret_resource
            @ Option.to_list external_secret_resource
            @ [ network_policy_doc
                  ~egress_to:

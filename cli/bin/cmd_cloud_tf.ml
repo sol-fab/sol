@@ -387,9 +387,16 @@ let cloud_destroy ~target ~resolved_config ~var_file ~vars ~action ~accept_unrel
         ~destruction
     in
     let outcome = Sol_cli_cloud_destroy.execute ~deps in
+    let secret_cleanup_failure = ref None in
     (match outcome with
      | Sol_cli_cloud_destroy.Destroy_succeeded { degradations; cleanup; verification; _ }
        ->
+       (* Provider application authorities live outside Terraform and the release record.
+          The inventory above established their absence at destroy time; this removes the
+          containers and re-observes the store. A successful delete call is not absence. *)
+       (match Sol_cli_secret_authority.destroy_authorities ~target:target_cfg with
+        | Ok () -> ()
+        | Error message -> secret_cleanup_failure := Some message);
        report_cleanup_evidence cleanup;
        report_degradations degradations;
        report_verification verification;
@@ -406,9 +413,16 @@ let cloud_destroy ~target ~resolved_config ~var_file ~vars ~action ~accept_unrel
        report_degradations degradations;
        verification |> Option.iter report_verification;
        Printf.eprintf "error: %s\n%!" (Sol_cli_cloud_destroy.completion_message outcome));
-    (match Sol_cli_cloud_destroy.exit_code outcome with
-     | 0 -> Ok ()
-     | code -> Error (Sol_cli_exit.reported ~code ()))
+    (match !secret_cleanup_failure, Sol_cli_cloud_destroy.exit_code outcome with
+     | Some message, _ ->
+       Printf.eprintf
+         "error: cloud infrastructure was destroyed, but provider secret authorities \
+          were not established absent: %s\n\
+          %!"
+         message;
+       Error (Sol_cli_exit.reported ~code:1 ())
+     | None, 0 -> Ok ()
+     | None, code -> Error (Sol_cli_exit.reported ~code ()))
 ;;
 
 let var_file_arg =

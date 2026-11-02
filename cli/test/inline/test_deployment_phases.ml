@@ -1930,6 +1930,46 @@ let setup_output_secret ~ddl_password =
          "postgresql://postgres:masterpw@db.internal:5432/app")
 ;;
 
+let local_config : Sol_cli_config.t =
+  let target =
+    { Sol_cli_config.name = "local"
+    ; env = "local"
+    ; provider = Sol_cli_provider.Aws
+    ; region = "us-east-1"
+    ; registry = None
+    ; base_domain = None
+    ; cluster_issuer = None
+    ; letsencrypt_email = None
+    ; cluster_name = None
+    ; kube_context = None
+    ; kubeconfig = None
+    ; terraform_var_file = None
+    ; observability_backend = None
+    ; observability_logs_url = None
+    ; observability_logs_username = None
+    ; observability_logs_password_env = None
+    ; observability_metrics_url = None
+    ; observability_metrics_username = None
+    ; observability_metrics_password_env = None
+    ; observability_traces_url = None
+    ; destroy_retention = None
+    ; alert_receiver_type = None
+    ; alert_receiver_url = None
+    ; alert_owner = None
+    ; alert_runbook_url = None
+    ; state_bucket = None
+    ; cluster_endpoint_cidr = None
+    ; dns_zone_ownership = None
+    ; node_failure_headroom_nodes = None
+    ; profile = None
+    ; shape = Some Sol_cli_profile.Local
+    ; provider_fields = []
+    ; secret_authorities = []
+    }
+  in
+  { Sol_cli_config.project = None; target; resources = []; services = [] }
+;;
+
 let run_database_setup
       ?(operation = Sol_cli_database_setup.Bootstrap)
       ?(ddl_password = "ddl-pw")
@@ -1938,6 +1978,7 @@ let run_database_setup
       ()
   =
   Sol_cli_database_setup_run.run
+    ~config:local_config
     ~ctx:Sol_cli_kube_destination.local_context
     ~namespace:"myapp-payments"
     ~ca_namespaces
@@ -2054,7 +2095,11 @@ let%test "database setup run: the CA is written into every consuming namespace" 
 
 (* Where the passwords come from: the authority, not a fresh generation. *)
 let resolve_passwords ~ctx () =
-  Sol_cli_database_setup_run.resolve ~ctx ~namespace:"myapp-payments" ~target:"payments"
+  Sol_cli_database_setup_run.resolve
+    ~config:local_config
+    ~ctx
+    ~namespace:"myapp-payments"
+    ~target:"payments"
 ;;
 
 let test_database_setup_bootstraps_only_without_a_record () =
@@ -2185,6 +2230,7 @@ let test_database_setup_pending_retry_applies_the_bootstrap_script () =
     let ctx = Sol_cli_kube_destination.local_context in
     match
       Sol_cli_database_setup_run.resolve
+        ~config:local_config
         ~ctx
         ~namespace:"myapp-payments"
         ~target:"payments"

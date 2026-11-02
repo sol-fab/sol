@@ -515,6 +515,8 @@ let test_input_ownership_is_one_decision () =
     in
     let authority_text = function
       | Sol_cli_secret_source.Sol_managed -> "sol"
+      | Sol_cli_secret_source.Provider { secret } ->
+        "provider:" ^ Sol_cli_provider_secret.reference secret
       | Sol_cli_secret_source.External { store; key } ->
         Printf.sprintf "external:%s:%s" store key
       | Sol_cli_secret_source.Target_kafka _ -> "kafka"

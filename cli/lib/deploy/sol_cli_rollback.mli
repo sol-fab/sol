@@ -8,6 +8,7 @@ val validate_resource_requirements
 val service_specs_of_release
   :  ?database:string * Sol_cli_resource_binding.postgres
   -> ?kafka:string * Sol_cli_resource_binding.kafka
+  -> ?config:Sol_cli_config.t
   -> Sol_cli_release.t
   -> ((Sol_cli_deployment_plan.service_spec * string) list, string) result
 

@@ -31,8 +31,12 @@ let apply_workload_phased
   =
   let open Result.Syntax in
   let* () = Sol_cli_secret.verify_external_secret_destination ~ctx spec in
-  (* Reads the unit's Sol-managed Secret. On a first deploy the user has already
-     created it — and the namespace it lives in — with `sol secret set`. *)
+  let* () = Sol_cli_secret.verify_provider_secret_class_destination ~ctx spec in
+  (* Before the provider precondition: adopt an existing Kubernetes value into provider
+     authority and retire the Kubernetes copy. A unit with no legacy value is a no-op. *)
+  let* () = Sol_cli_secret_migration.reconcile_spec ~ctx spec in
+  (* Reads the unit's Sol-managed Secret, or the provider authority that replaced it. On a
+     first deploy the operator has already written the value with `sol secret set`. *)
   let* () = Sol_cli_secret.verify_workload_secret ~ctx spec in
   let* () = Sol_cli_manifest.apply_bundle_namespace ~ctx bundle in
   let* () = Sol_cli_manifest.apply_bundle_prerequisites ~ctx bundle in

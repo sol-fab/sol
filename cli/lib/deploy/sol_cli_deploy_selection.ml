@@ -76,6 +76,10 @@ let kafka_key_owner ~(config : Sol_cli_config.t) ~unit_address kafka key =
   | Some (Sol_cli_secret_source.Target_kafka { secret }), None -> Target_kafka { secret }
   | Some (Sol_cli_secret_source.External { store; key }), None ->
     External_secret { store; key }
+  | Some (Sol_cli_secret_source.Provider _), _ ->
+    (* Kafka delivery never declares a provider-backed application source; the declared
+       authority remains the answer, exactly as for [Sol_managed]. *)
+    owner_of_authority declared
   | Some Sol_cli_secret_source.Sol_managed, _ | None, _ -> owner_of_authority declared
 ;;
 
@@ -183,6 +187,7 @@ let secret_authorities_for_plan
   let missing = ref [] in
   let mappings = ref [] in
   let conflicts = ref [] in
+  let failures = ref [] in
   List.iter
     (fun (spec : Sol_cli_deployment_plan.service_spec) ->
        let unit_address = spec.domain ^ "/" ^ spec.source_name in
@@ -208,8 +213,17 @@ let secret_authorities_for_plan
               := (unit_address, key, Sol_cli_secret_source.Target_kafka { secret })
                  :: !mappings
             | Unit_secret ->
-              mappings
-              := (unit_address, key, Sol_cli_secret_source.Sol_managed) :: !mappings
+              if Sol_cli_secret_authority.provider_backed config
+              then (
+                match Sol_cli_secret_authority.application ~config ~unit_address ~key with
+                | Ok secret ->
+                  mappings
+                  := (unit_address, key, Sol_cli_secret_source.Provider { secret })
+                     :: !mappings
+                | Error message -> failures := message :: !failures)
+              else
+                mappings
+                := (unit_address, key, Sol_cli_secret_source.Sol_managed) :: !mappings
             | External_secret { store; key = remote } ->
               mappings
               := ( unit_address
@@ -218,26 +232,29 @@ let secret_authorities_for_plan
                  :: !mappings)
          owners)
     plan.Sol_cli_deployment_plan.services;
-  match List.rev !conflicts with
-  | (unit_address, key) :: _ ->
-    Error
-      (Printf.sprintf
-         "target %s maps %s/%s, but its Kafka binding already owns that delivered value; \
-          remove the application authority mapping"
-         config.Sol_cli_config.target.name
-         unit_address
-         key)
+  match List.rev !failures with
+  | message :: _ -> Error message
   | [] ->
-    (match List.rev !missing with
+    (match List.rev !conflicts with
      | (unit_address, key) :: _ ->
        Error
          (Printf.sprintf
-            "target %s has no secret authority for %s/%s; declare it under \
-             targets.<provider>/<region>.secrets in sol/environments.yml"
+            "target %s maps %s/%s, but its Kafka binding already owns that delivered \
+             value; remove the application authority mapping"
             config.Sol_cli_config.target.name
             unit_address
             key)
-     | [] -> Ok (List.rev !mappings))
+     | [] ->
+       (match List.rev !missing with
+        | (unit_address, key) :: _ ->
+          Error
+            (Printf.sprintf
+               "target %s has no secret authority for %s/%s; declare it under \
+                targets.<provider>/<region>.secrets in sol/environments.yml"
+               config.Sol_cli_config.target.name
+               unit_address
+               key)
+        | [] -> Ok (List.rev !mappings)))
 ;;
 
 let secret_sources_for_plan ~config plan =

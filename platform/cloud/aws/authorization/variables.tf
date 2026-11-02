@@ -51,3 +51,8 @@ variable "scheduler_units" {
   }))
   default = []
 }
+
+variable "target_name" {
+  description = "Normalized Sol target identity; provider secret authorities are scoped to it so two targets in one environment cannot share a name."
+  type        = string
+}

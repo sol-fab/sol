@@ -1206,7 +1206,11 @@ let run_database_setup_step
        projections stay in agreement. Only a target with no recorded authority bootstraps,
        and then the values are generated once and persisted before the Job touches Postgres. *)
     let* operation, ddl_password, dml_password =
-      Sol_cli_database_setup_run.resolve ~ctx ~namespace:migration_namespace ~target
+      Sol_cli_database_setup_run.resolve
+        ~config:planning.config
+        ~ctx
+        ~namespace:migration_namespace
+        ~target
     in
     let ddl_url = Sol_cli_database_setup_url.ddl ~password:ddl_password master_url in
     let dml_url = Sol_cli_database_setup_url.dml ~password:dml_password master_url in
@@ -1258,6 +1262,7 @@ let run_database_setup_step
         dml_namespaces
     in
     Sol_cli_database_setup_run.run
+      ~config:planning.config
       ~ctx
       ~namespace:migration_namespace
       ~ca_namespaces:(migration_namespace :: dml_namespaces)

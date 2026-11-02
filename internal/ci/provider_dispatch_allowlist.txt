@@ -7,3 +7,5 @@ dispatch cli/lib/cloud/sol_cli_aws_serverless_target.ml 1 AWS-target dispatch id
 dispatch cli/lib/cloud/sol_cli_gcp_serverless_target.ml 1 GCP-target dispatch identifies the GCP provider once before invoking the Cloud Run adapter
 dispatch cli/lib/workspace/sol_cli_resource_binding.ml 8 external binding syntax is provider-specific and this validator owns that contract
 dispatch cli/lib/deploy/sol_cli_deployment_plan.ml 1 the deployment plan validates the binding syntax for its already-resolved provider
+dispatch cli/lib/base/sol_cli_provider_secret.ml 2 the provider-neutral secret reference maps to Sol's provider identity; a second provider list here would drift
+dispatch cli/lib/cloud/sol_cli_secret_authority.ml 5 one cross-provider secret-store adapter owns ownership, redaction and private file input; splitting it per provider would duplicate those guarantees
