@@ -48,6 +48,25 @@
       },
       "evidence": "behavioral",
       "status": "implemented-unqualified"
+    },
+    {
+      "id": "aws-interrupted-apply-resume",
+      "providers": [
+        "aws"
+      ],
+      "execution": [
+        "kubernetes"
+      ],
+      "fixture": "internal/qualification/aws/aws-target.example.yml",
+      "driver": "provider-harness",
+      "harness": "internal/qualification/aws/live-qual.sh",
+      "phases": [
+        "prepare",
+        "cloud",
+        "resume"
+      ],
+      "evidence": "behavioral",
+      "status": "implemented-unqualified"
     }
   ]
 }
