@@ -301,28 +301,37 @@ one continuous attempt.
 ### VERIF-021 — managed secret projection and the fenced grant (alpha E4, E6)
 
 This is a live cell of DEC-029's driver × runtime table, run inside the target so the
-substrate is shared. The CSI driver and the AWS provider are **not** Sol platform components
-(`docs/deployment/compatibility.md` records them as candidates); the run installs them out of
-band, as `VERIF-020` did for Vault, and records the chart and provider versions.
+substrate is shared. The cluster root now installs the `aws-secrets-store-csi-driver-provider`
+EKS add-on and Sol renders the per-unit `SecretProviderClass`; the live run verifies the
+mechanism the product now ships rather than installing a parallel one. Record the resolved
+add-on and provider versions.
 
 1. Reconcile the declared secret grant with `sol grants plan <target>` / `apply <target>`
-   (DEC-062, `FEAT-127`), so the unit has a real fenced identity.
-2. Create a `SecretProviderClass` with `provider: aws` for a Secrets Manager secret under the
-   environment's path, and confirm the provider authenticates as the **pod's** identity
-   (IRSA / EKS Pod Identity), never the node's.
+   (DEC-062, `FEAT-127`), so the unit has a real fenced identity. Seed the declared key with
+   `sol secret set` under the provisioner/operator identity before this step.
+2. Deploy one unit and inspect the rendered `SecretProviderClass`: `provider: aws`,
+   `usePodIdentity: "true"`, the target-scoped `objectName`, and no `secretObjects`. Confirm
+   the mounted file at `/var/run/sol/secrets/<KEY>` appears and that no Kubernetes Secret
+   carries the value; confirm the provider authenticates as the **pod's** EKS Pod Identity
+   association, never the node's.
 3. A granted unit reads the value; remove the unit's grant and confirm the read is
-   `AccessDenied` while a granted read still succeeds.
+   `AccessDenied` while a granted sibling still reads. Confirm a missing or deleted authority
+   fails the next deploy closed and is not regenerated.
 4. `enableSecretRotation` updates the mounted file within the stated bound; measure the
-   rotation-to-file-change delay. A new pod fails closed while the authority is unavailable;
-   a running pod keeps its last-known value.
-5. DEC-062 rule 6: run `aws iam simulate-principal-policy` against the unit's role for an
+   rotation-to-file-change delay, and record whether an application that re-reads through
+   `Sol_runtime.secret` observes it while a startup-cached process does not.
+5. Replace the namespace, then the cluster, and confirm redeploy repairs from the same
+   provider authority. Intentional teardown must independently list the provider store and
+   establish absence; a pending-deletion timestamp is not absence.
+6. DEC-062 rule 6: run `aws iam simulate-principal-policy` against the unit's role for an
    allowed and a denied action, including a permissions boundary, and compare with a real
    call. Record on `DEC-062` whether the simulation reflects boundaries, resource policies
    and SCPs; if it does not, the deploy-time verification (`FEAT-128`) needs a mechanism that
    does.
 
-Evidence: the exact commands and outputs, the provider/CSI versions, the measured delay, and
-the DEC-029 cell verdicts.
+Evidence: the exact commands and outputs, the resolved add-on/provider versions, the rendered
+SPC, the mounted paths, the measured delay, the denial observations, the replacement/recovery
+observations and the DEC-029 cell verdicts. No step here is claimed by the offline suite.
 
 ### VERIF-022 — projected ServiceAccount tokens (alpha E5) — blocked on implementation
 
