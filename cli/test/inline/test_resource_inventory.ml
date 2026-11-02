@@ -156,6 +156,31 @@ let%test "an unreadable root is unknown, not empty" =
     (List.length inventory.unknowns)
 ;;
 
+let%test "a cloud collection blocker is not reconciled" =
+  let target = target "byo" in
+  let blocked =
+    ({ state = Sol_cli_cloud_destroy.State_empty
+     ; observations = []
+     ; dispositions = []
+     ; blockers = [ Sol_cli_cloud_wiring.No_cluster_name ]
+     }
+     : Sol_cli_cloud_wiring.cloud_collection)
+  in
+  let inventory =
+    collect target ~roots:[ root Sol_cli_cloud_destroy.State_empty ] ~cloud:blocked
+  in
+  Windtrap.equal
+    (Windtrap.option Windtrap.string)
+    ~msg:"a missing cluster identity cannot reconcile"
+    (Some "incomplete")
+    (Some (I.verdict_to_string inventory.verdict));
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"the blocker is reported"
+    1
+    (List.length inventory.unknowns)
+;;
+
 let%test "state-only is unverified even when state is readable" =
   let target = target "byo" in
   let inventory =

@@ -817,6 +817,11 @@ let collect
     | Some _, None | None, _ -> []
   in
   let rows = sort_rows (dedupe (state_rows @ provider_rows)) in
+  let cloud_blockers =
+    match cloud with
+    | None -> []
+    | Some collection -> collection.blockers
+  in
   let inventory_complete =
     List.for_all
       (fun root ->
@@ -873,6 +878,7 @@ let collect
   in
   let verification_complete =
     (not state_only)
+    && cloud_blockers = []
     && unobserved_classes = []
     && failed_classes = []
     && recorded_unverified = []
@@ -894,6 +900,12 @@ let collect
       ~unverified:(not verification_complete)
       ~state_only
   in
+  let cloud_unknowns =
+    cloud_blockers
+    |> List.filter_map (function
+      | Sol_cli_cloud_wiring.State_unreadable _ -> None
+      | blocker -> Some (Sol_cli_cloud_wiring.ownership_blocker_message blocker))
+  in
   let unknowns =
     roots
     |> List.filter_map (fun root ->
@@ -903,8 +915,11 @@ let collect
       | Sol_cli_cloud_destroy.State_empty | Sol_cli_cloud_destroy.State_represented _ ->
         None)
     |> fun root_unknowns ->
-    root_unknowns
-    @ List.map (fun (class_name, reason) -> class_name ^ ": " ^ reason) failed
+    List.sort_uniq
+      String.compare
+      (root_unknowns
+       @ cloud_unknowns
+       @ List.map (fun (class_name, reason) -> class_name ^ ": " ^ reason) failed)
   in
   let coverage =
     { inventory_complete
