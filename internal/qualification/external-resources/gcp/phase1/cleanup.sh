@@ -18,6 +18,13 @@ gcloud artifacts repositories delete "$REPOSITORY" --project "$PROJECT" --locati
 gcloud storage rm --recursive --quiet "gs://$BUCKET" || true
 gcloud pubsub subscriptions delete "$SUBSCRIPTION" --project "$PROJECT" --quiet || true
 gcloud pubsub topics delete "$TOPIC" --project "$PROJECT" --quiet || true
+for role in $(gcloud projects get-iam-policy "$PROJECT" \
+  --flatten='bindings[].members' \
+  --filter="bindings.members:serviceAccount:$RUNTIME_SERVICE_ACCOUNT" \
+  --format='value(bindings.role)'); do
+  gcloud projects remove-iam-policy-binding "$PROJECT" \
+    --member="serviceAccount:$RUNTIME_SERVICE_ACCOUNT" --role="$role" --quiet || true
+done
 gcloud iam service-accounts delete "$RUNTIME_SERVICE_ACCOUNT" --project "$PROJECT" --quiet || true
 gcloud storage rm --recursive --quiet "$STATE" || true
 
