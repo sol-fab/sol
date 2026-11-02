@@ -391,36 +391,41 @@ let write_provider_authority ~(config : Sol_cli_config.t) ~target authority =
     authority. *)
 let retire_legacy_authority ~ctx ~namespace ~target =
   let module Render = Sol_cli_database_setup_render in
-  let name = Render.authority_name target in
-  match
-    Sol_cli_kubectl.get_if_present
-      ~ctx
-      ~args:[ "get"; "secret"; name; "-n"; namespace; "-o"; "name" ]
-  with
+  (* Only this target's verified record is retired. [read_authority] checks the target
+     annotation, the Sol ownership label, and both values; a same-named Secret with other
+     ownership is left alone. A read failure is reported and does not fail the deploy: the
+     provider authority is already the source of truth. *)
+  match read_authority ~ctx ~namespace ~target with
   | Ok None -> ()
-  | Error error ->
+  | Error reason ->
     Sol_cli_report.warn
-      "the former Kubernetes password authority %s/%s could not be observed for removal \
-       (%s); the provider authority is still the source of truth"
+      "the former Kubernetes password authority %s/%s was not retired: %s. The provider \
+       authority is still the source of truth."
       namespace
-      name
-      (Sol_cli_process.error_to_string error)
+      (Render.authority_name target)
+      reason
   | Ok (Some _) ->
-    (match Sol_cli_kubectl.delete ~ctx ~resource:"secret" ~name ~namespace with
+    (match
+       Sol_cli_kubectl.delete
+         ~ctx
+         ~resource:"secret"
+         ~name:(Render.authority_name target)
+         ~namespace
+     with
      | Ok () -> ()
      | Error error ->
        Sol_cli_report.warn
          "the former Kubernetes password authority %s/%s could not be removed (%s); the \
           provider authority is still the source of truth"
          namespace
-         name
+         (Render.authority_name target)
          (Sol_cli_process.error_to_string error))
 ;;
 
-(** Where the recorded passwords come from. This decision is separate from the effects:
-    the provider is authoritative when it has a record; an absent provider record may be
-    adopted from the legacy Kubernetes record; only two genuinely absent records generate a
-    new credential. *)
+(** Where the recorded passwords come from. This decision is separate from the effects: the
+    provider is authoritative when it has a record; an absent provider record may be
+    adopted from the legacy Kubernetes record; only two genuinely absent records generate
+    a new credential. *)
 type authority_source =
   | Provider_record of authority
   | Adopt_legacy of authority

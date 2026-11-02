@@ -568,7 +568,7 @@ let gcp_inventory json =
     | _ -> None)
 ;;
 
-let list_application_authorities (target : Sol_cli_config.target) =
+let list_authorities (target : Sol_cli_config.target) =
   let* scope = scope_of_target target in
   match scope.provider with
   | Sol_cli_provider_secret.Aws ->
@@ -629,12 +629,11 @@ let destroy_authorities ~(target : Sol_cli_config.target) =
   if not (provider_backed_target target)
   then Ok ()
   else
-    let* entries = list_application_authorities target in
+    let* scope = scope_of_target target in
+    let* entries = list_authorities target in
     let* () =
       entries
       |> Sol_cli_result.map_list (fun (entry : inventory_entry) ->
-        let scope = scope_of_target target in
-        let* scope = scope in
         let* deleted =
           delete_named
             ~provider:entry.entry_provider
@@ -651,7 +650,7 @@ let destroy_authorities ~(target : Sol_cli_config.target) =
                entry.entry_name))
       |> Result.map ignore
     in
-    let* remaining = list_application_authorities target in
+    let* remaining = list_authorities target in
     match remaining with
     | [] -> Ok ()
     | entries ->
