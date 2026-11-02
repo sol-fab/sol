@@ -61,6 +61,11 @@ if ! bash internal/ci/check_ocamlformat.sh --all; then
   failed=1
 fi
 
+echo "fast checks: qualification scenario runner"
+if ! bash internal/qualification/scenarios/test-runner.sh; then
+  failed=1
+fi
+
 echo "fast checks: source invariants"
 if ! bash internal/tooling/scripts/verify.sh static; then
   failed=1
