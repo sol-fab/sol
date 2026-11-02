@@ -12,6 +12,8 @@ sol_under_test_record_identity() { printf 'identity\n' >>"$CALLS"; }
 LIB
 cat >"$tmp/scenario.sh" <<'SCN'
 scenario_prepare() { printf 'prepare\n' >>"$CALLS"; }
+scenario_inventory() { printf 'inventory\n' >>"$CALLS"; }
+scenario_absence() { printf 'absence\n' >>"$CALLS"; printf 'all resources absent\n'; }
 scenario_plan() { printf 'plan\n' >>"$CALLS"; }
 scenario_cleanup() { printf 'cleanup\n' >>"$CALLS"; }
 scenario_execute() { printf 'execute\n' >>"$CALLS"; }
@@ -33,5 +35,8 @@ grep -qx prepare "$CALLS"
 grep -qx execute "$CALLS"
 grep -qx assert "$CALLS"
 grep -qx cleanup "$CALLS"
+grep -qx absence "$CALLS"
 test -s "$tmp/log/scenario-evidence.txt"
+test -s "$tmp/log/absence.txt"
+grep -q 'absence=PASS' "$tmp/log/cleanup-verdict.txt"
 echo "scenario runner composition passed"
