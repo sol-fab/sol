@@ -111,8 +111,12 @@ transfers that lifetime to its caller.
   transient cleanup to succeed. Process finalizers cannot run after a hard kill;
   migration and contract Jobs then require operator cleanup. These Jobs have no
   generated deadline or TTL, so process exit alone does not establish cleanup.
-- Database setup deletes its transient master Secret, script and Job, while keeping
-  its credential authority, DDL/DML output Secrets and trust material for consumers.
+- Database setup deletes its transient master Secret, script and Job, while keeping the
+  provider password authority (and retiring the former Kubernetes record), DDL/DML output
+  Secrets and trust material for consumers.
+- Application authority created by `sol secret set` is owned by the target and retained
+  across namespace or cluster replacement. Intentional target destruction removes it and
+  independently re-observes the provider store; a successful delete request is not absence.
 - ExternalSecrets are durable credential writers. Pruning removes only an undeclared
   writer whose live UID matches captured ownership. Declared writers and objects whose
   ownership cannot be established survive; their generated Secrets remain ESO's domain.
