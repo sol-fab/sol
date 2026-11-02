@@ -1,0 +1,25 @@
+extqual-gcp-1:
+  shape: local
+  base_domain: extqual-gcp.invalid
+  dns_zone_ownership: user
+  targets:
+    gcp/us-central1:
+      execution: serverless
+      state_bucket: sol-qualification-tfstate
+      gcp:
+        project_id: sol-qualification
+        region: us-central1
+      resources:
+        jobs:
+          binding:
+            ownership: external
+            store: external
+            connection:
+              TOPIC: sol-extqual-gcp-1-jobs
+              SUBSCRIPTION: sol-extqual-gcp-1-jobs-worker
+        uploads:
+          binding:
+            ownership: external
+            store: external
+            connection:
+              BUCKET: sol-extqual-gcp-1-uploads-819835583654
