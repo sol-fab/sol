@@ -420,8 +420,16 @@ let run_status target =
                 let* secret =
                   Sol_cli_secret_authority.application ~config ~unit_address ~key
                 in
-                Sol_cli_secret_authority.observe secret
-                |> Result.map Sol_cli_secret_authority.observation_to_string
+                let* observation = Sol_cli_secret_authority.observe secret in
+                match observation with
+                | Sol_cli_secret_authority.Owned ->
+                  let* value = Sol_cli_secret_authority.read secret in
+                  Ok
+                    (match value with
+                     | Some value when not (Sol_cli_string.is_blank value) -> "present"
+                     | Some _ | None -> "present, no readable version")
+                | observation ->
+                  Ok (Sol_cli_secret_authority.observation_to_string observation)
               else Ok (if List.mem key existing then "present" else "missing")
             | Some (Sol_cli_config.External _) ->
               let state = Option.value external_state ~default:"unknown" in
