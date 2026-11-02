@@ -66,6 +66,11 @@ if ! bash internal/qualification/scenarios/test-runner.sh; then
   failed=1
 fi
 
+echo "fast checks: qualification scenario catalog"
+if ! python3 internal/qualification/scenarios/test-catalog.py; then
+  failed=1
+fi
+
 echo "fast checks: source invariants"
 if ! bash internal/tooling/scripts/verify.sh static; then
   failed=1

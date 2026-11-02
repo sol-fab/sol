@@ -1,0 +1,53 @@
+{
+  "contract": "qualification-scenario/v1",
+  "scenarios": [
+    {
+      "id": "external-gcp-phase1",
+      "providers": [
+        "gcp"
+      ],
+      "execution": [
+        "serverless"
+      ],
+      "fixture": "internal/qualification/external-resources/gcp/phase1",
+      "driver": "scenario-runner",
+      "evidence": "behavioral",
+      "status": "prepared"
+    },
+    {
+      "id": "mixed-aws",
+      "providers": [
+        "aws"
+      ],
+      "execution": [
+        "kubernetes",
+        "serverless"
+      ],
+      "driver": "provider-harness",
+      "harness": "internal/qualification/aws/live-qual.sh",
+      "env": {
+        "MIXED": "1"
+      },
+      "evidence": "behavioral",
+      "status": "implemented-unqualified"
+    },
+    {
+      "id": "mixed-gcp",
+      "providers": [
+        "gcp"
+      ],
+      "execution": [
+        "kubernetes",
+        "serverless"
+      ],
+      "fixture": "internal/qualification/gcp/gcp-production-single-region-v1-matrix.tsv",
+      "driver": "provider-harness",
+      "harness": "internal/qualification/gcp/live-qual.sh",
+      "env": {
+        "MIXED": "1"
+      },
+      "evidence": "behavioral",
+      "status": "implemented-unqualified"
+    }
+  ]
+}
