@@ -134,6 +134,18 @@ let resources = function
   | State_empty | State_unreadable _ -> []
 ;;
 
+let resource_name (resource : resource) =
+  match resource.name with
+  | Some name when not (Sol_cli_string.is_blank name) -> Some name
+  | Some _ | None ->
+    (match resource.identifier with
+     | Some value when not (Sol_cli_string.is_blank value) -> Some value
+     | Some _ | None ->
+       (match resource.email with
+        | Some value when not (Sol_cli_string.is_blank value) -> Some value
+        | Some _ | None -> resource.url))
+;;
+
 let addresses state = List.map (fun resource -> resource.address) (resources state)
 
 let substrate_presence = function

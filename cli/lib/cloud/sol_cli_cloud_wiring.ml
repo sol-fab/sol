@@ -98,16 +98,16 @@ let materialize_workdir ~assets provider role ~backend_config =
   |> Result.map ignore
 ;;
 
-let terraform_init run_log infra_dir backend_config =
+let terraform_init ?(echo = true) run_log infra_dir backend_config =
   Sol_cli_run_log.run_phase run_log ~name:"terraform-init" (fun () ->
-    Sol_cli_terraform.init ~chdir:infra_dir ~backend_config ())
+    Sol_cli_terraform.init ~echo ~chdir:infra_dir ~backend_config ())
 ;;
 
-let init ~assets run_log ~provider ~role backend_config =
+let init ?(echo = true) ~assets run_log ~provider ~role backend_config =
   match materialize_workdir ~assets provider role ~backend_config with
   | Error message -> Error (Sol_cli_cloud_apply.Refused message)
   | Ok () ->
-    terraform_init run_log (workdir provider role ~backend_config) backend_config
+    terraform_init ~echo run_log (workdir provider role ~backend_config) backend_config
     |> terraform_outcome
     |> Result.map_error (fun message -> Sol_cli_cloud_apply.Terraform_failed message)
 ;;
@@ -117,8 +117,9 @@ let failure_message = function
     message
 ;;
 
-let init_result ~assets run_log ~provider ~role backend_config =
-  init ~assets run_log ~provider ~role backend_config |> Result.map_error failure_message
+let init_result ?(echo = true) ~assets run_log ~provider ~role backend_config =
+  init ~echo ~assets run_log ~provider ~role backend_config
+  |> Result.map_error failure_message
 ;;
 
 let cluster_of ~(target_cfg : Sol_cli_config.target) provider infra_dir =
@@ -329,14 +330,55 @@ let cluster_identity_mismatch ~state_name ~declared =
     declared
 ;;
 
-let reconcile_ownership
+type ownership_blocker =
+  | State_unreadable of string
+  | Cluster_identity_mismatch of
+      { state_name : string
+      ; declared : string
+      }
+  | Cluster_unnamed
+  | Cluster_ambiguous of string list
+  | No_cluster_name
+
+type cloud_collection =
+  { state : Sol_cli_cloud_destroy.state_read
+  ; observations : Sol_cli_absence.observation list
+  ; dispositions : Sol_cli_ownership_reconciliation.disposition list
+  ; blockers : ownership_blocker list
+  }
+
+let ownership_blocker_message = function
+  | State_unreadable reason ->
+    Printf.sprintf
+      "refusing to reconcile: the Terraform state could not be read (%s), so Sol cannot \
+       tell which provider resources this target already owns. An unreadable state is \
+       not an empty one -- nothing is imported while ownership is unknown"
+      reason
+  | Cluster_identity_mismatch { state_name; declared } ->
+    cluster_identity_mismatch ~state_name ~declared
+  | Cluster_unnamed ->
+    "the Terraform state represents a cluster but records no name, so its identity \
+     cannot be compared with this target. Nothing is imported while that is unknown."
+  | Cluster_ambiguous addresses ->
+    Printf.sprintf
+      "the Terraform state represents more than one cluster resource (%s), so its \
+       ownership cannot be attributed to one identity. Nothing is imported while that is \
+       unknown."
+      (String.concat ", " addresses)
+  | No_cluster_name ->
+    "reconciliation needs the target's cluster_name: both the provider inventory and the \
+     identity registry address resources by it, so without it nothing can be attributed \
+     or mapped"
+;;
+
+let collect_cloud
       ~provider
       ~(target_cfg : Sol_cli_config.target)
       ~cluster_name
       ~infra_dir
-      ~var_files
-      ~vars
-      ~act
+      ~observe
+      ?authorization_identities
+      ()
   =
   let state =
     match Sol_cli_terraform.show_json ~chdir:infra_dir () with
@@ -348,50 +390,77 @@ let reconcile_ownership
       Sol_cli_cloud_destroy.State_unreadable
         ("terraform show could not be run: " ^ Sol_cli_process.error_to_string error)
   in
+  let empty blockers = { state; observations = []; dispositions = []; blockers } in
   match state with
-  | Sol_cli_cloud_destroy.State_unreadable reason ->
-    Error
-      (Printf.sprintf
-         "refusing to reconcile: the Terraform state could not be read (%s), so Sol \
-          cannot tell which provider resources this target already owns. An unreadable \
-          state is not an empty one -- nothing is imported while ownership is unknown"
-         reason)
+  | Sol_cli_cloud_destroy.State_unreadable reason -> empty [ State_unreadable reason ]
   | Sol_cli_cloud_destroy.State_empty | Sol_cli_cloud_destroy.State_represented _ ->
-    let* cluster_name =
-      match state_cluster_identity ~provider state with
-      | Cluster_named state_name when not (String.equal state_name cluster_name) ->
-        Error (cluster_identity_mismatch ~state_name ~declared:cluster_name)
-      | Cluster_named _ | Cluster_not_in_state -> Ok cluster_name
-      | Cluster_unnamed ->
-        Error
-          "the Terraform state represents a cluster but records no name, so its identity \
-           cannot be compared with this target. Nothing is imported while that is \
-           unknown."
-      | Cluster_ambiguous addresses ->
-        Error
-          (Printf.sprintf
-             "the Terraform state represents more than one cluster resource (%s), so its \
-              ownership cannot be attributed to one identity. Nothing is imported while \
-              that is unknown."
-             (String.concat ", " addresses))
-    in
-    let observations =
-      Sol_cli_provider_registry.observations
-        provider
-        target_cfg
-        ~cluster_name
-        ~pre_destroy:state
-    in
-    let dispositions =
-      Sol_cli_ownership_reconciliation.dispositions
-        ~entries:
-          (Sol_cli_provider_registry.resource_identity
-             provider
-             ~cluster_name
-             ~project_id:(Sol_cli_config.provider_field target_cfg "project_id"))
-        ~state_addresses:(Sol_cli_cloud_destroy.addresses state)
-        observations
-    in
+    (match cluster_name with
+     | None -> empty [ No_cluster_name ]
+     | Some cluster_name ->
+       (match state_cluster_identity ~provider state with
+        | Cluster_named state_name when not (String.equal state_name cluster_name) ->
+          empty [ Cluster_identity_mismatch { state_name; declared = cluster_name } ]
+        | Cluster_unnamed -> empty [ Cluster_unnamed ]
+        | Cluster_ambiguous addresses -> empty [ Cluster_ambiguous addresses ]
+        | Cluster_named _ | Cluster_not_in_state ->
+          let observations =
+            if not observe
+            then []
+            else (
+              match authorization_identities with
+              | None ->
+                Sol_cli_provider_registry.observations
+                  provider
+                  target_cfg
+                  ~cluster_name
+                  ~pre_destroy:state
+              | Some authorization_identities ->
+                Sol_cli_provider_registry.observations
+                  provider
+                  target_cfg
+                  ~cluster_name
+                  ~pre_destroy:state
+                  ~authorization_identities)
+          in
+          let dispositions =
+            if not observe
+            then []
+            else
+              Sol_cli_ownership_reconciliation.dispositions
+                ~entries:
+                  (Sol_cli_provider_registry.resource_identity
+                     provider
+                     ~cluster_name
+                     ~project_id:(Sol_cli_config.provider_field target_cfg "project_id"))
+                ~state_addresses:(Sol_cli_cloud_destroy.addresses state)
+                observations
+          in
+          { state; observations; dispositions; blockers = [] }))
+;;
+
+let reconcile_ownership
+      ~provider
+      ~(target_cfg : Sol_cli_config.target)
+      ~cluster_name
+      ~infra_dir
+      ~var_files
+      ~vars
+      ~act
+  =
+  let collection =
+    collect_cloud
+      ~provider
+      ~target_cfg
+      ~cluster_name:(Some cluster_name)
+      ~infra_dir
+      ~observe:true
+      ()
+  in
+  match collection.blockers with
+  | blocker :: _ -> Error (ownership_blocker_message blocker)
+  | [] ->
+    let observations = collection.observations in
+    let dispositions = collection.dispositions in
     let candidates =
       List.filter_map Sol_cli_ownership_reconciliation.candidate dispositions
     in

@@ -10,6 +10,12 @@ let substrate_addresses = function
   | Sol_cli_provider.Byo -> []
 ;;
 
+let observed_classes = function
+  | Sol_cli_provider.Aws -> Sol_cli_aws_absence.observed_classes ()
+  | Sol_cli_provider.Gcp -> Sol_cli_gcp_absence.observed_classes ()
+  | Sol_cli_provider.Byo -> []
+;;
+
 (* The Terraform type of the substrate resource. State selection must require both the
    address prefix and this type, so a similarly-prefixed object cannot be read as the
    cluster whose identity scopes a destructive decision. *)
@@ -345,6 +351,35 @@ let resource_identity provider ~cluster_name ~project_id =
   | Sol_cli_provider.Aws -> Sol_cli_resource_identity.aws ~cluster_name
   | Sol_cli_provider.Gcp -> Sol_cli_resource_identity.gcp ~cluster_name ~project_id
   | Sol_cli_provider.Byo -> []
+;;
+
+let inventory_auth_class provider (resource : Sol_cli_cloud_destroy.resource) =
+  let address_starts prefix = String.starts_with ~prefix resource.address in
+  match provider, resource.kind with
+  | Sol_cli_provider.Aws, "aws_iam_policy"
+    when address_starts "aws_iam_policy.workload_boundary" ->
+    Some ("authorization IAM policy", Sol_cli_cloud_destroy.resource_name resource)
+  | Sol_cli_provider.Aws, "aws_iam_role" when address_starts "aws_iam_role.reconciler" ->
+    Some ("authorization IAM role", Sol_cli_cloud_destroy.resource_name resource)
+  | Sol_cli_provider.Aws, "aws_iam_role" when address_starts "aws_iam_role.workload" ->
+    Some ("authorization workload role", Sol_cli_cloud_destroy.resource_name resource)
+  | Sol_cli_provider.Gcp, "google_service_account"
+    when address_starts "google_service_account.reconciler" ->
+    Some ("authorization service account", Sol_cli_cloud_destroy.resource_name resource)
+  | Sol_cli_provider.Gcp, "google_project_iam_custom_role"
+    when address_starts "google_project_iam_custom_role.authorization" ->
+    Some ("authorization custom role", Sol_cli_cloud_destroy.resource_name resource)
+  | Sol_cli_provider.Gcp, "google_project_iam_member"
+    when address_starts "google_project_iam_member.reconciler_authorization" ->
+    let identity =
+      match resource.role, resource.member with
+      | Some role, Some member -> Some (role ^ " -> " ^ member)
+      | Some role, None -> Some role
+      | None, Some member -> Some member
+      | None, None -> None
+    in
+    Some ("authorization project IAM binding", identity)
+  | Sol_cli_provider.Aws, _ | Sol_cli_provider.Gcp, _ | Sol_cli_provider.Byo, _ -> None
 ;;
 
 let credentials provider ~operation ~leaves_target_standing =

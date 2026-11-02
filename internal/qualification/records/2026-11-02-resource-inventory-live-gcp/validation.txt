@@ -1,0 +1,2 @@
+inventory_contract: verdict=unknown inventory_complete=True verification_complete=False discrepancy=False unknowns=2
+inventory_contract: verdict=unverified inventory_complete=True verification_complete=False discrepancy=False unknowns=0

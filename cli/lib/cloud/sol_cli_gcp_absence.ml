@@ -51,7 +51,8 @@ let benign_empty_list_warning stderr =
   |> List.for_all (fun line ->
     String.starts_with
       ~prefix:"WARNING: The following filter keys were not present in any resource"
-      line)
+      line
+    || String.starts_with ~prefix:"Listing items under project " line)
 ;;
 
 (* Every GCP probe is an enumeration command. An empty successful listing is absence;

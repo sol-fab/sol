@@ -88,6 +88,14 @@ Adoption here is bounded by declaration: Sol imports only what its contract says
 it owns, never a resource discovered in the provider, and never by guessing
 ownership from the fact that an object exists.
 
+**Recovery of Sol's own stale state is not a second exception.** ADR 0012 records the
+narrower case where an apply failed after a provider created a resource Sol's own
+declaration caused: `sol target reconcile` may restore Terraform ownership only when the
+object maps exactly to one declared address through the identity registry. It is bounded
+recovery of a resource Sol already created, not adoption of ambient infrastructure, and
+it does not change this boundary.
+
+
 ## What this resolves
 
 - **`sol plan` scope.** The plan is the plan of the Sol-owned boundary. Resources

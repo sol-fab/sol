@@ -80,6 +80,22 @@
 
 (rule
  (alias runtest)
+ (deps ../bin/main.exe test_resources_command.sh)
+ (action
+  (run bash %{dep:test_resources_command.sh} %{dep:../bin/main.exe})))
+
+(rule
+ (alias runtest)
+ (deps
+  ../../internal/qualification/inventory_contract.py
+  ../../internal/qualification/test_inventory_contract.py)
+ (action
+  (run
+   python3
+   %{dep:../../internal/qualification/test_inventory_contract.py})))
+
+(rule
+ (alias runtest)
  (deps ../bin/main.exe test_deploy_first_run.sh)
  (action
   (run bash %{dep:test_deploy_first_run.sh} %{dep:../bin/main.exe})))

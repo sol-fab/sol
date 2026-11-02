@@ -10,6 +10,26 @@ Import has historical live evidence; the exceptional Cloud SQL guard procedure
 below still requires a disposable-target qualification before it can be called a
 supported end-to-end recovery path. Do not infer qualification from offline tests.
 
+## See what is recorded and observed first
+
+```sh
+sol resources <target> --json
+```
+
+`sol resources` is read-only. It shows the recorded Terraform state and the independent
+provider observation, and separates `status` from `recovery`: an observed object can be
+`unrecorded` while its recovery is `recoverable`, `unrecoverable`, or `unmapped`. A
+`verdict: attention_required` names a confirmed discrepancy; `incomplete` means the
+records are complete but a required class was not observed; `unknown` means a state or
+provider read did not establish the evidence. `unverified` is the explicit state-only
+mode and is not a presence/absence gate.
+
+Inspect `coverage.verification.unobserved_classes` before treating a clean-looking
+inventory as complete. `sol resources` never adopts anything; use `sol target reconcile`
+for that. After a successful reconcile, re-run `sol resources` to confirm the resource is
+now `owned` and the verdict has moved to `reconciled` (or `incomplete` for a remaining
+coverage gap).
+
 ## Restore ownership first
 
 Use the original workspace, explicit target, provider identity and protected

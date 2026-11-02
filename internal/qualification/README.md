@@ -164,6 +164,21 @@ Existing live entry points and matrices retain their current authority.
   worker effect.
 - `gcp/live-qual.sh` — GCP lifecycle/application qualification and provider-backed absence
   inventory.
+- `aws/live-qual.sh inventory` / `gcp/live-qual.sh inventory` — read-only resource
+  inventory: runs the installed candidate's `sol resources <target> --json`, validates
+  it with `inventory_contract.py`, and never mutates or tears down. `inventory` is
+  deliberately separate from `verify`, which remains the independent absence check.
+- `inventory_contract.py` — checks a `sol resources --json` result against its own
+  verdict: `reconciled` requires both inventory and verification completeness and no
+  discrepancy; `incomplete`, `attention_required`, `unknown`, and `unverified` each
+  have their own falsifiable condition. `test_inventory_contract.py` covers those
+  distinctions.
+- interrupted-apply recovery evidence uses the same validator with
+  `--expect attention`: `sol resources` must report `attention_required` with a
+  recoverable row, `sol target reconcile` restores ownership, and a second inventory must
+  report `reconciled` (or `incomplete` for a named coverage gap). The live mutation that
+  creates the specimen still requires explicit operator authorization; the read-only
+  observation and its validator are already covered offline.
 - `record.sh` — emits a provider qualification record from the attempt ledger and an
   explicit evidence manifest using the verified `qualification-release` evaluator
   artifact. The harness owns the manifest's claim/evidence choices.

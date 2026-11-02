@@ -33,6 +33,7 @@
   cmd_local_deploy
   cmd_local_task
   cmd_plan
+  cmd_resources
   cmd_deploy
   cmd_destroy
   cmd_cloud_run

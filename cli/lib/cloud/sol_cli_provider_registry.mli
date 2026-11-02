@@ -85,11 +85,25 @@ val substrate_absence
 val substrate_addresses : Sol_cli_provider.t -> string list
 val substrate_kind : Sol_cli_provider.t -> string
 
+(** The resource classes the provider's independent inventory can execute. This is
+    the probe set, not an ownership decision; inventory coverage joins it with the
+    classes actually recorded and observed. *)
+val observed_classes : Sol_cli_provider.t -> string list
+
 val resource_identity
   :  Sol_cli_provider.t
   -> cluster_name:string
   -> project_id:string option
   -> Sol_cli_resource_identity.entry list
+
+(** Provider-specific mapping from an authorization-root state resource to the
+    independent observation class that covers it, when one exists. This is a
+    provider capability, not generic Sol knowledge; [None] means the resource is
+    recorded but has no exact per-address observation yet. *)
+val inventory_auth_class
+  :  Sol_cli_provider.t
+  -> Sol_cli_cloud_destroy.resource
+  -> (string * string option) option
 
 val credentials
   :  Sol_cli_provider.t

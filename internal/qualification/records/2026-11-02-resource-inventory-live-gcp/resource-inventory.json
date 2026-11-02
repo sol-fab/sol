@@ -1,0 +1,190 @@
+{
+  "schema": 1,
+  "target": "probe/gcp/us-central1",
+  "verdict": "unknown",
+  "coverage": {
+    "inventory": {
+      "complete": true,
+      "roots": [ "bootstrap", "cluster", "platform", "authorization" ]
+    },
+    "verification": {
+      "complete": false,
+      "required_classes": [
+        "Artifact Registry repository", "Cloud NAT", "Cloud Router",
+        "Cloud SQL instance", "GKE cluster", "GKE node pool",
+        "Kafka credential secret", "VPC network",
+        "authorization custom role", "authorization project IAM binding",
+        "authorization secret IAM binding", "authorization service account",
+        "cert-manager DNS discovery project IAM binding", "custom role",
+        "firewall rule", "forwarding rule", "google_dns_managed_zone",
+        "google_storage_bucket", "persistent disk",
+        "provisioner project IAM binding", "regional address",
+        "reserved global address", "service account",
+        "service-networking peering connection", "storage bucket",
+        "subnetwork"
+      ],
+      "observed_classes": [
+        "Artifact Registry repository", "Cloud Router", "Cloud SQL instance",
+        "GKE cluster", "Kafka credential secret", "VPC network",
+        "authorization custom role", "authorization project IAM binding",
+        "authorization secret IAM binding", "authorization service account",
+        "cert-manager DNS discovery project IAM binding", "custom role",
+        "firewall rule", "forwarding rule", "persistent disk",
+        "provisioner project IAM binding", "regional address",
+        "reserved global address", "service account",
+        "service-networking peering connection", "storage bucket",
+        "subnetwork"
+      ],
+      "by_contract_classes": [
+        "DNS managed zone", "Terraform state bucket",
+        "google_dns_managed_zone", "google_storage_bucket"
+      ],
+      "unobserved_classes": [],
+      "failed_classes": [ "Cloud NAT", "GKE node pool" ],
+      "recorded_unverified": []
+    }
+  },
+  "roots": [
+    {
+      "layer": "installation",
+      "root": "bootstrap",
+      "durable": true,
+      "state": "represented",
+      "recorded": 2,
+      "last_operation": { "status": "no_previous" },
+      "errored_state": false
+    },
+    {
+      "layer": "cloud",
+      "root": "cluster",
+      "durable": false,
+      "state": "empty",
+      "recorded": 0,
+      "last_operation": { "status": "no_previous" },
+      "errored_state": false
+    },
+    {
+      "layer": "platform",
+      "root": "platform",
+      "durable": false,
+      "state": "empty",
+      "recorded": 0,
+      "last_operation": { "status": "no_previous" },
+      "errored_state": false
+    },
+    {
+      "layer": "authorization",
+      "root": "authorization",
+      "durable": false,
+      "state": "empty",
+      "recorded": 0,
+      "last_operation": { "status": "no_previous" },
+      "errored_state": false
+    }
+  ],
+  "resources": [
+    {
+      "layer": "installation",
+      "root": "bootstrap",
+      "address": "google_dns_managed_zone.qualification[0]",
+      "resource_class": "google_dns_managed_zone",
+      "name": "qual-gcp-sol-fab-dev",
+      "identity": "qual-gcp-sol-fab-dev",
+      "observed_as": "qual-gcp-sol-fab-dev",
+      "ownership_kind": "External_by_contract",
+      "import_identity": null,
+      "status": "external",
+      "status_reason": null,
+      "recovery": { "disposition": "not_applicable" },
+      "observation": "by_contract",
+      "record": "present",
+      "provider": "not_checked",
+      "action": "retain",
+      "reason": "installation resource; durable by contract and removed by sol uninstall",
+      "checked_with": null,
+      "lifetime": "installation",
+      "deletion_protection": null
+    },
+    {
+      "layer": "installation",
+      "root": "bootstrap",
+      "address": "google_storage_bucket.state",
+      "resource_class": "google_storage_bucket",
+      "name": "sol-qualification-tfstate",
+      "identity": "sol-qualification-tfstate",
+      "observed_as": "sol-qualification-tfstate",
+      "ownership_kind": "External_by_contract",
+      "import_identity": null,
+      "status": "external",
+      "status_reason": null,
+      "recovery": { "disposition": "not_applicable" },
+      "observation": "by_contract",
+      "record": "present",
+      "provider": "not_checked",
+      "action": "retain",
+      "reason": "installation resource; durable by contract and removed by sol uninstall",
+      "checked_with": null,
+      "lifetime": "installation",
+      "deletion_protection": null
+    },
+    {
+      "layer": "cloud",
+      "root": "cluster",
+      "address": null,
+      "resource_class": "Cloud NAT",
+      "name": "",
+      "identity": "",
+      "observed_as": "",
+      "ownership_kind": null,
+      "import_identity": null,
+      "status": "unknown",
+      "status_reason": "ERROR: (gcloud.compute.routers.nats.list) HTTPError 404: The resource 'projects/sol-qualification/regions/us-central1/routers/sol-qual-preflight-router' was not found. This command is authenticated as lbendtlynielsen@gmail.com which is the active account specified by the [core/account] property",
+      "recovery": { "disposition": "not_applicable" },
+      "observation": "failed",
+      "record": "not_recorded",
+      "provider": "unobservable",
+      "action": "investigate",
+      "reason": "ERROR: (gcloud.compute.routers.nats.list) HTTPError 404: The resource 'projects/sol-qualification/regions/us-central1/routers/sol-qual-preflight-router' was not found. This command is authenticated as lbendtlynielsen@gmail.com which is the active account specified by the [core/account] property",
+      "checked_with": null,
+      "lifetime": "target",
+      "deletion_protection": null
+    },
+    {
+      "layer": "cloud",
+      "root": "cluster",
+      "address": null,
+      "resource_class": "GKE node pool",
+      "name": "",
+      "identity": "",
+      "observed_as": "",
+      "ownership_kind": null,
+      "import_identity": null,
+      "status": "unknown",
+      "status_reason": "ERROR: (gcloud.container.node-pools.list) ResponseError: code=404, message=Not found: projects/sol-qualification/locations/us-central1/clusters/sol-qual-preflight. This command is authenticated as lbendtlynielsen@gmail.com which is the active account specified by the [core/account] property.",
+      "recovery": { "disposition": "not_applicable" },
+      "observation": "failed",
+      "record": "not_recorded",
+      "provider": "unobservable",
+      "action": "investigate",
+      "reason": "ERROR: (gcloud.container.node-pools.list) ResponseError: code=404, message=Not found: projects/sol-qualification/locations/us-central1/clusters/sol-qual-preflight. This command is authenticated as lbendtlynielsen@gmail.com which is the active account specified by the [core/account] property.",
+      "checked_with": null,
+      "lifetime": "target",
+      "deletion_protection": null
+    }
+  ],
+  "summary": {
+    "owned": 0,
+    "recorded": 0,
+    "missing": 0,
+    "unrecorded": 0,
+    "external": 2,
+    "in_cluster": 0,
+    "synthetic": 0,
+    "uid_mismatch": 0,
+    "unknown": 2
+  },
+  "unknowns": [
+    "Cloud NAT: ERROR: (gcloud.compute.routers.nats.list) HTTPError 404: The resource 'projects/sol-qualification/regions/us-central1/routers/sol-qual-preflight-router' was not found. This command is authenticated as lbendtlynielsen@gmail.com which is the active account specified by the [core/account] property",
+    "GKE node pool: ERROR: (gcloud.container.node-pools.list) ResponseError: code=404, message=Not found: projects/sol-qualification/locations/us-central1/clusters/sol-qual-preflight. This command is authenticated as lbendtlynielsen@gmail.com which is the active account specified by the [core/account] property."
+  ]
+}

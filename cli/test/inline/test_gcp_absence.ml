@@ -404,6 +404,15 @@ let%test "GCP scope: the benign empty-result filter warning is still absence" =
   test_the_benign_empty_filter_warning_is_still_absence ()
 ;;
 
+let%test "GCP: Artifact Registry's listing notice is benign" =
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the informational listing notice is not a scope failure"
+    true
+    (Sol_cli_gcp_absence.benign_empty_list_warning
+       "Listing items under project sol-qualification, location us-central1.\n")
+;;
+
 let test_custom_roles_are_normalized_to_the_target_project () =
   with_calls
     ~node_pools_out:""

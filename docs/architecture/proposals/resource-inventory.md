@@ -1,6 +1,6 @@
 # PRD: resource inventory for Sol-provisioned targets
 
-**Status:** Draft for review
+**Status:** Implemented in PR #1911 (2026-11-02); see §18 for the actual surface and limitations.
 **Date:** 2026-11-01
 **Related:** [#1119](https://github.com/sol-fab/sol/issues/1119),
 [#1605](https://github.com/sol-fab/sol/issues/1605),
@@ -151,8 +151,9 @@ Alternatives are discussed in §13. The name is deliberately a decision for revi
 | `--class=CLASS` | Filter by resource class (repeatable). |
 | `--status=STATUS` | Filter by inventory status (repeatable). |
 | `--explain` | Add the evidence for each row: state address, observed identity, import identity, attribution rule, probe/command, reason. |
-| `--var-file=PATH`, `--var=KEY=VALUE` | Same target variable resolution as `sol target reconcile`; needed for roots whose configuration must be evaluated. |
 | `--verbose` | Show provider identities and root details that are normally condensed. |
+
+_Implementation note:_ `sol resources` does not take `--var`/`--var-file`; reading state and observing the provider does not evaluate the root configuration, and those flags would not change the result.
 
 There is intentionally **no** `--reconcile`, `--import`, `--delete`, or `--fix`. The output points to the existing command.
 
@@ -218,12 +219,12 @@ The JSON contract carries `coverage.inventory.complete` and `coverage.verificati
 ```text
 reconciled          = inventory.complete && verification.complete && no discrepancy
 incomplete          = inventory.complete && !verification.complete && no discrepancy && !state_only
+unverified          = --state-only
 attention_required  = inventory.complete && no failed required observation && confirmed discrepancy
 unknown             = !inventory.complete || a required observation failed
-unverified          = --state-only
 ```
 
-`attention_required` outranks `incomplete` because a confirmed discrepancy is actionable even when other classes are unverified; both exit `1`, and the JSON carries both axes. A failed read outranks both because it means the inventory itself is incomplete. `--state-only` forces `unverified` even though verification is incomplete; it is an explicit mode, not a coverage verdict.
+`attention_required` outranks `incomplete` because a confirmed discrepancy is actionable even when other classes are unverified; both exit `1`, and the JSON carries both axes. A failed read outranks both because it means the inventory itself is incomplete. `--state-only` forces `unverified` even though verification is incomplete; it is an explicit mode, not a coverage verdict. In implementation, `unverified` is evaluated before `attention_required`, so a state-only run can never be mistaken for a live discrepancy report.
 
 ## 7. Resource model
 
@@ -394,13 +395,15 @@ Authorization probes already run in every `observations` call, and the identitie
       "observed_classes": ["EKS cluster", "RDS instance", "EKS node group"],
       "by_contract_classes": ["S3 state bucket"],
       "unobserved_classes": ["IAM role"],
-      "failed_classes": []
+      "failed_classes": [],
+      "recorded_unverified": []
     }
   },
   "roots": [
     {
       "layer": "cloud",
       "root": "cluster",
+      "durable": false,
       "state": "represented",
       "recorded": 23,
       "observed": 20,
@@ -422,6 +425,7 @@ Authorization probes already run in every `observations` call, and the identitie
       "resource_class": "EKS cluster",
       "name": "sol-prod",
       "status": "owned",
+      "status_reason": null,
       "observation": "observed",
       "recovery": { "disposition": "not_applicable" },
       "action": "none",
@@ -434,6 +438,7 @@ Authorization probes already run in every `observations` call, and the identitie
       "resource_class": "EKS node group",
       "name": "sol-prod-nodes",
       "status": "unrecorded",
+      "status_reason": null,
       "observation": "observed",
       "recovery": {
         "disposition": "recoverable",
@@ -466,17 +471,17 @@ Rules for the JSON contract:
 - `schema` is an integer; adding fields is allowed, changing meaning requires a new schema.
 - No secret values, database URLs, tokens, passwords, or raw `sensitive_values`.
 - `coverage.inventory.complete` is true only when every declared root's state/release record is `empty` or `represented`; any `unreadable` root makes it false.
-- `coverage.verification.complete` is true only when every required class is `observed` or `by_contract`; `unobserved` or `failed` makes it false. `by_contract` classes have no independent provider identity and are not a coverage gap.
-- `unknowns` carries every unreadable state/root and every failed observation with its reason, separately from confirmed resources. `coverage.verification.failed_classes` names the failed probes.
+- `coverage.verification.complete` is true only when every required class is `observed` or `by_contract`, every recorded row is verified, and no observation failed. `unobserved`, `failed`, or `recorded_unverified` makes it false. `by_contract` classes have no independent provider identity and are not a coverage gap.
+- `unknowns` carries every unreadable state/root and every failed observation with its reason, separately from confirmed resources. `coverage.verification.failed_classes` names the failed probes; `coverage.verification.recorded_unverified` lists recorded addresses/classes the inventory could not verify.
 - `roots[].errored_state` is read from the root directory (`errored.tfstate` existence), not from `Sol_cli_terraform.previous_operation`, which returns the supervised status only.
-- `verdict` is one of `reconciled`, `incomplete`, `attention_required`, `unknown`, `unverified`, with this precedence: `unknown` → `attention_required` → `unverified` → `incomplete` → `reconciled`. `unverified` is the explicit `--state-only` mode and outranks `incomplete` so a state-only run cannot be mistaken for a live incomplete run; a live run never produces it.
+- `verdict` is one of `reconciled`, `incomplete`, `attention_required`, `unknown`, `unverified`, with this precedence: `unknown` → `unverified` → `attention_required` → `incomplete` → `reconciled`. `unverified` is the explicit `--state-only` mode and outranks `incomplete` so a state-only run cannot be mistaken for a live incomplete run; a live run never produces it.
   - `unknown`: inventory incomplete (a root/record could not be read) or a required observation failed.
   - `attention_required`: a confirmed discrepancy — any `unrecorded` row (with `recoverable`, `unrecoverable` or `unmapped` recovery), `missing`, or `uid_mismatch`.
   - `unverified`: `--state-only`.
   - `incomplete`: live mode, inventory complete, verification incomplete, and no confirmed discrepancy.
   - `reconciled`: inventory complete, verification complete, and no confirmed discrepancy.
 - `recovery` is `not_applicable`, `recoverable`, `unrecoverable`, or `unmapped`. `recoverable` carries `address` and `import_identity`; `unrecoverable`/`unmapped` carry `reason`.
-- JSON spellings are fixed: `record` is `present` / `not_recorded` / `unreadable`; `provider` is `present` / `absent` / `unobservable` / `not_checked`; `observation` is `observed` / `unobserved` / `by_contract` / `failed`; `roots[].state` is `empty` / `represented` / `unreadable`; `status` is `owned` / `recorded` / `missing` / `unrecorded` / `external` / `in_cluster` / `synthetic` / `uid_mismatch` / `absent` / `unknown`; `verdict` is the five values above. A variant that is not listed is not serialized.
+- JSON spellings are fixed: `record` is `present` / `not_recorded` / `unreadable`; `provider` is `present` / `absent` / `unobservable` / `not_checked`; `observation` is `observed` / `unobserved` / `by_contract` / `failed`; `roots[].state` is `empty` / `represented` / `unreadable`; `status` is `owned` / `recorded` / `missing` / `unrecorded` / `external` / `in_cluster` / `synthetic` / `uid_mismatch` / `absent` / `unknown`; `status_reason` is a string for `unknown`/`uid_mismatch` and null otherwise; `verdict` is the five values above. A variant that is not listed is not serialized.
 - Rows are stable-sorted by layer, class, address/name so diffs are reviewable.
 
 ## 9. The timed-out / partial-apply path
@@ -710,12 +715,14 @@ The review decisions are now part of the design, not open questions:
 | Text detail | Class and name by default; full provider/import identities under `--explain`/`--verbose`. |
 | ADR | If accepted, record the bounded stale-state recovery exception to ADR 0005 (or a short new ADR) before implementation relies on it. |
 
-Remaining questions, deliberately narrow:
+The implementation resolved these:
 
-1. **Required-class list per milestone.** Which platform/authorization classes are required for `verification.complete` in M1 versus M2? Start from `test_inventory_coverage.ml` and `check_destroy_completeness.py`, but do not mark a class verified merely because it has a probe; the probe must be exercised.
-2. **ADR wording.** Does the bounded recovery exception belong in ADR 0005's existing “declared-ownership exception” section, or in a short new ADR? It should name `sol target reconcile` and distinguish stale-state recovery from ambient external discovery.
-3. **Verdict precedence.** `attention_required` currently outranks `incomplete` because a confirmed discrepancy is actionable. Both exit `1` and the JSON carries both axes; confirm that ordering is the right CI contract.
-4. **M1 delivery shape.** Should the first implementation land with authorization (and any unprobed platform class) `Unobserved` and therefore `incomplete` on a full four-root target, or wait for M2's identity threading so a clean target can reach `reconciled`? Recommendation: land M1 with the honest `incomplete` verdict; do not fake verification to make the first demo green.
+1. **Required-class list.** It is the provider's executable probe set ∪ the identity registry's non-empty classes ∪ the provider's required controller-created classes. A state class with no registry entry is added as `Unobserved`; `By_contract` classes are not required. Authorization classes are required only through the executable probe set; per-address authorization coverage remains partial (see §18).
+2. **ADR.** [ADR 0012](../adr/0012-resource-inventory-and-bounded-recovery.md) records the read-only projection and the bounded stale-state recovery exception, and ADR 0005 links to it.
+3. **Verdict precedence.** Implemented as `unknown` → `unverified` (state-only) → `attention_required` → `incomplete` → `reconciled`. A confirmed discrepancy outranks a coverage gap; a failed read and state-only mode outrank both.
+4. **M1 delivery shape.** Delivered with the honest `incomplete` verdict for unobserved required classes; no fake verification. A read-only live GCP run after teardown reported `unknown` because two existing provider probes return 404 after their parent is absent; the inventory correctly refused to call those absence (§18).
+
+Remaining work is recorded as limitations in §18, not as unresolved design choices.
 
 ## 16. Risks
 
@@ -750,3 +757,94 @@ Remaining questions, deliberately narrow:
 - `cli/lib/cloud/sol_cli_cloud_destroy.ml` — `terraform show -json` state parser.
 - `cli/lib/cloud/sol_cli_terraform.ml`, `sol_cli_supervised.ml`, `sol_cli_state_guard.ml` — operation status and unresolved state.
 - `cli/test/inline/test_inventory_coverage.ml`, `internal/ci/check_destroy_completeness.py` — existing coverage guarantees.
+
+## 18. Implementation record (2026-11-02)
+
+This section supersedes the “review questions” framing above for implementation
+behaviour. The design is unchanged; this records what landed and what remains.
+
+### Surface
+
+- `sol resources <target>` in `cli/bin/cmd_resources.ml`.
+- `Sol_cli_resource_inventory` in `cli/lib/cloud` owns the model, classification,
+  coverage computation, verdict, JSON and text rendering.
+- `Sol_cli_cloud_wiring.collect_cloud` is the extracted read-only cloud-root collector.
+  `reconcile_ownership` uses it and keeps its previous errors, exit status and adoption
+  set; `sol resources` uses the same collector with no adoption.
+- `Sol_cli_provider_registry.observed_classes` exposes the executable probe set.
+- `Sol_cli_report.install_terminal_stderr` keeps `--json` stdout machine-readable.
+
+### Verdict and coverage as implemented
+
+- `reconciled` requires `coverage.inventory.complete`, `coverage.verification.complete`,
+  no `unrecorded`/`missing`/`uid_mismatch` status, and no `unrecoverable`/`unmapped`
+  recovery disposition.
+- `verification.complete` is false for any unobserved/failed required class **and** for
+  any recorded row the inventory could not verify (`coverage.verification.recorded_unverified`).
+- `unknown` means the inventory itself is incomplete or a required probe failed.
+- `unverified` is the explicit `--state-only` mode and exits `1`.
+- `attention_required` means a confirmed discrepancy; `incomplete` means the records are
+  complete but a required class was not observed.
+- All non-reconciled verdicts exit `1`. A partial collection is never an input to the
+  adoption loop.
+
+### Qualification integrated
+
+- `cli/test/inline/test_resource_inventory.ml`: six tests for reconciliation, incomplete
+  coverage, unrecorded/attention, unreadable/unknown, state-only/unverified, and
+  status/recovery JSON separation.
+- `cli/test/test_resources_command.sh`: command-level test with a fake Terraform state
+  and fake AWS credentials/API; checks the `unverified` exit, both coverage axes,
+  state-only makes no provider probes, `--json` is parseable, and `--class`/`--status`
+  filter rows.
+- `internal/qualification/inventory_contract.py`: validates a JSON inventory against its
+  claimed verdict. `internal/qualification/test_inventory_contract.py` covers the
+  reconciled/incomplete/attention/unknown/unverified distinctions.
+- `aws/live-qual.sh inventory` and `gcp/live-qual.sh inventory`: read-only phases that run
+  the installed candidate's `sol resources <target> --json`, validate it with the
+  contract, and never mutate or tear down. `verify` remains the independent absence
+  inventory.
+- Read-only live evidence on `probe/gcp/us-central1` (checkout binary):
+  - after the target was torn down, `sol resources --json` read all four roots and
+    returned `verdict: unknown`, `coverage.inventory.complete: true`,
+    `coverage.verification.complete: false`, exit `1`. Twenty-two classes were observed;
+    `Cloud NAT` and `GKE node pool` returned provider 404s because their parent was
+    absent. The inventory correctly reported `unknown` rather than absence;
+    evidence: `internal/qualification/records/2026-11-02-resource-inventory-live-gcp/`;
+  - `--state-only` returned `verdict: unverified`, verification incomplete, exit `1`,
+    with no provider probe.
+- The Artifact Registry probe was corrected at its owning boundary where the live run
+  exposed a benign listing notice on stderr. The Cloud NAT/GKE node pool 404s remain
+  unknown by design: the existing absence contract refuses to turn a failed enumeration
+  into absence. A parent-child absence rule would be a separate provider-contract
+  decision with its own tests and live qualification.
+
+### Limitations
+
+- **Authorization per-address mapping is partial.** The probes and identities exist and
+  are threaded, but only the reconciler role, workload-boundary policy, workload roles,
+  reconciler service account/role/binding are mapped to state addresses. Scheduler,
+  serverless runtime identities, secret IAM members, and role policies remain recorded
+  but unobserved until a later mapping; that makes a deployed target `incomplete`, not
+  falsely `reconciled`.
+- **Platform custom Terraform** is reported as `recorded`/unverified unless its type is
+  by-contract. Workspace overlays that add arbitrary provider resources therefore keep
+  verification incomplete.
+- **Serverless and workload inventory (M3/M4)** is not implemented. Direct Cloud
+  Run/Lambda/task release records and Kubernetes workload UIDs are not yet rows; the
+  initial implementation must not claim it inventories every resource Sol can provision.
+- **Interrupted-apply live evidence is not executed here.** The read-only path and the
+  `attention_required` contract are implemented and tested; a deliberate interrupted
+  apply is a destructive live qualification that requires explicit operator
+  authorization. The existing `docs/guides/partial-state-recovery.md` now includes the
+  `sol resources` observation before and after `sol target reconcile`.
+- **GCP post-destroy absence probes.** `Cloud NAT` and `GKE node pool` return 404 when
+  their router/cluster is already absent, so the live inventory reports `unknown` for a
+  fully torn-down GCP target. The existing absence contract intentionally does not read a
+  failed enumeration as absence; fixing this requires a separately qualified parent-child
+  absence rule. Until then `live-qual.sh inventory --expect reconciled` cannot pass on
+  such a target.
+- **AWS live read-only evidence** was not run in this environment; the command and
+  offline tests are provider-neutral and the AWS probes are the existing ones.
+- `--state-only` still needs state-backend credentials and network; it is not an offline
+  mode.
