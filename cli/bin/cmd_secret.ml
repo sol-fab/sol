@@ -271,6 +271,39 @@ let run_delete target address =
         let* secret =
           Sol_cli_secret_authority.application ~config ~unit_address ~key:address.key
         in
+        (* Retire any pre-migration Kubernetes copy first. Deleting only the provider
+           authority would let the next deploy adopt the stale copy back. An address that
+           cannot name a namespace cannot name a legacy object either, so there is nothing
+           to retire in that case. *)
+        let* () =
+          match
+            namespace_and_secret
+              ~workspace
+              ~domain:address.domain
+              ~unit_name:address.unit_name
+          with
+          | Error _ -> Ok ()
+          | Ok (namespace, secret_name) ->
+            (match
+               Sol_cli_secret.delete_unit_key
+                 ~ctx
+                 ~namespace
+                 ~secret_name
+                 ~key:address.key
+             with
+             | Ok _ -> Ok ()
+             | Error message
+               when Sol_cli_string.contains ~needle:"NotFound" message
+                    || Sol_cli_string.contains ~needle:"not found" message ->
+               (* The namespace or Secret is already gone; there is no copy to resurrect. *)
+               Ok ()
+             | Error message ->
+               Error
+                 (Printf.sprintf
+                    "could not retire the Kubernetes copy before deleting the provider \
+                     authority: %s"
+                    message))
+        in
         let* deleted =
           match Sol_cli_secret_authority.observe secret with
           | Error message -> Error message
@@ -279,8 +312,7 @@ let run_delete target address =
           | Ok (Sol_cli_secret_authority.Pending_deletion date) ->
             Error
               (Printf.sprintf
-                 "%s/%s is pending provider deletion (%s); its absence is \
-                  not                   established"
+                 "%s/%s is pending provider deletion (%s); its absence is not established"
                  unit_address
                  address.key
                  date)
