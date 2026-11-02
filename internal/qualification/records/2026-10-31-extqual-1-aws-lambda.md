@@ -6,9 +6,9 @@ This exercise used a branch build, not a released candidate, and did not run the
 shared attempt/record pipeline. It establishes that the AWS path can work against
 real SQS and S3; it does not establish a production claim.
 
-- Account/region: `876701109436` / `us-east-1`
+- Account/region: `<aws-account>` / `us-east-1`
 - Queue: `sol-extqual-1-jobs`
-- Bucket: `sol-extqual-1-uploads-876701109436`
+- Bucket: `sol-extqual-1-uploads-<aws-account>`
 - Function: `extqual-fn`
 - Runtime identity: `sol-extqual-1-extqual-extqual_fn`
 - Boundary: `sol-extqual-1-workload-boundary`
