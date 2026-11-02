@@ -249,6 +249,47 @@ phase_destroy_run() {
   destroy_teardown_run
 }
 
+# Read-only resource inventory. This is the product's `sol resources` view, not a
+# second provider inventory: the harness runs the installed candidate and validates
+# the JSON contract it reports. `expect` is the verdict the phase requires:
+# reconciled after a healthy deploy/absence, attention_required after a deliberate
+# interrupted apply, or unverified for an explicit state-only inspection.
+phase_inventory_run() {
+  local expect="${1:-reconciled}"
+  local target="${TARGET:?}" workspace="${WORKSPACE:?}" sol="${SOL:?}"
+  local json="$LOG_DIR/resource-inventory.json"
+  local err="$LOG_DIR/resource-inventory.err"
+  local validation="$LOG_DIR/resource-inventory-validation.txt"
+  local rc=0 vrc=0
+  say "resource inventory: reading $target with the installed candidate"
+  (cd "$workspace" && "$sol" resources "$target" --json >"$json" 2>"$err") || rc=$?
+  if [ ! -s "$json" ]; then
+    say "resource inventory: the command produced no JSON (exit $rc); see $err"
+    return 1
+  fi
+  python3 "$ROOT/internal/qualification/inventory_contract.py"     --expect "$expect" "$json" >"$validation" 2>&1 || vrc=$?
+  cat "$validation"
+  if [ "$vrc" -ne 0 ]; then
+    say "resource inventory: the JSON does not satisfy $expect"
+    return 1
+  fi
+  case "$expect" in
+    reconciled)
+      if [ "$rc" -ne 0 ]; then
+        say "resource inventory: verdict is reconciled but the command exited $rc"
+        return 1
+      fi
+      ;;
+    attention | incomplete | unknown | unverified)
+      if [ "$rc" -ne 1 ]; then
+        say "resource inventory: $expect must exit 1, got $rc"
+        return 1
+      fi
+      ;;
+  esac
+  say "resource inventory: $expect satisfied (evidence $json)"
+}
+
 # The destroy destination. The attempt owns the kubeconfig path (ATTEMPT_KUBECONFIG):
 # the destination hook establishes that exact path and returns a classified outcome
 # (ABSENT, UNKNOWN, or PRESENT with the kubeconfig ready or blocked). The skeleton

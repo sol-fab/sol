@@ -164,6 +164,21 @@ Existing live entry points and matrices retain their current authority.
   worker effect.
 - `gcp/live-qual.sh` — GCP lifecycle/application qualification and provider-backed absence
   inventory.
+- `aws/live-qual.sh inventory` / `gcp/live-qual.sh inventory` — read-only resource
+  inventory: runs the installed candidate's `sol resources <target> --json`, validates
+  it with `inventory_contract.py`, and never mutates or tears down. `inventory` is
+  deliberately separate from `verify`, which remains the independent absence check.
+- `inventory_contract.py` — checks a `sol resources --json` result against its own
+  verdict: `reconciled` requires both inventory and verification completeness and no
+  discrepancy; `incomplete`, `attention_required`, `unknown`, and `unverified` each
+  have their own falsifiable condition. `test_inventory_contract.py` covers those
+  distinctions.
+- interrupted-apply recovery evidence uses the same validator with
+  `--expect attention`: `sol resources` must report `attention_required` with a
+  recoverable row, `sol target reconcile` restores ownership, and a second inventory must
+  report `reconciled` (or `incomplete` for a named coverage gap). The live mutation that
+  creates the specimen still requires explicit operator authorization; the read-only
+  observation and its validator are already covered offline.
 - `record.sh` — emits a provider qualification record from the attempt ledger and an
   explicit evidence manifest using the verified `qualification-release` evaluator
   artifact. The harness owns the manifest's claim/evidence choices.
@@ -181,6 +196,20 @@ UNKNOWN installation stops the phase before disposable infrastructure is applied
 resolve the operator inputs named by Sol and continue the same attempt. Durable
 installation resources remain distinct from disposable cleanup. `PLAN_ONLY=1` on
 GCP skips bootstrap mutation entirely.
+
+### Resource inventory status (2026-11-02)
+
+- GCP read-only: live inventory after teardown is `reconciled`, exit 0, both coverage axes
+  complete, 26 classes observed. The Cloud Router→Cloud NAT and GKE cluster→node pool
+  parent-child absence proofs are exercised live. Evidence:
+  `records/2026-11-02-resource-inventory-live-gcp/`.
+- AWS read-only: **not run**. The available `sol-qual` SSO session had expired and needs an
+  interactive operator login. The AWS probes and inline-policy observation have offline
+  tests only.
+- Interrupted-apply recovery: not executed live. Offline evidence covers the
+  `attention_required`/recoverable contract and `sol target reconcile` fail-closed checks;
+  a disposable target and explicit authorization are still required. The validator's
+  `--expect attention` is the pre-recovery gate.
 
 The offline harness tests protect fail-closed behavior and evidence accounting. They are regression
 tests, not substitutes for live evidence.

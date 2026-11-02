@@ -11,16 +11,32 @@ let without_final_newline text =
 let app_block text = emit Logs.App (without_final_newline text)
 let err_block text = emit Logs.Error (without_final_newline text)
 
-let terminal =
+let terminal_on channel =
   let report _src level ~over k msgf =
+    ignore level;
     msgf (fun ?header:_ ?tags:_ fmt ->
       Format.kasprintf
         (fun text ->
-           let channel =
-             match level with
-             | Logs.App -> stdout
-             | Logs.Error | Logs.Warning | Logs.Info | Logs.Debug -> stderr
-           in
+           output_string channel text;
+           output_char channel '\n';
+           flush channel;
+           over ();
+           k ())
+        fmt)
+  in
+  { Logs.report }
+;;
+
+let terminal =
+  let report _src level ~over k msgf =
+    let channel =
+      match level with
+      | Logs.App -> stdout
+      | Logs.Error | Logs.Warning | Logs.Info | Logs.Debug -> stderr
+    in
+    msgf (fun ?header:_ ?tags:_ fmt ->
+      Format.kasprintf
+        (fun text ->
            output_string channel text;
            output_char channel '\n';
            flush channel;
@@ -34,6 +50,11 @@ let terminal =
 let install_terminal () =
   Logs.set_level (Some Logs.Warning);
   Logs.set_reporter terminal
+;;
+
+let install_terminal_stderr () =
+  Logs.set_level (Some Logs.Warning);
+  Logs.set_reporter (terminal_on stderr)
 ;;
 
 let collect f =

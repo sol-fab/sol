@@ -10,6 +10,26 @@ Import has historical live evidence; the exceptional Cloud SQL guard procedure
 below still requires a disposable-target qualification before it can be called a
 supported end-to-end recovery path. Do not infer qualification from offline tests.
 
+## See what is recorded and observed first
+
+```sh
+sol resources <target> --json
+```
+
+`sol resources` is read-only. It shows the recorded Terraform state and the independent
+provider observation, and separates `status` from `recovery`: an observed object can be
+`unrecorded` while its recovery is `recoverable`, `unrecoverable`, or `unmapped`. A
+`verdict: attention_required` names a confirmed discrepancy; `incomplete` means the
+records are complete but a required class was not observed; `unknown` means a state or
+provider read did not establish the evidence. `unverified` is the explicit state-only
+mode and is not a presence/absence gate.
+
+Inspect `coverage.verification.unobserved_classes` before treating a clean-looking
+inventory as complete. `sol resources` never adopts anything; use `sol target reconcile`
+for that. After a successful reconcile, re-run `sol resources` to confirm the resource is
+now `owned` and the verdict has moved to `reconciled` (or `incomplete` for a remaining
+coverage gap).
+
 ## Restore ownership first
 
 Use the original workspace, explicit target, provider identity and protected
@@ -90,6 +110,27 @@ final postcondition: require Sol's verdict and independent provider inventory,
 including any previously captured identities. Present, pending deletion and
 unobservable resources must not become verified absence. Record retained resources
 under their explicit retention contract.
+
+## Inventory sequence for a disposable interrupted apply
+
+This sequence is the qualification procedure, not authorization to run the mutating
+steps. A disposable target and explicit operator authorization are required.
+
+1. Before recovery, run `sol resources <target> --json` and pass it to
+   `internal/qualification/inventory_contract.py --expect attention`. The result must
+   identify the orphan as `unrecorded` with a `recoverable` disposition; it must not be
+   `reconciled`.
+2. Run `sol target reconcile <target> --dry-run --explain`. The same orphan must be the
+   exact import candidate; an `unrecoverable` or `unmapped` row is not adoptable.
+3. Perform the authorized reconcile, then re-run `sol resources <target> --json`. The
+   adopted row must be `owned` and the verdict `reconciled` or `incomplete` for a named
+   coverage gap. A second `--expect attention` would be a failure.
+4. Keep the before/after JSON and validation output with the attempt. The inventory output
+   is evidence only; `sol target reconcile` must never consume it as adoption authority.
+
+The remaining evidence is a live disposable target that demonstrates this sequence end to
+end. Offline tests cover the verdict/status/recovery join and the reconcile fail-closed
+checks, but they do not prove provider-side interruption behavior.
 
 ## Evidence still required
 

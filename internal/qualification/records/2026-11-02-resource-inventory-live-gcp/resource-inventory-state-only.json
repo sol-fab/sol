@@ -1,0 +1,149 @@
+{
+  "schema": 1,
+  "target": "probe/gcp/us-central1",
+  "verdict": "unverified",
+  "coverage": {
+    "inventory": {
+      "complete": true,
+      "roots": [ "bootstrap", "cluster", "platform", "authorization" ]
+    },
+    "verification": {
+      "complete": false,
+      "required_classes": [
+        "Artifact Registry repository", "Cloud NAT", "Cloud Router",
+        "Cloud SQL instance", "GKE cluster", "GKE node pool",
+        "Kafka credential secret", "VPC network",
+        "authorization custom role", "authorization project IAM binding",
+        "authorization scheduler service account",
+        "authorization secret IAM binding",
+        "authorization serverless service account",
+        "authorization service account",
+        "cert-manager DNS discovery project IAM binding", "custom role",
+        "firewall rule", "forwarding rule", "google_dns_managed_zone",
+        "google_storage_bucket", "persistent disk",
+        "provisioner project IAM binding", "regional address",
+        "reserved global address", "service account",
+        "service-networking peering connection", "storage bucket",
+        "subnetwork"
+      ],
+      "observed_classes": [],
+      "by_contract_classes": [
+        "google_dns_managed_zone", "google_storage_bucket"
+      ],
+      "unobserved_classes": [
+        "Artifact Registry repository", "Cloud NAT", "Cloud Router",
+        "Cloud SQL instance", "GKE cluster", "GKE node pool",
+        "Kafka credential secret", "VPC network",
+        "authorization custom role", "authorization project IAM binding",
+        "authorization scheduler service account",
+        "authorization secret IAM binding",
+        "authorization serverless service account",
+        "authorization service account",
+        "cert-manager DNS discovery project IAM binding", "custom role",
+        "firewall rule", "forwarding rule", "persistent disk",
+        "provisioner project IAM binding", "regional address",
+        "reserved global address", "service account",
+        "service-networking peering connection", "storage bucket",
+        "subnetwork"
+      ],
+      "failed_classes": [],
+      "recorded_unverified": []
+    }
+  },
+  "roots": [
+    {
+      "layer": "installation",
+      "root": "bootstrap",
+      "durable": true,
+      "state": "represented",
+      "recorded": 2,
+      "last_operation": { "status": "no_previous" },
+      "errored_state": false
+    },
+    {
+      "layer": "cloud",
+      "root": "cluster",
+      "durable": false,
+      "state": "empty",
+      "recorded": 0,
+      "last_operation": { "status": "no_previous" },
+      "errored_state": false
+    },
+    {
+      "layer": "platform",
+      "root": "platform",
+      "durable": false,
+      "state": "empty",
+      "recorded": 0,
+      "last_operation": { "status": "no_previous" },
+      "errored_state": false
+    },
+    {
+      "layer": "authorization",
+      "root": "authorization",
+      "durable": false,
+      "state": "empty",
+      "recorded": 0,
+      "last_operation": { "status": "no_previous" },
+      "errored_state": false
+    }
+  ],
+  "resources": [
+    {
+      "layer": "installation",
+      "root": "bootstrap",
+      "address": "google_dns_managed_zone.qualification[0]",
+      "resource_class": "google_dns_managed_zone",
+      "name": "qual-gcp-sol-fab-dev",
+      "identity": "qual-gcp-sol-fab-dev",
+      "observed_as": "qual-gcp-sol-fab-dev",
+      "ownership_kind": "External_by_contract",
+      "import_identity": null,
+      "status": "external",
+      "status_reason": null,
+      "recovery": { "disposition": "not_applicable" },
+      "observation": "by_contract",
+      "record": "present",
+      "provider": "not_checked",
+      "action": "retain",
+      "reason": "installation resource; durable by contract and removed by sol uninstall",
+      "checked_with": null,
+      "lifetime": "installation",
+      "deletion_protection": null
+    },
+    {
+      "layer": "installation",
+      "root": "bootstrap",
+      "address": "google_storage_bucket.state",
+      "resource_class": "google_storage_bucket",
+      "name": "sol-qualification-tfstate",
+      "identity": "sol-qualification-tfstate",
+      "observed_as": "sol-qualification-tfstate",
+      "ownership_kind": "External_by_contract",
+      "import_identity": null,
+      "status": "external",
+      "status_reason": null,
+      "recovery": { "disposition": "not_applicable" },
+      "observation": "by_contract",
+      "record": "present",
+      "provider": "not_checked",
+      "action": "retain",
+      "reason": "installation resource; durable by contract and removed by sol uninstall",
+      "checked_with": null,
+      "lifetime": "installation",
+      "deletion_protection": null
+    }
+  ],
+  "summary": {
+    "owned": 0,
+    "recorded": 0,
+    "missing": 0,
+    "unrecorded": 0,
+    "external": 2,
+    "in_cluster": 0,
+    "synthetic": 0,
+    "uid_mismatch": 0,
+    "unknown": 0
+  },
+  "unknowns": []
+}

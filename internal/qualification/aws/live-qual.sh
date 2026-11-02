@@ -146,7 +146,7 @@ source "$ROOT/internal/qualification/provider-aws.sh"
 require_provider_hooks || exit 1
 
 case "${1:-}" in
-  prepare | cloud | app | destroy | resume)
+  prepare | cloud | app | destroy | resume | inventory)
     sol_under_test_resolve
     ;;
 esac
@@ -203,7 +203,8 @@ phases
   destroy    supported teardown against *this attempt's* kubeconfig (or none when the cluster
              is absent, so a stale same-named context is never used), then the independent
              inventory
-  verify     the independent inventory only; invokes no teardown
+  verify     the independent absence inventory only; invokes no teardown
+  inventory  the product's read-only resource inventory (sol resources); invokes no teardown
 
 The independent inventory (absence.py, read-only) decides teardown from provider reads alone: every
 required disposable class -- EKS cluster, RDS instance, subnet group and snapshots, EC2 instances,
@@ -1126,7 +1127,10 @@ case "${1:-}" in
   app) phase_app ;;
   destroy) phase_destroy ;;
   resume) phase_resume ;;
-  verify | inventory)
+  inventory)
+    phase_inventory_run reconciled
+    ;;
+  verify)
     if [ ! -x "$SOL_QUALIFICATION_LIFECYCLE" ]; then
       refuse "REFUSING: the typed lifecycle assessor is not built at $SOL_QUALIFICATION_LIFECYCLE"
       exit 1

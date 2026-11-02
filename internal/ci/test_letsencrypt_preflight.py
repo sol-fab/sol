@@ -15,7 +15,9 @@ import letsencrypt_preflight as preflight  # noqa: E402
 
 checks = 0
 failures = 0
-NOW = dt.datetime(2026, 10, 26, 12, 0, tzinfo=dt.timezone.utc)
+# preflight.check reads the wall clock; keep the fixture relative to it so this
+# test does not expire on a future calendar date.
+NOW = dt.datetime.now(dt.timezone.utc)
 
 
 def check(label: str, condition: bool) -> None:

@@ -41,6 +41,7 @@ point for "what is Sol and what is it promising".
 | [`guides/application-authoring.md`](guides/application-authoring.md) | Application authors | **Published** — DOCS-027 |
 | [`guides/deployment.md`](guides/deployment.md) | Operators | **Published** — DOCS-028; the operator detail stays in `deployment/*` |
 | [`guides/operations.md`](guides/operations.md) | Operators | **Published** — DOCS-029 |
+| [`guides/resource-inventory.md`](guides/resource-inventory.md) | Operators | **Published** — `sol resources`; read-only recorded/observed inventory and its verdict |
 | [`reference/README.md`](reference/README.md), [`reference/runtime.md`](reference/runtime.md), [`reference/substrate.md`](reference/substrate.md) | Application authors | **Published** |
 | CLI reference | All users | **Published** — [`reference/cli.md`](reference/cli.md) |
 | [`architecture/product-architecture.md`](architecture/product-architecture.md) and [`architecture/adr/`](architecture/adr/) | Evaluators, contributors | **Published** |

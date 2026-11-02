@@ -40,9 +40,13 @@ let fake_gcloud
       ~node_pools_out
       ~node_pools_err
       ~nats_out
+      ~nats_err
       ~roles_out
       ~disks_out
+      ~clusters_out
+      ~routers_out
       ~list_exit
+      ~nats_exit
   =
   Printf.sprintf
     {|#!/bin/sh
@@ -53,7 +57,16 @@ case "$*" in
     printf '%%s' %s >&2
     exit %d
     ;;
+  *"container clusters list"*)
+    printf '%%s' %s
+    exit 0
+    ;;
   *"routers nats list"*)
+    printf '%%s' %s
+    printf '%%s' %s >&2
+    exit %d
+    ;;
+  *"compute routers list"*)
     printf '%%s' %s
     exit 0
     ;;
@@ -73,12 +86,20 @@ exit 0
     (if list_exit = 0 then "" else " >&2")
     (Filename.quote node_pools_err)
     list_exit
+    (Filename.quote clusters_out)
     (Filename.quote nats_out)
+    (Filename.quote nats_err)
+    nats_exit
+    (Filename.quote routers_out)
     (Filename.quote roles_out)
     (Filename.quote disks_out)
 ;;
 
 let with_fake_gcloud
+      ?(nats_err = "")
+      ?(clusters_out = "acme-prod\n")
+      ?(routers_out = "acme-prod-router\n")
+      ?(nats_exit = 0)
       ~node_pools_out
       ~node_pools_err
       ~nats_out
@@ -100,9 +121,13 @@ let with_fake_gcloud
        ~node_pools_out
        ~node_pools_err
        ~nats_out
+       ~nats_err
        ~roles_out
        ~disks_out
-       ~list_exit);
+       ~clusters_out
+       ~routers_out
+       ~list_exit
+       ~nats_exit);
   close_out oc;
   Unix.chmod bin 0o755;
   let old_path =
@@ -154,7 +179,11 @@ let only observations resource_class =
 let with_calls
       ?(disks_out = "[]")
       ?(node_pools_err = "")
+      ?(nats_err = "")
       ?(roles_out = "")
+      ?(clusters_out = "acme-prod\n")
+      ?(routers_out = "acme-prod-router\n")
+      ?(nats_exit = 0)
       ?(previously_attributed = [])
       ~node_pools_out
       ~nats_out
@@ -165,9 +194,13 @@ let with_calls
     ~node_pools_out
     ~node_pools_err
     ~nats_out
+    ~nats_err
     ~roles_out
     ~disks_out
+    ~clusters_out
+    ~routers_out
     ~list_exit
+    ~nats_exit
     (fun () ->
        let observations =
          Sol_cli_gcp_absence.observations
@@ -402,6 +435,84 @@ let%test "GCP scope: a missing-project warning on a successful list is Unobserva
 
 let%test "GCP scope: the benign empty-result filter warning is still absence" =
   test_the_benign_empty_filter_warning_is_still_absence ()
+;;
+
+let%test "GCP: Artifact Registry's listing notice is benign" =
+  Windtrap.equal
+    Windtrap.bool
+    ~msg:"the informational listing notice is not a scope failure"
+    true
+    (Sol_cli_gcp_absence.benign_empty_list_warning
+       "Listing items under project sol-qualification, location us-central1.\n")
+;;
+
+let%test "GCP parent-child: an absent GKE cluster proves its node pools absent" =
+  with_calls
+    ~clusters_out:""
+    ~node_pools_out:
+      "ERROR: (gcloud.container.node-pools.list) NOT_FOUND: cluster acme-prod not found\n"
+    ~node_pools_err:""
+    ~nats_out:""
+    ~list_exit:1
+    (fun ~log:_ ~observations ->
+       match only observations "GKE node pool" with
+       | Sol_cli_absence.Absent _ -> ()
+       | Sol_cli_absence.Unobservable u ->
+         Windtrap.failf
+           "an absent parent must prove the child absent, got unknown: %s"
+           u.reason
+       | _ -> Windtrap.fail "the node pool must be Absent when its cluster is Absent")
+;;
+
+let%test "GCP parent-child: a present GKE cluster keeps a child 404 unknown" =
+  with_calls
+    ~clusters_out:"acme-prod\n"
+    ~node_pools_out:
+      "ERROR: (gcloud.container.node-pools.list) NOT_FOUND: node pool list failed\n"
+    ~node_pools_err:""
+    ~nats_out:""
+    ~list_exit:1
+    (fun ~log:_ ~observations ->
+       match only observations "GKE node pool" with
+       | Sol_cli_absence.Unobservable _ -> ()
+       | Sol_cli_absence.Absent _ ->
+         Windtrap.fail "a present parent must not turn a child failure into absence"
+       | _ -> Windtrap.fail "the node pool must stay Unobservable")
+;;
+
+let%test "GCP parent-child: an absent Cloud Router proves its NAT absent" =
+  with_calls
+    ~routers_out:""
+    ~nats_out:
+      "ERROR: (gcloud.compute.routers.nats.list) HTTPError 404: router not found\n"
+    ~nats_err:""
+    ~nats_exit:1
+    ~node_pools_out:""
+    ~list_exit:0
+    (fun ~log:_ ~observations ->
+       match only observations "Cloud NAT" with
+       | Sol_cli_absence.Absent _ -> ()
+       | Sol_cli_absence.Unobservable u ->
+         Windtrap.failf
+           "an absent router must prove its NAT absent, got unknown: %s"
+           u.reason
+       | _ -> Windtrap.fail "the NAT must be Absent when its router is Absent")
+;;
+
+let%test "GCP parent-child: a present Cloud Router keeps a NAT 404 unknown" =
+  with_calls
+    ~routers_out:"acme-prod-router\n"
+    ~nats_out:"ERROR: (gcloud.compute.routers.nats.list) HTTPError 404: NAT list failed\n"
+    ~nats_err:""
+    ~nats_exit:1
+    ~node_pools_out:""
+    ~list_exit:0
+    (fun ~log:_ ~observations ->
+       match only observations "Cloud NAT" with
+       | Sol_cli_absence.Unobservable _ -> ()
+       | Sol_cli_absence.Absent _ ->
+         Windtrap.fail "a present router must not turn a child failure into absence"
+       | _ -> Windtrap.fail "the NAT must stay Unobservable")
 ;;
 
 let test_custom_roles_are_normalized_to_the_target_project () =

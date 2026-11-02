@@ -79,7 +79,7 @@ case "${1:-}" in
     LE_EMAIL="${LE_EMAIL:?Set LE_EMAIL to an ACME contact address}"
     PUBLISHER_SERVICE_ACCOUNT="${PUBLISHER_SERVICE_ACCOUNT:?Set PUBLISHER_SERVICE_ACCOUNT to the publisher service account email for this target}"
     ;;
-  destroy | verify | "")
+  destroy | verify | inventory | "")
     if [ -n "${1:-}" ]; then
       CLUSTER="${CLUSTER:?Set CLUSTER to the cluster name to check}"
       IMPERSONATOR="${IMPERSONATOR:?Set IMPERSONATOR to the calling identity, e.g. user:you@example.com}"
@@ -144,7 +144,7 @@ source "$ROOT/internal/qualification/lib/phases.sh"
 source "$ROOT/internal/qualification/provider-gcp.sh"
 require_provider_hooks || exit 1
 case "${1:-}" in
-  prepare | cloud | app | destroy | stop)
+  prepare | cloud | app | destroy | stop | inventory)
     sol_under_test_resolve
     ;;
 esac
@@ -2418,6 +2418,7 @@ phases
   stop      SIGTERM the run recorded in LOG_DIR by its own pid, so its trap tears down while any
             Terraform it is running is allowed to finish; then verify absence
   verify    read-only absence check; invokes no teardown
+  inventory read-only resource inventory (sol resources); invokes no teardown
 
 required
   ATTEMPT        a unique identity for this disposable run; the target, state key and
@@ -2501,6 +2502,11 @@ case "${1:-}" in
     KEEP=1
     KEEP_REASON="verify does not mutate; nothing to tear down"
     if verify_absent; then say "verify: absent"; else say "verify: resources remain"; exit 1; fi
+    ;;
+  inventory)
+    KEEP=1
+    KEEP_REASON="inventory does not mutate; nothing to tear down"
+    phase_inventory_run reconciled
     ;;
   *)
     KEEP=1

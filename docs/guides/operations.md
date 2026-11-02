@@ -92,6 +92,19 @@ live workloads before advancing the current-release pointer. It refuses when
 release ownership or migration compatibility cannot be established. Application
 rollback does not roll back database state.
 
+## Inspect the target's resources
+
+```bash
+sol resources <target>            # recorded + independently observed
+sol resources <target> --json     # machine-readable evidence
+```
+
+This is read-only: it never imports, deletes, unlocks, or adopts. It separates
+`inventory` completeness from `verification` completeness, so a recorded-but-unobserved
+class is `incomplete` rather than a clean result. Use it before `sol destroy` and after a
+failed apply; use `sol target reconcile` for ownership recovery. See the
+[resource inventory guide](resource-inventory.md).
+
 ## Remove an environment
 
 ```bash

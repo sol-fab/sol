@@ -19,7 +19,8 @@ val terraform_layout
 val confirm_guarded_removal_flag : string
 
 val init
-  :  assets:Sol_cli_platform_assets.t
+  :  ?echo:bool
+  -> assets:Sol_cli_platform_assets.t
   -> Sol_cli_run_log.t
   -> provider:Sol_cli_provider.t
   -> role:Sol_cli_platform_assets.cloud_role
@@ -31,6 +32,41 @@ type reconciliation =
   ; dispositions : Sol_cli_ownership_reconciliation.disposition list
   ; restored : Sol_cli_ownership_reconciliation.candidate list
   }
+
+(** Why the cloud root could not be attributed. This is a partial result, not an
+    ownership decision: [sol target reconcile] still maps every blocker to the same
+    fail-closed error it produced before the read-only extraction. *)
+type ownership_blocker =
+  | State_unreadable of string
+  | Cluster_identity_mismatch of
+      { state_name : string
+      ; declared : string
+      }
+  | Cluster_unnamed
+  | Cluster_ambiguous of string list
+  | No_cluster_name
+
+val ownership_blocker_message : ownership_blocker -> string
+
+(** The read-only cloud-root collection. It never imports or changes state. A
+    blocker means the state/identity could not be established; observations and
+    dispositions are then empty, as they were before the extraction. *)
+type cloud_collection =
+  { state : Sol_cli_cloud_destroy.state_read
+  ; observations : Sol_cli_absence.observation list
+  ; dispositions : Sol_cli_ownership_reconciliation.disposition list
+  ; blockers : ownership_blocker list
+  }
+
+val collect_cloud
+  :  provider:Sol_cli_provider.t
+  -> target_cfg:Sol_cli_config.target
+  -> cluster_name:string option
+  -> infra_dir:string
+  -> observe:bool
+  -> ?authorization_identities:(string * string list) list
+  -> unit
+  -> cloud_collection
 
 val reconcile_ownership
   :  provider:Sol_cli_provider.t
@@ -82,7 +118,8 @@ val credentials_result
   -> (unit, string) result
 
 val init_result
-  :  assets:Sol_cli_platform_assets.t
+  :  ?echo:bool
+  -> assets:Sol_cli_platform_assets.t
   -> Sol_cli_run_log.t
   -> provider:Sol_cli_provider.t
   -> role:Sol_cli_platform_assets.cloud_role

@@ -70,6 +70,7 @@ restores the whole recorded release boundary.
 | `sol migrate apply` | TARGET | `--dir=DIR`, `--dry-run`, `--table=TABLE` | documented | Apply all pending migrations (default subcommand) |
 | `sol plan` | TARGET | `--image-ref=SERVICE=REPO@sha256:DIGEST`, `--var=KEY=VALUE`, `--var-file=PATH` | documented | Preview target infrastructure, authorization, workload |
 | `sol releases` | — | `--target=ENV/PROVIDER/REGION` | documented | List the release records the target's cluster holds for |
+| `sol resources` | TARGET | `--all`, `--class=CLASS`, `--explain`, `--json`, `--state-only`, `--status=STATUS`, `-v` | documented | Show the target's recorded and independently observed |
 | `sol target reconcile` | TARGET | `--dry-run`, `--explain`, `--json`, `--var=KEY=VALUE`, `--var-file=PATH` | documented | Compare Terraform ownership with independently |
 | `sol target show` | — | `--check`, `--json`, `--target=ENV/PROVIDER/REGION`, `-v` | documented | Show a deployment target |
 | `sol task gcp deploy` | — | `--ack-deadline=SECONDS`, `--concurrency=N`, `--dlq-retention=SECONDS`, `--image=IMAGE`, `--max-attempts=N`, `--project=PROJECT`, `--record=PATH`, `--region=REGION`, `--service=SERVICE`, `--target=TARGET` | documented | Deploy a Pub/Sub topic, push subscription, |

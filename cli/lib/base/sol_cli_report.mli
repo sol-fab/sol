@@ -5,4 +5,8 @@ val app_block : string -> unit
 val err_block : string -> unit
 val terminal : Logs.reporter
 val install_terminal : unit -> unit
+
+(** Route every report level to stderr, keeping stdout machine-readable. *)
+val install_terminal_stderr : unit -> unit
+
 val collect : (unit -> 'a) -> 'a * (Logs.level * string) list

@@ -26,6 +26,11 @@ type substrate_presence =
 
 val inventory_of_show_json : string -> state_read
 val resources : state_read -> resource list
+
+(** The best provider-facing name this state record carries: name, then identifier,
+    then email, then URL. It is a display/observation join, not ownership proof. *)
+val resource_name : resource -> string option
+
 val addresses : state_read -> string list
 val substrate_presence : state_read -> substrate_presence
 val in_cluster_kind : string -> bool
