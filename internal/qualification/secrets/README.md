@@ -103,7 +103,7 @@ if any check is not `PASS`. It does not push the image or mutate a provider.
 The statuses are:
 
 ```text
-candidate, target, target_state, target_registry, tools
+candidate, target, target_state, target_registry, target_endpoint_cidr, tools
 aws_credentials, aws_account, aws_role_<role>, authorization_identity, workload_identity
 cluster_fresh, ascp_catalog, secrets_read, registry_repository, registry_auth
 iam_simulate, absence_read, target_plan, probe_authority_absent, probe_image
@@ -140,6 +140,8 @@ Before `plan_preflight=PASS` can be expected:
 - a dedicated, existing ECR repository named by `QUAL_PROBE_REPOSITORY`
   (default `secret-qual-probe`) with push permission;
 - a fresh `sol-secret-qual` cluster (or another chosen cluster) and an empty probe authority;
+- a specific `cluster_endpoint_cidr` for the operator egress; the target must not fall back
+  to the non-production `0.0.0.0/0` default;
 - permission to simulate the workload policy and to run the read-only `absence.py` capture;
 - an established durable installation: state bucket, roles, DNS ownership, and bootstrap.
 

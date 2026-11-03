@@ -125,6 +125,7 @@ facts = {
     "account": str((declared.get("aws") or {}).get("account_id") or ""),
     "state_bucket": declared.get("state_bucket"),
     "destroy_retention": declared.get("destroy_retention", "none"),
+    "cluster_endpoint_cidr": declared.get("cluster_endpoint_cidr"),
 }
 json.dump(facts, open(facts_path, "w", encoding="utf-8"), indent=2, sort_keys=True)
 PY
@@ -200,6 +201,14 @@ scenario_plan_preflight() {
       printf 'target_registry=PASS\n' >>"$file"
     else
       printf 'target_registry=FAIL target=%s env=%s\n' "${target_registry:-unset}" "${QUAL_REGISTRY:-unset}" >>"$file"
+      rc=1
+    fi
+    local target_cidr
+    target_cidr="$(jq -r '.cluster_endpoint_cidr // empty' "$LOG_DIR/target-facts.json")"
+    if [ -n "$target_cidr" ] && [ "$target_cidr" != "0.0.0.0/0" ]; then
+      printf 'target_endpoint_cidr=PASS cidr=%s\n' "$target_cidr" >>"$file"
+    else
+      printf 'target_endpoint_cidr=FAIL set a specific non-world cluster_endpoint_cidr\n' >>"$file"
       rc=1
     fi
   else
