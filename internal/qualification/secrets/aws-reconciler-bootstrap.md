@@ -22,8 +22,8 @@ be approved separately. The secret scenario does not perform it.
 - installed release prefix `SOL_INSTALL`, and its
   `share/sol/<version>/platform/cloud/aws/authorization` root;
 - target `secret-qual/aws/us-east-1`;
-- account `876701109436`, region `us-east-1`;
-- state bucket `sol-qual5-876701109436-tfstate`, lock table `sol-qual5-tflock`;
+- account `123456789012`, region `us-east-1`;
+- state bucket `<state-bucket>`, lock table `<lock-table>`;
 - qualifier/authorization principal ARN that may assume the reconciler;
 - environment `secret-qual`, cluster `sol-secret-qual`.
 
@@ -31,8 +31,8 @@ The target must declare:
 
 ```yaml
 aws:
-  state_lock_table: sol-qual5-tflock
-  reconciler_role_arn: arn:aws:iam::876701109436:role/sol/authorization/sol-secret-qual-authorization
+  state_lock_table: <lock-table>
+  reconciler_role_arn: arn:aws:iam::123456789012:role/sol/authorization/sol-secret-qual-authorization
   reconciler_trust_principal_arn: arn:aws:iam::<qualifier-or-ci-authorization-role>
 ```
 
@@ -61,13 +61,13 @@ WORKDIR="$(mktemp -d)"
 cp -R "$SOL_INSTALL/share/sol/$SOL_VERSION/platform/cloud/aws/authorization" \
   "$WORKDIR/authorization"
 AUTH_ROOT="$WORKDIR/authorization"
-STATE_BUCKET=sol-qual5-876701109436-tfstate
-STATE_LOCK=sol-qual5-tflock
+STATE_BUCKET=<state-bucket>
+STATE_LOCK=<lock-table>
 TARGET=secret-qual/aws/us-east-1
 ENVIRONMENT=secret-qual
 TARGET_NAME=secret-qual-aws-us-east-1   # sanitized target name, no slashes
 CLUSTER=sol-secret-qual
-TRUST_ARN=arn:aws:iam::876701109436:role/<qualifier-or-ci-authorization-role>
+TRUST_ARN=arn:aws:iam::123456789012:role/<qualifier-or-ci-authorization-role>
 
 terraform -chdir="$AUTH_ROOT" init -reconfigure \
   -backend-config="bucket=$STATE_BUCKET" \
