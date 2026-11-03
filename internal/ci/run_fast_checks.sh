@@ -66,6 +66,11 @@ if ! bash internal/qualification/scenarios/test-runner.sh; then
   failed=1
 fi
 
+echo "fast checks: GCP external scenario plan"
+if ! bash internal/qualification/external-resources/gcp/phase1/test-scenario.sh; then
+  failed=1
+fi
+
 echo "fast checks: qualification scenario catalog"
 if ! python3 internal/qualification/scenarios/test-catalog.py; then
   failed=1

@@ -12,7 +12,8 @@
       "fixture": "internal/qualification/external-resources/gcp/phase1",
       "driver": "scenario-runner",
       "evidence": "behavioral",
-      "status": "prepared"
+      "status": "implemented-unqualified",
+      "scenario": "internal/qualification/external-resources/gcp/phase1/scenario.sh"
     },
     {
       "id": "mixed-aws",
