@@ -28,6 +28,11 @@ sol_under_test_resolve
 sol_under_test_record_identity "$LOG_DIR"
 if [ "$PLAN" = 1 ]; then
   scenario_plan
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'scenario plan failed with status %s: %s\n' "$rc" "$SCENARIO" >&2
+    exit "$rc"
+  fi
   printf 'scenario plan: %s\n' "$SCENARIO"
   exit 0
 fi
