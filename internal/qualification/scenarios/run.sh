@@ -27,12 +27,14 @@ attempt_begin 0
 sol_under_test_resolve
 sol_under_test_record_identity "$LOG_DIR"
 if [ "$PLAN" = 1 ]; then
-  scenario_plan
-  rc=$?
+  rc=0
+  scenario_plan || rc=$?
   if [ "$rc" -ne 0 ]; then
+    printf 'plan=FAIL\nrc=%s\nscenario=%s\n' "$rc" "$SCENARIO" >"$LOG_DIR/plan-status.txt"
     printf 'scenario plan failed with status %s: %s\n' "$rc" "$SCENARIO" >&2
     exit "$rc"
   fi
+  printf 'plan=PASS\nscenario=%s\n' "$SCENARIO" >"$LOG_DIR/plan-status.txt"
   printf 'scenario plan: %s\n' "$SCENARIO"
   exit 0
 fi
@@ -42,7 +44,7 @@ declare -F scenario_absence >/dev/null || { printf 'run: scenario must define sc
 cleanup() {
   local rc=$?
   if scenario_cleanup; then
-    if scenario_absence >"$LOG_DIR/absence.txt"; then
+    if scenario_absence >"$LOG_DIR/absence.txt" && [ -s "$LOG_DIR/absence.txt" ]; then
       printf 'cleanup=PASS\nabsence=PASS\n' >"$LOG_DIR/cleanup-verdict.txt"
     else
       printf 'cleanup=PASS\nabsence=FAIL\n' >"$LOG_DIR/cleanup-verdict.txt"

@@ -74,3 +74,4 @@ if LOG_DIR="$tmp/log" ATTEMPT=test ATTEMPT_CLAIM=production \
   --scenario "$tmp/failing-plan.sh" --plan >/dev/null 2>&1; then
   echo "runner reported success for a failing plan" >&2; exit 1
 fi
+grep -q '^plan=FAIL$' "$tmp/log/plan-status.txt"
