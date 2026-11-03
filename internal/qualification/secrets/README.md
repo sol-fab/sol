@@ -62,10 +62,10 @@ procedures.
      pod/namespace/port-forward actions.
    The scenario does not call `kubectl exec`; it reads the mounted file through the probe's
    HTTP endpoint over `port-forward`, so no container exec permission is needed.
-9. The target's reconciler identity must be available to `sol grants apply`. Export the same
-   authorization variables the provider harness uses (`SOL_AUTHORIZATION_ROLE_ARN` for AWS,
-   `SOL_AUTHORIZATION_SERVICE_ACCOUNT`/`SOL_WORKLOAD_IDENTITY_PROVIDER` for GCP) or already be
-   impersonating that identity. The scenario itself never writes IAM outside `sol grants`.
+9. The target's fenced reconciler identity (`aws.reconciler_role_arn`) must exist before
+   `sol grants apply`, and `aws.reconciler_trust_principal_arn` must name the qualifier (or
+   CI authorization) identity permitted to assume it. The scenario never writes IAM outside
+   `sol grants`.
 
 ## Commands
 
@@ -83,16 +83,35 @@ export QUAL_CLUSTER=qual-secret-aws
 export QUAL_REGION=us-east-1
 export QUAL_REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com
 export QUAL_WORKLOAD_IDENTITY=arn:aws:iam::123456789012:role/sol/qual/sol-qual-secret-probe-worker
+export QUAL_PROBE_REPOSITORY=secret-qual-probe
+# optional: set when an EKS access entry must be attributed by absence.py
+# export QUAL_QUALIFIER_ARN=arn:aws:iam::123456789012:role/qualifier
 
 QUAL_PLAN_PREFLIGHT=1 internal/qualification/scenarios/run.sh \
   --scenario internal/qualification/secrets/aws-scenario.sh --plan
 ```
 
-Plan mode resolves the candidate and target, checks the candidate capability, target
-declaration, required tools, provider identity/read permissions, and fresh-cluster
-precondition. It writes `plan-preflight.txt` with one `PASS`/`FAIL`/`UNKNOWN` line per
-check and exits non-zero if any check is not `PASS`. It never builds/pushes the image or
-mutates a provider.
+Plan mode resolves the candidate and target declaration, checks the candidate capability,
+target state/registry, required tools, AWS caller/account and target roles, the workload
+identity ARN, cluster freshness, the ASCP catalog, Secrets Manager read access, the dedicated
+ECR repository and authorization, IAM policy simulation permission, absence-inventory read
+access, the target's `sol plan` and empty probe authority, and a local probe-image build. It
+writes `plan-preflight.txt` with one `PASS`/`FAIL`/`UNKNOWN` line per check and exits non-zero
+if any check is not `PASS`. It does not push the image or mutate a provider.
+
+The statuses are:
+
+```text
+candidate, target, target_state, target_registry, target_endpoint_cidr, tools
+aws_credentials, aws_account, aws_role_<role>, reconciler_role, reconciler_trust, workload_identity
+cluster_fresh, ascp_catalog, secrets_read, registry_repository, registry_auth
+iam_simulate, absence_read, target_plan, probe_authority_absent, probe_image
+```
+
+`plan_preflight=PASS` requires every required line to be `PASS`; any `FAIL` or `UNKNOWN`
+leaves it `BLOCKED`. `workload_identity` validates the ARN's account and `sol/<env>/` role
+path; the role itself is created by `sol grants apply`. The image is built locally in plan
+mode but only pushed in `prepare`.
 
 Execute (only after approval; this creates billable resources and mutates IAM through Sol):
 
@@ -108,6 +127,24 @@ GCP uses `PROVIDER=gcp`, `SOL_TARGET=qual/gcp/us-central1`,
 scenario derives the exact KSA principal from the plan namespace/workload and project.
 The shared runner binds the attempt identity and the candidate; it refuses an attempt that
 reuses another attempt's evidence directory.
+
+## Current AWS operator prerequisites
+
+Before `plan_preflight=PASS` can be expected:
+
+- a candidate whose revision contains #1915, extracted with its archive and `candidate.json`;
+- an interactive AWS SSO/credential refresh for the target account;
+- the four target role ARNs in the private target, readable with `iam:GetRole`;
+- `QUAL_WORKLOAD_IDENTITY` matching the target account and `sol/<env>/` role path;
+- `aws.reconciler_role_arn` already bootstrapped and `aws.reconciler_trust_principal_arn`
+  naming the identity that may assume it;
+- a dedicated, existing ECR repository named by `QUAL_PROBE_REPOSITORY`
+  (default `secret-qual-probe`) with push permission;
+- a fresh `sol-secret-qual` cluster (or another chosen cluster) and an empty probe authority;
+- a specific `cluster_endpoint_cidr` for the operator egress; the target must not fall back
+  to the non-production `0.0.0.0/0` default;
+- permission to simulate the workload policy and to run the read-only `absence.py` capture;
+- an established durable installation: state bucket, roles, DNS ownership, and bootstrap.
 
 ## Expected outcomes and evidence
 

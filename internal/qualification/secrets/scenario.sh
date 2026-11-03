@@ -131,7 +131,8 @@ scenario_cleanup() {
   if [ "${SCENARIO_OWNS_TARGET:-0}" = 1 ] && [ -n "${SOL:-}" ] && [ -n "${SOL_TARGET:-}" ]; then
     "$SOL" destroy "$SOL_TARGET" --apply >"$LOG_DIR/destroy.log" 2>&1 || rc=$?
   fi
-  if [ "$rc" -eq 0 ] && [ "${SCENARIO_OWNS_TARGET:-0}" = 1 ]; then
+  if [ "$rc" -eq 0 ] &&
+     { [ "${SCENARIO_OWNS_TARGET:-0}" = 1 ] || [ "${SCENARIO_OWNS_PROBE_REPOSITORY:-0}" = 1 ]; }; then
     hook_cleanup_extra || rc=$?
   fi
   if [ "$rc" -eq 0 ] && [ "${SCENARIO_OWNS_AUTHORITY:-0}" = 1 ] &&

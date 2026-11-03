@@ -307,3 +307,249 @@ hook_registry_preflight() {
     return 1
   fi
 }
+
+# Granular AWS plan preflight. Every line is PASS, FAIL, or UNKNOWN; common.sh turns
+# any non-PASS required line into plan_preflight=BLOCKED. Nothing here mutates a
+# provider or writes a remote object.
+aws_plan_emit() { printf '%s\n' "$*" >>"${PLAN_FILE:?}"; }
+
+aws_plan_role_arn() { jq -r --arg key "$1" '.aws[$key] // empty' "$LOG_DIR/target-facts.json"; }
+
+hook_plan_preflight() {
+  local rc=0 account target_account role_key role_arn role_name env workload_identity
+  local wi_account wi_path plan_rc=0 plan_ref=""
+  target_account="$(jq -r '.account // empty' "$LOG_DIR/target-facts.json")"
+  env="$(jq -r '.environment // empty' "$LOG_DIR/target-facts.json")"
+
+  if aws sts get-caller-identity --output json >"$LOG_DIR/aws-identity.json" \
+      2>"$LOG_DIR/aws-identity.err"; then
+    account="$(jq -r '.Account' "$LOG_DIR/aws-identity.json")"
+    aws_plan_emit "aws_credentials=PASS account=$account arn=$(jq -r '.Arn' "$LOG_DIR/aws-identity.json")"
+    if [ -n "$account" ] && [ "$account" = "$target_account" ]; then
+      aws_plan_emit "aws_account=PASS target=$target_account"
+    elif [ -z "$account" ]; then
+      aws_plan_emit "aws_account=UNKNOWN caller account is empty"
+      rc=1
+    else
+      aws_plan_emit "aws_account=FAIL caller=$account target=${target_account:-unset}"
+      rc=1
+    fi
+  else
+    aws_plan_emit "aws_credentials=UNKNOWN see aws-identity.err"
+    aws_plan_emit "aws_account=UNKNOWN cannot read caller identity"
+    account=""
+    rc=1
+  fi
+
+  for role_key in provisioner_role_arn cluster_access_role_arn deploy_role_arn operator_role_arn; do
+    role_arn="$(aws_plan_role_arn "$role_key")"
+    role_name="${role_arn##*/}"
+    if [ -z "$role_arn" ]; then
+      aws_plan_emit "aws_role_${role_key}=FAIL target declares no $role_key"
+      rc=1
+    elif aws iam get-role --role-name "$role_name" --output json \
+        >"$LOG_DIR/plan-role-${role_key}.json" 2>"$LOG_DIR/plan-role-${role_key}.err"; then
+      aws_plan_emit "aws_role_${role_key}=PASS name=$role_name"
+    elif grep -Eq 'NoSuchEntity|not exist' "$LOG_DIR/plan-role-${role_key}.err" 2>/dev/null; then
+      aws_plan_emit "aws_role_${role_key}=FAIL name=$role_name does not exist"
+      rc=1
+    else
+      aws_plan_emit "aws_role_${role_key}=UNKNOWN name=$role_name see plan-role-${role_key}.err"
+      rc=1
+    fi
+  done
+
+  local authz_arn authz_name authz_trust authz_verified=0
+  authz_arn="$(aws_plan_role_arn reconciler_role_arn)"
+  authz_name="${authz_arn##*/}"
+  authz_trust="$(jq -r '.aws.reconciler_trust_principal_arn // empty' "$LOG_DIR/target-facts.json")"
+  if [ -z "$authz_arn" ]; then
+    aws_plan_emit "reconciler_role=FAIL target declares no aws.reconciler_role_arn"
+    rc=1
+  elif aws iam get-role --role-name "$authz_name" --output json \
+      >"$LOG_DIR/plan-role-authorization.json" 2>"$LOG_DIR/plan-role-authorization.err"; then
+    authz_verified=1
+    aws_plan_emit "reconciler_role=PASS arn=$authz_arn"
+  elif grep -Eq 'NoSuchEntity|not exist' "$LOG_DIR/plan-role-authorization.err" 2>/dev/null; then
+    aws_plan_emit "reconciler_role=FAIL arn=$authz_arn does not exist; bootstrap it before grants apply"
+    rc=1
+  else
+    aws_plan_emit "reconciler_role=UNKNOWN arn=$authz_arn see plan-role-authorization.err"
+    rc=1
+  fi
+  if [ -z "$authz_trust" ]; then
+    aws_plan_emit "reconciler_trust=FAIL target declares no aws.reconciler_trust_principal_arn"
+    rc=1
+  elif [ "$authz_verified" != 1 ]; then
+    aws_plan_emit "reconciler_trust=UNKNOWN principal=$authz_trust role was not verified"
+    rc=1
+  elif python3 - "$LOG_DIR/plan-role-authorization.json" "$authz_trust" <<'PY'
+import json, sys
+role = json.load(open(sys.argv[1], encoding="utf-8")).get("Role", {})
+document = role.get("AssumeRolePolicyDocument", {})
+if sys.argv[2] not in json.dumps(document):
+    raise SystemExit("the trust policy does not name the declared principal")
+PY
+  then
+    aws_plan_emit "reconciler_trust=PASS principal=$authz_trust"
+  else
+    aws_plan_emit "reconciler_trust=FAIL principal=$authz_trust is not in the role trust policy"
+    rc=1
+  fi
+
+  workload_identity="${QUAL_WORKLOAD_IDENTITY:-}"
+  if [ -z "$workload_identity" ]; then
+    aws_plan_emit "workload_identity=FAIL QUAL_WORKLOAD_IDENTITY is unset"
+    rc=1
+  elif [[ "$workload_identity" =~ ^arn:aws:iam::([0-9]{12}):role/(.+)$ ]]; then
+    wi_account="${BASH_REMATCH[1]}"
+    wi_path="${BASH_REMATCH[2]}"
+    if [ "$wi_account" != "$target_account" ]; then
+      aws_plan_emit "workload_identity=FAIL account=$wi_account target=$target_account"
+      rc=1
+    elif [[ "$wi_path" != sol/"$env"/* ]]; then
+      aws_plan_emit "workload_identity=FAIL path=$wi_path expected=sol/$env/..."
+      rc=1
+    else
+      aws_plan_emit "workload_identity=PASS arn=$workload_identity"
+    fi
+  else
+    aws_plan_emit "workload_identity=FAIL not an IAM role ARN: $workload_identity"
+    rc=1
+  fi
+
+  if aws eks describe-cluster --name "$(aws_cluster)" --region "$(aws_region)" \
+      >"$LOG_DIR/plan-existing-cluster.json" 2>"$LOG_DIR/plan-cluster.err"; then
+    aws_plan_emit "cluster_fresh=FAIL cluster=$(aws_cluster) already exists"
+    rc=1
+  elif grep -q 'ResourceNotFoundException' "$LOG_DIR/plan-cluster.err" 2>/dev/null; then
+    aws_plan_emit "cluster_fresh=PASS cluster=$(aws_cluster) is absent"
+  else
+    aws_plan_emit "cluster_fresh=UNKNOWN see plan-cluster.err"
+    rc=1
+  fi
+
+  if aws eks describe-addon-versions --addon-name aws-secrets-store-csi-driver-provider \
+      --region "$(aws_region)" \
+      --query "addons[].addonVersions[?addonVersion=='v3.1.4-eksbuild.3'].addonVersion" \
+      --output text >"$LOG_DIR/ascp-catalog.txt" 2>"$LOG_DIR/ascp-catalog.err"; then
+    if grep -q 'v3.1.4-eksbuild.3' "$LOG_DIR/ascp-catalog.txt"; then
+      aws_plan_emit "ascp_catalog=PASS version=v3.1.4-eksbuild.3"
+    else
+      aws_plan_emit "ascp_catalog=FAIL version=v3.1.4-eksbuild.3 is not served in $(aws_region)"
+      rc=1
+    fi
+  else
+    aws_plan_emit "ascp_catalog=UNKNOWN see ascp-catalog.err"
+    rc=1
+  fi
+
+  if aws secretsmanager list-secrets --region "$(aws_region)" --max-items 1 --output json \
+      >"$LOG_DIR/aws-secret-list.json" 2>"$LOG_DIR/aws-secret-list.err"; then
+    aws_plan_emit "secrets_read=PASS"
+  else
+    aws_plan_emit "secrets_read=UNKNOWN see aws-secret-list.err"
+    rc=1
+  fi
+
+  if [ -n "${QUAL_PROBE_REPOSITORY:-}" ]; then
+    if aws ecr describe-repositories --repository-names "$QUAL_PROBE_REPOSITORY" \
+        --region "$(aws_region)" >"$LOG_DIR/registry-repository.json" \
+        2>"$LOG_DIR/registry-repository.err"; then
+      aws_plan_emit "registry_repository=PASS name=$QUAL_PROBE_REPOSITORY"
+    elif grep -q 'RepositoryNotFoundException' "$LOG_DIR/registry-repository.err" 2>/dev/null; then
+      aws_plan_emit "registry_repository=FAIL name=$QUAL_PROBE_REPOSITORY does not exist"
+      rc=1
+    else
+      aws_plan_emit "registry_repository=UNKNOWN name=$QUAL_PROBE_REPOSITORY"
+      rc=1
+    fi
+    if aws ecr get-authorization-token --region "$(aws_region)" \
+        --query 'authorizationData[0].authorizationToken' --output text \
+        >"$LOG_DIR/registry-auth.txt" 2>"$LOG_DIR/registry-auth.err"; then
+      aws_plan_emit "registry_auth=PASS"
+    else
+      aws_plan_emit "registry_auth=UNKNOWN see registry-auth.err"
+      rc=1
+    fi
+  else
+    aws_plan_emit "registry_repository=FAIL QUAL_PROBE_REPOSITORY is unset"
+    aws_plan_emit "registry_auth=UNKNOWN repository is unset"
+    rc=1
+  fi
+
+  # The scenario calls SimulatePrincipalPolicy for effective-access evidence. Use the
+  # deploy role, not the not-yet-created workload role, so this tests the API permission.
+  local deploy_arn deploy_name
+  deploy_arn="$(aws_plan_role_arn deploy_role_arn)"
+  deploy_name="${deploy_arn##*/}"
+  if [ -n "$deploy_arn" ] && aws iam simulate-principal-policy \
+      --policy-source-arn "$deploy_arn" \
+      --action-names secretsmanager:GetSecretValue \
+      --resource-arns "arn:aws:secretsmanager:$(aws_region):$target_account:secret:*" \
+      --query 'EvaluationResults[0].EvalDecision' --output text \
+      >"$LOG_DIR/plan-simulate.txt" 2>"$LOG_DIR/plan-simulate.err"; then
+    aws_plan_emit "iam_simulate=PASS role=$deploy_name"
+  else
+    aws_plan_emit "iam_simulate=UNKNOWN role=$deploy_name see plan-simulate.err"
+    rc=1
+  fi
+
+  # Read-only permission preflight for the authoritative absence inventory; --initial
+  # permits a target whose cluster does not exist yet.
+  if python3 "$ROOT/internal/qualification/aws/absence.py" capture \
+      --cluster "$(aws_cluster)" --region "$(aws_region)" --account "$target_account" \
+      --prior "$LOG_DIR/plan-absence-prior.json" --registry-prefix "$QUAL_REGISTRY" \
+      --base-domain "$(aws_base_domain)" --retention "$(aws_retention)" \
+      --attempt "$ATTEMPT" --target "$SOL_TARGET" --candidate "$SOL_CANDIDATE" \
+      --initial >"$LOG_DIR/plan-absence-capture.txt" 2>&1; then
+    aws_plan_emit "absence_read=PASS"
+  else
+    aws_plan_emit "absence_read=UNKNOWN see plan-absence-capture.txt"
+    rc=1
+  fi
+
+  # A fresh target also has no leftover probe authority. Resolve the provider reference
+  # through the installed candidate's plan, never by reimplementing the naming rule.
+  if [ "${SCENARIO_CANDIDATE_STATUS:-FAIL}" != PASS ]; then
+    aws_plan_emit "target_plan=UNKNOWN candidate is not ready"
+    rc=1
+  elif ( cd "${WORKSPACE:?}" && "$SOL" plan "$SOL_TARGET" --out "$LOG_DIR/plan.json" ) \
+      >"$LOG_DIR/plan.log" 2>&1; then
+    if python3 - "$LOG_DIR/plan.json" "$LOG_DIR/plan-service.json" "$QUAL_UNIT" <<'PY'
+import json, sys
+plan = json.load(open(sys.argv[1], encoding="utf-8"))
+name = sys.argv[3].split("/", 1)[1]
+service = next((s for s in plan.get("services", []) if s.get("source_name") == name), None)
+if service is None:
+    raise SystemExit(f"plan does not contain {name}")
+json.dump(service, open(sys.argv[2], "w", encoding="utf-8"), indent=2, sort_keys=True)
+PY
+    then
+      plan_ref="$(jq -r --arg k "$QUAL_PROBE_KEY" '.secret_sources[]? | select(.key == $k) | .reference' \
+        "$LOG_DIR/plan-service.json" 2>/dev/null || true)"
+    else
+      plan_ref=""
+    fi
+    if [ -z "$plan_ref" ]; then
+      aws_plan_emit "target_plan=FAIL plan carries no provider reference for $QUAL_PROBE_KEY"
+      rc=1
+    else
+      aws_plan_emit "target_plan=PASS reference=$plan_ref"
+      if aws secretsmanager describe-secret --secret-id "$plan_ref" --region "$(aws_region)" \
+          >/dev/null 2>"$LOG_DIR/plan-authority.err"; then
+        aws_plan_emit "probe_authority_absent=FAIL prior authority exists: $plan_ref"
+        rc=1
+      elif grep -q 'ResourceNotFoundException' "$LOG_DIR/plan-authority.err" 2>/dev/null; then
+        aws_plan_emit "probe_authority_absent=PASS"
+      else
+        aws_plan_emit "probe_authority_absent=UNKNOWN see plan-authority.err"
+        rc=1
+      fi
+    fi
+  else
+    aws_plan_emit "target_plan=UNKNOWN see plan.log"
+    rc=1
+  fi
+  return "$rc"
+}
