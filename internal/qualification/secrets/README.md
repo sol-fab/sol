@@ -168,6 +168,10 @@ failed run still bills until teardown; the destroy is part of the run, not a fol
 - Provider IAM propagation: a just-applied grant/revocation can take time to become effective.
   The scenario's pod-restart and simulation checks are bounded; a timeout is UNKNOWN, not a
   pass. Re-run a fresh attempt rather than editing IAM by hand.
+- `iam:SimulatePrincipalPolicy` alone does not establish effective access: it does not model
+  permissions boundaries, resource policies or SCPs. The scenario records it as policy-level
+  evidence and treats a fresh pod's mount/readiness as the effective check. A simulation
+  `allowed` is not sufficient for the authorization cell.
 - The AWS add-on version is pinned and preflight re-reads the regional catalog. If the catalog
   no longer serves the pin, stop; do not fall back to `most_recent`.
 - The focused absence hook checks the authority, cluster, database and network/disk classes it
