@@ -13,9 +13,9 @@ LIB
 cat >"$tmp/scenario.sh" <<'SCN'
 scenario_prepare() { printf 'prepare\n' >>"$CALLS"; }
 scenario_inventory() { printf 'inventory\n' >>"$CALLS"; }
-scenario_absence() { printf 'absence\n' >>"$CALLS"; printf 'all resources absent\n'; }
+scenario_absence() { printf 'absence\n' >>"$CALLS"; printf 'all resources absent\n'; [ "${FAIL_ABSENCE:-0}" != 1 ]; }
 scenario_plan() { printf 'plan\n' >>"$CALLS"; }
-scenario_cleanup() { printf 'cleanup\n' >>"$CALLS"; }
+scenario_cleanup() { printf 'cleanup\n' >>"$CALLS"; [ "${FAIL_CLEANUP:-0}" != 1 ]; }
 scenario_execute() { printf 'execute\n' >>"$CALLS"; }
 scenario_assert() { printf 'assert\n' >>"$CALLS"; }
 scenario_evidence() { printf 'evidence\n'; }
@@ -40,3 +40,27 @@ test -s "$tmp/log/scenario-evidence.txt"
 test -s "$tmp/log/absence.txt"
 grep -q 'absence=PASS' "$tmp/log/cleanup-verdict.txt"
 echo "scenario runner composition passed"
+
+# Inventory must bracket execution, and absence must follow cleanup.
+awk 'BEGIN{want=1} /^inventory$/{n++; if(n==1 && $0!="") first=NR} /^execute$/{if(n!=1) exit 1} /^inventory$/{if(n==2 && NR<ex) exit 1} END{if(n!=2) exit 1}' "$CALLS" || {
+  echo "inventory was not recorded before and after execution" >&2; exit 1; }
+
+# Cleanup failure is a scenario failure and absence is UNKNOWN.
+rm -f "$CALLS"
+if FAIL_CLEANUP=1 APPROVED=1 LOG_DIR="$tmp/log" ATTEMPT=test ATTEMPT_CLAIM=production \
+  QUALIFICATION_LIB_DIR="$tmp/lib" "$root/internal/qualification/scenarios/run.sh" \
+  --scenario "$tmp/scenario.sh"; then
+  echo "runner passed despite cleanup failure" >&2; exit 1
+fi
+grep -q '^cleanup=FAIL' "$tmp/log/cleanup-verdict.txt"
+grep -q '^absence=UNKNOWN' "$tmp/log/cleanup-verdict.txt"
+
+# Independent absence failure is a scenario failure even when cleanup succeeded.
+rm -f "$CALLS"
+if FAIL_ABSENCE=1 APPROVED=1 LOG_DIR="$tmp/log" ATTEMPT=test ATTEMPT_CLAIM=production \
+  QUALIFICATION_LIB_DIR="$tmp/lib" "$root/internal/qualification/scenarios/run.sh" \
+  --scenario "$tmp/scenario.sh"; then
+  echo "runner passed despite absence failure" >&2; exit 1
+fi
+grep -q '^cleanup=PASS' "$tmp/log/cleanup-verdict.txt"
+grep -q '^absence=FAIL' "$tmp/log/cleanup-verdict.txt"

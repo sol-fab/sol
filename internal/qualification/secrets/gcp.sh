@@ -108,7 +108,7 @@ hook_delete_authority() {
 }
 
 hook_absence() {
-  local secret_status cluster_status sql_status disk_status verdict=ABSENT
+  local secret_status cluster_status sql_status disk_status verdict=PASS
   if gcloud secrets describe "$1" --project "$(gcp_project)" >/dev/null \
       2>"$LOG_DIR/absence-secret.err"; then
     secret_status=PRESENT
