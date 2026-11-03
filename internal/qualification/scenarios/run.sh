@@ -24,6 +24,10 @@ source "$SCENARIO"
 : "${LOG_DIR:?set LOG_DIR to the attempt evidence directory}"
 : "${ATTEMPT:?set ATTEMPT to a unique attempt identity}"
 attempt_begin 0
+if ! ( sol_under_test_resolve ); then
+  printf 'plan=FAIL\nreason=candidate-rejected\nscenario=%s\n' "$SCENARIO" >"$LOG_DIR/plan-status.txt"
+  exit 2
+fi
 sol_under_test_resolve
 sol_under_test_record_identity "$LOG_DIR"
 if [ "$PLAN" = 1 ]; then

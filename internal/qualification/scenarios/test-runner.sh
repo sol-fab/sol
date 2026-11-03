@@ -75,3 +75,18 @@ if LOG_DIR="$tmp/log" ATTEMPT=test ATTEMPT_CLAIM=production \
   echo "runner reported success for a failing plan" >&2; exit 1
 fi
 grep -q '^plan=FAIL$' "$tmp/log/plan-status.txt"
+
+# Candidate rejection is caught before scenario plan and leaves explicit evidence.
+mkdir -p "$tmp/reject-lib"
+cat >"$tmp/reject-lib/attempt.sh" <<'LIB'
+attempt_begin() { :; }
+LIB
+cat >"$tmp/reject-lib/sol-under-test.sh" <<'LIB'
+sol_under_test_resolve() { return 2; }
+LIB
+if LOG_DIR="$tmp/log" ATTEMPT=test ATTEMPT_CLAIM=production \
+  QUALIFICATION_LIB_DIR="$tmp/reject-lib" "$root/internal/qualification/scenarios/run.sh" \
+  --scenario "$tmp/scenario.sh" --plan >/dev/null 2>&1; then
+  echo "runner accepted a rejected candidate" >&2; exit 1
+fi
+grep -q '^reason=candidate-rejected$' "$tmp/log/plan-status.txt"
