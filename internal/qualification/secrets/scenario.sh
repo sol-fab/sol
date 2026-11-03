@@ -72,6 +72,9 @@ scenario_assert() {
   [ -s "$LOG_DIR/missing-failclosed.log" ] || scenario_die "missing-authority evidence is missing"
   [ -s "$LOG_DIR/recovery.txt" ] || scenario_die "recovery evidence is missing"
   [ -s "$LOG_DIR/contract.txt" ] || scenario_die "contract binding is missing"
+  [ -s "$LOG_DIR/profile-target.yml" ] || scenario_die "target provenance is missing"
+  [ -s "$LOG_DIR/runtime-mechanism.txt" ] || scenario_die "provider runtime mechanism is missing"
+  [ -s "$LOG_DIR/pod-projection.txt" ] || scenario_die "pod projection evidence is missing"
   grep -q '^scenario_contract=qualification-scenario/v1$' "$LOG_DIR/contract.txt" ||
     scenario_die "the scenario contract binding is missing"
   ! grep -q '^failed=' "$LOG_DIR/scenario-status.txt" ||

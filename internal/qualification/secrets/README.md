@@ -133,6 +133,11 @@ sol destroy "$SOL_TARGET" --apply
 and then re-run the provider absence commands from `aws.sh`/`gcp.sh` manually. A successful
 destroy request is not absence; only the independent provider reads are.
 
+The tiny probe image is pushed to `QUAL_REGISTRY` with the attempt tag; it is not part of the
+target's teardown. Remove the tag after the attempt with the registry's own lifecycle policy
+or `aws ecr batch-delete-image` / `gcloud artifacts docker images delete`; record that
+cleanup in the attempt if the registry is shared.
+
 ## Estimated cost
 
 List on-demand prices, November 2026; verify in the provider console before approval. The

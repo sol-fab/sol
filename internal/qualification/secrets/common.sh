@@ -40,6 +40,7 @@ scenario_setup_workspace() {
   mkdir -p "$WORKSPACE/sol"
   cp -R "$HERE/fixture/." "$WORKSPACE/"
   cp "$QUAL_TARGET_FILE" "$WORKSPACE/sol/environments.yml"
+  cp "$QUAL_TARGET_FILE" "$LOG_DIR/profile-target.yml"
   python3 - "$WORKSPACE/sol/environments.yml" "$SOL_TARGET" "$QUAL_UNIT" "$QUAL_PROBE_KEY" \
     "$LOG_DIR/target-facts.json" "$PROVIDER" <<'PY'
 import json
