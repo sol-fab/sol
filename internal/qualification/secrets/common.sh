@@ -57,14 +57,23 @@ scenario_status() {
   printf '%s=%s\n' "$1" "$2" >>"$LOG_DIR/scenario-status.txt"
 }
 
+scenario_workspace_name() {
+  local attempt_slug
+  attempt_slug="$(printf '%s' "${ATTEMPT:-attempt}" | tr '[:upper:]' '[:lower:]' |
+    tr -c 'a-z0-9-' '-' | cut -c1-40 | sed 's/-*$//')"
+  printf 'scenario-%s\n' "${attempt_slug:-attempt}"
+}
+
 scenario_setup_workspace() {
   QUAL_UNIT="${QUAL_UNIT:-probe/secret_probe_worker}"
   QUAL_PROBE_KEY="${QUAL_PROBE_KEY:-SOL_PROBE_SECRET}"
   QUAL_PROBE_LOCAL_PORT="${QUAL_PROBE_LOCAL_PORT:-18080}"
   QUAL_ROTATION_TIMEOUT_S="${QUAL_ROTATION_TIMEOUT_S:-300}"
   QUAL_POD_TIMEOUT_S="${QUAL_POD_TIMEOUT_S:-300}"
-  QUAL_PROBE_REPOSITORY="${QUAL_PROBE_REPOSITORY:-secret-qual-probe}"
-  WORKSPACE="$LOG_DIR/scenario-workspace"
+  WORKSPACE_NAME="$(scenario_workspace_name)"
+  WORKSPACE="$LOG_DIR/$WORKSPACE_NAME"
+  QUAL_PROBE_REPOSITORY="${QUAL_PROBE_REPOSITORY:-$WORKSPACE_NAME/secret-qual-probe}"
+  QUAL_REGISTRY_PREFIX="${QUAL_REGISTRY_PREFIX:-$WORKSPACE_NAME}"
   case "$WORKSPACE" in
     "$LOG_DIR"/*) ;;
     *) scenario_die "refusing to manage a workspace outside LOG_DIR: $WORKSPACE" ;;
@@ -186,13 +195,18 @@ scenario_plan_preflight() {
   else
     rc=1
   fi
-  WORKSPACE="$LOG_DIR/scenario-workspace"
+  WORKSPACE_NAME="$(scenario_workspace_name)"
+  WORKSPACE="$LOG_DIR/$WORKSPACE_NAME"
+  QUAL_PROBE_REPOSITORY="${QUAL_PROBE_REPOSITORY:-$WORKSPACE_NAME/secret-qual-probe}"
+  QUAL_REGISTRY_PREFIX="${QUAL_REGISTRY_PREFIX:-$WORKSPACE_NAME}"
   if ( scenario_setup_workspace && scenario_write_contract ) >>"$file" 2>&1; then
     printf 'target=PASS\n' >>"$file"
     target_state="$(jq -r '.state_bucket // empty' "$LOG_DIR/target-facts.json")"
     local target_lock
     target_lock="$(jq -r '.aws.state_lock_table // empty' "$LOG_DIR/target-facts.json")"
     target_registry="$(jq -r '.registry // empty' "$LOG_DIR/target-facts.json")"
+    printf 'workspace_name=%s\nregistry_prefix=%s\nprobe_repository=%s\n' \
+      "$WORKSPACE_NAME" "$QUAL_REGISTRY_PREFIX" "$QUAL_PROBE_REPOSITORY" >>"$file"
     if [ -n "$target_state" ] && [ -n "$target_lock" ]; then
       printf 'target_state=PASS bucket=%s lock_table=%s\n' "$target_state" "$target_lock" >>"$file"
     else
@@ -284,7 +298,7 @@ scenario_build_probe_image() {
   else
     local tag image
     tag="$(printf '%s' "$ATTEMPT" | tr -c 'a-zA-Z0-9_.-' '-')"
-    image="$QUAL_REGISTRY/secret-qual-probe:$tag"
+    image="$QUAL_REGISTRY/$QUAL_PROBE_REPOSITORY:$tag"
     DOCKER_BUILDKIT=0 docker build --platform linux/amd64 -t "$image" \
       "$WORKSPACE/app/probe/secret_probe_worker" >"$LOG_DIR/probe-build.log" 2>&1 ||
       scenario_die "probe image build failed; see probe-build.log"

@@ -46,9 +46,13 @@ procedures.
      and `secretmanager.googleapis.com` enabled.
 5. Registry push access to `QUAL_REGISTRY` (an existing ECR repository or Artifact Registry
    repository the cluster can pull). The scenario builds and pushes a tiny pinned BusyBox probe;
-   node pull permission must already exist. For AWS, set `QUAL_PROBE_REPOSITORY` to the
-   **dedicated** ECR repository name (for example `secret-qual-probe`); the scenario removes
-   that repository during teardown so it does not appear as target residue.
+   node pull permission must already exist. For AWS, the ECR repository is
+   `<attempt-workspace>/<name>`; the workspace is derived from `ATTEMPT` (for example
+   `scenario-secret-aws-1`), the default probe repository is
+   `scenario-secret-aws-1/secret-qual-probe`, and `QUAL_REGISTRY_PREFIX` defaults to the same
+   workspace. That prefix is passed to `absence.py` so only this attempt's repositories,
+   including the probe repository, are attributed together. The scenario removes the dedicated probe repository during teardown
+   so it does not appear as target residue.
 6. `kubectl`, `docker` (classic builder works; the scenario sets `DOCKER_BUILDKIT=0`), `jq`,
    `curl`, `python3` with PyYAML, `git` (candidate ancestry), and the provider CLI
    authenticated to the intended identity.
@@ -93,7 +97,9 @@ export QUAL_CLUSTER=qual-secret-aws
 export QUAL_REGION=us-east-1
 export QUAL_REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com
 export QUAL_WORKLOAD_IDENTITY=arn:aws:iam::123456789012:role/sol/qual/sol-qual-secret-probe-worker
-export QUAL_PROBE_REPOSITORY=secret-qual-probe
+export QUAL_PROBE_REPOSITORY=scenario-secret-aws-1/secret-qual-probe
+# optional: defaults to the attempt-specific workspace name
+export QUAL_REGISTRY_PREFIX=scenario-secret-aws-1
 # optional: set when an EKS access entry must be attributed by absence.py
 # export QUAL_QUALIFIER_ARN=arn:aws:iam::123456789012:role/qualifier
 
@@ -151,7 +157,7 @@ Before `plan_preflight=PASS` can be expected:
 - `aws.reconciler_role_arn` already bootstrapped and `aws.reconciler_trust_principal_arn`
   naming the identity that may assume it;
 - a dedicated, existing ECR repository named by `QUAL_PROBE_REPOSITORY`
-  (default `secret-qual-probe`) with push permission;
+  (default `<attempt-workspace>/secret-qual-probe`, derived from `ATTEMPT`) with push permission;
 - a fresh `sol-secret-qual` cluster (or another chosen cluster), an empty probe authority, and
   no prior `cloud.tfstate`/`platform.tfstate` under the target's state prefix;
 - a specific `cluster_endpoint_cidr` for the operator egress; the target must not fall back
@@ -168,7 +174,9 @@ Before `plan_preflight=PASS` can be expected:
 - [ ] `aws.reconciler_role_arn` names the bootstrapped fenced reconciler, and
       `aws.reconciler_trust_principal_arn` names the qualifier/CI authorization principal.
 - [ ] `QUAL_WORKLOAD_IDENTITY` is the probe unit's account-matching `sol/<env>/` role ARN.
-- [ ] The dedicated ECR repository exists and the caller has push/authorization access.
+- [ ] The attempt-specific workspace and ECR repositories exist; the caller has
+      push/authorization access. The plan prints `workspace_name`, `registry_prefix`, and
+      `probe_repository`.
 - [ ] AWS credentials resolve to the expected account.
 - [ ] The cluster is absent, the probe authority is absent, and no prior cloud/platform state
       object exists under `sol/<target>/`.

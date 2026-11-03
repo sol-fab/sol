@@ -98,6 +98,19 @@ YAML
 ) >/dev/null 2>"$tmp/decl/err"
 [ -s "$tmp/decl/log/target-facts.json" ] || { echo "durable declaration was not accepted" >&2; exit 1; }
 [ -s "$tmp/decl/log/contract.txt" ] || { echo "contract binding was not written" >&2; exit 1; }
+(
+  export HERE="$root/internal/qualification/secrets" ROOT="$root" PROVIDER=aws
+  export LOG_DIR="$tmp/decl/log" SOL_TARGET="qual/aws/us-east-1"
+  export QUAL_UNIT="probe/secret_probe_worker" QUAL_PROBE_KEY="SOL_PROBE_SECRET"
+  export ATTEMPT=test QUAL_TARGET_FILE="$tmp/decl/env.yml" QUAL_CLUSTER="qual-secret" QUAL_REGION="us-east-1"
+  # shellcheck source=/dev/null
+  source "$root/internal/qualification/secrets/scenario.sh"
+  scenario_setup_workspace
+  printf '%s|%s|%s\n' "$WORKSPACE_NAME" "$QUAL_PROBE_REPOSITORY" "$QUAL_REGISTRY_PREFIX"
+) >"$tmp/decl/repository-scope.txt"
+grep -qx 'scenario-test|scenario-test/secret-qual-probe|scenario-test' \
+  "$tmp/decl/repository-scope.txt" || {
+  echo "the probe/absence repository scope is not workspace-aligned" >&2; exit 1; }
 sed 's/shape: durable/shape: local/' "$tmp/decl/env.yml" >"$tmp/decl/local.yml"
 if (
   export HERE="$root/internal/qualification/secrets" ROOT="$root" PROVIDER=aws
