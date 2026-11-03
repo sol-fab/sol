@@ -10,9 +10,10 @@ cat >"$tmp/lib/attempt.sh" <<'LIB'
 attempt_begin() { :; }
 LIB
 cat >"$tmp/lib/sol-under-test.sh" <<'LIB'
-sol_under_test_resolve() { :; }
+sol_under_test_resolve() { : "${SOL_CANDIDATE_REVISION:?}"; }
 sol_under_test_record_identity() { :; }
 LIB
+candidate_revision="$(git -C "$root" rev-parse c6ec37e7)"
 calls="$tmp/calls"
 for provider in aws gcp; do
   output="$(
@@ -20,6 +21,7 @@ for provider in aws gcp; do
       QUAL_UNIT=probe/secret_probe_worker QUAL_PROBE_KEY=SOL_PROBE_SECRET \
       QUAL_REGISTRY=registry.example.test SOL_CLUSTER=qualification \
       QUAL_CLUSTER=qualification QUAL_REGION=us-east-1 QUAL_PROJECT=example-project \
+      SOL_CANDIDATE_REVISION="$candidate_revision" \
       CALLS="$calls" LOG_DIR="$tmp/log" ATTEMPT="test-$provider" ATTEMPT_CLAIM=production \
       QUALIFICATION_LIB_DIR="$tmp/lib" "$root/internal/qualification/scenarios/run.sh" \
       --scenario "$root/internal/qualification/secrets/$provider-scenario.sh" --plan
@@ -33,6 +35,35 @@ python3 "$root/internal/qualification/scenarios/test-catalog.py" >/dev/null
 grep -q '"id": "provider-secrets-aws"' "$root/internal/qualification/scenarios/catalog.json"
 grep -q '"id": "provider-secrets-gcp"' "$root/internal/qualification/scenarios/catalog.json"
 echo "provider-secret scenario composes with the shared runner and catalog"
+
+# A candidate built before #1915 is not a provider-backed secret candidate; --plan must
+# refuse it before any live action. This is the same check a live run performs.
+pre_feature="$(git -C "$root" rev-parse c6ec37e7^)"
+if PLAN_OUTPUT="$(
+  PROVIDER=aws SOL_TARGET="prod/aws/us-east-1" \
+    QUAL_UNIT=probe/secret_probe_worker QUAL_PROBE_KEY=SOL_PROBE_SECRET \
+    QUAL_REGISTRY=registry.example.test QUAL_CLUSTER=qualification QUAL_REGION=us-east-1 \
+    SOL_CANDIDATE_REVISION="$pre_feature" \
+    LOG_DIR="$tmp/log" ATTEMPT="test-pre-1915" ATTEMPT_CLAIM=production \
+    QUALIFICATION_LIB_DIR="$tmp/lib" "$root/internal/qualification/scenarios/run.sh" \
+    --scenario "$root/internal/qualification/secrets/aws-scenario.sh" --plan 2>&1
+)"; then
+  echo "a pre-#1915 candidate was accepted by the secret scenario" >&2
+  exit 1
+fi
+printf '%s\n' "$PLAN_OUTPUT" | grep -q 'candidate=FAIL' || {
+  echo "the pre-#1915 refusal did not name the candidate" >&2; exit 1; }
+
+# The shared runner requires both canonical evidence functions before it will execute.
+(
+  export ROOT="$root" HERE="$root/internal/qualification/secrets" PROVIDER=aws
+  export LOG_DIR="$tmp/log" SOL_TARGET="prod/aws/us-east-1"
+  # shellcheck source=/dev/null
+  source "$root/internal/qualification/secrets/scenario.sh"
+  declare -F scenario_inventory >/dev/null
+  declare -F scenario_absence >/dev/null
+) || { echo "scenario lacks the canonical inventory/absence functions" >&2; exit 1; }
+echo "provider-secret candidate and evidence-function checks passed"
 
 # Declaration validation is offline: a durable target with the probe authority mapping is
 # accepted, and a non-durable target is refused before any provider call.
@@ -119,3 +150,19 @@ chmod +x "$tmp/cleanup/bin/sol"
 grep -q 'destroy qual/aws/us-east-1 --apply' "$tmp/cleanup/calls-owned" ||
   { echo "cleanup did not destroy an owned target" >&2; exit 1; }
 echo "provider-secret cleanup ownership passed"
+
+# The runner calls scenario_absence after cleanup; it must be the provider absence
+# verdict, not a scenario-local duplicate of cleanup.
+(
+  export ROOT="$root" HERE="$root/internal/qualification/secrets" PROVIDER=aws
+  export LOG_DIR="$tmp/cleanup/log" SOL_TARGET="qual/aws/us-east-1"
+  # shellcheck source=/dev/null
+  source "$root/internal/qualification/secrets/scenario.sh"
+  hook_absence() { printf 'absence=PASS\nfull_inventory=ABSENT\n'; }
+  scenario_absence
+) >"$tmp/cleanup/absence-check.txt"
+grep -q '^absence=PASS' "$tmp/cleanup/absence-check.txt" || {
+  echo "scenario_absence did not return the provider verdict" >&2; exit 1; }
+grep -q '^phase=verify exit=0$' "$tmp/cleanup/log/phase-verdicts.txt" || {
+  echo "scenario_absence did not record the verify phase" >&2; exit 1; }
+echo "provider-secret absence slot passed"

@@ -6,6 +6,16 @@ set -uo pipefail
 
 aws_region() { jq -r '.region' "$LOG_DIR/target-facts.json"; }
 aws_cluster() { jq -r '.cluster' "$LOG_DIR/target-facts.json"; }
+aws_account() {
+  local account
+  account="$(jq -r '.account // empty' "$LOG_DIR/target-facts.json")"
+  if [ -z "$account" ] && [ -s "$LOG_DIR/aws-identity.json" ]; then
+    account="$(jq -r '.Account // empty' "$LOG_DIR/aws-identity.json")"
+  fi
+  printf '%s' "$account"
+}
+aws_base_domain() { jq -r '.base_domain // empty' "$LOG_DIR/target-facts.json"; }
+aws_retention() { jq -r '.destroy_retention // "none"' "$LOG_DIR/target-facts.json"; }
 
 hook_preflight() {
   require_env QUAL_WORKLOAD_IDENTITY
@@ -111,6 +121,22 @@ hook_delete_authority() {
     --force-delete-without-recovery
 }
 
+# The authoritative AWS residue inventory needs an independent pre-teardown identity
+# capture. Capture on the last inventory-before-teardown pass, after the workload exists.
+aws_capture_prior() {
+  local account
+  account="$(aws_account)"
+  [ -n "$account" ] || { printf 'full-inventory-capture=UNKNOWN no account\n'; return 1; }
+  python3 "$ROOT/internal/qualification/aws/absence.py" capture \
+    --cluster "$(aws_cluster)" --region "$(aws_region)" --account "$account" \
+    --prior "$LOG_DIR/aws-absence-prior.json" \
+    --registry-prefix "$QUAL_REGISTRY" --base-domain "$(aws_base_domain)" \
+    --retention "$(aws_retention)" --attempt "$ATTEMPT" --target "$SOL_TARGET" \
+    --candidate "$SOL_CANDIDATE" \
+    ${QUAL_QUALIFIER_ARN:+--qualifier-arn "$QUAL_QUALIFIER_ARN"} \
+    >"$LOG_DIR/aws-absence-capture.txt" 2>&1
+}
+
 hook_absence() {
   local secret_status cluster_status rds_status vpc_status verdict=ABSENT
   secret_status="$(aws secretsmanager describe-secret --secret-id "$1" --region "$(aws_region)" \
@@ -158,13 +184,126 @@ PY
   for status in "$secret_status" "$cluster_status" "$rds_status" "$vpc_status"; do
     [ "$status" = ABSENT ] || verdict=FAIL
   done
+  local full_status=UNKNOWN
+  if [ ! -s "$LOG_DIR/aws-absence-prior.json" ]; then
+    printf 'full-inventory=UNKNOWN prior identity capture is missing\n'
+    verdict=FAIL
+  elif python3 "$ROOT/internal/qualification/aws/absence.py" collect \
+      --dir "$LOG_DIR/aws-absence" --prior "$LOG_DIR/aws-absence-prior.json" \
+      --cluster "$(aws_cluster)" --region "$(aws_region)" --account "$(aws_account)" \
+      --registry-prefix "$QUAL_REGISTRY" --base-domain "$(aws_base_domain)" \
+      --retention "$(aws_retention)" --attempt "$ATTEMPT" --target "$SOL_TARGET" \
+      --candidate "$SOL_CANDIDATE" \
+      ${QUAL_QUALIFIER_ARN:+--qualifier-arn "$QUAL_QUALIFIER_ARN"} \
+      >"$LOG_DIR/aws-absence-collect.txt" 2>&1; then
+    full_status=ABSENT
+    printf 'full-inventory=ABSENT\n'
+    cat "$LOG_DIR/aws-absence/aws-inventory-verdict.txt"
+  else
+    full_status=NOT-ABSENT
+    printf 'full-inventory=NOT-ABSENT\n'
+    cat "$LOG_DIR/aws-absence/aws-inventory-verdict.txt" 2>/dev/null || true
+    verdict=FAIL
+  fi
   {
     printf 'absence=%s\n' "$verdict"
     printf 'secret=%s\n' "$secret_status"
     printf 'cluster=%s\n' "$cluster_status"
     printf 'rds=%s\n' "$rds_status"
     printf 'vpc=%s\n' "$vpc_status"
+    printf 'full_inventory=%s\n' "$full_status"
   } >"$LOG_DIR/absence-detail.txt"
   cat "$LOG_DIR/absence-detail.txt"
   [ "$verdict" = PASS ]
+}
+
+# Read-only target inventory for the shared runner's inventory-before/after files.
+# This is provider observation, not a second Sol inventory: the runner owns ordering
+# and filenames; the provider owns truth.
+hook_inventory() {
+  local ref="${AUTHORITY_REFERENCE:-}" rc=0
+  printf 'provider=aws\nregion=%s\ncluster=%s\n' "$(aws_region)" "$(aws_cluster)"
+  if aws eks describe-cluster --name "$(aws_cluster)" --region "$(aws_region)" \
+      >/dev/null 2>"$LOG_DIR/inventory-eks.err"; then
+    printf 'eks-cluster=PRESENT\n'
+  elif grep -q 'ResourceNotFoundException' "$LOG_DIR/inventory-eks.err" 2>/dev/null; then
+    printf 'eks-cluster=ABSENT\n'
+  else
+    printf 'eks-cluster=UNKNOWN\n'
+    rc=1
+  fi
+  if [ -z "$ref" ]; then
+    printf 'probe-authority=NOT-SEEDED\n'
+  elif aws secretsmanager describe-secret --secret-id "$ref" --region "$(aws_region)" \
+      >/dev/null 2>"$LOG_DIR/inventory-secret.err"; then
+    printf 'probe-authority=PRESENT\n'
+  elif grep -q 'ResourceNotFoundException' "$LOG_DIR/inventory-secret.err" 2>/dev/null; then
+    printf 'probe-authority=ABSENT\n'
+  else
+    printf 'probe-authority=UNKNOWN\n'
+    rc=1
+  fi
+  if aws rds describe-db-instances --region "$(aws_region)" --output json \
+      >"$LOG_DIR/inventory-rds.json" 2>"$LOG_DIR/inventory-rds.err"; then
+    printf 'rds-target-owned=%s\n' "$(python3 - "$LOG_DIR/inventory-rds.json" "$(aws_cluster)" <<'PY'
+import json, sys
+items = json.load(open(sys.argv[1], encoding="utf-8")).get("DBInstances", [])
+cluster = sys.argv[2]
+count = 0
+for item in items:
+    tags = {t.get("Key"): t.get("Value") for t in item.get("TagList", [])}
+    if tags.get("sol-cluster") == cluster or tags.get("kubernetes.io/cluster/" + cluster) == "owned":
+        count += 1
+print(count)
+PY
+)"
+  else
+    printf 'rds-target-owned=UNKNOWN\n'
+    rc=1
+  fi
+  if aws ec2 describe-vpcs --region "$(aws_region)" \
+      --filters "Name=tag:kubernetes.io/cluster/$(aws_cluster),Values=owned" \
+      --output json >"$LOG_DIR/inventory-vpc.json" 2>"$LOG_DIR/inventory-vpc.err"; then
+    printf 'vpc-target-owned=%s\n' "$(jq '.Vpcs | length' "$LOG_DIR/inventory-vpc.json")"
+  else
+    printf 'vpc-target-owned=UNKNOWN\n'
+    rc=1
+  fi
+  if [ "${SCENARIO_OWNS_TARGET:-0}" = 1 ] && [ ! -s "$LOG_DIR/aws-absence-prior.json" ]; then
+    if ! aws_capture_prior; then
+      printf 'full-inventory-capture=FAIL see aws-absence-capture.txt\n'
+      rc=1
+    else
+      printf 'full-inventory-capture=CAPTURED\n'
+    fi
+  fi
+  return "$rc"
+}
+
+# The probe image lives in a dedicated external repository; it is not a Sol target
+# resource, so destroy does not remove it. Delete it only when the operator names the
+# dedicated repository.
+hook_cleanup_extra() {
+  [ -n "${QUAL_PROBE_REPOSITORY:-}" ] || return 0
+  if aws ecr describe-repositories --repository-names "$QUAL_PROBE_REPOSITORY" \
+      --region "$(aws_region)" >/dev/null 2>&1; then
+    aws ecr delete-repository --repository-name "$QUAL_PROBE_REPOSITORY" --force \
+      --region "$(aws_region)" >/dev/null
+  fi
+}
+
+# Read-only confirmation that the dedicated probe repository exists and is addressable
+# with the caller's credentials. Push permission is exercised only in prepare.
+hook_registry_preflight() {
+  local repo="${QUAL_PROBE_REPOSITORY:-secret-qual-probe}"
+  if aws ecr describe-repositories --repository-names "$repo" --region "$(aws_region)" \
+      >"$LOG_DIR/registry-repository.json" 2>"$LOG_DIR/registry-repository.err"; then
+    printf 'registry_repository=PASS name=%s\n' "$repo"
+  elif grep -q 'RepositoryNotFoundException' "$LOG_DIR/registry-repository.err" 2>/dev/null; then
+    printf 'registry_repository=MISSING name=%s\n' "$repo"
+    return 1
+  else
+    printf 'registry_repository=UNKNOWN name=%s\n' "$repo"
+    return 1
+  fi
 }

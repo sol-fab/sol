@@ -21,6 +21,38 @@ scenario_record_phase() {
   printf 'phase=%s exit=%s\n' "$1" "$2" >>"$LOG_DIR/phase-verdicts.txt"
 }
 
+# Providers that create a disposable image repository or similar out-of-target resource
+# override this. The default is a no-op; the shared runner calls cleanup once.
+hook_cleanup_extra() { :; }
+
+# The scenario executes the provider-backed implementation merged in #1915. A
+# candidate built before that revision cannot exercise it, even if its version
+# string is newer. Keep the revision check in the scenario rather than in the
+# generic candidate resolver: other scenarios do not share this minimum.
+scenario_check_candidate_capability() {
+  local minimum="${QUAL_MIN_CANDIDATE_REVISION:-c6ec37e7}"
+  if [ -z "${SOL_CANDIDATE_REVISION:-}" ]; then
+    printf 'candidate=FAIL reason=the candidate resolver recorded no revision\n'
+    return 1
+  fi
+  if ! git -C "$ROOT" cat-file -e "${minimum}^{commit}" >/dev/null 2>&1; then
+    printf 'candidate=UNKNOWN reason=cannot resolve minimum revision %s in this checkout\n' "$minimum"
+    return 1
+  fi
+  if git -C "$ROOT" merge-base --is-ancestor "$minimum" "$SOL_CANDIDATE_REVISION" >/dev/null 2>&1; then
+    printf 'candidate=PASS revision=%s minimum=%s\n' "$SOL_CANDIDATE_REVISION" "$minimum"
+    return 0
+  fi
+  printf 'candidate=FAIL revision=%s reason=does not contain #1915 (%s)\n' \
+    "$SOL_CANDIDATE_REVISION" "$minimum"
+  return 1
+}
+
+scenario_require_candidate_capability() {
+  scenario_check_candidate_capability >/dev/null ||
+    scenario_die "candidate ${SOL_CANDIDATE_REVISION:-<unset>} does not contain the provider-backed secret implementation (#1915)"
+}
+
 scenario_status() {
   printf '%s=%s\n' "$1" "$2" >>"$LOG_DIR/scenario-status.txt"
 }
@@ -31,6 +63,7 @@ scenario_setup_workspace() {
   QUAL_PROBE_LOCAL_PORT="${QUAL_PROBE_LOCAL_PORT:-18080}"
   QUAL_ROTATION_TIMEOUT_S="${QUAL_ROTATION_TIMEOUT_S:-300}"
   QUAL_POD_TIMEOUT_S="${QUAL_POD_TIMEOUT_S:-300}"
+  QUAL_PROBE_REPOSITORY="${QUAL_PROBE_REPOSITORY:-secret-qual-probe}"
   WORKSPACE="$LOG_DIR/scenario-workspace"
   case "$WORKSPACE" in
     "$LOG_DIR"/*) ;;
@@ -87,6 +120,10 @@ facts = {
     "cluster": cluster,
     "project": project,
     "registry": declared.get("registry"),
+    "base_domain": declared.get("base_domain"),
+    "account": str((declared.get("aws") or {}).get("account_id") or ""),
+    "state_bucket": declared.get("state_bucket"),
+    "destroy_retention": declared.get("destroy_retention", "none"),
 }
 json.dump(facts, open(facts_path, "w", encoding="utf-8"), indent=2, sort_keys=True)
 PY
@@ -128,6 +165,65 @@ with open(out, "w", encoding="utf-8") as handle:
     handle.write("evidence_class=behavioral\n")
     handle.write("scenario_contract=qualification-scenario/v1\n")
 PY
+}
+
+# Plan-mode prerequisites. This is read-only with respect to providers: it resolves
+# the target declaration and calls the provider's read-only preflight. It deliberately
+# does not build or push the probe image; that is a prepare-phase mutation.
+scenario_plan_preflight() {
+  local file="$LOG_DIR/plan-preflight.txt" rc=0 missing="" tool
+  : >"$file"
+  if [ -n "${SCENARIO_CANDIDATE_LINE:-}" ]; then
+    printf '%s\n' "$SCENARIO_CANDIDATE_LINE" >>"$file"
+    [ "${SCENARIO_CANDIDATE_STATUS:-FAIL}" = PASS ] || rc=1
+  elif scenario_check_candidate_capability >>"$file" 2>&1; then
+    :
+  else
+    rc=1
+  fi
+  if ( scenario_setup_workspace && scenario_write_contract ) >>"$file" 2>&1; then
+    printf 'target=PASS\n' >>"$file"
+  else
+    printf 'target=FAIL\n' >>"$file"
+    rc=1
+  fi
+  local provider_tool=aws
+  [ "$PROVIDER" = gcp ] && provider_tool=gcloud
+  for tool in "$provider_tool" kubectl docker jq curl python3 git; do
+    command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+  done
+  if [ -z "$missing" ]; then
+    printf 'tools=PASS\n' >>"$file"
+  else
+    printf 'tools=FAIL missing=%s\n' "${missing# }" >>"$file"
+    rc=1
+  fi
+  if grep -qx 'target=PASS' "$file" && [ -z "$missing" ]; then
+    if ( hook_preflight ) >>"$file" 2>&1; then
+      printf 'provider_preflight=PASS\n' >>"$file"
+    else
+      printf 'provider_preflight=UNKNOWN see plan provider output above\n' >>"$file"
+      rc=1
+    fi
+  else
+    printf 'provider_preflight=SKIPPED target/tools are not ready\n' >>"$file"
+    rc=1
+  fi
+  if grep -qx 'provider_preflight=PASS' "$file"; then
+    if ( hook_registry_preflight ) >>"$file" 2>&1; then :; else rc=1; fi
+  else
+    printf 'registry_repository=SKIPPED provider preflight is not ready\n' >>"$file"
+    rc=1
+  fi
+  printf 'probe_image=NOT-BUILT plan mode does not build; prepare does\n' >>"$file"
+  printf 'registry_push=UNKNOWN push permission is exercised in prepare\n' >>"$file"
+  if [ "$rc" -eq 0 ]; then
+    printf 'plan_preflight=PASS\n' >>"$file"
+  else
+    printf 'plan_preflight=BLOCKED\n' >>"$file"
+  fi
+  cat "$file"
+  return "$rc"
 }
 
 scenario_build_probe_image() {
@@ -515,22 +611,5 @@ scenario_namespace_recovery() {
   printf 'namespace_replaced=1\nprobe_status=%s\n' "$code" >"$LOG_DIR/namespace-recovery.txt"
 }
 
-scenario_destroy_and_absence() {
-  scenario_stop_port_forward
-  local rc=0
-  "$SOL" destroy "$SOL_TARGET" --apply >"$LOG_DIR/destroy.log" 2>&1 || rc=$?
-  scenario_record_phase destroy "$rc"
-  if [ "$rc" -ne 0 ]; then
-    scenario_status destroy_exit "$rc"
-    scenario_die "sol destroy failed; see destroy.log"
-  fi
-  SCENARIO_CLEANED=1
-  if ! hook_absence "$AUTHORITY_REFERENCE" >"$LOG_DIR/absence.txt" 2>&1; then
-    scenario_record_phase verify 1
-    scenario_die "provider-side absence was not established; see absence.txt"
-  fi
-  scenario_record_phase verify 0
-  scenario_status destroy 0
-}
 
 trap 'scenario_stop_port_forward' EXIT
