@@ -121,6 +121,7 @@ facts = {
     "project": project,
     "registry": declared.get("registry"),
     "base_domain": declared.get("base_domain"),
+    "aws": declared.get("aws") or {},
     "account": str((declared.get("aws") or {}).get("account_id") or ""),
     "state_bucket": declared.get("state_bucket"),
     "destroy_retention": declared.get("destroy_retention", "none"),
@@ -145,6 +146,7 @@ PY
   SCENARIO_CLEANED=0
   SCENARIO_OWNS_TARGET=0
   SCENARIO_OWNS_AUTHORITY=0
+  SCENARIO_OWNS_PROBE_REPOSITORY=0
   PORT_FORWARD_PID=""
 }
 
@@ -171,7 +173,9 @@ PY
 # the target declaration and calls the provider's read-only preflight. It deliberately
 # does not build or push the probe image; that is a prepare-phase mutation.
 scenario_plan_preflight() {
-  local file="$LOG_DIR/plan-preflight.txt" rc=0 missing="" tool
+  local file="$LOG_DIR/plan-preflight.txt" rc=0 missing="" tool provider_tool
+  local target_state target_registry
+  PLAN_FILE="$file"
   : >"$file"
   if [ -n "${SCENARIO_CANDIDATE_LINE:-}" ]; then
     printf '%s\n' "$SCENARIO_CANDIDATE_LINE" >>"$file"
@@ -181,13 +185,28 @@ scenario_plan_preflight() {
   else
     rc=1
   fi
+  WORKSPACE="$LOG_DIR/scenario-workspace"
   if ( scenario_setup_workspace && scenario_write_contract ) >>"$file" 2>&1; then
     printf 'target=PASS\n' >>"$file"
+    target_state="$(jq -r '.state_bucket // empty' "$LOG_DIR/target-facts.json")"
+    target_registry="$(jq -r '.registry // empty' "$LOG_DIR/target-facts.json")"
+    if [ -n "$target_state" ]; then
+      printf 'target_state=PASS bucket=%s\n' "$target_state" >>"$file"
+    else
+      printf 'target_state=FAIL target declares no state_bucket\n' >>"$file"
+      rc=1
+    fi
+    if [ -n "$target_registry" ] && [ "$target_registry" = "${QUAL_REGISTRY:-}" ]; then
+      printf 'target_registry=PASS\n' >>"$file"
+    else
+      printf 'target_registry=FAIL target=%s env=%s\n' "${target_registry:-unset}" "${QUAL_REGISTRY:-unset}" >>"$file"
+      rc=1
+    fi
   else
     printf 'target=FAIL\n' >>"$file"
     rc=1
   fi
-  local provider_tool=aws
+  provider_tool=aws
   [ "$PROVIDER" = gcp ] && provider_tool=gcloud
   for tool in "$provider_tool" kubectl docker jq curl python3 git; do
     command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
@@ -199,24 +218,29 @@ scenario_plan_preflight() {
     rc=1
   fi
   if grep -qx 'target=PASS' "$file" && [ -z "$missing" ]; then
-    if ( hook_preflight ) >>"$file" 2>&1; then
+    if declare -F hook_plan_preflight >/dev/null; then
+      hook_plan_preflight >>"$file" 2>&1 || rc=1
+    elif ( hook_preflight ) >>"$file" 2>&1; then
       printf 'provider_preflight=PASS\n' >>"$file"
     else
       printf 'provider_preflight=UNKNOWN see plan provider output above\n' >>"$file"
       rc=1
     fi
   else
-    printf 'provider_preflight=SKIPPED target/tools are not ready\n' >>"$file"
+    printf 'provider_preflight=UNKNOWN target/tools are not ready\n' >>"$file"
     rc=1
   fi
-  if grep -qx 'provider_preflight=PASS' "$file"; then
-    if ( hook_registry_preflight ) >>"$file" 2>&1; then :; else rc=1; fi
+  if [ "$rc" -eq 0 ]; then
+    if ( scenario_plan_build_probe_image ) >>"$file" 2>&1; then
+      printf 'probe_image=PASS local build\n' >>"$file"
+    else
+      printf 'probe_image=FAIL local build failed; see plan-probe-build.log\n' >>"$file"
+      rc=1
+    fi
   else
-    printf 'registry_repository=SKIPPED provider preflight is not ready\n' >>"$file"
+    printf 'probe_image=UNKNOWN earlier checks are not ready\n' >>"$file"
     rc=1
   fi
-  printf 'probe_image=NOT-BUILT plan mode does not build; prepare does\n' >>"$file"
-  printf 'registry_push=UNKNOWN push permission is exercised in prepare\n' >>"$file"
   if [ "$rc" -eq 0 ]; then
     printf 'plan_preflight=PASS\n' >>"$file"
   else
@@ -224,6 +248,18 @@ scenario_plan_preflight() {
   fi
   cat "$file"
   return "$rc"
+}
+
+scenario_plan_build_probe_image() {
+  if [ -n "${QUAL_PROBE_IMAGE:-}" ]; then
+    case "$QUAL_PROBE_IMAGE" in
+      *@sha256:*) return 0 ;;
+      *) printf 'QUAL_PROBE_IMAGE is not a digest reference: %s\n' "$QUAL_PROBE_IMAGE"; return 1 ;;
+    esac
+  fi
+  local tag="plan-$(printf '%s' "${ATTEMPT:-plan}" | tr -c 'a-zA-Z0-9_.-' '-')"
+  DOCKER_BUILDKIT=0 docker build --platform linux/amd64 -t "secret-qual-probe:$tag" \
+    "$WORKSPACE/app/probe/secret_probe_worker" >"$LOG_DIR/plan-probe-build.log" 2>&1
 }
 
 scenario_build_probe_image() {
@@ -236,6 +272,9 @@ scenario_build_probe_image() {
     DOCKER_BUILDKIT=0 docker build --platform linux/amd64 -t "$image" \
       "$WORKSPACE/app/probe/secret_probe_worker" >"$LOG_DIR/probe-build.log" 2>&1 ||
       scenario_die "probe image build failed; see probe-build.log"
+    # The dedicated repository may already exist; if push fails after creating layers,
+    # cleanup still needs to remove that disposable repository.
+    SCENARIO_OWNS_PROBE_REPOSITORY=1
     docker push "$image" >"$LOG_DIR/probe-push.log" 2>&1 ||
       scenario_die "probe image push failed; see probe-push.log"
     PROBE_IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' "$image" 2>/dev/null || true)"
