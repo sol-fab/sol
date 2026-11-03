@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Offline composition test: the provider-secret scenario is a valid scenario for the
+# shared runner and --plan is non-mutating. No provider is contacted.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/lib" "$tmp/log"
+cat >"$tmp/lib/attempt.sh" <<'LIB'
+attempt_begin() { :; }
+LIB
+cat >"$tmp/lib/sol-under-test.sh" <<'LIB'
+sol_under_test_resolve() { :; }
+sol_under_test_record_identity() { :; }
+LIB
+calls="$tmp/calls"
+for provider in aws gcp; do
+  output="$(
+    PROVIDER="$provider" SOL_TARGET="prod/$provider/us-east-1" \
+      QUAL_UNIT=probe/secret_probe_worker QUAL_PROBE_KEY=SOL_PROBE_SECRET \
+      QUAL_REGISTRY=registry.example.test SOL_CLUSTER=qualification \
+      QUAL_CLUSTER=qualification QUAL_REGION=us-east-1 QUAL_PROJECT=example-project \
+      CALLS="$calls" LOG_DIR="$tmp/log" ATTEMPT="test-$provider" ATTEMPT_CLAIM=production \
+      QUALIFICATION_LIB_DIR="$tmp/lib" "$root/internal/qualification/scenarios/run.sh" \
+      --scenario "$root/internal/qualification/secrets/$provider-scenario.sh" --plan
+  )"
+  printf '%s\n' "$output" | grep -F "Provider-backed secret scenario ($provider)" >/dev/null
+  printf '%s\n' "$output" | grep -F 'Steps:' >/dev/null
+  printf '%s\n' "$output" | grep -F 'Estimated live cost' >/dev/null
+  [ ! -e "$calls" ] || { echo "plan contacted scenario prepare/execute/cleanup" >&2; exit 1; }
+done
+python3 "$root/internal/qualification/scenarios/test-catalog.py" >/dev/null
+grep -q '"id": "provider-secrets-aws"' "$root/internal/qualification/scenarios/catalog.json"
+grep -q '"id": "provider-secrets-gcp"' "$root/internal/qualification/scenarios/catalog.json"
+echo "provider-secret scenario composes with the shared runner and catalog"
+
+# Declaration validation is offline: a durable target with the probe authority mapping is
+# accepted, and a non-durable target is refused before any provider call.
+mkdir -p "$tmp/decl/log"
+cat >"$tmp/decl/env.yml" <<'YAML'
+qual:
+  targets:
+    aws/us-east-1:
+      shape: durable
+      cluster_name: qual-secret
+      registry: registry.example.test
+      secrets:
+        probe/secret_probe_worker:
+          SOL_PROBE_SECRET:
+            authority: sol
+YAML
+(
+  export HERE="$root/internal/qualification/secrets"
+  export ROOT="$root"
+  export PROVIDER=aws
+  export LOG_DIR="$tmp/decl/log"
+  export SOL_TARGET="qual/aws/us-east-1"
+  export QUAL_UNIT="probe/secret_probe_worker"
+  export QUAL_PROBE_KEY="SOL_PROBE_SECRET"
+  export QUAL_TARGET_FILE="$tmp/decl/env.yml"
+  export QUAL_CLUSTER="qual-secret"
+  export QUAL_REGION="us-east-1"
+  # shellcheck source=/dev/null
+  source "$root/internal/qualification/secrets/common.sh"
+  # shellcheck source=/dev/null
+  source "$root/internal/qualification/secrets/aws.sh"
+  scenario_setup_workspace
+  scenario_write_contract
+) >/dev/null 2>"$tmp/decl/err"
+[ -s "$tmp/decl/log/target-facts.json" ] || { echo "durable declaration was not accepted" >&2; exit 1; }
+[ -s "$tmp/decl/log/contract.txt" ] || { echo "contract binding was not written" >&2; exit 1; }
+sed 's/shape: durable/shape: local/' "$tmp/decl/env.yml" >"$tmp/decl/local.yml"
+if (
+  export HERE="$root/internal/qualification/secrets" ROOT="$root" PROVIDER=aws
+  export LOG_DIR="$tmp/decl/log-local" SOL_TARGET="qual/aws/us-east-1"
+  export QUAL_UNIT="probe/secret_probe_worker" QUAL_PROBE_KEY="SOL_PROBE_SECRET"
+  export QUAL_TARGET_FILE="$tmp/decl/local.yml" QUAL_CLUSTER="qual-secret" QUAL_REGION="us-east-1"
+  # shellcheck source=/dev/null
+  source "$root/internal/qualification/secrets/common.sh"
+  # shellcheck source=/dev/null
+  source "$root/internal/qualification/secrets/aws.sh"
+  scenario_setup_workspace
+) >/dev/null 2>&1; then
+  echo "a local target was accepted by the provider-secret scenario" >&2
+  exit 1
+fi
+echo "provider-secret declaration validation passed"

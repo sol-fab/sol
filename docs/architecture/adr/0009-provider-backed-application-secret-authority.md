@@ -99,7 +99,8 @@ re-lists the store: a successful delete request is not absence.
 - A missing, unowned, unreadable, unversioned or pending-deletion authority fails the
   deploy before a Pod that needs it is applied.
 - AWS ASCP rotation polling is 2 minutes; the GKE Secret Manager add-on is enabled with a
-  2-minute rotation interval. A mounted file is refreshed by the driver, so an
+  2-minute rotation interval. The AWS add-on is pinned to `v3.1.4-eksbuild.3`, the catalog
+  build selected for Kubernetes 1.36, so the run records the provider build it used. A mounted file is refreshed by the driver, so an
   application that re-reads through `Sol_runtime.secret` observes the new value.
 - A process that captured the value at startup does not observe a rotation; explicit
   activation (rollout restart) remains the operator action. `sol secret set` writes and

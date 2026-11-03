@@ -87,8 +87,12 @@ module "eks" {
     # Provider-backed application secrets are mounted by the Secrets Store CSI driver and
     # the AWS provider. The add-on authenticates as the *pod's* EKS Pod Identity
     # association, never as the node, so a workload reads only the secrets its role grants.
+    # Pin the add-on version: a live qualification must run a reproducible provider build,
+    # and `most_recent` lets the EKS service silently move it. v3.1.4-eksbuild.3 is the
+    # EKS catalog version compatible with Kubernetes 1.36
+    # (aws-secrets-store-csi-driver-provider; chart 3.1.4).
     aws-secrets-store-csi-driver-provider = {
-      most_recent = true
+      addon_version = "v3.1.4-eksbuild.3"
     }
   }
 

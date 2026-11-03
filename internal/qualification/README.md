@@ -164,6 +164,11 @@ Existing live entry points and matrices retain their current authority.
   worker effect.
 - `gcp/live-qual.sh` — GCP lifecycle/application qualification and provider-backed absence
   inventory.
+- `secrets/` — provider-backed application-secret feature verification through the shared
+  scenario runner: CSI projection, no Kubernetes mirror, per-unit authorization and
+  revocation, rotation, missing-authority fail-closed behavior, namespace recovery and
+  provider-side absence. It is registered in the scenario catalog as implemented-unqualified;
+  it is not a release record until the canonical contract gains the claim family.
 - `record.sh` — emits a provider qualification record from the attempt ledger and an
   explicit evidence manifest using the verified `qualification-release` evaluator
   artifact. The harness owns the manifest's claim/evidence choices.

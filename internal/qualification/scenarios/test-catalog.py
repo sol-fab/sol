@@ -12,8 +12,10 @@ for scenario in catalog["scenarios"]:
     assert scenario["providers"]
     assert scenario["execution"]
     assert scenario["evidence"] == "behavioral"
-    for key in ("fixture", "harness"):
+    for key in ("fixture", "harness", "scenario"):
         if key in scenario:
             assert (root / scenario[key]).exists(), scenario[key]
     assert scenario["driver"] in ("scenario-runner", "provider-harness")
+    if scenario["driver"] == "provider-harness":
+        assert "harness" in scenario, scenario["id"]
 print("qualification scenario catalog is internally consistent")

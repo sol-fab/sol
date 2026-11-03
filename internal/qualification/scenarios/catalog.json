@@ -67,6 +67,34 @@
       ],
       "evidence": "behavioral",
       "status": "implemented-unqualified"
+    },
+    {
+      "id": "provider-secrets-aws",
+      "providers": [
+        "aws"
+      ],
+      "execution": [
+        "kubernetes"
+      ],
+      "fixture": "internal/qualification/secrets/fixture",
+      "scenario": "internal/qualification/secrets/aws-scenario.sh",
+      "driver": "scenario-runner",
+      "evidence": "behavioral",
+      "status": "implemented-unqualified"
+    },
+    {
+      "id": "provider-secrets-gcp",
+      "providers": [
+        "gcp"
+      ],
+      "execution": [
+        "kubernetes"
+      ],
+      "fixture": "internal/qualification/secrets/fixture",
+      "scenario": "internal/qualification/secrets/gcp-scenario.sh",
+      "driver": "scenario-runner",
+      "evidence": "behavioral",
+      "status": "implemented-unqualified"
     }
   ]
 }
