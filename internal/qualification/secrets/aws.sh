@@ -138,7 +138,7 @@ aws_capture_prior() {
 }
 
 hook_absence() {
-  local secret_status cluster_status rds_status vpc_status verdict=ABSENT
+  local secret_status cluster_status rds_status vpc_status verdict=PASS
   secret_status="$(aws secretsmanager describe-secret --secret-id "$1" --region "$(aws_region)" \
     >/dev/null 2>"$LOG_DIR/absence-secret.err" && echo PRESENT || echo ABSENT)"
   if grep -q 'ResourceNotFoundException' "$LOG_DIR/absence-secret.err" 2>/dev/null; then

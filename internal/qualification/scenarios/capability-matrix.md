@@ -14,7 +14,7 @@ attempt/evidence contract.
 | Resource inventory | Cross-cutting scenario requirement | Cross-cutting scenario requirement |
 | Independent absence verification | Cross-cutting scenario requirement | Cross-cutting scenario requirement |
 | External Secrets (ESO) | Existing scenario; NOT RUN | Existing scenario; NOT RUN |
-| Provider-backed secrets / CSI | Shared-runner scenario implemented; offline-tested; not run | Shared-runner scenario implemented; offline-tested; not run |
+| Provider-backed secrets / CSI | Shared-runner scenario implemented; offline-tested; plan-validated; not live | Shared-runner scenario implemented; offline-tested; plan-validated; not live |
 | Provider-backed application secrets (CSI, no mirror) | Implemented, offline-tested; live procedure prepared, NOT RUN | Implemented, offline-tested; live procedure prepared, NOT RUN |
 
 ## Secret-management scenarios
@@ -31,3 +31,14 @@ Kubernetes Secret mirror, per-unit authorization and revocation, rotation, missi
 fail-closed behavior, namespace recovery, and independent provider absence. It is a feature
 verification, not a release-promotion record until the canonical contract/producer work adds
 the claim family.
+
+## Status vocabulary
+
+- **implemented**: code exists and composes with the shared runner.
+- **offline-tested**: executable tests exercise composition, failure paths, and cleanup verdicts.
+- **plan-validated**: `--plan` runs the released-candidate and scenario checks without mutation.
+- **live-qualified**: behavioral evidence from a real provider run recorded through the attempt/evidence contract.
+
+The GCP Phase 1 and provider-secret scenarios are implemented, offline-tested, and
+plan-validated. None is live-qualified. The interrupted-apply entry remains
+catalogued only and is not executable through the shared runner.
