@@ -31,6 +31,13 @@ val verify_workload_secret
   -> Sol_cli_deployment_plan.service_spec
   -> (unit, string) result
 
+(** Refuse to overwrite a [SecretProviderClass] that Sol does not own. The object may be
+    absent; it is then created by the bundle's prerequisites. *)
+val verify_provider_secret_class_destination
+  :  ctx:Sol_cli_kube_destination.context
+  -> Sol_cli_deployment_plan.service_spec
+  -> (unit, string) result
+
 val verify_external_secret_ready
   :  ?timeout_s:float
   -> ?poll_s:float
@@ -103,6 +110,16 @@ val read_secret_key
   -> secret_name:string
   -> key:string
   -> (string, string) result
+
+(** Read one key from a Secret that must be Sol's, or [None] when the Secret or key is
+    absent. The provider migration uses this: it may adopt only a value Sol wrote, and it
+    refuses a same-named Secret with unknown ownership. *)
+val read_owned_key
+  :  ctx:Sol_cli_kube_destination.context
+  -> namespace:string
+  -> secret_name:string
+  -> key:string
+  -> (string option, string) result
 
 (** Atomically write the selected keys to a named Secret per namespace, preserving
     unrelated keys and refusing destinations Sol does not own or ESO writes. Errors

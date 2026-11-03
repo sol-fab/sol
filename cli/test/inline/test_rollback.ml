@@ -10,7 +10,7 @@ let service_specs_of_release ?config ?kafka release =
       in
       Ok (Some (Sol_cli_kubernetes_name.sanitize_name config.target.name, selection))
   in
-  Sol_cli_rollback.service_specs_of_release ?database ?kafka release
+  Sol_cli_rollback.service_specs_of_release ?database ?kafka ?config release
 ;;
 
 let k8s_name value =
@@ -3280,4 +3280,36 @@ esac
                 ~msg:"no cleanup call touches the survivor"
                 ""
                 (In_channel.with_open_text log In_channel.input_all)))
+;;
+
+(* A rollback restores the release's requirements against the current target's
+   authority. On a durable target a Sol-managed key is a provider reference, not a
+   Kubernetes Secret the deploy no longer writes. *)
+let%test "rollback projects provider-backed application authority" =
+  let base = Result.get_ok (Sol_cli_config.parse_target "prod/aws/us-east-1") in
+  let target = { base with shape = Some Sol_cli_profile.Durable } in
+  let config =
+    { Sol_cli_config.project = Some "myapp"; target; resources = []; services = [] }
+  in
+  let release =
+    release_with_workloads ~apply_mode:Sol_cli_release.Direct [ ledger_spec ]
+  in
+  match Sol_cli_rollback.service_specs_of_release ~config release with
+  | Error message -> Windtrap.fail message
+  | Ok specs ->
+    let spec =
+      List.find
+        (fun ((s : Sol_cli_deployment_plan.service_spec), _) ->
+           String.equal s.source_name "ledger_svc")
+        specs
+      |> fst
+    in
+    (match List.assoc_opt "DB_PASSWORD" spec.secret_sources with
+     | Some (Sol_cli_manifest.Provider { secret }) ->
+       Windtrap.equal
+         Windtrap.string
+         ~msg:"the restored source is the current provider authority"
+         "sol/prod/prod-aws-us-east-1/units/payments/ledger-svc/DB_PASSWORD"
+         (Sol_cli_provider_secret.reference secret)
+     | _ -> Windtrap.fail "rollback did not restore the provider authority")
 ;;

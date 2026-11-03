@@ -17,7 +17,7 @@ provider "google" {
 }
 
 locals {
-  secret_prefix = "sol-${var.environment}-"
+  secret_prefix = "sol-${var.environment}-${var.target_name}-"
   role_id       = "sol_${replace(var.environment, "-", "_")}_authorization"
 }
 
@@ -74,8 +74,9 @@ resource "google_secret_manager_secret_iam_member" "workload" {
     for grant in local.realized_grants : "${grant.unit}/${grant.resource}" => grant
   }
 
-  project   = var.project_id
-  secret_id = "sol-${var.environment}-${each.value.resource}"
+  project = var.project_id
+  # A secret grant's resource is <domain>/<unit>/<KEY>; the provider id flattens the path.
+  secret_id = "sol-${var.environment}-${var.target_name}-${replace(each.value.resource, "/", "-")}"
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${var.project_id}.svc.id.goog[${each.value.namespace}/${each.value.unit}]"
 }

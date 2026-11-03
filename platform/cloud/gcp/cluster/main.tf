@@ -98,6 +98,16 @@ resource "google_container_cluster" "main" {
     workload_pool = "${var.project_id}.svc.id.goog"
   }
 
+  # The Secret Manager add-on projects provider-backed values as mounted files. Its
+  # rotation interval is the add-on's, not a per-Pod watcher; the minimum is two minutes.
+  secret_manager_config {
+    enabled = true
+    rotation_config {
+      enabled           = true
+      rotation_interval = "2m"
+    }
+  }
+
   datapath_provider = "ADVANCED_DATAPATH"
 
   private_cluster_config {

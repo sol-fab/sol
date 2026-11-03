@@ -278,6 +278,166 @@ let read_authority ~ctx ~namespace ~target =
      | _ -> Error (unreadable "it does not carry the fields a Sol authority record has"))
 ;;
 
+(** The provider-backed password authority.
+
+    The DDL/DML passwords are the authority; the class Secrets are projections. Moving the
+    authority out of the migration namespace means a namespace or cluster replacement no
+    longer destroys the only record of a role password. The provider record carries the
+    same state machine as the former Kubernetes record: [pending] means persisted before
+    the Job that proves Postgres accepted the values, [established] means a successful Job
+    did. Only an established record authorizes a repair. *)
+
+let authority_json (authority : authority) =
+  `Assoc
+    [ "version", `Int 1
+    ; ( "state"
+      , `String (Sol_cli_database_setup_render.authority_state_to_string authority.state)
+      )
+    ; "ddl_password", `String authority.ddl_password
+    ; "dml_password", `String authority.dml_password
+    ]
+  |> Yojson.Safe.to_string
+;;
+
+let authority_of_json ~what text =
+  let open Result.Syntax in
+  let* json = Sol_cli_json.decode_sensitive ~what text in
+  let field name = Sol_cli_json.require ~what [ name ] Sol_cli_json.string json in
+  let* version = Sol_cli_json.require ~what [ "version" ] Sol_cli_json.int json in
+  if version <> 1
+  then Error (Printf.sprintf "%s has an unsupported record version %d" what version)
+  else
+    let* state = field "state" in
+    let* ddl_password = field "ddl_password" in
+    let* dml_password = field "dml_password" in
+    if Sol_cli_string.is_blank ddl_password || Sol_cli_string.is_blank dml_password
+    then Error (Printf.sprintf "%s carries an empty password" what)
+    else (
+      match state with
+      | "established" ->
+        Ok
+          { ddl_password
+          ; dml_password
+          ; state = Sol_cli_database_setup_render.Established
+          }
+      | "pending" ->
+        Ok { ddl_password; dml_password; state = Sol_cli_database_setup_render.Pending }
+      | _ -> Error (Printf.sprintf "%s has an unknown state %S" what state))
+;;
+
+let provider_authority_secret ~(config : Sol_cli_config.t) =
+  Sol_cli_secret_authority.database ~config ~part:"authority"
+;;
+
+let read_provider_authority ~(config : Sol_cli_config.t) ~target =
+  let module Provider = Sol_cli_secret_authority in
+  let* secret = provider_authority_secret ~config in
+  let what =
+    Printf.sprintf
+      "the provider password authority for target %s (%s)"
+      target
+      (Sol_cli_provider_secret.reference secret)
+  in
+  match Provider.observe secret with
+  | Error message ->
+    Error
+      (Printf.sprintf
+         "could not observe %s: %s. The authority is what makes a deploy a repair rather \
+          than a rotation, so Sol will not continue past a value it cannot observe."
+         what
+         message)
+  | Ok Provider.Missing -> Ok None
+  | Ok (Provider.Pending_deletion date) ->
+    Error
+      (Printf.sprintf
+         "%s is pending provider deletion (%s); restore it before deploying."
+         what
+         date)
+  | Ok (Provider.Unowned reason) ->
+    Error (Printf.sprintf "%s is not Sol-owned (%s); refusing to use it." what reason)
+  | Ok Provider.Owned ->
+    (match Provider.read secret with
+     | Error message ->
+       Error
+         (Printf.sprintf
+            "could not read %s: %s. Sol will not generate a replacement for a credential \
+             it cannot read."
+            what
+            message)
+     | Ok None ->
+       Error
+         (Printf.sprintf
+            "%s exists but has no version. Restore the recorded authority; Sol will not \
+             generate a replacement."
+            what)
+     | Ok (Some text) -> authority_of_json ~what text |> Result.map Option.some)
+;;
+
+let write_provider_authority ~(config : Sol_cli_config.t) ~target authority =
+  let* secret = provider_authority_secret ~config in
+  Sol_cli_secret_authority.write secret ~value:(authority_json authority)
+  |> Result.map_error (fun message ->
+    Printf.sprintf
+      "could not write the provider password authority for target %s (%s): %s"
+      target
+      (Sol_cli_provider_secret.reference secret)
+      message)
+;;
+
+(** The former Kubernetes authority is no longer read once the provider holds the record.
+    It is retired after the provider write so an interruption leaves the durable copy, not
+    only the namespace-scoped one. A failure is reported and does not fail the deploy: the
+    provider is authoritative, so a leftover Kubernetes copy is stale rather than a second
+    authority. *)
+let retire_legacy_authority ~ctx ~namespace ~target =
+  let module Render = Sol_cli_database_setup_render in
+  (* Only this target's verified record is retired. [read_authority] checks the target
+     annotation, the Sol ownership label, and both values; a same-named Secret with other
+     ownership is left alone. A read failure is reported and does not fail the deploy: the
+     provider authority is already the source of truth. *)
+  match read_authority ~ctx ~namespace ~target with
+  | Ok None -> ()
+  | Error reason ->
+    Sol_cli_report.warn
+      "the former Kubernetes password authority %s/%s was not retired: %s. The provider \
+       authority is still the source of truth."
+      namespace
+      (Render.authority_name target)
+      reason
+  | Ok (Some _) ->
+    (match
+       Sol_cli_kubectl.delete
+         ~ctx
+         ~resource:"secret"
+         ~name:(Render.authority_name target)
+         ~namespace
+     with
+     | Ok () -> ()
+     | Error error ->
+       Sol_cli_report.warn
+         "the former Kubernetes password authority %s/%s could not be removed (%s); the \
+          provider authority is still the source of truth"
+         namespace
+         (Render.authority_name target)
+         (Sol_cli_process.error_to_string error))
+;;
+
+(** Where the recorded passwords come from. This decision is separate from the effects: the
+    provider is authoritative when it has a record; an absent provider record may be
+    adopted from the legacy Kubernetes record; only two genuinely absent records generate
+    a new credential. *)
+type authority_source =
+  | Provider_record of authority
+  | Adopt_legacy of authority
+  | Generate
+
+let choose_authority ~provider ~legacy =
+  match provider, legacy with
+  | Some authority, _ -> Provider_record authority
+  | None, Some authority -> Adopt_legacy authority
+  | None, None -> Generate
+;;
+
 (** Which operation this deploy performs, and the passwords it uses.
 
     An ordinary deploy **reuses** what is recorded: it re-applies the passwords the
@@ -299,19 +459,50 @@ let read_authority ~ctx ~namespace ~target =
     Rotation is deliberately absent: PostgreSQL invalidates the previous password the moment
     [ALTER] runs, so it needs overlapping credentials or an explicitly disruptive procedure,
     and that is an operator decision rather than a side effect of a deploy. *)
-let resolve ~ctx ~namespace ~target =
+let resolve ~(config : Sol_cli_config.t) ~ctx ~namespace ~target =
   let open Result.Syntax in
-  let* recorded = read_authority ~ctx ~namespace ~target in
-  match recorded with
-  | Some { state = Sol_cli_database_setup_render.Established; ddl_password; dml_password }
-    -> Ok (Sol_cli_database_setup.Repair, ddl_password, dml_password)
-  | Some { state = Sol_cli_database_setup_render.Pending; ddl_password; dml_password } ->
-    Ok (Sol_cli_database_setup.Bootstrap, ddl_password, dml_password)
+  let* provider =
+    if Sol_cli_secret_authority.provider_backed config
+    then read_provider_authority ~config ~target
+    else Ok None
+  in
+  match provider with
+  | Some _ ->
+    (match choose_authority ~provider ~legacy:None with
+     | Provider_record
+         { state = Sol_cli_database_setup_render.Established; ddl_password; dml_password }
+       -> Ok (Sol_cli_database_setup.Repair, ddl_password, dml_password)
+     | Provider_record
+         { state = Sol_cli_database_setup_render.Pending; ddl_password; dml_password } ->
+       Ok (Sol_cli_database_setup.Bootstrap, ddl_password, dml_password)
+     | _ ->
+       (* [provider] is [Some], so [choose_authority] cannot return the other cases. *)
+       Error "the provider authority decision was inconsistent")
   | None ->
-    Ok
-      ( Sol_cli_database_setup.Bootstrap
-      , Sol_cli_database_setup_password.generate ()
-      , Sol_cli_database_setup_password.generate () )
+    (* Migration: the provider authority is absent. A legacy Kubernetes record may still
+       hold the passwords; adopt it before generating anything. *)
+    let* legacy = read_authority ~ctx ~namespace ~target in
+    (match choose_authority ~provider:None ~legacy with
+     | Provider_record _ | Generate ->
+       Ok
+         ( Sol_cli_database_setup.Bootstrap
+         , Sol_cli_database_setup_password.generate ()
+         , Sol_cli_database_setup_password.generate () )
+     | Adopt_legacy authority ->
+       let* () =
+         if Sol_cli_secret_authority.provider_backed config
+         then write_provider_authority ~config ~target authority
+         else Ok ()
+       in
+       (match authority.state with
+        | Sol_cli_database_setup_render.Established ->
+          Ok
+            (Sol_cli_database_setup.Repair, authority.ddl_password, authority.dml_password)
+        | Sol_cli_database_setup_render.Pending ->
+          Ok
+            ( Sol_cli_database_setup.Bootstrap
+            , authority.ddl_password
+            , authority.dml_password )))
 ;;
 
 let wait_interval_s = 2.
@@ -322,6 +513,7 @@ let wait_interval_s = 2.
 let wait_attempts = 150
 
 let run
+      ~config
       ~ctx
       ~namespace
       ~ca_namespaces
@@ -335,6 +527,7 @@ let run
       ~output_secrets
   =
   let module Render = Sol_cli_database_setup_render in
+  let provider_backed = Sol_cli_secret_authority.provider_backed config in
   (* Before anything is written: a master URL whose password cannot be carried by a
      service-file entry is refused here, not after the Job has been created. *)
   let* service_file = Render.service_file ~master_url in
@@ -413,8 +606,19 @@ let run
          let* () =
            match operation with
            | Sol_cli_database_setup.Bootstrap ->
-             apply_doc ~ctx ~what:"password authority" authority
-           | Sol_cli_database_setup.Repair -> Ok ()
+             if provider_backed
+             then
+               write_provider_authority
+                 ~config
+                 ~target
+                 { ddl_password; dml_password; state = Render.Pending }
+             else apply_doc ~ctx ~what:"password authority" authority
+           | Sol_cli_database_setup.Repair ->
+             if provider_backed
+             then (
+               retire_legacy_authority ~ctx ~namespace ~target;
+               Ok ())
+             else Ok ()
          in
          (* Before the Job: the script it consumes and the trust anchor it verifies the
          server against. The Job produces the roles; it does not receive the class
@@ -460,10 +664,21 @@ let run
            let* () =
              match operation with
              | Sol_cli_database_setup.Bootstrap ->
-               apply_doc
-                 ~ctx
-                 ~what:"password authority (established)"
-                 established_authority
+               if provider_backed
+               then (
+                 let* () =
+                   write_provider_authority
+                     ~config
+                     ~target
+                     { ddl_password; dml_password; state = Render.Established }
+                 in
+                 retire_legacy_authority ~ctx ~namespace ~target;
+                 Ok ())
+               else
+                 apply_doc
+                   ~ctx
+                   ~what:"password authority (established)"
+                   established_authority
              | Sol_cli_database_setup.Repair -> Ok ()
            in
            List.fold_left

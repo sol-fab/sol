@@ -470,3 +470,91 @@ let%test "verify: GCP serverless service-account identity is used" =
 let%test "verify: AWS serverless runtime role is accepted" =
   test_aws_serverless_identity_grant_passes ()
 ;;
+
+(* Isolation: the authorization verifier must observe the exact provider resource each
+   unit is granted. Two units that declare the same key receive different ARNs, and a
+   simulator decision for one says nothing about the other. *)
+let%test "verify: two units with the same key observe different AWS secret ARNs" =
+  let arns = ref [] in
+  let run argv =
+    (match
+       List.find_opt
+         (fun (index, arg) ->
+            String.equal arg "--resource-arns" && index + 1 < List.length argv)
+         (List.mapi (fun index arg -> index, arg) argv)
+     with
+     | Some (index, _) ->
+       (match List.nth_opt argv (index + 1) with
+        | Some arn -> arns := arn :: !arns
+        | None -> ())
+     | None -> ());
+    aws_run ~decision:"allowed" argv
+  in
+  let grants =
+    [ workload ~unit:"payments-api" [ "units/payments/payments-api/API_KEY" ]
+    ; workload ~unit:"checkout-api" [ "units/checkout/checkout-api/API_KEY" ]
+    ]
+  in
+  (match
+     Sol_cli_provider_capabilities.aws_effective_access
+       ~run
+       (target Sol_cli_provider.Aws)
+       grants
+   with
+   | Error message -> Windtrap.fail message
+   | Ok () -> ());
+  let arns = List.sort String.compare !arns in
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"each unit reads only its own unit-qualified authority"
+    [ "arn:aws:secretsmanager:us-east-1:123456789012:secret:sol/dev/dev-aws-us-east-1/units/checkout/checkout-api/API_KEY"
+    ; "arn:aws:secretsmanager:us-east-1:123456789012:secret:sol/dev/dev-aws-us-east-1/units/payments/payments-api/API_KEY"
+    ]
+    arns
+;;
+
+let%test "verify: a GCP unit gets the member for its own secret only" =
+  let target = target ~fields:[ "project_id", "my-project" ] Sol_cli_provider.Gcp in
+  let seen = ref [] in
+  let run argv =
+    if List.mem "get-iam-policy" argv
+    then (
+      let secret =
+        match List.nth_opt argv 3 with
+        | Some secret -> secret
+        | None -> ""
+      in
+      seen := secret :: !seen;
+      let member =
+        if Sol_cli_string.contains ~needle:"payments" secret
+        then {|"serviceAccount:my-project.svc.id.goog[payments/payments-api]"|}
+        else {|"serviceAccount:my-project.svc.id.goog[checkout/checkout-api]"|}
+      in
+      Ok
+        (Printf.sprintf
+           {|{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":[%s]}]}|}
+           member))
+    else Error ("unexpected gcloud command: " ^ String.concat " " argv)
+  in
+  let grants =
+    [ workload
+        ~unit:"payments-api"
+        ~namespace:"payments"
+        [ "units/payments/payments-api/API_KEY" ]
+    ; workload
+        ~unit:"checkout-api"
+        ~namespace:"checkout"
+        [ "units/checkout/checkout-api/API_KEY" ]
+    ]
+  in
+  (match Sol_cli_provider_capabilities.gcp_effective_access ~run target grants with
+   | Error message -> Windtrap.fail message
+   | Ok () -> ());
+  Windtrap.equal
+    (Windtrap.list Windtrap.string)
+    ~msg:"the verifier reads each unit's own secret id"
+    [ "sol-dev-dev-aws-us-east-1-units-checkout-checkout-api-API_KEY"
+    ; "sol-dev-dev-aws-us-east-1-units-payments-payments-api-API_KEY"
+    ]
+    (List.sort String.compare !seen)
+;;

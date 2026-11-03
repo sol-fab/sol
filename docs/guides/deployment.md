@@ -239,12 +239,24 @@ closed if it is not effective.
 infers a destination from the branch or the event (DEC-016). Workload secret values are never held
 by CI (FEAT-053). Seed Sol-owned values from a secret source through stdin, for example:
 `your-secret-tool get payment-api-key | sol secret set "$SOL_TARGET" payments/charge_svc/PAYMENT_API_KEY --from-stdin`.
-Database access needs no CI step: a unit that declares `uses: [app_db]` reads the target's
-`<target>-dml-creds` class Secret, and the migration Job reads `<target>-ddl-creds`, both delivered
-by the deploy from the target's binding — never from an operator-held `POSTGRES_URL`.
+`sol secret set` uses the target's provisioner/operator identity, not the deploy identity: it creates
+the provider authority container on first write and adds a version. Seed a newly declared key before
+the `authorize` job runs for it — the authorization root attaches resource-level IAM to an existing
+GCP secret, and the deploy verifies the authority before applying a workload.
+
+On a durable AWS/GCP target the value is authoritative in AWS Secrets Manager or GCP Secret Manager
+and is mounted into the workload as a file at `/var/run/sol/secrets/<KEY>`; no Kubernetes Secret
+mirrors it. On a local target it stays in the unit's Kubernetes Secret. Applications read the value
+through `Sol_runtime.secret KEY` (file first, then the environment variable), so existing
+environment-based consumption keeps working. Database access needs no CI step: a unit that declares
+`uses: [app_db]` reads the target's `<target>-dml-creds` class Secret, and the migration Job reads
+`<target>-ddl-creds`, both delivered by the deploy from the target's binding — never from an
+operator-held `POSTGRES_URL`. The generated DDL/DML passwords are authoritative in the provider store
+and a deploy is a repair, not a rotation.
+
 Every required key has an explicit `sol` or `external` authority mapping in the target declaration.
-Sol-owned values live in that unit's Kubernetes Secret. For an external key, declare a namespaced
-`SecretStore` and remote key under the same unit, for example:
+For an external key, declare a namespaced `SecretStore` and remote key under the same unit, for
+example:
 
 ```yaml
 production:
@@ -294,6 +306,27 @@ The generated workflow ships the direct form, with one `--image-ref` per service
 replace the deploy step with `sol deploy --emit-to`; the
 `platform/cloud/delivery/argocd/application.yaml` `Application` reconciles what it writes, and
 the rendered inputs are the same.
+
+### Provider secret identities
+
+The identity that runs `sol secret set` writes provider authority; the deploy identity only
+reads it and writes the PostgreSQL password record. Keep them distinct.
+
+- **AWS.** The generated provisioner policy manages `sol/*/units/*` and
+  `sol/*/databases/*` (create, tag, put, delete, list). The generated deploy policy reads
+  those paths and may `PutSecretValue` only under `sol/*/databases/*`. Workload roles are
+  narrowed per unit by the authorization root.
+- **GCP.** Sol does not create the project's deploy/provisioner service accounts. Grant the
+  provisioning/operator identity the Secret Manager permissions it needs to create,
+  delete, describe, list and add versions under the target's `sol-<env>-<target>-` prefix.
+  Grant the deploy service account `roles/secretmanager.secretAccessor` on that prefix and
+  `roles/secretmanager.secretVersionManager` on `sol-<env>-<target>-databases-*` so it can
+  record the PostgreSQL authority. The reconciler service account only sets IAM on the
+  declared secrets.
+- **Cluster add-ons.** AWS installs the `aws-secrets-store-csi-driver-provider` EKS
+  add-on; GKE enables the Secret Manager add-on with a two-minute rotation interval and
+  requires `secretmanager.googleapis.com`. Both use the workload's own identity: EKS Pod
+  Identity or GCP Workload Identity.
 
 ## 6. What you bring, and what Sol brings
 

@@ -84,6 +84,12 @@ module "eks" {
     eks-pod-identity-agent = {
       most_recent = true
     }
+    # Provider-backed application secrets are mounted by the Secrets Store CSI driver and
+    # the AWS provider. The add-on authenticates as the *pod's* EKS Pod Identity
+    # association, never as the node, so a workload reads only the secrets its role grants.
+    aws-secrets-store-csi-driver-provider = {
+      most_recent = true
+    }
   }
 
   eks_managed_node_groups = {

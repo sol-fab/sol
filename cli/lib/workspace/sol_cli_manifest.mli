@@ -1,5 +1,6 @@
 type secret_source = Sol_cli_secret_source.t =
   | Sol_managed
+  | Provider of { secret : Sol_cli_provider_secret.t }
   | External of
       { store : string
       ; key : string
@@ -133,6 +134,19 @@ val external_secret_doc
   :  secret_refs:(string * string * string) list
   -> ns:string
   -> name:string
+  -> Sol_cli_yaml.document
+
+(** The provider-backed keys in a unit's source map, and the CSI object that projects
+    them. The object is a prerequisite because a Pod must not start before its files can
+    be mounted; it is deliberately not a Kubernetes Secret. *)
+val provider_sources
+  :  secret_sources:(string * secret_source) list
+  -> (string * Sol_cli_provider_secret.t) list
+
+val provider_secret_class_doc
+  :  ns:string
+  -> name:string
+  -> sources:(string * Sol_cli_provider_secret.t) list
   -> Sol_cli_yaml.document
 
 type workload_shape =

@@ -7,6 +7,14 @@ not a full commit log — see `git log` for that.
 
 ## Unreleased
 
+- **Behavior change:** on durable AWS/GCP targets, ordinary Sol-managed application
+  values and the generated PostgreSQL DDL/DML passwords are authoritative in AWS
+  Secrets Manager or GCP Secret Manager instead of Kubernetes. Applications receive
+  provider-backed values as mounted files at `/var/run/sol/secrets` through a
+  `SecretProviderClass`; ordinary values are not mirrored into Kubernetes Secrets.
+  `Sol_runtime.secret` reads `<KEY>_FILE`, then `SOL_SECRETS_DIR/<KEY>`, then the
+  environment variable `KEY`, so existing environment-based consumers keep working.
+  Local targets, external secrets and the Kafka authority are unchanged.
 - **Behavior change:** image references use one validator,
   `Sol_cli_image_ref.is_digest`, which enforces Docker's repository-name grammar
   and a lowercase `sha256:<64 hex>` digest. Cloud Run now refuses short or

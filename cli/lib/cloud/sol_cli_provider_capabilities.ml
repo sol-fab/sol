@@ -558,6 +558,7 @@ let aws_authorization_root_vars target =
   Ok
     [ "region", target.region
     ; "environment", target.env
+    ; "target_name", Sol_cli_kubernetes_name.sanitize_name target.name
     ; "cluster_name", Option.value target.cluster_name ~default:""
     ; "reconciler_trust_principal_arn", trust
     ]
@@ -570,6 +571,7 @@ let gcp_authorization_root_vars target =
   Ok
     [ "region", target.region
     ; "environment", target.env
+    ; "target_name", Sol_cli_kubernetes_name.sanitize_name target.name
     ; "project_id", project
     ; "reconciler_trust_principal", trust
     ]
@@ -613,7 +615,12 @@ let aws_target_root_vars target grants serverless scheduler =
   let grants_json =
     `List (List.map Sol_cli_grant.target_grant_to_json grants) |> Yojson.Safe.to_string
   in
-  Ok (base @ scheduler_vars @ [ "grants", grants_json ])
+  Ok
+    (base
+     @ scheduler_vars
+     @ [ "target_name", Sol_cli_kubernetes_name.sanitize_name target.name
+       ; "grants", grants_json
+       ])
 ;;
 
 let gcp_serverless_root_vars target units =
@@ -657,7 +664,12 @@ let gcp_target_root_vars target grants serverless scheduler =
   let grants_json =
     `List (List.map Sol_cli_grant.target_grant_to_json grants) |> Yojson.Safe.to_string
   in
-  Ok (base @ scheduler_vars @ [ "grants", grants_json ])
+  Ok
+    (base
+     @ scheduler_vars
+     @ [ "target_name", Sol_cli_kubernetes_name.sanitize_name target.name
+       ; "grants", grants_json
+       ])
 ;;
 
 let gcp_authorization_reconciler target =
@@ -979,10 +991,11 @@ let aws_effective_access ~run (target : Sol_cli_config.target) workloads =
         | key :: rest ->
           let resource =
             Printf.sprintf
-              "arn:aws:secretsmanager:%s:%s:secret:sol/%s/%s"
+              "arn:aws:secretsmanager:%s:%s:secret:sol/%s/%s/%s"
               target.region
               account
               target.env
+              (Sol_cli_kubernetes_name.sanitize_name target.name)
               key
           in
           let* () =
@@ -1109,7 +1122,13 @@ let gcp_effective_access ~run (target : Sol_cli_config.target) workloads =
             workload.unit
       in
       let check_secret key =
-        let secret = Printf.sprintf "sol-%s-%s" target.env key in
+        let secret =
+          Printf.sprintf
+            "sol-%s-%s-%s"
+            target.env
+            (Sol_cli_kubernetes_name.sanitize_name target.name)
+            (String.map (fun c -> if c = '/' then '-' else c) key)
+        in
         let* members =
           Result.bind
             (run

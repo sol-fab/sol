@@ -150,12 +150,14 @@ The built-in `/metrics` endpoint also uses the `Auth.level` policy values above.
 (checked in order):
 
 1. `SOL_API_KEY_FILE` env var — path to a file containing the key.
-2. `SOL_API_KEY` env var — direct value; for local development only.
+2. `SOL_SECRETS_DIR/SOL_API_KEY` — the provider-independent mounted-file directory Sol
+   projects provider-backed values into.
+3. `SOL_API_KEY` env var — direct value; for local development only.
 
-Either source is read **once, when the service starts** (`Service.Make.run`), and an
+The source is read **once, when the service starts** (`Service.Make.run`), and an
 empty or unreadable file is a startup `Config` error. A rotated key therefore takes
-effect only after a restart, whichever source is used: `sol secret set` restarts the
-workloads for this reason.
+effect only after a restart, whichever source is used; `sol secret set` writes the value
+and does not restart a workload (activation is explicit).
 
 `Api_key` applies to the built-in `/metrics` endpoint (`metrics_auth`). It is **not**
 applied to application routes: an internal route authenticates with `` `Workload_identity``

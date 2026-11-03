@@ -3711,3 +3711,137 @@ let%test "bundle: the ExternalSecret is a prerequisite, not part of the workload
 ;;
 
 let%test "fn schedule timezone renders" = test_fn_schedule_timezone_renders ()
+
+(* Provider-backed application values are mounted files. The projection is a
+   SecretProviderClass prerequisite, and the workload must not reference a Kubernetes
+   Secret for them: mirroring an ordinary value back into the cluster is the mechanism
+   the provider authority replaces. *)
+let provider_secret ?(provider = Sol_cli_provider_secret.Aws) key =
+  let scope =
+    match provider with
+    | Sol_cli_provider_secret.Aws ->
+      Sol_cli_provider_secret.scope
+        ~provider
+        ~environment:"dev"
+        ~target:"dev-aws-us-east-1"
+        ~project:None
+        ~region:(Some "us-east-1")
+    | Sol_cli_provider_secret.Gcp ->
+      Sol_cli_provider_secret.scope
+        ~provider
+        ~environment:"dev"
+        ~target:"dev-gcp-us-central1"
+        ~project:(Some "example-project")
+        ~region:None
+  in
+  match scope with
+  | Error message -> Windtrap.fail message
+  | Ok scope ->
+    (match
+       Sol_cli_provider_secret.application
+         ~scope
+         ~domain:"payments"
+         ~unit:"charge-svc"
+         ~key
+     with
+     | Error message -> Windtrap.fail message
+     | Ok secret -> secret)
+;;
+
+let provider_spec ?(provider = Sol_cli_provider_secret.Aws) () =
+  let secret = provider_secret ~provider "API_KEY" in
+  { svc_spec with
+    secrets = [ "API_KEY", "" ]
+  ; secret_sources = [ "API_KEY", Sol_cli_manifest.Provider { secret } ]
+  }
+;;
+
+let render_bundle spec =
+  match
+    Sol_cli_deployment_render.render_spec
+      ~workspace:"myapp"
+      ~release_id:release_id_of_test
+      spec
+  with
+  | Error message -> Windtrap.fail ("render_spec failed: " ^ message)
+  | Ok bundle -> bundle
+;;
+
+let%test "provider-backed application values are mounted, never a Kubernetes Secret" =
+  let bundle = render_bundle (provider_spec ()) in
+  let prerequisites = bundle.Sol_cli_manifest.prerequisites_yaml in
+  let workload = bundle.Sol_cli_manifest.workload_yaml in
+  let all = prerequisites ^ workload in
+  assert_contains
+    "the projection is a prerequisite"
+    prerequisites
+    "kind: SecretProviderClass";
+  assert_contains "the AWS provider is named" prerequisites "provider: aws";
+  assert_contains
+    "the object is the per-unit provider secret"
+    prerequisites
+    "objectName: sol/dev/dev-aws-us-east-1/units/payments/charge-svc/API_KEY";
+  assert_contains "the file is named for the key" prerequisites "objectAlias: API_KEY";
+  assert_contains
+    "the pod's own identity is used, not a node role"
+    prerequisites
+    "usePodIdentity: \"true\"";
+  assert_absent "ordinary values are not mirrored" prerequisites "secretObjects";
+  assert_contains
+    "the pod mounts the CSI volume"
+    workload
+    "secretProviderClass: charge-svc-provider-secrets";
+  assert_contains
+    "the pod mounts a CSI driver"
+    workload
+    "driver: secrets-store.csi.k8s.io";
+  assert_contains "the key has the file contract" workload "name: API_KEY_FILE";
+  assert_contains "the directory is declared" workload "name: SOL_SECRETS_DIR";
+  assert_absent "no env value carries the secret" workload "secretKeyRef";
+  assert_absent "no unit Secret is projected" workload "kind: Secret";
+  assert_contains "the workload still renders" workload "kind: Deployment";
+  assert_contains "the plan carries no value" all "objectAlias: API_KEY"
+;;
+
+let%test "GKE projects the versioned resource name without a Kubernetes mirror" =
+  let bundle = render_bundle (provider_spec ~provider:Sol_cli_provider_secret.Gcp ()) in
+  let prerequisites = bundle.Sol_cli_manifest.prerequisites_yaml in
+  assert_contains "the GKE provider is named" prerequisites "provider: gke";
+  assert_contains
+    "the versioned resource name is the projection reference"
+    prerequisites
+    "resourceName: \
+     projects/example-project/secrets/sol-dev-dev-gcp-us-central1-units-payments-charge-svc-API_KEY/versions/latest";
+  assert_contains "the mount path is the key" prerequisites "path: API_KEY";
+  assert_absent "the GKE add-on cannot sync to Secrets" prerequisites "secretObjects"
+;;
+
+let%test "a non-provider Sol-managed key keeps the environment contract" =
+  let spec =
+    { svc_spec with
+      secrets = [ "API_KEY", "" ]
+    ; secret_sources = [ "API_KEY", Sol_cli_manifest.Sol_managed ]
+    }
+  in
+  let workload = (render_bundle spec).Sol_cli_manifest.workload_yaml in
+  assert_contains "the Kubernetes Secret is read" workload "secretKeyRef";
+  assert_contains "the unit Secret is named" workload "charge-svc-secrets";
+  assert_absent "no provider projection is added" workload "SecretProviderClass"
+;;
+
+let%test "a scheduled provider-backed consumer mounts the same files" =
+  let secret = provider_secret "API_KEY" in
+  let spec =
+    { fn_spec with
+      secrets = [ "API_KEY", "" ]
+    ; secret_sources = [ "API_KEY", Sol_cli_manifest.Provider { secret } ]
+    }
+  in
+  let workload = (render_bundle spec).Sol_cli_manifest.workload_yaml in
+  assert_contains "the CronJob mounts the file" workload "name: API_KEY_FILE";
+  assert_contains
+    "the CronJob names the provider class"
+    workload
+    "secretProviderClass: invoice-fn-provider-secrets";
+  assert_absent "the CronJob does not read a mirrored Secret" workload "secretKeyRef"
+;;

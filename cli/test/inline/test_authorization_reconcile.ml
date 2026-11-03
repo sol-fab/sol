@@ -13,6 +13,12 @@ let grant unit capability resource = { Sol_cli_authorization.unit; capability; r
 let stripe = grant "payments-api" "secret" "stripe"
 let legacy = grant "payments-api" "secret" "legacy"
 
+(* A secret grant is unit-qualified: two units that declare the same key must not share
+   one provider secret. *)
+let qualified unit key =
+  grant unit "secret" (Printf.sprintf "units/payments/%s/%s" unit key)
+;;
+
 let write_file path content =
   Result.get_ok (Sol_cli_fs.mkdir_p (Filename.dirname path));
   let oc = open_out path in
@@ -73,7 +79,11 @@ let test_desired_is_every_declared_secret_of_every_unit () =
     let model = model [ workload ~keys:[ "stripe"; "legacy" ] "payments-api" ] in
     match Sol_cli_authorization_reconcile.desired model with
     | Error message -> Windtrap.fail message
-    | Ok grants -> check_grants "one grant per declared secret" [ stripe; legacy ] grants)
+    | Ok grants ->
+      check_grants
+        "one grant per declared secret"
+        [ qualified "payments-api" "stripe"; qualified "payments-api" "legacy" ]
+        grants)
 ;;
 
 let test_desired_refuses_iam_wildcards () =
@@ -104,7 +114,7 @@ let test_desired_spans_the_whole_workspace () =
     | Ok grants ->
       check_grants
         "every unit is covered"
-        [ stripe; grant "checkout-api" "secret" "stripe" ]
+        [ qualified "payments-api" "stripe"; qualified "checkout-api" "stripe" ]
         grants)
 ;;
 

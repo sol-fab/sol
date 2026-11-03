@@ -223,6 +223,11 @@ let run target_name image_refs var_file vars =
          match authority with
          | Sol_cli_secret_source.Sol_managed ->
            "declared Sol-managed Kubernetes Secret; value state deferred"
+         | Provider { secret } ->
+           Printf.sprintf
+             "declared provider-backed authority %s (%s); value state deferred"
+             (Sol_cli_provider_secret.reference secret)
+             (Sol_cli_provider_secret.provider_to_string secret.provider)
          | External { store; key } ->
            Printf.sprintf
              "declared ESO SecretStore %s key %s; sync state deferred"

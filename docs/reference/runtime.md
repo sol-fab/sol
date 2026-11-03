@@ -99,15 +99,24 @@ wrong:
 
 ## Config and secret injection
 
-Application values are scoped to one `domain/unit`. A workload references its
-own Kubernetes Secret, named `<k8s-unit-name>-secrets`, through `envFrom`; for
-example, `payments/charge_svc` receives values from `charge-svc-secrets` in the
-`<workspace>-payments` namespace. `sol secret set TARGET payments/charge_svc/KEY`
-changes only that Secret. It never restarts or waits for a workload, including a
-Deployment, Rollout, worker or scheduled function. Explicit activation uses the
+Application values are scoped to one `domain/unit`. On a **local** target the
+workload references its own Kubernetes Secret, named `<k8s-unit-name>-secrets`,
+through `envFrom`; for example, `payments/charge_svc` receives values from
+`charge-svc-secrets` in the `<workspace>-payments` namespace. On a **durable
+AWS/GCP** target an ordinary Sol-managed value is authoritative in the provider
+store and is mounted as a file at `/var/run/sol/secrets/<KEY>`; the renderer adds
+`KEY_FILE` and `SOL_SECRETS_DIR`, and no Kubernetes Secret mirrors the value.
+`Sol_runtime.secret` resolves `<KEY>_FILE`, then `SOL_SECRETS_DIR/<KEY>`, then the
+environment variable `KEY`, so existing environment-based consumption keeps
+working wherever no file is projected. `Sol_runtime.secret_result` distinguishes
+an unreadable projection from an absent optional value.
+
+`sol secret set TARGET payments/charge_svc/KEY` changes only that value. It never
+restarts or waits for a workload, including a Deployment, Rollout, worker or
+scheduled function. Explicit activation uses the
 [workload's rollout tool](../deployment/credential-rotation.md#explicit-activation);
-an unchanged deploy does not adopt a changed environment value. It never writes
-the platform Secret or another unit's Secret.
+an unchanged deploy does not adopt a changed value. It never writes the platform
+Secret or another unit's value.
 
 Kafka credentials are resource-owned, not operator-written platform inputs. For a
 managed Kafka binding, the deploy reads the authoritative password from the
@@ -122,8 +131,11 @@ Database connections are not a platform input either: a unit that declares
 and the migration Job reads `<target>-ddl-creds`.
 
 **Where those Secrets live is the target's, not the application inventory's.** The namespace
-database operations run in — the migration Job, the password authority
-(`<target>-db-credentials`) and the DDL class Secret — is derived from the database identity:
+database operations run in — the migration Job and the DDL class Secret — is derived from the
+database identity. On a durable target the password authority itself is the
+provider record `sol/<env>/<target>/databases/authority`; the former
+`<target>-db-credentials` Kubernetes record is read only to migrate an existing
+target and is then retired:
 the target and the resource it acts on. It does not depend on which units a deploy selects, so
 omitting a domain from a scoped deploy cannot move a credential or split the Job from the Secret
 it reads.
@@ -166,8 +178,11 @@ workload readiness. `sol secret status` evaluates the same predicate without
 waiting.
 
 Sol verifies that each required value exists and is non-empty; it cannot verify
-that application code reads the environment variable by the expected name. A
-misspelled key in application code remains an application-level runtime issue.
+that application code reads the file or environment variable by the expected
+name. A misspelled key in application code remains an application-level runtime
+issue. A provider-backed key is delivered as the file `<KEY>`, and the
+environment variable `KEY` is not set for it; use `Sol_runtime.secret KEY` (or the
+`KEY_FILE` path) rather than reading `KEY` directly.
 
 ### `SOL_ENV` — the environment, for behaviour only
 
@@ -318,8 +333,8 @@ application-provided key source.
 
 The built-in `/metrics` endpoint can require the shared key: a unit that passes
 `` `Api_key`` as `metrics_auth` answers `GET /metrics` only to a caller presenting
-`x-api-key`, and `sol-svc` reads the expected value from `SOL_API_KEY_FILE` first, then
-`SOL_API_KEY` (once, at startup). A unit that does not protect `/metrics` does not require
+`x-api-key`, and `sol-svc` reads the expected value from `SOL_API_KEY_FILE`, then
+`SOL_SECRETS_DIR/SOL_API_KEY`, then `SOL_API_KEY` (once, at startup). A unit that does not protect `/metrics` does not require
 `SOL_API_KEY`; a unit that does declares it in its `sol.toml` `[infra.env] secrets`. Its
 target authority selects either the unit-scoped Sol-managed Secret or an ESO-managed
 `ExternalSecret`; Sol does not emit a placeholder value.

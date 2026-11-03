@@ -144,7 +144,9 @@ let run_locked ~lease ~ctx ~local ~database_selection ?config ~workspace ~facts 
            ( Sol_cli_kubernetes_name.sanitize_name config.target.name
            , Sol_cli_resource_binding.kafka_for_shape ~shape kafka ))
   in
-  let* restored = Sol_cli_rollback.service_specs_of_release ?database ?kafka release in
+  let* restored =
+    Sol_cli_rollback.service_specs_of_release ?database ?kafka ?config release
+  in
   (* The restored workloads read the current target's delivered Secret. Re-project it so
      a recreated delivery object or a changed current authority cannot leave rollback
      reading a stale credential. *)

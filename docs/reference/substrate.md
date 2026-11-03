@@ -225,7 +225,8 @@ objects for each service in your workspace:
 | Namespace | Always. One namespace per `<workspace>-<domain>` pair. |
 | ServiceAccount | Always. One per service, in its namespace. |
 | ConfigMap | Always. Contains Sol's platform defaults plus any `[infra.env] config` keys from `sol.toml`. |
-| Secret | Sol-owned values are written to each unit's `<unit>-secrets` object by `sol secret set TARGET <domain>/<unit>/<KEY>`. External values are delivered by a namespaced ESO `ExternalSecret` into `<unit>-external-secrets`; both deployment modes render the same references and no values or placeholder Secret objects. Sol platform Jobs use a separate `sol-secrets` object for target-level inputs. |
+| Secret | On a local target, Sol-owned values are written to each unit's `<unit>-secrets` object by `sol secret set TARGET <domain>/<unit>/<KEY>`. On a durable AWS/GCP target the value is authority in the provider store and is mounted through CSI; no Kubernetes Secret mirrors it. External values are delivered by a namespaced ESO `ExternalSecret` into `<unit>-external-secrets`; both deployment modes render the same references and no values or placeholder Secret objects. Sol platform Jobs use a separate `sol-secrets` object for target-level inputs. |
+| SecretProviderClass | For each unit with provider-backed values on a durable target. Projects exactly the declared provider secrets as files; it does not emit `secretObjects`. |
 | Deployment | For every `-svc` and `-worker`. |
 | Service (ClusterIP) | For every `-svc`. |
 | CronJob | For every `-fn`, using the `schedule:` field from `sol.toml`. |
@@ -238,11 +239,13 @@ without `--emit-to`) Sol applies them via `kubectl apply`. In GitOps mode
 Flux to apply.
 
 **Secret values are never in the rendered output:** Sol does not emit a unit's
-Sol-managed Secret, in either direct apply or GitOps emission, and there is no
-placeholder Secret to populate. Create it before the workload with
-`sol secret set <TARGET> <domain>/<unit>/<KEY>`; the workload's environment
-references the key, and the deploy fails closed when the Secret or a declared key
-is missing rather than applying a workload that cannot start.
+Sol-managed value, in either direct apply or GitOps emission, and there is no
+placeholder Secret to populate. Write it before the workload with
+`sol secret set <TARGET> <domain>/<unit>/<KEY>`; a local workload reads it from
+the unit Secret through its environment, while a durable AWS/GCP workload mounts
+it as a file and uses `Sol_runtime.secret` (or `KEY_FILE`). The deploy fails
+closed when the authority or a declared key is missing rather than applying a
+workload that cannot start.
 
 External authority keys are delivered by the External Secrets Operator. Sol
 renders a namespaced `ExternalSecret` into the bundle's prerequisites and applies

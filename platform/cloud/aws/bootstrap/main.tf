@@ -156,6 +156,32 @@ data "aws_iam_policy_document" "provisioner" {
     resources = ["arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:sol-kafka-*"]
   }
 
+  statement {
+    sid    = "ManageApplicationSecretAuthority"
+    effect = "Allow"
+    actions = [
+      "secretsmanager:CreateSecret", "secretsmanager:DeleteSecret",
+      "secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue",
+      "secretsmanager:PutSecretValue", "secretsmanager:UpdateSecret",
+      "secretsmanager:ListSecretVersionIds", "secretsmanager:UpdateSecretVersionStage",
+      "secretsmanager:TagResource", "secretsmanager:UntagResource",
+    ]
+    # `sol secret set` (the operator/provisioner identity) is the writer; workloads
+    # never receive these actions. Each environment's authorities live under its own
+    # path, and the per-unit workload policy narrows further.
+    resources = [
+      "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:sol/*/units/*",
+      "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:sol/*/databases/*",
+    ]
+  }
+
+  statement {
+    sid       = "ListApplicationSecretAuthority"
+    effect    = "Allow"
+    actions   = ["secretsmanager:ListSecrets"]
+    resources = ["*"]
+  }
+
 }
 
 data "aws_iam_policy_document" "cluster_access" {
@@ -187,6 +213,30 @@ data "aws_iam_policy_document" "deploy" {
     effect    = "Allow"
     actions   = ["eks:DescribeCluster", "eks:ListClusters"]
     resources = ["*"]
+  }
+
+  statement {
+    sid    = "ReadApplicationSecretAuthority"
+    effect = "Allow"
+    actions = [
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:DescribeSecret",
+      "secretsmanager:ListSecretVersionIds",
+    ]
+    # The deploy verifies that the authority exists and has a current version, and reads
+    # the target's database authority to make a deploy a repair rather than a rotation.
+    # It does not create or write application authorities; `sol secret set` does.
+    resources = [
+      "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:sol/*/units/*",
+      "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:sol/*/databases/*",
+    ]
+  }
+
+  statement {
+    sid       = "WriteDatabasePasswordAuthority"
+    effect    = "Allow"
+    actions   = ["secretsmanager:PutSecretValue"]
+    resources = ["arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:sol/*/databases/*"]
   }
 
   statement {

@@ -144,18 +144,40 @@ let run_set target address from_stdin from_file =
   let* config = load_target target in
   let* facts = Sol_cli_workspace_model.load_cwd () in
   let workspace = Sol_cli_workspace.current_name () in
-  let* ctx = destination_context config in
   let unit_address = address.domain ^ "/" ^ address.unit_name in
   let* _toml =
     check_set_permissions config facts unit_address address.unit_name address.key
   in
-  let* namespace, secret_name =
-    namespace_and_secret ~workspace ~domain:address.domain ~unit_name:address.unit_name
+  (* Resolve the destination before opening confidential input, so a refused address
+     never consumes a value from a pipe. *)
+  let* destination =
+    if Sol_cli_secret_authority.provider_backed config
+    then
+      Sol_cli_secret_authority.application ~config ~unit_address ~key:address.key
+      |> Result.map (fun secret -> `Provider secret)
+    else
+      let* ctx = destination_context config in
+      let* namespace, secret_name =
+        namespace_and_secret
+          ~workspace
+          ~domain:address.domain
+          ~unit_name:address.unit_name
+      in
+      Ok (`Kubernetes (ctx, namespace, secret_name))
   in
-  (* Resolve ownership and destination before opening confidential input. *)
   let* value = read_value ~from_stdin ~from_file in
   let* changed =
-    Sol_cli_secret.set_unit_key ~ctx ~namespace ~secret_name ~key:address.key ~value
+    match destination with
+    | `Provider secret ->
+      let* () = Sol_cli_secret_authority.ensure secret in
+      let* current = Sol_cli_secret_authority.read secret in
+      (match current with
+       | Some existing when String.equal existing value -> Ok false
+       | _ ->
+         let* () = Sol_cli_secret_authority.write secret ~value in
+         Ok true)
+    | `Kubernetes (ctx, namespace, secret_name) ->
+      Sol_cli_secret.set_unit_key ~ctx ~namespace ~secret_name ~key:address.key ~value
   in
   (* **Set writes; activation is explicit.** Sol updates the value and stops there. A
      running process keeps reading the value it started with until something restarts it,
@@ -244,6 +266,71 @@ let run_delete target address =
              "refusing to delete %s/%s: the recorded deployed release consumes this key"
              unit_address
              address.key)
+      else if Sol_cli_secret_authority.provider_backed config
+      then (
+        let* secret =
+          Sol_cli_secret_authority.application ~config ~unit_address ~key:address.key
+        in
+        (* Retire any pre-migration Kubernetes copy first. Deleting only the provider
+           authority would let the next deploy adopt the stale copy back. An address that
+           cannot name a namespace cannot name a legacy object either, so there is nothing
+           to retire in that case. *)
+        let* () =
+          match
+            namespace_and_secret
+              ~workspace
+              ~domain:address.domain
+              ~unit_name:address.unit_name
+          with
+          | Error _ -> Ok ()
+          | Ok (namespace, secret_name) ->
+            (match
+               Sol_cli_secret.delete_unit_key
+                 ~ctx
+                 ~namespace
+                 ~secret_name
+                 ~key:address.key
+             with
+             | Ok _ -> Ok ()
+             | Error message
+               when Sol_cli_string.contains ~needle:"NotFound" message
+                    || Sol_cli_string.contains ~needle:"not found" message ->
+               (* The namespace or Secret is already gone; there is no copy to resurrect. *)
+               Ok ()
+             | Error message ->
+               Error
+                 (Printf.sprintf
+                    "could not retire the Kubernetes copy before deleting the provider \
+                     authority: %s"
+                    message))
+        in
+        let* deleted =
+          match Sol_cli_secret_authority.observe secret with
+          | Error message -> Error message
+          | Ok Sol_cli_secret_authority.Missing -> Ok false
+          | Ok Sol_cli_secret_authority.Owned -> Sol_cli_secret_authority.delete secret
+          | Ok (Sol_cli_secret_authority.Pending_deletion date) ->
+            Error
+              (Printf.sprintf
+                 "%s/%s is pending provider deletion (%s); its absence is not established"
+                 unit_address
+                 address.key
+                 date)
+          | Ok (Sol_cli_secret_authority.Unowned reason) ->
+            Error
+              (Printf.sprintf
+                 "%s/%s is not a Sol-owned provider authority (%s); refusing to delete it"
+                 unit_address
+                 address.key
+                 reason)
+        in
+        Printf.printf
+          (if deleted
+           then "Provider secret authority deleted for %s/%s.\n%!"
+           else "No provider secret authority existed for %s/%s.\n%!")
+          unit_address
+          address.key;
+        Ok ())
       else
         let* namespace, secret_name =
           namespace_and_secret
@@ -311,25 +398,45 @@ let run_status target =
               ~expected_keys:external_keys
             |> Result.map Option.some
         in
-        Ok
-          (keys
-           |> List.map (fun key ->
-             let owner =
-               match Sol_cli_config.secret_authority config.target ~unit_address ~key with
-               | None -> "unmapped"
-               | Some Sol_cli_config.Sol_managed -> "sol"
-               | Some (Sol_cli_config.External _) -> "external"
-             in
-             let state =
-               match Sol_cli_config.secret_authority config.target ~unit_address ~key with
-               | Some Sol_cli_config.Sol_managed ->
-                 if List.mem key existing then "present" else "missing"
-               | Some (Sol_cli_config.External _) ->
-                 let state = Option.value external_state ~default:"unknown" in
-                 state ^ "; restart required or process freshness unverified"
-               | None -> "unmapped"
-             in
-             Printf.sprintf "%s/%s owner=%s state=%s" unit_address key owner state)))
+        keys
+        |> Sol_cli_result.map_list (fun key ->
+          let authority =
+            Sol_cli_config.secret_authority config.target ~unit_address ~key
+          in
+          let owner =
+            match authority with
+            | None -> "unmapped"
+            | Some Sol_cli_config.Sol_managed ->
+              if Sol_cli_secret_authority.provider_backed config
+              then "sol-provider"
+              else "sol"
+            | Some (Sol_cli_config.External _) -> "external"
+          in
+          let* state =
+            match authority with
+            | Some Sol_cli_config.Sol_managed ->
+              if Sol_cli_secret_authority.provider_backed config
+              then
+                let* secret =
+                  Sol_cli_secret_authority.application ~config ~unit_address ~key
+                in
+                let* observation = Sol_cli_secret_authority.observe secret in
+                match observation with
+                | Sol_cli_secret_authority.Owned ->
+                  let* value = Sol_cli_secret_authority.read secret in
+                  Ok
+                    (match value with
+                     | Some value when not (Sol_cli_string.is_blank value) -> "present"
+                     | Some _ | None -> "present, no readable version")
+                | observation ->
+                  Ok (Sol_cli_secret_authority.observation_to_string observation)
+              else Ok (if List.mem key existing then "present" else "missing")
+            | Some (Sol_cli_config.External _) ->
+              let state = Option.value external_state ~default:"unknown" in
+              Ok (state ^ "; restart required or process freshness unverified")
+            | None -> Ok "unmapped"
+          in
+          Ok (Printf.sprintf "%s/%s owner=%s state=%s" unit_address key owner state)))
   in
   List.iter (Printf.printf "%s\n%!") (List.concat rows);
   Ok ()

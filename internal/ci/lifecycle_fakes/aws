@@ -1,13 +1,112 @@
 #!/usr/bin/env bash
 set -eu
 printf 'aws %s\n' "$*" >>"$LIFECYCLE_LOG"
+  secret_state="${SOL_SECRET_STATE:-$LIFECYCLE_LOG.secrets}"
+  mkdir -p "$secret_state"
+
+  secret_name() {
+    prev=""
+    for arg in "$@"; do
+      case "$prev" in
+        --secret-id|--name) printf '%s' "$arg" ;;
+      esac
+      prev="$arg"
+    done
+  }
+
+  if [ "$1 $2" = "secretsmanager create-secret" ]; then
+    name="$(secret_name "$@")"
+    if [ -f "$secret_state/$name.tags" ]; then
+      printf 'An error occurred (ResourceExistsException) when calling the CreateSecret operation\n' >&2
+      exit 254
+    fi
+    mkdir -p "$(dirname "$secret_state/$name.tags")"
+    : >"$secret_state/$name.tags"
+    prev=""
+    for arg in "$@"; do
+      if [ "$prev" = "--tags" ]; then
+        printf '%s\n' "$arg" | sed -e 's/^Key=//' -e 's/,Value=/=/' >>"$secret_state/$name.tags"
+      fi
+      prev="$arg"
+    done
+    exit 0
+  fi
+
   if [ "$1 $2" = "secretsmanager describe-secret" ]; then
+    name="$(secret_name "$@")"
+    if [ -f "$secret_state/$name.tags" ]; then
+      printf '{"Name":"%s","Tags":[' "$name"
+      first=1
+      while IFS='=' read -r key value; do
+        [ -z "$key" ] && continue
+        [ "$first" = 0 ] && printf ','
+        printf '{"Key":"%s","Value":"%s"}' "$key" "$value"
+        first=0
+      done <"$secret_state/$name.tags"
+      printf ']}\n'
+      exit 0
+    fi
     if [ "${KAFKA_AUTHORITY_PRESENT:-}" = 1 ]; then
       printf '%s\n' "${4:?secret identity required}"
       exit 0
     fi
     printf "An error occurred (ResourceNotFoundException) when calling the DescribeSecret operation: Secrets Manager can't find the specified secret.\n" >&2
     exit 254
+  fi
+
+  if [ "$1 $2" = "secretsmanager put-secret-value" ]; then
+    name="$(secret_name "$@")"
+    [ -f "$secret_state/$name.tags" ] || {
+      printf "An error occurred (ResourceNotFoundException) when calling the PutSecretValue operation\n" >&2
+      exit 254
+    }
+    prev=""
+    for arg in "$@"; do
+      if [ "$prev" = "--secret-string" ]; then
+        mkdir -p "$(dirname "$secret_state/$name.value")"
+        cp "${arg#file://}" "$secret_state/$name.value"
+      fi
+      prev="$arg"
+    done
+    exit 0
+  fi
+
+  if [ "$1 $2" = "secretsmanager get-secret-value" ]; then
+    name="$(secret_name "$@")"
+    if [ -f "$secret_state/$name.value" ]; then
+      python3 - "$secret_state/$name.value" <<'PY'
+import json, sys
+print(json.dumps({"SecretString": open(sys.argv[1], encoding="utf-8").read()}))
+PY
+      exit 0
+    fi
+    printf "An error occurred (ResourceNotFoundException) when calling the GetSecretValue operation\n" >&2
+    exit 254
+  fi
+
+  if [ "$1 $2" = "secretsmanager delete-secret" ]; then
+    name="$(secret_name "$@")"
+    rm -f "$secret_state/$name.tags" "$secret_state/$name.value"
+    exit 0
+  fi
+
+  if [ "$1 $2" = "secretsmanager list-secrets" ]; then
+    python3 - "$secret_state" <<'PY'
+import glob, json, os, sys
+items = []
+for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.tags"))):
+    name = os.path.basename(path)[:-5]
+    tags = []
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if line:
+                key, value = line.split("=", 1)
+                tags.append({"Key": key, "Value": value})
+    items.append({"Name": name, "Tags": tags})
+print(json.dumps({"SecretList": items}))
+PY
+    exit 0
   fi
   if [ "$1 $2" = "elbv2 describe-load-balancers" ] &&
     case " $* " in *" --filters "*) true ;; *) false ;; esac; then

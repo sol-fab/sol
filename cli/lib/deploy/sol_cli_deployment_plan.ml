@@ -272,7 +272,7 @@ let external_secret_of_spec (spec : service_spec) : (string * string) option =
     List.exists
       (fun (_, source) ->
          match source with
-         | Sol_cli_manifest.Sol_managed -> false
+         | Sol_cli_manifest.Sol_managed | Provider _ -> false
          | External _ -> true
          | Target_kafka _ -> false)
       spec.secret_sources
@@ -301,9 +301,8 @@ let release_workload_of_spec (spec : service_spec) : Sol_cli_release_id.workload
       spec.secret_sources
       |> List.filter_map (fun (key, source) ->
         match source with
-        | Sol_cli_manifest.Sol_managed -> None
-        | External { store; key = remote_key } -> Some (key, store, remote_key)
-        | Target_kafka _ -> None)
+        | Sol_cli_manifest.Sol_managed | Provider _ | Target_kafka _ -> None
+        | External { store; key = remote_key } -> Some (key, store, remote_key))
   ; schedule = spec.schedule
   ; schedule_timezone = spec.schedule_timezone
   ; scheduled_concurrency =
@@ -464,6 +463,23 @@ let to_json t =
       ; "image", `String s.image
       ; "config", `Assoc (List.map (fun (k, v) -> k, `String v) s.config)
       ; "secret_keys", `List (List.map (fun (k, _) -> `String k) s.secrets)
+      ; ( "secret_sources"
+        , `List
+            (s.secret_sources
+             |> List.filter_map (fun (key, source) ->
+               match source with
+               | Sol_cli_manifest.Provider { secret } ->
+                 Some
+                   (`Assoc
+                       [ "key", `String key
+                       ; "authority", `String "provider"
+                       ; ( "provider"
+                         , `String
+                             (Sol_cli_provider_secret.provider_to_string secret.provider)
+                         )
+                       ; "reference", `String (Sol_cli_provider_secret.reference secret)
+                       ])
+               | Sol_managed | External _ | Target_kafka _ -> None)) )
       ; "build_secret_keys", `List (List.map (fun k -> `String k) s.build_secret_keys)
       ; ( "volumes"
         , `List

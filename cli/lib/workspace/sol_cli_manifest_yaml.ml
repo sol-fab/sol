@@ -24,6 +24,7 @@ type workload_shape =
    ([Sol_cli_secret_source]), and this renderer consumes it like any other consumer. *)
 type secret_source = Sol_cli_secret_source.t =
   | Sol_managed
+  | Provider of { secret : Sol_cli_provider_secret.t }
   | External of
       { store : string
       ; key : string
@@ -245,6 +246,7 @@ let secret_name_for_key ~name ~secret_sources ~db_dml_creds_name key =
     (match List.assoc_opt key secret_sources with
      | Some (External _) -> external_secret_name name
      | Some (Target_kafka { secret }) -> secret
+     | Some (Provider { secret }) -> Sol_cli_provider_secret.reference secret
      | Some Sol_managed | None -> workload_secret_name name)
 ;;
 
@@ -302,8 +304,135 @@ let external_secret_doc ~secret_refs ~ns ~name =
     ]
 ;;
 
+let provider_sources ~secret_sources =
+  secret_sources
+  |> List.filter_map (fun (key, source) ->
+    match source with
+    | Sol_cli_secret_source.Provider { secret } -> Some (key, secret)
+    | Sol_managed | External _ | Target_kafka _ -> None)
+;;
+
+(* Provider-backed values are mounted files, not env [secretKeyRef]s: a Kubernetes Secret
+   mirror is exactly what the provider authority replaces. The file's path is exported as
+   [KEY_FILE] so an application can use the same environment-variable name it already
+   reads while resolving the value from the projected file ([Sol_runtime.secret]). *)
+let provider_env ~secret_store_dir provider_sources =
+  (* [SOL_SECRETS_DIR] is the provider-independent name an application can rely on;
+     [KEY_FILE] preserves the per-key convention the framework already used. Neither
+     carries a value. *)
+  Y.map [ "name", Y.string "SOL_SECRETS_DIR"; "value", Y.string secret_store_dir ]
+  :: (provider_sources
+      |> List.map (fun (key, _) ->
+        Y.map
+          [ "name", Y.string (key ^ "_FILE")
+          ; ( "value"
+            , Y.string
+                (Filename.concat
+                   secret_store_dir
+                   (Sol_cli_provider_secret.normalized_key key)) )
+          ]))
+;;
+
+(** Where a provider-backed value is mounted. The path is a Sol contract: the renderer
+    sets [KEY_FILE] to this directory's [KEY] file, and [Sol_runtime.secret] defaults to
+    the same directory when an application reads a key without an explicit [_FILE]. *)
+let secret_store_dir = "/var/run/sol/secrets"
+
+let secret_store_volume_name = "sol-provider-secrets"
+
+(** The CSI object that projects a unit's provider-backed keys. It is a prerequisite: it
+    must exist before the Pod starts, and it is deliberately **not** a Kubernetes Secret.
+    [secretObjects] is not emitted, so ordinary values are never mirrored back into the
+    cluster. *)
+let provider_secret_class_doc ~ns ~name ~sources =
+  let provider = (snd (List.hd sources)).Sol_cli_provider_secret.provider in
+  let class_name = name ^ "-provider-secrets" in
+  let parameters =
+    match provider with
+    | Sol_cli_provider_secret.Aws ->
+      let objects =
+        sources
+        |> List.map (fun (key, secret) ->
+          Printf.sprintf
+            "- objectName: %s\n  objectType: secretsmanager\n  objectAlias: %s"
+            (Sol_cli_provider_secret.spc_reference secret)
+            (Sol_cli_provider_secret.normalized_key key))
+        |> String.concat "\n"
+      in
+      [ "objects", Y.literal (objects ^ "\n")
+      ; "enableSecretRotation", Y.quoted "true"
+      ; "rotationPollInterval", Y.quoted "2m"
+      ; (* The workload identity is the Pod Identity association, not a node role or an
+           IRSA annotation. ASCP defaults to IRSA, so this must be explicit. *)
+        "usePodIdentity", Y.quoted "true"
+      ]
+    | Sol_cli_provider_secret.Gcp ->
+      let secrets =
+        sources
+        |> List.map (fun (key, secret) ->
+          Printf.sprintf
+            "- resourceName: %s\n  path: %s"
+            (Sol_cli_provider_secret.spc_reference secret)
+            (Sol_cli_provider_secret.normalized_key key))
+        |> String.concat "\n"
+      in
+      [ "secrets", Y.literal (secrets ^ "\n") ]
+  in
+  resource
+    ~api_version:"secrets-store.csi.x-k8s.io/v1"
+    ~kind:"SecretProviderClass"
+    [ ( "metadata"
+      , metadata_with_labels
+          ~labels:[ "app.kubernetes.io/managed-by", "sol" ]
+          ~ns
+          ~name:class_name )
+    ; ( "spec"
+      , Y.map
+          [ "provider", Y.string (Sol_cli_provider_secret.spc_provider_name provider)
+          ; "parameters", Y.map parameters
+          ] )
+    ]
+;;
+
+let provider_secret_volume ~name =
+  Y.map
+    [ "name", Y.string secret_store_volume_name
+    ; ( "csi"
+      , Y.map
+          [ "driver", Y.string "secrets-store.csi.k8s.io"
+          ; "readOnly", Y.bool true
+          ; ( "volumeAttributes"
+            , Y.map [ "secretProviderClass", Y.string (name ^ "-provider-secrets") ] )
+          ] )
+    ]
+;;
+
+let provider_secret_mount =
+  Y.map
+    [ "name", Y.string secret_store_volume_name
+    ; "mountPath", Y.string secret_store_dir
+    ; "readOnly", Y.bool true
+    ]
+;;
+
+(** The volume, mount and [KEY_FILE] environment for a unit's provider-backed keys. One
+    definition serves Deployments and CronJobs, so a scheduled consumer and a long-running
+    one cannot disagree about where the same key is projected. *)
+let provider_projection ~name ~secret_sources =
+  match provider_sources ~secret_sources with
+  | [] -> [], [], []
+  | sources ->
+    ( [ provider_secret_volume ~name ]
+    , [ provider_secret_mount ]
+    , provider_env ~secret_store_dir sources )
+;;
+
 let secret_key_refs ~name ~secret_sources ~db_dml_creds_name secret_keys =
   secret_keys
+  |> List.filter (fun key ->
+    match List.assoc_opt key secret_sources with
+    | Some (Provider _) -> false
+    | _ -> true)
   |> List.map (fun key ->
     let secret_name = secret_name_for_key ~name ~secret_sources ~db_dml_creds_name key in
     Y.map
@@ -537,6 +666,9 @@ let pod_template
     |> List.map (fun (v : Sol_cli_toml.volume) ->
       Y.map [ "name", Y.string v.name; "mountPath", Y.string v.mount_path ])
   in
+  let provider_volumes, provider_mounts, provider_env =
+    provider_projection ~name ~secret_sources
+  in
   let projected_identity_volumes =
     projected_identities
     |> List.map (fun (p : Sol_cli_identity_projection.t) ->
@@ -638,10 +770,15 @@ let pod_template
        ]
        @ non_empty_list
            "volumeMounts"
-           (volume_mounts @ projected_identity_mounts @ kafka_ca_mount @ db_ca_mount)
+           (volume_mounts
+            @ provider_mounts
+            @ projected_identity_mounts
+            @ kafka_ca_mount
+            @ db_ca_mount)
        @ non_empty_list
            "env"
-           (secret_key_refs ~name ~secret_sources ~db_dml_creds_name secret_keys)
+           (secret_key_refs ~name ~secret_sources ~db_dml_creds_name secret_keys
+            @ provider_env)
        @ [ "envFrom", env_from ~name; "resources", resources ~cpu ~memory ]
        @ probes ~shape ~consumes_kafka ~readiness_path)
   in
@@ -657,6 +794,7 @@ let pod_template
            @ non_empty_list
                "volumes"
                (pod_volumes
+                @ provider_volumes
                 @ projected_identity_volumes
                 @ kafka_ca_volumes
                 @ db_ca_volumes)
@@ -989,6 +1127,9 @@ let cronjob_doc (workload : Scheduled_workload_spec.t) =
           ()
         |> List.map (fun (k, v) -> k, Y.quoted v))
   in
+  let provider_volumes, provider_mounts, provider_env =
+    provider_projection ~name ~secret_sources
+  in
   let projected_identity_mounts =
     projected_identities
     |> List.map (fun (p : Sol_cli_identity_projection.t) ->
@@ -1042,7 +1183,9 @@ let cronjob_doc (workload : Scheduled_workload_spec.t) =
       ]
   in
   let kafka_ca =
-    match kafka_ca_mounts @ db_ca_mounts @ projected_identity_mounts with
+    match
+      kafka_ca_mounts @ db_ca_mounts @ provider_mounts @ projected_identity_mounts
+    with
     | [] -> []
     | mounts -> [ "volumeMounts", Y.list mounts ]
   in
@@ -1083,7 +1226,12 @@ let cronjob_doc (workload : Scheduled_workload_spec.t) =
       ]
   in
   let kafka_ca_volumes =
-    match kafka_ca_volume_items @ db_ca_volume_items @ projected_identity_volumes with
+    match
+      kafka_ca_volume_items
+      @ db_ca_volume_items
+      @ provider_volumes
+      @ projected_identity_volumes
+    with
     | [] -> []
     | volumes -> [ "volumes", Y.list volumes ]
   in
@@ -1096,7 +1244,8 @@ let cronjob_doc (workload : Scheduled_workload_spec.t) =
        ]
        @ non_empty_list
            "env"
-           (secret_key_refs ~name ~secret_sources ~db_dml_creds_name secret_keys)
+           (secret_key_refs ~name ~secret_sources ~db_dml_creds_name secret_keys
+            @ provider_env)
        @ [ "envFrom", env_from ~name; "resources", resources ~cpu ~memory ]
        @ kafka_ca)
   in

@@ -58,15 +58,16 @@ let load_trimmed_file ~env path =
 ;;
 
 let api_key ~env =
-  match Sol_runtime.setting "SOL_API_KEY_FILE", Sol_runtime.setting "SOL_API_KEY" with
-  | Some path, _ ->
+  match Sol_runtime.secret_file ~name:"SOL_API_KEY" with
+  | Some path ->
     (match load_trimmed_file ~env path with
      | Ok "" -> Error (`Config ("API key file is empty: " ^ path))
      | Ok key -> Ok key
-     | Error msg ->
-       Error (`Config ("could not read SOL_API_KEY_FILE " ^ path ^ ": " ^ msg)))
-  | None, Some key -> Ok key
-  | None, None -> Error (`Config "SOL_API_KEY/SOL_API_KEY_FILE is not set")
+     | Error msg -> Error (`Config ("could not read API key file " ^ path ^ ": " ^ msg)))
+  | None ->
+    (match Sol_runtime.setting "SOL_API_KEY" with
+     | Some key -> Ok key
+     | None -> Error (`Config "SOL_API_KEY is not set"))
 ;;
 
 (* [Some token] when the declaration projected one for this peer, [None] when no
