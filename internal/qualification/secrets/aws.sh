@@ -291,3 +291,19 @@ hook_cleanup_extra() {
       --region "$(aws_region)" >/dev/null
   fi
 }
+
+# Read-only confirmation that the dedicated probe repository exists and is addressable
+# with the caller's credentials. Push permission is exercised only in prepare.
+hook_registry_preflight() {
+  local repo="${QUAL_PROBE_REPOSITORY:-secret-qual-probe}"
+  if aws ecr describe-repositories --repository-names "$repo" --region "$(aws_region)" \
+      >"$LOG_DIR/registry-repository.json" 2>"$LOG_DIR/registry-repository.err"; then
+    printf 'registry_repository=PASS name=%s\n' "$repo"
+  elif grep -q 'RepositoryNotFoundException' "$LOG_DIR/registry-repository.err" 2>/dev/null; then
+    printf 'registry_repository=MISSING name=%s\n' "$repo"
+    return 1
+  else
+    printf 'registry_repository=UNKNOWN name=%s\n' "$repo"
+    return 1
+  fi
+}

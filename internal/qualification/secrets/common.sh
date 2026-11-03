@@ -209,13 +209,14 @@ scenario_plan_preflight() {
     printf 'provider_preflight=SKIPPED target/tools are not ready\n' >>"$file"
     rc=1
   fi
-  printf 'probe_image=UNKNOWN not built in plan mode\n' >>"$file"
-  if [ -z "${QUAL_REGISTRY:-}" ]; then
-    printf 'registry_push=FAIL QUAL_REGISTRY is unset\n' >>"$file"
-    rc=1
+  if grep -qx 'provider_preflight=PASS' "$file"; then
+    if ( hook_registry_preflight ) >>"$file" 2>&1; then :; else rc=1; fi
   else
-    printf 'registry_push=UNKNOWN not attempted in plan mode\n' >>"$file"
+    printf 'registry_repository=SKIPPED provider preflight is not ready\n' >>"$file"
+    rc=1
   fi
+  printf 'probe_image=NOT-BUILT plan mode does not build; prepare does\n' >>"$file"
+  printf 'registry_push=UNKNOWN push permission is exercised in prepare\n' >>"$file"
   if [ "$rc" -eq 0 ]; then
     printf 'plan_preflight=PASS\n' >>"$file"
   else

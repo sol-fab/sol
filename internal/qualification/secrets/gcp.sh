@@ -196,3 +196,29 @@ hook_inventory() {
   fi
   return "$rc"
 }
+
+# Read-only confirmation that the Artifact Registry repository named by QUAL_REGISTRY
+# exists. The expected form is <region>-docker.pkg.dev/<project>/<repository>.
+hook_registry_preflight() {
+  local registry="${QUAL_REGISTRY:-}" region project repo
+  case "$registry" in
+    *-docker.pkg.dev/*/*)
+      region="${registry%%-docker.pkg.dev/*}"
+      project="${registry#*-docker.pkg.dev/}"
+      project="${project%%/*}"
+      repo="${registry##*/}"
+      ;;
+    *)
+      printf 'registry_repository=UNKNOWN format is not <region>-docker.pkg.dev/<project>/<repository>\n'
+      return 1
+      ;;
+  esac
+  if gcloud artifacts repositories describe "$repo" --location "$region" \
+      --project "$project" --format='value(name)' >"$LOG_DIR/registry-repository.txt" \
+      2>"$LOG_DIR/registry-repository.err"; then
+    printf 'registry_repository=PASS name=%s\n' "$repo"
+  else
+    printf 'registry_repository=UNKNOWN name=%s see registry-repository.err\n' "$repo"
+    return 1
+  fi
+}
