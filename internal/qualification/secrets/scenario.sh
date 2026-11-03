@@ -30,10 +30,22 @@ disks and load balancer; it excludes image egress and operator time. Tear down o
 completion or on any blocker; a stopped run still bills until teardown.
 No mutation is performed by --plan.
 PLAN
+  local candidate=0
+  SCENARIO_CANDIDATE_LINE="$(scenario_check_candidate_capability)" || candidate=1
+  if [ "$candidate" -eq 0 ]; then SCENARIO_CANDIDATE_STATUS=PASS; else SCENARIO_CANDIDATE_STATUS=FAIL; fi
+  if [ "${QUAL_PLAN_PREFLIGHT:-0}" != 1 ]; then
+    printf '%s\n' "$SCENARIO_CANDIDATE_LINE"
+  fi
+  if [ "${QUAL_PLAN_PREFLIGHT:-0}" = 1 ]; then
+    scenario_plan_preflight || return 1
+    return "$candidate"
+  fi
+  return "$candidate"
 }
 
 scenario_prepare() {
   require_env SOL_TARGET QUAL_TARGET_FILE QUAL_REGISTRY QUAL_CLUSTER QUAL_REGION
+  scenario_require_candidate_capability
   scenario_setup_workspace
   scenario_write_contract
   hook_preflight || return 1
@@ -59,12 +71,23 @@ scenario_execute() {
   scenario_revoke_and_restore || return 1
   scenario_missing_authority || return 1
   scenario_namespace_recovery || return 1
-  scenario_destroy_and_absence || return 1
+}
+
+# The shared runner owns the before/after inventory files and the cleanup verdict.
+# This scenario only supplies the provider reads; it does not write those files itself.
+scenario_inventory() {
+  hook_inventory
+}
+
+scenario_absence() {
+  local rc=0
+  hook_absence "${AUTHORITY_REFERENCE:-}" || rc=$?
+  scenario_record_phase verify "$rc"
+  return "$rc"
 }
 
 scenario_assert() {
-  [ -s "$LOG_DIR/absence.txt" ] || scenario_die "absence evidence is missing"
-  grep -q '^absence=PASS' "$LOG_DIR/absence.txt" || scenario_die "provider absence was not established"
+  [ -s "$LOG_DIR/inventory-before.txt" ] || scenario_die "inventory-before evidence is missing"
   [ -s "$LOG_DIR/projection.json" ] || scenario_die "projection evidence is missing"
   [ -s "$LOG_DIR/kubernetes-secret-absence.txt" ] || scenario_die "no-mirror evidence is missing"
   [ -s "$LOG_DIR/rotation.json" ] || scenario_die "rotation evidence is missing"
@@ -90,32 +113,34 @@ scenario_evidence() {
   printf 'contract_binding: %s\n' "$LOG_DIR/contract.txt"
   printf 'phases: %s\n' "$LOG_DIR/phase-verdicts.txt"
   printf 'evidence:\n'
-  for file in projection.json kubernetes-secret-absence.txt rotation.json \
-    authorization.json missing-failclosed.log recovery.txt namespace-recovery.txt \
-    absence.txt destroy.log; do
+  for file in inventory-before.txt inventory-after.txt projection.json \
+    kubernetes-secret-absence.txt rotation.json authorization.json \
+    missing-failclosed.log recovery.txt namespace-recovery.txt \
+    absence.txt cleanup-verdict.txt destroy.log; do
     [ -f "$LOG_DIR/$file" ] && printf '  %s\n' "$file"
   done
 }
 
 scenario_cleanup() {
   scenario_stop_port_forward
-  # The success path calls destroy itself so absence is part of scenario_assert. This
-  # trap is the interrupted/failed path; it must never destroy a target it did not
-  # create (a preflight refusal for an existing cluster is not ownership).
+  # The shared runner calls this once on success and once on the failure path. It never
+  # calls absence itself, and it must not destroy a target this scenario did not create
+  # (a preflight refusal for an existing cluster is not ownership).
   if [ "${SCENARIO_CLEANED:-0}" = 1 ]; then return 0; fi
   local rc=0
   if [ "${SCENARIO_OWNS_TARGET:-0}" = 1 ] && [ -n "${SOL:-}" ] && [ -n "${SOL_TARGET:-}" ]; then
     "$SOL" destroy "$SOL_TARGET" --apply >"$LOG_DIR/destroy.log" 2>&1 || rc=$?
   fi
-  if [ "${SCENARIO_OWNS_AUTHORITY:-0}" = 1 ] && [ -n "${AUTHORITY_REFERENCE:-}" ]; then
+  if [ "$rc" -eq 0 ] && [ "${SCENARIO_OWNS_TARGET:-0}" = 1 ]; then
+    hook_cleanup_extra || rc=$?
+  fi
+  if [ "$rc" -eq 0 ] && [ "${SCENARIO_OWNS_AUTHORITY:-0}" = 1 ] &&
+     [ "${SCENARIO_OWNS_TARGET:-0}" = 0 ] && [ -n "${AUTHORITY_REFERENCE:-}" ]; then
     hook_delete_authority "$AUTHORITY_REFERENCE" >"$LOG_DIR/authority-cleanup.log" 2>&1 || true
   fi
-  if [ "${SCENARIO_OWNS_TARGET:-0}" = 1 ] || [ "${SCENARIO_OWNS_AUTHORITY:-0}" = 1 ]; then
-    hook_absence "${AUTHORITY_REFERENCE:-}" >"$LOG_DIR/absence.txt" 2>&1 || rc=$?
-  fi
   scenario_record_phase destroy "$rc"
-  scenario_record_phase verify "$rc"
   SCENARIO_CLEANED=1
   return "$rc"
 }
+
 

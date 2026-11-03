@@ -28,7 +28,8 @@ procedures.
 
 1. **Explicit approval** for a billable live run. Do not run the execute step without it.
 2. A **released candidate** (`SOL_INSTALL` prefix, `SOL_CANDIDATE` document and its archive)
-   accepted by `sol-under-test.sh`; the candidate must contain #1915.
+   accepted by `sol-under-test.sh`; the candidate revision must be a descendant of #1915
+   (`c6ec37e7`). The scenario refuses a pre-#1915 candidate before preparing anything.
 3. A **fresh target** declared in a private environments file copied from
    [`target.example.yml`](target.example.yml). The target's cluster must not exist, and its
    `secrets` mapping must contain `probe/secret_probe_worker: SOL_PROBE_SECRET: { authority: sol }`.
@@ -43,9 +44,12 @@ procedures.
      and `secretmanager.googleapis.com` enabled.
 5. Registry push access to `QUAL_REGISTRY` (an existing ECR repository or Artifact Registry
    repository the cluster can pull). The scenario builds and pushes a tiny pinned BusyBox probe;
-   node pull permission must already exist.
+   node pull permission must already exist. For AWS, set `QUAL_PROBE_REPOSITORY` to the
+   **dedicated** ECR repository name (for example `secret-qual-probe`); the scenario removes
+   that repository during teardown so it does not appear as target residue.
 6. `kubectl`, `docker` (classic builder works; the scenario sets `DOCKER_BUILDKIT=0`), `jq`,
-   `curl`, `python3` with PyYAML, and the provider CLI authenticated to the intended identity.
+   `curl`, `python3` with PyYAML, `git` (candidate ancestry), and the provider CLI
+   authenticated to the intended identity.
 7. `script` from util-linux is not needed by this scenario, but the target's first whole-target
    deploy may use the same installation path as the provider harness; keep it available.
 8. **Qualifier permissions** beyond the target's deploy/provisioner identities:
@@ -80,9 +84,15 @@ export QUAL_REGION=us-east-1
 export QUAL_REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com
 export QUAL_WORKLOAD_IDENTITY=arn:aws:iam::123456789012:role/sol/qual/sol-qual-secret-probe-worker
 
-internal/qualification/scenarios/run.sh \
+QUAL_PLAN_PREFLIGHT=1 internal/qualification/scenarios/run.sh \
   --scenario internal/qualification/secrets/aws-scenario.sh --plan
 ```
+
+Plan mode resolves the candidate and target, checks the candidate capability, target
+declaration, required tools, provider identity/read permissions, and fresh-cluster
+precondition. It writes `plan-preflight.txt` with one `PASS`/`FAIL`/`UNKNOWN` line per
+check and exits non-zero if any check is not `PASS`. It never builds/pushes the image or
+mutates a provider.
 
 Execute (only after approval; this creates billable resources and mutates IAM through Sol):
 
@@ -103,6 +113,11 @@ reuses another attempt's evidence directory.
 
 The run succeeds only when all of these hold:
 
+- The shared runner records `inventory-before.txt` (after prepare, before the authority
+  and workload exist), `inventory-after.txt` (after execute, before teardown),
+  `absence.txt` (after teardown), and `cleanup-verdict.txt` (`cleanup=PASS|FAIL`,
+  `absence=PASS|FAIL|UNKNOWN`). The scenario supplies the provider reads; it does not
+  write those runner-owned files itself.
 - `phase-verdicts.txt` records `prepare`, `cloud`, `app`, `destroy`, `verify`.
 - `projection.json` has `correct_status=200` and `wrong_status=401`; `fingerprint` is a
   SHA-256 of the value, never the value.
@@ -118,7 +133,12 @@ The run succeeds only when all of these hold:
 - `missing-failclosed.log` is non-zero and names the missing provider authority;
   `recovery.txt` shows a successful re-seed and probe.
 - `namespace-recovery.txt` shows a successful redeploy after namespace deletion.
-- `absence.txt` starts with `absence=PASS` after independent provider reads.
+- `cleanup-verdict.txt` has `cleanup=PASS` and `absence=PASS`; `absence.txt` is the
+  independent provider read behind that verdict. On AWS it includes the authoritative
+  `internal/qualification/aws/absence.py` inventory (`full_inventory=ABSENT`) captured from
+  `aws-absence-prior.json`, not only the focused secret/cluster/RDS/VPC checks. Set
+  `QUAL_QUALIFIER_ARN` when the transport principal has an EKS access entry that must be
+  attributed.
 
 If any of these is missing, the run is not evidence and must not be recorded as a pass.
 The scenario deliberately refuses to turn an unreadable provider response into absence.
@@ -174,10 +194,10 @@ failed run still bills until teardown; the destroy is part of the run, not a fol
   `allowed` is not sufficient for the authorization cell.
 - The AWS add-on version is pinned and preflight re-reads the regional catalog. If the catalog
   no longer serves the pin, stop; do not fall back to `most_recent`.
-- The focused absence hook checks the authority, cluster, database and network/disk classes it
-  names. A promotion-eligible attempt must also attach the full provider inventory
-  (`internal/qualification/aws/absence.py` / the GCP harness absence phase) for the target;
-  the secret scenario is feature evidence, not a replacement for full teardown evidence.
+- AWS absence is the authoritative `internal/qualification/aws/absence.py` inventory,
+  captured before teardown and collected after cleanup; it is not only the focused
+  authority/cluster/RDS/VPC check. GCP still uses focused provider reads plus the GCP
+  harness's full absence phase when a promotion-eligible attempt needs it.
 
 ## Evidence contract and coordination
 
@@ -187,7 +207,9 @@ revision and SHA-256 of `internal/qualification/qualification-contract.json`; it
 modify that contract or the pinned evaluator. It is registered in
 `internal/qualification/scenarios/catalog.json` as `implemented-unqualified`.
 
-The canonical release producer (#1734/#1737) still needs to add the provider-secret claim
-family and map these evidence files into a provider record. Until that lands, treat this as
+The scenario now implements the shared runner's canonical evidence slots
+(`scenario_inventory`, `scenario_absence`, `cleanup-verdict.txt`) rather than only a
+scenario-local absence check. The canonical release producer (#1734/#1737) still needs to
+add the provider-secret claim family and map those evidence files into a provider record. Until that lands, treat this as
 feature verification only, not a promotion artifact. The catalog and the capability matrix
 name it separately from the ESO scenarios and the Kafka/application claims.

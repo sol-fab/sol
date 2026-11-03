@@ -152,3 +152,47 @@ hook_absence() {
   cat "$LOG_DIR/absence-detail.txt"
   [ "$verdict" = PASS ]
 }
+
+# Read-only target inventory for the shared runner's inventory-before/after files.
+hook_inventory() {
+  local ref="${AUTHORITY_REFERENCE:-}" rc=0
+  printf 'provider=gcp\nproject=%s\nregion=%s\ncluster=%s\n' \
+    "$(gcp_project)" "$(gcp_region)" "$(gcp_cluster)"
+  if gcloud container clusters describe "$(gcp_cluster)" --region "$(gcp_region)" \
+      --project "$(gcp_project)" >/dev/null 2>"$LOG_DIR/inventory-cluster.err"; then
+    printf 'gke-cluster=PRESENT\n'
+  elif grep -Eqi 'NOT_FOUND|not found' "$LOG_DIR/inventory-cluster.err" 2>/dev/null; then
+    printf 'gke-cluster=ABSENT\n'
+  else
+    printf 'gke-cluster=UNKNOWN\n'
+    rc=1
+  fi
+  if [ -z "$ref" ]; then
+    printf 'probe-authority=NOT-SEEDED\n'
+  elif gcloud secrets describe "$ref" --project "$(gcp_project)" \
+      >/dev/null 2>"$LOG_DIR/inventory-secret.err"; then
+    printf 'probe-authority=PRESENT\n'
+  elif grep -Eqi 'NOT_FOUND|not found' "$LOG_DIR/inventory-secret.err" 2>/dev/null; then
+    printf 'probe-authority=ABSENT\n'
+  else
+    printf 'probe-authority=UNKNOWN\n'
+    rc=1
+  fi
+  if gcloud sql instances list --project "$(gcp_project)" \
+      --filter="name~$(gcp_cluster)" --format='value(name)' >"$LOG_DIR/inventory-sql.txt" \
+      2>"$LOG_DIR/inventory-sql.err"; then
+    printf 'cloud-sql-target-owned=%s\n' "$(grep -c . "$LOG_DIR/inventory-sql.txt" || true)"
+  else
+    printf 'cloud-sql-target-owned=UNKNOWN\n'
+    rc=1
+  fi
+  if gcloud compute disks list --project "$(gcp_project)" \
+      --filter="name~$(gcp_cluster)" --format='value(name)' >"$LOG_DIR/inventory-disks.txt" \
+      2>"$LOG_DIR/inventory-disks.err"; then
+    printf 'disks-target-owned=%s\n' "$(grep -c . "$LOG_DIR/inventory-disks.txt" || true)"
+  else
+    printf 'disks-target-owned=UNKNOWN\n'
+    rc=1
+  fi
+  return "$rc"
+}
