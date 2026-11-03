@@ -32,6 +32,10 @@ procedures.
 3. A **fresh target** declared in a private environments file copied from
    [`target.example.yml`](target.example.yml). The target's cluster must not exist, and its
    `secrets` mapping must contain `probe/secret_probe_worker: SOL_PROBE_SECRET: { authority: sol }`.
+   The target's **durable installation** (state backend, provisioner/deploy identities, DNS
+   ownership and any provider bootstrap) must already be established; this scenario starts at
+   the disposable target and does not drive the first-run installation offer. Use the provider
+   harness's cloud phase (or the documented bootstrap) first if it is absent.
 4. Provider identities:
    - AWS: provisioner, cluster-access, deploy and operator roles plus the reconciler role used by
      `sol grants apply`; `QUAL_WORKLOAD_IDENTITY` is the probe unit's workload role ARN.
