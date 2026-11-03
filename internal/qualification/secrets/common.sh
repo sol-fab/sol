@@ -482,6 +482,7 @@ scenario_missing_authority() {
       --image-ref "secret_probe_worker=$PROBE_IMAGE" >"$LOG_DIR/recovery-deploy.log" 2>&1; then
     scenario_die "deploy did not recover after re-seeding the authority; see recovery-deploy.log"
   fi
+  kubectl -n "$NS" delete pod -l "app=$K8S" --wait=false >"$LOG_DIR/recovery-pod-restart.log" 2>&1 || true
   kubectl -n "$NS" rollout status "deployment/$K8S" --timeout="${QUAL_POD_TIMEOUT_S}s" \
     >"$LOG_DIR/recovery-rollout.log" 2>&1 || scenario_die "the probe did not recover after re-seeding"
   scenario_start_port_forward || scenario_die "could not re-establish the probe port-forward for recovery"
