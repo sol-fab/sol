@@ -383,12 +383,16 @@ hook_plan_preflight() {
   elif [ "$authz_verified" != 1 ]; then
     aws_plan_emit "reconciler_trust=UNKNOWN principal=$authz_trust role was not verified"
     rc=1
-  elif python3 - "$LOG_DIR/plan-role-authorization.json" "$authz_trust" <<'PY'
+  elif python3 - "$LOG_DIR/plan-role-authorization.json" "$authz_trust" "$authz_arn" <<'PY'
 import json
 import sys
 import urllib.parse
 
 role = json.load(open(sys.argv[1], encoding="utf-8")).get("Role", {})
+if role.get("Arn") != sys.argv[3]:
+    raise SystemExit("the role ARN does not match the target declaration")
+if role.get("Path") != "/sol/authorization/":
+    raise SystemExit("the reconciler role is not at /sol/authorization/")
 document = role.get("AssumeRolePolicyDocument", {})
 if isinstance(document, str):
     try:
