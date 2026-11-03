@@ -62,10 +62,10 @@ procedures.
      pod/namespace/port-forward actions.
    The scenario does not call `kubectl exec`; it reads the mounted file through the probe's
    HTTP endpoint over `port-forward`, so no container exec permission is needed.
-9. The target's reconciler identity must be available to `sol grants apply`. Export the same
-   authorization variables the provider harness uses (`SOL_AUTHORIZATION_ROLE_ARN` for AWS,
-   `SOL_AUTHORIZATION_SERVICE_ACCOUNT`/`SOL_WORKLOAD_IDENTITY_PROVIDER` for GCP) or already be
-   impersonating that identity. The scenario itself never writes IAM outside `sol grants`.
+9. The target's fenced reconciler identity (`aws.reconciler_role_arn`) must exist before
+   `sol grants apply`, and `aws.reconciler_trust_principal_arn` must name the qualifier (or
+   CI authorization) identity permitted to assume it. The scenario never writes IAM outside
+   `sol grants`.
 
 ## Commands
 
@@ -84,7 +84,6 @@ export QUAL_REGION=us-east-1
 export QUAL_REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com
 export QUAL_WORKLOAD_IDENTITY=arn:aws:iam::123456789012:role/sol/qual/sol-qual-secret-probe-worker
 export QUAL_PROBE_REPOSITORY=secret-qual-probe
-export SOL_AUTHORIZATION_ROLE_ARN=arn:aws:iam::123456789012:role/qual-reconciler
 # optional: set when an EKS access entry must be attributed by absence.py
 # export QUAL_QUALIFIER_ARN=arn:aws:iam::123456789012:role/qualifier
 
@@ -104,7 +103,7 @@ The statuses are:
 
 ```text
 candidate, target, target_state, target_registry, target_endpoint_cidr, tools
-aws_credentials, aws_account, aws_role_<role>, authorization_identity, workload_identity
+aws_credentials, aws_account, aws_role_<role>, reconciler_role, reconciler_trust, workload_identity
 cluster_fresh, ascp_catalog, secrets_read, registry_repository, registry_auth
 iam_simulate, absence_read, target_plan, probe_authority_absent, probe_image
 ```
@@ -137,6 +136,8 @@ Before `plan_preflight=PASS` can be expected:
 - an interactive AWS SSO/credential refresh for the target account;
 - the four target role ARNs in the private target, readable with `iam:GetRole`;
 - `QUAL_WORKLOAD_IDENTITY` matching the target account and `sol/<env>/` role path;
+- `aws.reconciler_role_arn` already bootstrapped and `aws.reconciler_trust_principal_arn`
+  naming the identity that may assume it;
 - a dedicated, existing ECR repository named by `QUAL_PROBE_REPOSITORY`
   (default `secret-qual-probe`) with push permission;
 - a fresh `sol-secret-qual` cluster (or another chosen cluster) and an empty probe authority;

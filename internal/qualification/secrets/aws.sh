@@ -359,17 +359,41 @@ hook_plan_preflight() {
     fi
   done
 
-  local authz_arn authz_name
-  authz_arn="${SOL_AUTHORIZATION_ROLE_ARN:-}"
+  local authz_arn authz_name authz_trust authz_verified=0
+  authz_arn="$(aws_plan_role_arn reconciler_role_arn)"
   authz_name="${authz_arn##*/}"
+  authz_trust="$(jq -r '.aws.reconciler_trust_principal_arn // empty' "$LOG_DIR/target-facts.json")"
   if [ -z "$authz_arn" ]; then
-    aws_plan_emit "authorization_identity=UNKNOWN set SOL_AUTHORIZATION_ROLE_ARN (or run already impersonating the reconciler)"
+    aws_plan_emit "reconciler_role=FAIL target declares no aws.reconciler_role_arn"
     rc=1
   elif aws iam get-role --role-name "$authz_name" --output json \
       >"$LOG_DIR/plan-role-authorization.json" 2>"$LOG_DIR/plan-role-authorization.err"; then
-    aws_plan_emit "authorization_identity=PASS arn=$authz_arn"
+    authz_verified=1
+    aws_plan_emit "reconciler_role=PASS arn=$authz_arn"
+  elif grep -Eq 'NoSuchEntity|not exist' "$LOG_DIR/plan-role-authorization.err" 2>/dev/null; then
+    aws_plan_emit "reconciler_role=FAIL arn=$authz_arn does not exist; bootstrap it before grants apply"
+    rc=1
   else
-    aws_plan_emit "authorization_identity=UNKNOWN arn=$authz_arn see plan-role-authorization.err"
+    aws_plan_emit "reconciler_role=UNKNOWN arn=$authz_arn see plan-role-authorization.err"
+    rc=1
+  fi
+  if [ -z "$authz_trust" ]; then
+    aws_plan_emit "reconciler_trust=FAIL target declares no aws.reconciler_trust_principal_arn"
+    rc=1
+  elif [ "$authz_verified" != 1 ]; then
+    aws_plan_emit "reconciler_trust=UNKNOWN principal=$authz_trust role was not verified"
+    rc=1
+  elif python3 - "$LOG_DIR/plan-role-authorization.json" "$authz_trust" <<'PY'
+import json, sys
+role = json.load(open(sys.argv[1], encoding="utf-8")).get("Role", {})
+document = role.get("AssumeRolePolicyDocument", {})
+if sys.argv[2] not in json.dumps(document):
+    raise SystemExit("the trust policy does not name the declared principal")
+PY
+  then
+    aws_plan_emit "reconciler_trust=PASS principal=$authz_trust"
+  else
+    aws_plan_emit "reconciler_trust=FAIL principal=$authz_trust is not in the role trust policy"
     rc=1
   fi
 
