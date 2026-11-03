@@ -130,7 +130,7 @@ aws_capture_prior() {
   python3 "$ROOT/internal/qualification/aws/absence.py" capture \
     --cluster "$(aws_cluster)" --region "$(aws_region)" --account "$account" \
     --prior "$LOG_DIR/aws-absence-prior.json" \
-    --registry-prefix "$QUAL_REGISTRY" --base-domain "$(aws_base_domain)" \
+    --registry-prefix "$QUAL_REGISTRY_PREFIX" --base-domain "$(aws_base_domain)" \
     --retention "$(aws_retention)" --attempt "$ATTEMPT" --target "$SOL_TARGET" \
     --candidate "$SOL_CANDIDATE" \
     ${QUAL_QUALIFIER_ARN:+--qualifier-arn "$QUAL_QUALIFIER_ARN"} \
@@ -191,7 +191,7 @@ PY
   elif python3 "$ROOT/internal/qualification/aws/absence.py" collect \
       --dir "$LOG_DIR/aws-absence" --prior "$LOG_DIR/aws-absence-prior.json" \
       --cluster "$(aws_cluster)" --region "$(aws_region)" --account "$(aws_account)" \
-      --registry-prefix "$QUAL_REGISTRY" --base-domain "$(aws_base_domain)" \
+      --registry-prefix "$QUAL_REGISTRY_PREFIX" --base-domain "$(aws_base_domain)" \
       --retention "$(aws_retention)" --attempt "$ATTEMPT" --target "$SOL_TARGET" \
       --candidate "$SOL_CANDIDATE" \
       ${QUAL_QUALIFIER_ARN:+--qualifier-arn "$QUAL_QUALIFIER_ARN"} \
@@ -295,7 +295,7 @@ hook_cleanup_extra() {
 # Read-only confirmation that the dedicated probe repository exists and is addressable
 # with the caller's credentials. Push permission is exercised only in prepare.
 hook_registry_preflight() {
-  local repo="${QUAL_PROBE_REPOSITORY:-secret-qual-probe}"
+  local repo="${QUAL_PROBE_REPOSITORY:-${WORKSPACE_NAME:-scenario-workspace}/secret-qual-probe}"
   if aws ecr describe-repositories --repository-names "$repo" --region "$(aws_region)" \
       >"$LOG_DIR/registry-repository.json" 2>"$LOG_DIR/registry-repository.err"; then
     printf 'registry_repository=PASS name=%s\n' "$repo"
@@ -559,7 +559,7 @@ PY
   # permits a target whose cluster does not exist yet.
   if python3 "$ROOT/internal/qualification/aws/absence.py" capture \
       --cluster "$(aws_cluster)" --region "$(aws_region)" --account "$target_account" \
-      --prior "$LOG_DIR/plan-absence-prior.json" --registry-prefix "$QUAL_REGISTRY" \
+      --prior "$LOG_DIR/plan-absence-prior.json" --registry-prefix "$QUAL_REGISTRY_PREFIX" \
       --base-domain "$(aws_base_domain)" --retention "$(aws_retention)" \
       --attempt "$ATTEMPT" --target "$SOL_TARGET" --candidate "$SOL_CANDIDATE" \
       --initial >"$LOG_DIR/plan-absence-capture.txt" 2>&1; then
