@@ -38,8 +38,10 @@ procedures.
    the disposable target and does not drive the first-run installation offer. Use the provider
    harness's cloud phase (or the documented bootstrap) first if it is absent.
 4. Provider identities:
-   - AWS: provisioner, cluster-access, deploy and operator roles plus the reconciler role used by
-     `sol grants apply`; `QUAL_WORKLOAD_IDENTITY` is the probe unit's workload role ARN.
+   - AWS: provisioner, cluster-access, deploy and operator roles plus the fenced reconciler
+     role used by `sol grants apply`. The reconciler must be bootstrapped once with the
+     provisioner; see [`aws-reconciler-bootstrap.md`](aws-reconciler-bootstrap.md).
+     `QUAL_WORKLOAD_IDENTITY` is the probe unit's workload role ARN.
    - GCP: deploy/provisioner service accounts, the reconciler service account, Workload Identity,
      and `secretmanager.googleapis.com` enabled.
 5. Registry push access to `QUAL_REGISTRY` (an existing ECR repository or Artifact Registry
@@ -66,6 +68,14 @@ procedures.
    `sol grants apply`, and `aws.reconciler_trust_principal_arn` must name the qualifier (or
    CI authorization) identity permitted to assume it. The scenario never writes IAM outside
    `sol grants`.
+
+## Reconciler bootstrap
+
+The reconciler role is not created by the scenario and cannot be created by the operation
+that assumes it. The one-time, non-circular bootstrap is documented in
+[`aws-reconciler-bootstrap.md`](aws-reconciler-bootstrap.md): a provisioner-authorized
+Terraform apply of the authorization root with an empty grant set, followed by
+`sol grants apply` as the fenced reconciler.
 
 ## Commands
 
@@ -104,6 +114,7 @@ The statuses are:
 ```text
 candidate, target, target_state, target_registry, target_endpoint_cidr, tools
 aws_credentials, aws_account, aws_role_<role>, reconciler_role, reconciler_trust, workload_identity
+state_bucket, state_lock, state_fresh
 cluster_fresh, ascp_catalog, secrets_read, registry_repository, registry_auth
 iam_simulate, absence_read, target_plan, probe_authority_absent, probe_image
 ```
@@ -134,17 +145,36 @@ Before `plan_preflight=PASS` can be expected:
 
 - a candidate whose revision contains #1915, extracted with its archive and `candidate.json`;
 - an interactive AWS SSO/credential refresh for the target account;
-- the four target role ARNs in the private target, readable with `iam:GetRole`;
+- the four target role ARNs in the private target, readable with `iam:GetRole`, plus
+  `aws.state_lock_table` and read access to the state bucket;
 - `QUAL_WORKLOAD_IDENTITY` matching the target account and `sol/<env>/` role path;
 - `aws.reconciler_role_arn` already bootstrapped and `aws.reconciler_trust_principal_arn`
   naming the identity that may assume it;
 - a dedicated, existing ECR repository named by `QUAL_PROBE_REPOSITORY`
   (default `secret-qual-probe`) with push permission;
-- a fresh `sol-secret-qual` cluster (or another chosen cluster) and an empty probe authority;
+- a fresh `sol-secret-qual` cluster (or another chosen cluster), an empty probe authority, and
+  no prior `cloud.tfstate`/`platform.tfstate` under the target's state prefix;
 - a specific `cluster_endpoint_cidr` for the operator egress; the target must not fall back
   to the non-production `0.0.0.0/0` default;
 - permission to simulate the workload policy and to run the read-only `absence.py` capture;
 - an established durable installation: state bucket, roles, DNS ownership, and bootstrap.
+
+## Checklist for plan_preflight=PASS
+
+- [ ] `SOL_INSTALL`/`SOL_CANDIDATE` name a candidate whose revision descends from #1915.
+- [ ] The target has `cluster_endpoint_cidr` set to the operator egress CIDR, not
+      `0.0.0.0/0`.
+- [ ] `state_bucket`, `aws.state_lock_table`, `registry`, and all target role ARNs are set.
+- [ ] `aws.reconciler_role_arn` names the bootstrapped fenced reconciler, and
+      `aws.reconciler_trust_principal_arn` names the qualifier/CI authorization principal.
+- [ ] `QUAL_WORKLOAD_IDENTITY` is the probe unit's account-matching `sol/<env>/` role ARN.
+- [ ] The dedicated ECR repository exists and the caller has push/authorization access.
+- [ ] AWS credentials resolve to the expected account.
+- [ ] The cluster is absent, the probe authority is absent, and no prior cloud/platform state
+      object exists under `sol/<target>/`.
+- [ ] The caller can read state/lock, EKS, Secrets Manager, ECR, IAM simulation, and the
+      `absence.py` inventory classes.
+- [ ] Docker, `kubectl`, provider CLI, `jq`, `curl`, `python3`+PyYAML, and `git` are present.
 
 ## Expected outcomes and evidence
 
@@ -179,6 +209,25 @@ The run succeeds only when all of these hold:
 
 If any of these is missing, the run is not evidence and must not be recorded as a pass.
 The scenario deliberately refuses to turn an unreadable provider response into absence.
+
+### Interrupted cleanup
+
+The shared runner writes `cleanup-verdict.txt` after `scenario_cleanup` and
+`scenario_absence`. If the process is killed before that point, the verdict is absent and the
+target may still exist. Do not infer absence from the missing file:
+
+1. Run `sol destroy "$SOL_TARGET" --apply`; rerun it if the first attempt is interrupted.
+   Preserve `destroy.log` and Terraform/provider errors.
+2. Delete the dedicated probe ECR repository if it still exists.
+3. Re-run the authoritative absence inventory with the attempt's
+   `aws-absence-prior.json` capture. If that prior file is missing, the full verdict is
+   UNKNOWN; do not manufacture a prior from the post-destroy account.
+4. Record `cleanup=FAIL` / `absence=UNKNOWN` until both commands establish their verdict.
+   Never delete the durable state bucket, lock table, DNS zone, or installation roles as part
+   of target cleanup. `sol destroy` also removes the target's fenced reconciler role; a new
+   attempt must re-run the reconciler bootstrap before `sol grants apply`.
+5. If `sol destroy` reports unresolved state, use its diagnostic output and the normal
+   Terraform recovery path; do not import or delete state by hand.
 
 ## Cleanup and independent absence
 

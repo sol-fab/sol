@@ -383,10 +383,22 @@ hook_plan_preflight() {
   elif [ "$authz_verified" != 1 ]; then
     aws_plan_emit "reconciler_trust=UNKNOWN principal=$authz_trust role was not verified"
     rc=1
-  elif python3 - "$LOG_DIR/plan-role-authorization.json" "$authz_trust" <<'PY'
-import json, sys
+  elif python3 - "$LOG_DIR/plan-role-authorization.json" "$authz_trust" "$authz_arn" <<'PY'
+import json
+import sys
+import urllib.parse
+
 role = json.load(open(sys.argv[1], encoding="utf-8")).get("Role", {})
+if role.get("Arn") != sys.argv[3]:
+    raise SystemExit("the role ARN does not match the target declaration")
+if role.get("Path") != "/sol/authorization/":
+    raise SystemExit("the reconciler role is not at /sol/authorization/")
 document = role.get("AssumeRolePolicyDocument", {})
+if isinstance(document, str):
+    try:
+        document = json.loads(urllib.parse.unquote(document))
+    except json.JSONDecodeError:
+        pass
 if sys.argv[2] not in json.dumps(document):
     raise SystemExit("the trust policy does not name the declared principal")
 PY
@@ -415,6 +427,54 @@ PY
     fi
   else
     aws_plan_emit "workload_identity=FAIL not an IAM role ARN: $workload_identity"
+    rc=1
+  fi
+
+  local state_bucket state_lock
+  state_bucket="$(jq -r '.state_bucket // empty' "$LOG_DIR/target-facts.json")"
+  state_lock="$(jq -r '.aws.state_lock_table // empty' "$LOG_DIR/target-facts.json")"
+  if [ -n "$state_bucket" ] && aws s3api head-bucket --bucket "$state_bucket" \
+      >"$LOG_DIR/plan-state-bucket.txt" 2>"$LOG_DIR/plan-state-bucket.err"; then
+    aws_plan_emit "state_bucket=PASS bucket=$state_bucket"
+  else
+    aws_plan_emit "state_bucket=UNKNOWN bucket=${state_bucket:-unset} see plan-state-bucket.err"
+    rc=1
+  fi
+  if [ -n "$state_lock" ] && aws dynamodb describe-table --table-name "$state_lock" \
+      --region "$(aws_region)" >"$LOG_DIR/plan-state-lock.json" 2>"$LOG_DIR/plan-state-lock.err"; then
+    aws_plan_emit "state_lock=PASS table=$state_lock"
+  elif [ -n "$state_lock" ] && grep -Eq 'ResourceNotFoundException|not exist' \
+      "$LOG_DIR/plan-state-lock.err" 2>/dev/null; then
+    aws_plan_emit "state_lock=FAIL table=$state_lock does not exist"
+    rc=1
+  else
+    aws_plan_emit "state_lock=UNKNOWN table=${state_lock:-unset} see plan-state-lock.err"
+    rc=1
+  fi
+  local state_key state_fresh=PASS state_fresh_detail=""
+  if [ -n "$state_bucket" ]; then
+    for state_key in "sol/$SOL_TARGET/cloud.tfstate" "sol/$SOL_TARGET/platform.tfstate"; do
+      if aws s3api head-object --bucket "$state_bucket" --key "$state_key" \
+          >/dev/null 2>"$LOG_DIR/plan-state-object.err"; then
+        state_fresh=FAIL
+        state_fresh_detail="prior state object exists: $state_key"
+        break
+      elif grep -Eq '404|Not Found|NoSuchKey' "$LOG_DIR/plan-state-object.err" 2>/dev/null; then
+        :
+      else
+        state_fresh=UNKNOWN
+        state_fresh_detail="cannot read $state_key"
+        break
+      fi
+    done
+    if [ "$state_fresh" = PASS ]; then
+      aws_plan_emit "state_fresh=PASS cloud/platform state keys are absent"
+    else
+      aws_plan_emit "state_fresh=${state_fresh} ${state_fresh_detail}"
+      rc=1
+    fi
+  else
+    aws_plan_emit "state_fresh=UNKNOWN no state bucket"
     rc=1
   fi
 

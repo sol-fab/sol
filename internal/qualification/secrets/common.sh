@@ -190,11 +190,13 @@ scenario_plan_preflight() {
   if ( scenario_setup_workspace && scenario_write_contract ) >>"$file" 2>&1; then
     printf 'target=PASS\n' >>"$file"
     target_state="$(jq -r '.state_bucket // empty' "$LOG_DIR/target-facts.json")"
+    local target_lock
+    target_lock="$(jq -r '.aws.state_lock_table // empty' "$LOG_DIR/target-facts.json")"
     target_registry="$(jq -r '.registry // empty' "$LOG_DIR/target-facts.json")"
-    if [ -n "$target_state" ]; then
-      printf 'target_state=PASS bucket=%s\n' "$target_state" >>"$file"
+    if [ -n "$target_state" ] && [ -n "$target_lock" ]; then
+      printf 'target_state=PASS bucket=%s lock_table=%s\n' "$target_state" "$target_lock" >>"$file"
     else
-      printf 'target_state=FAIL target declares no state_bucket\n' >>"$file"
+      printf 'target_state=FAIL bucket=%s lock_table=%s\n' "${target_state:-unset}" "${target_lock:-unset}" >>"$file"
       rc=1
     fi
     if [ -n "$target_registry" ] && [ "$target_registry" = "${QUAL_REGISTRY:-}" ]; then
@@ -205,10 +207,15 @@ scenario_plan_preflight() {
     fi
     local target_cidr
     target_cidr="$(jq -r '.cluster_endpoint_cidr // empty' "$LOG_DIR/target-facts.json")"
-    if [ -n "$target_cidr" ] && [ "$target_cidr" != "0.0.0.0/0" ]; then
+    if [ -n "$target_cidr" ] && [ "$target_cidr" != "0.0.0.0/0" ] &&
+       python3 - "$target_cidr" <<'PY' >/dev/null 2>&1
+import ipaddress, sys
+ipaddress.ip_network(sys.argv[1], strict=False)
+PY
+    then
       printf 'target_endpoint_cidr=PASS cidr=%s\n' "$target_cidr" >>"$file"
     else
-      printf 'target_endpoint_cidr=FAIL set a specific non-world cluster_endpoint_cidr\n' >>"$file"
+      printf 'target_endpoint_cidr=FAIL set a valid, specific non-world cluster_endpoint_cidr\n' >>"$file"
       rc=1
     fi
   else
