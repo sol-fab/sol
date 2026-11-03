@@ -32,11 +32,29 @@ if [ "$PLAN" = 1 ]; then
   exit 0
 fi
 : "${APPROVED:?set APPROVED=1 only after live qualification is authorized}"
-scenario_prepare
-cleanup() { scenario_cleanup || true; }
+declare -F scenario_inventory >/dev/null || { printf 'run: scenario must define scenario_inventory\n' >&2; exit 2; }
+declare -F scenario_absence >/dev/null || { printf 'run: scenario must define scenario_absence\n' >&2; exit 2; }
+cleanup() {
+  local rc=$?
+  if scenario_cleanup; then
+    if scenario_absence >"$LOG_DIR/absence.txt"; then
+      printf 'cleanup=PASS\nabsence=PASS\n' >"$LOG_DIR/cleanup-verdict.txt"
+    else
+      printf 'cleanup=PASS\nabsence=FAIL\n' >"$LOG_DIR/cleanup-verdict.txt"
+      rc=1
+    fi
+  else
+    printf 'cleanup=FAIL\nabsence=UNKNOWN\n' >"$LOG_DIR/cleanup-verdict.txt"
+    rc=1
+  fi
+  exit "$rc"
+}
 trap cleanup EXIT
+scenario_prepare
+scenario_inventory >"$LOG_DIR/inventory-before.txt"
 scenario_execute
 scenario_assert
+scenario_inventory >"$LOG_DIR/inventory-after.txt"
 scenario_evidence >"$LOG_DIR/scenario-evidence.txt"
 printf 'scenario passed: %s\n' "$SCENARIO"
 if [ -n "${SOL_QUALIFICATION_EVALUATOR:-}" ]; then
