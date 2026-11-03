@@ -61,9 +61,7 @@ YAML
   export QUAL_CLUSTER="qual-secret"
   export QUAL_REGION="us-east-1"
   # shellcheck source=/dev/null
-  source "$root/internal/qualification/secrets/common.sh"
-  # shellcheck source=/dev/null
-  source "$root/internal/qualification/secrets/aws.sh"
+  source "$root/internal/qualification/secrets/scenario.sh"
   scenario_setup_workspace
   scenario_write_contract
 ) >/dev/null 2>"$tmp/decl/err"
@@ -76,12 +74,48 @@ if (
   export QUAL_UNIT="probe/secret_probe_worker" QUAL_PROBE_KEY="SOL_PROBE_SECRET"
   export QUAL_TARGET_FILE="$tmp/decl/local.yml" QUAL_CLUSTER="qual-secret" QUAL_REGION="us-east-1"
   # shellcheck source=/dev/null
-  source "$root/internal/qualification/secrets/common.sh"
-  # shellcheck source=/dev/null
-  source "$root/internal/qualification/secrets/aws.sh"
+  source "$root/internal/qualification/secrets/scenario.sh"
   scenario_setup_workspace
 ) >/dev/null 2>&1; then
   echo "a local target was accepted by the provider-secret scenario" >&2
   exit 1
 fi
 echo "provider-secret declaration validation passed"
+
+# Cleanup ownership: a preflight refusal (no owned target/authority) must not destroy a
+# target the scenario did not create; an interrupted owned target must be destroyed.
+mkdir -p "$tmp/cleanup/log" "$tmp/cleanup/bin"
+cat >"$tmp/cleanup/bin/sol" <<'SOL'
+#!/bin/sh
+printf '%s\n' "$*" >>"$CALLS"
+SOL
+chmod +x "$tmp/cleanup/bin/sol"
+(
+  export HERE="$root/internal/qualification/secrets" ROOT="$root" PROVIDER=aws
+  export LOG_DIR="$tmp/cleanup/log" SOL_TARGET="qual/aws/us-east-1"
+  export SOL="$tmp/cleanup/bin/sol" CALLS="$tmp/cleanup/calls"
+  export QUAL_UNIT="probe/secret_probe_worker" QUAL_PROBE_KEY="SOL_PROBE_SECRET"
+  export QUAL_TARGET_FILE="$tmp/decl/env.yml" QUAL_CLUSTER="qual-secret" QUAL_REGION="us-east-1"
+  export SCENARIO_CLEANED=0 SCENARIO_OWNS_TARGET=0 SCENARIO_OWNS_AUTHORITY=0
+  # shellcheck source=/dev/null
+  source "$root/internal/qualification/secrets/scenario.sh"
+  scenario_cleanup
+) >/dev/null 2>"$tmp/cleanup/err1"
+[ ! -s "$tmp/cleanup/err1" ] || cat "$tmp/cleanup/err1" >&2
+[ ! -e "$tmp/cleanup/calls" ] || { echo "cleanup destroyed a target it did not own" >&2; exit 1; }
+(
+  export HERE="$root/internal/qualification/secrets" ROOT="$root" PROVIDER=aws
+  export LOG_DIR="$tmp/cleanup/log" SOL_TARGET="qual/aws/us-east-1"
+  export SOL="$tmp/cleanup/bin/sol" CALLS="$tmp/cleanup/calls-owned"
+  export QUAL_UNIT="probe/secret_probe_worker" QUAL_PROBE_KEY="SOL_PROBE_SECRET"
+  export QUAL_TARGET_FILE="$tmp/decl/env.yml" QUAL_CLUSTER="qual-secret" QUAL_REGION="us-east-1"
+  export SCENARIO_CLEANED=0 SCENARIO_OWNS_TARGET=1 SCENARIO_OWNS_AUTHORITY=0
+  # shellcheck source=/dev/null
+  source "$root/internal/qualification/secrets/scenario.sh"
+  hook_absence() { printf 'absence=PASS\n'; }
+  scenario_cleanup
+) >/dev/null 2>"$tmp/cleanup/err2"
+[ ! -s "$tmp/cleanup/err2" ] || cat "$tmp/cleanup/err2" >&2
+grep -q 'destroy qual/aws/us-east-1 --apply' "$tmp/cleanup/calls-owned" ||
+  { echo "cleanup did not destroy an owned target" >&2; exit 1; }
+echo "provider-secret cleanup ownership passed"

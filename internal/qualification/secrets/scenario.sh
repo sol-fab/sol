@@ -42,9 +42,9 @@ scenario_prepare() {
 }
 
 scenario_execute() {
-  scenario_seed_authority || return 1
   scenario_plan_json
   scenario_extract_plan
+  scenario_seed_authority || return 1
   hook_authority_metadata "$AUTHORITY_REFERENCE" || return 1
   scenario_cold_deploy || return 1
   scenario_apply_grants || return 1
@@ -100,16 +100,22 @@ scenario_evidence() {
 scenario_cleanup() {
   scenario_stop_port_forward
   # The success path calls destroy itself so absence is part of scenario_assert. This
-  # trap is the interrupted/failed path; it still destroys and records what it observed,
-  # but it cannot turn a failed run into a passing one.
+  # trap is the interrupted/failed path; it must never destroy a target it did not
+  # create (a preflight refusal for an existing cluster is not ownership).
   if [ "${SCENARIO_CLEANED:-0}" = 1 ]; then return 0; fi
   local rc=0
-  if [ -n "${SOL:-}" ] && [ -n "${SOL_TARGET:-}" ]; then
+  if [ "${SCENARIO_OWNS_TARGET:-0}" = 1 ] && [ -n "${SOL:-}" ] && [ -n "${SOL_TARGET:-}" ]; then
     "$SOL" destroy "$SOL_TARGET" --apply >"$LOG_DIR/destroy.log" 2>&1 || rc=$?
   fi
-  hook_absence "${AUTHORITY_REFERENCE:-}" >"$LOG_DIR/absence.txt" 2>&1 || rc=$?
+  if [ "${SCENARIO_OWNS_AUTHORITY:-0}" = 1 ] && [ -n "${AUTHORITY_REFERENCE:-}" ]; then
+    hook_delete_authority "$AUTHORITY_REFERENCE" >"$LOG_DIR/authority-cleanup.log" 2>&1 || true
+  fi
+  if [ "${SCENARIO_OWNS_TARGET:-0}" = 1 ] || [ "${SCENARIO_OWNS_AUTHORITY:-0}" = 1 ]; then
+    hook_absence "${AUTHORITY_REFERENCE:-}" >"$LOG_DIR/absence.txt" 2>&1 || rc=$?
+  fi
   scenario_record_phase destroy "$rc"
   scenario_record_phase verify "$rc"
   SCENARIO_CLEANED=1
   return "$rc"
 }
+

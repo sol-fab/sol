@@ -106,6 +106,8 @@ PY
   NS=""
   K8S=""
   SCENARIO_CLEANED=0
+  SCENARIO_OWNS_TARGET=0
+  SCENARIO_OWNS_AUTHORITY=0
   PORT_FORWARD_PID=""
 }
 
@@ -151,6 +153,7 @@ scenario_build_probe_image() {
 }
 
 scenario_seed_authority() {
+  SCENARIO_OWNS_AUTHORITY=1
   VALUE="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
   if ! printf '%s' "$VALUE" | "$SOL" secret set "$SOL_TARGET" "$QUAL_UNIT" "$QUAL_PROBE_KEY" \
       --from-stdin >"$LOG_DIR/secret-set.log" 2>&1; then
@@ -192,6 +195,9 @@ PY
 
 scenario_cold_deploy() {
   local rc=0
+  # From this point the target may have been created even if the command fails; the
+  # interrupted-run cleanup must destroy it. Preflight failures never reach here.
+  SCENARIO_OWNS_TARGET=1
   "$SOL" deploy "$SOL_TARGET" --registry "$QUAL_REGISTRY" \
     --image-ref "secret_probe_worker=$PROBE_IMAGE" \
     >"$LOG_DIR/cold-deploy.log" 2>&1 || rc=$?
