@@ -149,7 +149,7 @@ does not need `$SOL_HOME` or a Sol source checkout to build.
 | Kubernetes (EKS) | 1.36 | `platform/cloud/aws/cluster/variables.tf` (`kubernetes_version`) |
 | Kubernetes (GKE) | `REGULAR` release channel; the exact version is observed at run time and is not yet a pinned qualification input | `platform/cloud/gcp/cluster/main.tf` (`release_channel`) |
 | Provider module | AWS and GCP (`platform/cloud/aws/cluster/`, `platform/cloud/gcp/cluster/`) | `Sol_cli_provider_capabilities`, the provider roots |
-| Secrets Store CSI (AWS) | EKS add-on `aws-secrets-store-csi-driver-provider`, `most_recent`; rotation polling 2m; not yet a pinned qualification input | `platform/cloud/aws/cluster/main.tf` |
+| Secrets Store CSI (AWS) | EKS add-on `aws-secrets-store-csi-driver-provider` `v3.1.4-eksbuild.3`; rotation polling 2m; selected for Kubernetes 1.36 | `platform/cloud/aws/cluster/main.tf` |
 | Secret Manager add-on (GKE) | cluster add-on enabled with a 2m rotation interval; requires `secretmanager.googleapis.com` enabled and Workload Identity | `platform/cloud/gcp/cluster/main.tf` |
 | cert-manager chart | v1.14.4 | `platform/cloud/modules/platform/main.tf` |
 | ingress-nginx chart | 4.10.1 | `platform/shared/components.json` (`versions`) |
