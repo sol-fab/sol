@@ -64,3 +64,13 @@ if FAIL_ABSENCE=1 APPROVED=1 LOG_DIR="$tmp/log" ATTEMPT=test ATTEMPT_CLAIM=produ
 fi
 grep -q '^cleanup=PASS' "$tmp/log/cleanup-verdict.txt"
 grep -q '^absence=FAIL' "$tmp/log/cleanup-verdict.txt"
+
+# A plan that rejects the candidate must not be reported as a successful plan.
+cat >"$tmp/failing-plan.sh" <<'SCN'
+scenario_plan() { return 1; }
+SCN
+if LOG_DIR="$tmp/log" ATTEMPT=test ATTEMPT_CLAIM=production \
+  QUALIFICATION_LIB_DIR="$tmp/lib" "$root/internal/qualification/scenarios/run.sh" \
+  --scenario "$tmp/failing-plan.sh" --plan >/dev/null 2>&1; then
+  echo "runner reported success for a failing plan" >&2; exit 1
+fi
