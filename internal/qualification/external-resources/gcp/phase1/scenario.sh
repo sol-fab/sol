@@ -17,7 +17,9 @@ TAG="$(printf '%s' "${ATTEMPT:-extqual}" | tr '[:upper:]_' '[:lower:]-' | cut -c
 IMAGE="$REGION-docker.pkg.dev/$PROJECT/$REPOSITORY/extqual-gcp-fn:$TAG"
 
 scenario_plan() {
-  ( cd "$WS" && "$SOL" check )
+  # A plan that cannot validate the candidate's declaration is not a successful
+  # plan: the runner records plan=PASS only when every plan step passed.
+  ( cd "$WS" && "$SOL" check ) || return 1
   printf 'target=%s\njob=%s\nimage=%s\ntopic=%s\nsubscription=%s\nbucket=%s\n' \
     "$TARGET" "$JOB" "$IMAGE" "$TOPIC" "$SUBSCRIPTION" "$BUCKET"
 }
