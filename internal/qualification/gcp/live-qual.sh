@@ -252,6 +252,8 @@ YAML
 
 write_target() {
   local le_email="${LE_EMAIL:-$TEARDOWN_LE_EMAIL}"
+  local probe_omit=true
+  if [ "${MIXED:-0}" = 1 ] && [ "${MIXED_CLOUD:-0}" != 1 ]; then probe_omit=false; fi
   mkdir -p "$(dirname "$TARGET_FILE")"
   if [ -f "$TARGET_FILE" ] && ! owns_target_file; then
     say "REFUSING: $TARGET_FILE exists and was not written by this harness; move it aside first."
@@ -297,7 +299,7 @@ $(production_target_fields)
         fulfilment_worker: {}
         order_svc: {}
         fulfillment_worker: {}
-        probe_fn: {omit: $(if [ "$MIXED" = 1 ]; then printf false; else printf true; fi)}
+        probe_fn: {omit: $probe_omit}
         probe_ts_fn: {omit: true}
         charge_svc:
           omit: true

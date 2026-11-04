@@ -250,7 +250,10 @@ hook_gcp_destroy_evidence() {
 }
 
 hook_gcp_cloud_precondition() {
-  write_target
+  # The bootstrap deploy has no application digests to name. A mixed target's
+  # serverless component would fail the cold deploy at the digest gate, so the
+  # bootstrap target omits it; the app phase rewrites the full target.
+  MIXED_CLOUD=1 write_target
   run cloud-check "$SOL" check || return 1
 }
 
@@ -323,7 +326,11 @@ hook_gcp_cloud_prestate() {
   start_cluster_kubeconfig_waiter
 }
 
-hook_gcp_cloud_post_apply() { :; }
+hook_gcp_cloud_post_apply() {
+  if [ "${MIXED:-0}" = 1 ]; then
+    write_target
+  fi
+}
 
 hook_gcp_cloud_not_reconciled() {
   INSTALL_STATE=failed

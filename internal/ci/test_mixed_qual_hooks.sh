@@ -113,4 +113,27 @@ MIXED=1 TARGET_FILE="$TARGET_FILE" require_mixed_target
 MIXED=0 TARGET_FILE="$work/kubernetes-target.yml" require_mixed_target
 echo "mixed target disposition guard passed"
 
+# The AWS cloud bootstrap deploy has no image digests yet, so a mixed target's
+# serverless unit must be omitted for that deploy and restored for app.
+cat >"$work/cloud-target.yml" <<'YAML'
+live:
+  targets:
+    aws/us-east-1:
+      execution: mixed
+      services:
+        probe_fn: {}
+        orders_svc: {}
+YAML
+MIXED=1 TARGET_FILE="$work/cloud-target.yml" TARGET=live/aws/us-east-1 \
+  mixed_omit_serverless_target
+python3 - "$work/cloud-target.yml" <<'PY'
+import sys, yaml
+document = yaml.safe_load(open(sys.argv[1]))
+target = document["live"]["targets"]["aws/us-east-1"]
+assert target["execution"] == "mixed"
+assert target["services"]["probe_fn"] == {"omit": True}, target["services"]
+assert target["services"]["orders_svc"] == {}, target["services"]
+PY
+echo "mixed bootstrap omits the serverless component"
+
 echo "mixed qualification hooks passed"

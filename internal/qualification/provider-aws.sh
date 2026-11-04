@@ -397,20 +397,58 @@ hook_aws_cloud_precondition() {
 hook_aws_cloud_plan_only() { return 1; }
 hook_aws_cloud_plan() { :; }
 
+# The bootstrap deploy has no application digests: the ECR repositories it creates do
+# not exist until it runs, and a serverless unit requires a digest. For a mixed target,
+# temporarily omit the serverless component so the Kubernetes/platform reconcile and
+# the repository creation can complete. `app` rewrites the full target and deploys the
+# function with the digests published from `prepare`.
+mixed_omit_serverless_target() {
+  [ "${MIXED:-0}" = 1 ] || return 0
+  python3 - "$TARGET_FILE" "$TARGET" <<'PY'
+import sys, yaml
+path, target = sys.argv[1], sys.argv[2]
+parts = target.split("/")
+if len(parts) != 3:
+    raise SystemExit(f"target {target!r} is not <env>/<provider>/<region>")
+env, provider, region = parts
+with open(path, encoding="utf-8") as handle:
+    document = yaml.safe_load(handle) or {}
+try:
+    declared = document[env]["targets"][f"{provider}/{region}"]
+except (KeyError, TypeError) as error:
+    raise SystemExit(f"target file does not declare {target}: {error}")
+services = declared.setdefault("services", {})
+services.setdefault("probe_fn", {})["omit"] = True
+with open(path, "w", encoding="utf-8") as handle:
+    yaml.safe_dump(document, handle, sort_keys=False)
+PY
+}
+
 # The cloud cold deploy. AWS builds in prepare and publishes in cloud before this deploy,
 # so it names the published digests when they exist and nothing for a cold account whose
 # artifact gate has not run yet. The app's workload-moving deploy pins digests separately.
 hook_aws_cloud_cold_deploy() {
-  local name="$1" image_ref_args
+  local name="$1" image_ref_args backup="$LOG_DIR/cloud-target.before-serverless.yml" rc=0
   say "$name"
   image_ref_args="$(app_image_ref_args)"
+  if [ "${MIXED:-0}" = 1 ]; then
+    cp "$TARGET_FILE" "$backup" || return 1
+    if ! mixed_omit_serverless_target; then
+      mv "$backup" "$TARGET_FILE"
+      return 1
+    fi
+  fi
   local command="cd '$WORKSPACE' && exec '$SOL' deploy '$TARGET' --registry '$ECR_REGISTRY' $image_ref_args"
   if command -v script >/dev/null 2>&1; then
     printf 'y\n' | timeout "$PHASE_TIMEOUT" script -qec "$command" /dev/null \
-      >"$LOG_DIR/$name.log" 2>&1
+      >"$LOG_DIR/$name.log" 2>&1 || rc=$?
   else
-    timeout "$PHASE_TIMEOUT" bash -c "$command" >"$LOG_DIR/$name.log" 2>&1
+    timeout "$PHASE_TIMEOUT" bash -c "$command" >"$LOG_DIR/$name.log" 2>&1 || rc=$?
   fi
+  if [ -f "$backup" ]; then
+    mv "$backup" "$TARGET_FILE" || rc=1
+  fi
+  return "$rc"
 }
 
 hook_aws_cloud_prestate() {
