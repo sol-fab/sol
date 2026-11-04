@@ -63,10 +63,13 @@ cleanup() {
 trap cleanup EXIT
 scenario_prepare
 scenario_inventory >"$LOG_DIR/inventory-before.txt"
+[ -s "$LOG_DIR/inventory-before.txt" ] || { printf 'run: scenario_inventory produced no before inventory\n' >&2; exit 1; }
 scenario_execute
 scenario_assert
 scenario_inventory >"$LOG_DIR/inventory-after.txt"
+[ -s "$LOG_DIR/inventory-after.txt" ] || { printf 'run: scenario_inventory produced no after inventory\n' >&2; exit 1; }
 scenario_evidence >"$LOG_DIR/scenario-evidence.txt"
+[ -s "$LOG_DIR/scenario-evidence.txt" ] || { printf 'run: scenario_evidence produced no evidence\n' >&2; exit 1; }
 printf 'scenario passed: %s\n' "$SCENARIO"
 if [ -n "${SOL_QUALIFICATION_EVALUATOR:-}" ]; then
   "$ROOT/internal/qualification/record.sh" \

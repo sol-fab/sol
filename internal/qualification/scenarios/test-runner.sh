@@ -12,7 +12,7 @@ sol_under_test_record_identity() { printf 'identity\n' >>"$CALLS"; }
 LIB
 cat >"$tmp/scenario.sh" <<'SCN'
 scenario_prepare() { printf 'prepare\n' >>"$CALLS"; }
-scenario_inventory() { printf 'inventory\n' >>"$CALLS"; }
+scenario_inventory() { printf 'inventory\n' >>"$CALLS"; [ "${EMPTY_INVENTORY:-0}" != 1 ] && printf 'provider-inventory\n'; }
 scenario_absence() { printf 'absence\n' >>"$CALLS"; printf 'all resources absent\n'; [ "${FAIL_ABSENCE:-0}" != 1 ]; }
 scenario_plan() { printf 'plan\n' >>"$CALLS"; }
 scenario_cleanup() { printf 'cleanup\n' >>"$CALLS"; [ "${FAIL_CLEANUP:-0}" != 1 ]; }
@@ -90,3 +90,10 @@ if LOG_DIR="$tmp/log" ATTEMPT=test ATTEMPT_CLAIM=production \
   echo "runner accepted a rejected candidate" >&2; exit 1
 fi
 grep -q '^reason=candidate-rejected$' "$tmp/log/plan-status.txt"
+
+# Empty inventory/evidence is a failure, not a vacuous pass.
+if EMPTY_INVENTORY=1 APPROVED=1 LOG_DIR="$tmp/log" ATTEMPT=test ATTEMPT_CLAIM=production \
+  QUALIFICATION_LIB_DIR="$tmp/lib" "$root/internal/qualification/scenarios/run.sh" \
+  --scenario "$tmp/scenario.sh" >/dev/null 2>&1; then
+  echo "runner accepted an empty inventory" >&2; exit 1
+fi
