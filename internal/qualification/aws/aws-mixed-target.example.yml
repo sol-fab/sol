@@ -1,17 +1,43 @@
 # Mixed serverless + Kubernetes qualification target.
 #
 # Copy to examples/pluto/sol/environments.local.yml, replace the bracketed values,
-# and run the AWS row with MIXED=1. The same disposition row must declare
-# `execution: mixed`; the harness refuses MIXED=1 otherwise.
-prod:
+# and run the AWS row with:
+#
+#   export TARGET=mixed/aws/us-east-1
+#   export MIXED=1
+#
+# Use a new environment name (here `mixed`), not the tracked `prod`: a local
+# environments file may only add keys the tracked file leaves unset (DEC-047),
+# and the tracked `prod` target already sets `cluster_name`. The target itself
+# must declare `execution: mixed`; the harness refuses MIXED=1 otherwise.
+mixed:
+  base_domain: [your-domain]
+  shape: local
+  dns_zone_ownership: sol
+  cluster_issuer: letsencrypt-staging
+  letsencrypt_email: [ops@your-domain]
+  # The row builds and publishes the OCaml application units and adds probe_fn
+  # as the serverless component. The TypeScript units are outside the profile
+  # this row exercises.
+  services:
+    order_svc:
+      omit: true
+    fulfillment_worker:
+      omit: true
+    probe_fn: {}
+    probe_ts_fn:
+      omit: true
   targets:
     aws/us-east-1:
       execution: mixed
-      shape: local
       state_bucket: [unique-state-bucket]
       registry: [account].dkr.ecr.us-east-1.amazonaws.com
       cluster_name: [unique-cluster-name]
       kube_context: [unique-cluster-name]
+      terraform_var_file: [absolute path to internal/qualification/aws/qual.tfvars]
+      # One specific operator egress CIDR; never the non-production world default.
+      cluster_endpoint_cidr: [operator-egress-cidr]
+      destroy_retention: none
       aws:
         profile: sol-qual
         state_lock_table: [unique-lock-table]
@@ -19,15 +45,3 @@ prod:
         cluster_access_role_arn: arn:aws:iam::[account]:role/sol-cluster-access
         operator_role_arn: arn:aws:iam::[account]:role/sol-operator
         provisioner_role_arn: arn:aws:iam::[account]:role/sol-provisioner
-      destroy_retention: none
-      # The row builds and publishes the OCaml application units and adds
-      # probe_fn as the serverless component. The TypeScript units are outside
-      # the production profile this row exercises.
-      services:
-        order_svc:
-          omit: true
-        fulfillment_worker:
-          omit: true
-        probe_fn: {}
-        probe_ts_fn:
-          omit: true
