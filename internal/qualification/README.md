@@ -198,6 +198,14 @@ the function through the Kubernetes renderer. The row adds the candidate's `prob
 its application unit set, so the serverless function is built, published and deployed by
 Sol alongside the existing Kubernetes workloads.
 
+For AWS, start from
+[`aws/aws-mixed-target.example.yml`](aws/aws-mixed-target.example.yml) and use a distinct
+environment name, for example `TARGET=mixed/aws/us-east-1`. Do not copy it under the
+tracked `prod` environment: the local environments file may only add keys the tracked
+file leaves unset (DEC-047), and `prod` already sets `cluster_name`. The example carries
+the issuer, Terraform var file, endpoint CIDR and target identity the prepare phase
+requires.
+
 After the normal application transaction, the provider hook applies a persisted plan:
 
 1. `sol plan <target> --out` writes the transition for both components.
