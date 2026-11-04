@@ -4,6 +4,8 @@
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 TMP="$(mktemp -d)"
+export TF_VAR_grafana_oidc_client_id=self-test
+export TF_VAR_grafana_oidc_client_secret=self-test
 # The assertion semantics are shared with the other provider; this suite supplies
 # only its own helpers and its own test cases.
 # shellcheck source=/dev/null

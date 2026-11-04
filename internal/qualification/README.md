@@ -70,7 +70,8 @@ success. A skipped capability is named as skipped; it is not silently promoted.
 
 ### Grafana OIDC preflight
 
-A `letsencrypt-prod` attempt also requires Grafana SSO inputs: Terraform's
+Every platform install publishes Grafana with OIDC, regardless of the
+certificate issuer (staging included). Terraform's
 `grafana_oidc_client_id`/`grafana_oidc_client_secret` default to empty, so a
 missing client would otherwise surface only after the cluster and database
 exist. `require_grafana_oidc_inputs` refuses before mutation and names the
