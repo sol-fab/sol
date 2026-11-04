@@ -18,6 +18,10 @@ module Lambda_fn = struct
   let run () = Ok ()
 end
 
+module Http_fn = struct
+  let handle _ = Response.ok "ok"
+end
+
 module Should_not_run_fn = struct
   let trigger = Fn.Cron
   let run () = Windtrap.fail "stopped cron should not run"
@@ -226,6 +230,222 @@ let test_lambda_trigger_requires_runtime_api () =
      | _ -> Windtrap.fail "expected config error")
 ;;
 
+let test_http_requires_exposure () =
+  Eio_main.run
+  @@ fun env ->
+  with_env "SOL_HTTP_EXPOSURE" "" (fun () ->
+    with_env "SOL_HTTP_PATH" "/quote" (fun () ->
+      let module M = Fn.Make_http (Http_fn) in
+      match M.run ~env () with
+      | Error (`Config msg) ->
+        Windtrap.equal
+          Windtrap.bool
+          ~msg:"names the missing exposure"
+          true
+          (Sol_runtime.contains_substring ~needle:"SOL_HTTP_EXPOSURE" msg)
+      | _ -> Windtrap.fail "expected config error"))
+;;
+
+let test_http_requires_path () =
+  Eio_main.run
+  @@ fun env ->
+  with_env "SOL_HTTP_EXPOSURE" "public" (fun () ->
+    with_env "SOL_HTTP_PATH" "" (fun () ->
+      let module M = Fn.Make_http (Http_fn) in
+      match M.run ~env () with
+      | Error (`Config msg) ->
+        Windtrap.equal
+          Windtrap.bool
+          ~msg:"names the missing path"
+          true
+          (Sol_runtime.contains_substring ~needle:"SOL_HTTP_PATH" msg)
+      | _ -> Windtrap.fail "expected config error"))
+;;
+
+let read_http_response ~sw ~net ~port path =
+  let flow = Eio.Net.connect ~sw net (`Tcp (Eio.Net.Ipaddr.V4.loopback, port)) in
+  let request =
+    Printf.sprintf "GET %s HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n" path
+  in
+  Eio.Flow.copy_string request flow;
+  let buf = Eio.Buf_read.of_flow flow ~max_size:65536 in
+  let status_line = Eio.Buf_read.line buf in
+  let rec headers acc =
+    let line = Eio.Buf_read.line buf in
+    if String.equal line "" then List.rev acc else headers (line :: acc)
+  in
+  let headers = headers [] in
+  let body = Eio.Buf_read.take_all buf in
+  status_line, headers, body
+;;
+
+let status_of_line line =
+  match String.split_on_char ' ' line with
+  | _ :: code :: _ -> int_of_string_opt code
+  | _ -> None
+;;
+
+let test_http_public_server_serves_declared_route () =
+  Eio_main.run
+  @@ fun env ->
+  with_env "SOL_HTTP_EXPOSURE" "public" (fun () ->
+    with_env "SOL_HTTP_PATH" "/quote" (fun () ->
+      Eio.Switch.run
+      @@ fun sw ->
+      let module M = Fn.Make_http (Http_fn) in
+      let stop, stop_r = Eio.Promise.create () in
+      let port_p, port_r = Eio.Promise.create () in
+      Eio.Fiber.fork ~sw (fun () ->
+        ignore
+          (M.run ~env ~on_listen:(fun port -> Eio.Promise.resolve port_r port) ~stop ()));
+      let port = Eio.Promise.await port_p in
+      let status, headers, body = read_http_response ~sw ~net:env#net ~port "/quote" in
+      Windtrap.equal
+        (Windtrap.option Windtrap.int)
+        ~msg:"declared route"
+        (Some 200)
+        (status_of_line status);
+      Windtrap.equal
+        Windtrap.bool
+        ~msg:"function header"
+        true
+        (List.exists
+           (fun header -> String.starts_with ~prefix:"x-sol-fn:" header)
+           headers);
+      Windtrap.equal Windtrap.string ~msg:"handler body" "ok" body;
+      let status, _, _ = read_http_response ~sw ~net:env#net ~port "/nope" in
+      Windtrap.equal
+        (Windtrap.option Windtrap.int)
+        ~msg:"undeclared route"
+        (Some 404)
+        (status_of_line status);
+      Eio.Promise.resolve stop_r ();
+      Eio.Time.sleep env#clock 0.05))
+;;
+
+let test_http_internal_server_rejects_anonymous () =
+  Eio_main.run
+  @@ fun env ->
+  with_env "SOL_HTTP_EXPOSURE" "internal" (fun () ->
+    with_env "SOL_HTTP_PATH" "/quote" (fun () ->
+      with_env "SOL_UNIT" "orders/quote_fn" (fun () ->
+        with_env "SOL_CALLED_BY" "caller/other=other-ns:other-sa" (fun () ->
+          with_env
+            "SOL_TRUSTED_WORKLOAD_ISSUER"
+            "https://kubernetes.default.svc"
+            (fun () ->
+               Eio.Switch.run
+               @@ fun sw ->
+               let module M = Fn.Make_http (Http_fn) in
+               let stop, stop_r = Eio.Promise.create () in
+               let port_p, port_r = Eio.Promise.create () in
+               Eio.Fiber.fork ~sw (fun () ->
+                 ignore
+                   (M.run
+                      ~env
+                      ~on_listen:(fun port -> Eio.Promise.resolve port_r port)
+                      ~stop
+                      ()));
+               let port = Eio.Promise.await port_p in
+               let status, _, _ = read_http_response ~sw ~net:env#net ~port "/quote" in
+               Windtrap.equal
+                 (Windtrap.option Windtrap.int)
+                 ~msg:"anonymous internal request"
+                 (Some 401)
+                 (status_of_line status);
+               let status, _, _ = read_http_response ~sw ~net:env#net ~port "/readyz" in
+               Windtrap.equal
+                 (Windtrap.option Windtrap.int)
+                 ~msg:"readiness stays external"
+                 (Some 200)
+                 (status_of_line status);
+               Eio.Promise.resolve stop_r ();
+               Eio.Time.sleep env#clock 0.05)))))
+;;
+
+let test_http_internal_lambda_refused () =
+  Eio_main.run
+  @@ fun env ->
+  with_env "AWS_LAMBDA_RUNTIME_API" "127.0.0.1:1" (fun () ->
+    with_env "SOL_HTTP_EXPOSURE" "internal" (fun () ->
+      with_env "SOL_HTTP_PATH" "/quote" (fun () ->
+        let module M = Fn.Make_http (Http_fn) in
+        match M.run ~env () with
+        | Error (`Config msg) ->
+          Windtrap.equal
+            Windtrap.bool
+            ~msg:"refuses an internal Lambda endpoint"
+            true
+            (Sol_runtime.contains_substring ~needle:"cannot run on Lambda" msg)
+        | _ -> Windtrap.fail "expected config error")))
+;;
+
+let test_http_rejects_unknown_exposure () =
+  Eio_main.run
+  @@ fun env ->
+  with_env "SOL_HTTP_EXPOSURE" "network" (fun () ->
+    with_env "SOL_HTTP_PATH" "/quote" (fun () ->
+      let module M = Fn.Make_http (Http_fn) in
+      match M.run ~env () with
+      | Error (`Config msg) ->
+        Windtrap.equal
+          Windtrap.bool
+          ~msg:"names the invalid exposure"
+          true
+          (Sol_runtime.contains_substring ~needle:"public" msg)
+      | _ -> Windtrap.fail "expected config error"))
+;;
+
+let test_http_api_gateway_event () =
+  let module M = Fn.Make_http (Http_fn) in
+  let event =
+    {|{"version":"2.0","rawPath":"/quote","rawQueryString":"x=1","headers":{"authorization":"Bearer token"},"requestContext":{"http":{"method":"POST"}},"body":"hello","isBase64Encoded":false}|}
+  in
+  match M.For_testing.api_gateway_request event with
+  | Error message -> Windtrap.fail message
+  | Ok request ->
+    Windtrap.equal Windtrap.bool ~msg:"method" true (request.Request.method_ = `POST);
+    Windtrap.equal Windtrap.string ~msg:"path" "/quote" request.Request.path;
+    Windtrap.equal Windtrap.string ~msg:"body" "hello" request.Request.body;
+    Windtrap.equal
+      Windtrap.bool
+      ~msg:"authorization header preserved"
+      true
+      (Http.Header.get request.Request.headers "authorization" = Some "Bearer token")
+;;
+
+let test_http_api_gateway_base64_body () =
+  let module M = Fn.Make_http (Http_fn) in
+  let body = Base64.encode_exn "decoded" in
+  let event =
+    Printf.sprintf
+      {|{"rawPath":"/quote","headers":{},"requestContext":{"http":{"method":"PUT"}},"body":"%s","isBase64Encoded":true}|}
+      body
+  in
+  match M.For_testing.api_gateway_request event with
+  | Error message -> Windtrap.fail message
+  | Ok request ->
+    Windtrap.equal Windtrap.string ~msg:"body" "decoded" request.Request.body
+;;
+
+let test_http_api_gateway_response () =
+  let module M = Fn.Make_http (Http_fn) in
+  let json = M.For_testing.api_gateway_response (Response.ok "ok") in
+  match Yojson.Safe.from_string json with
+  | exception Yojson.Json_error message -> Windtrap.fail message
+  | json ->
+    Windtrap.equal
+      Windtrap.int
+      ~msg:"status"
+      200
+      Yojson.Safe.Util.(json |> member "statusCode" |> to_int);
+    Windtrap.equal
+      Windtrap.string
+      ~msg:"body"
+      "ok"
+      Yojson.Safe.Util.(json |> member "body" |> to_string)
+;;
+
 let () =
   Windtrap.run
     "sol-fn"
@@ -254,6 +474,24 @@ let () =
         [ Windtrap.test
             "requires AWS_LAMBDA_RUNTIME_API"
             test_lambda_trigger_requires_runtime_api
+        ]
+    ; Windtrap.group
+        "http"
+        [ Windtrap.test "requires explicit exposure" test_http_requires_exposure
+        ; Windtrap.test "requires a route path" test_http_requires_path
+        ; Windtrap.test "rejects an unknown exposure" test_http_rejects_unknown_exposure
+        ; Windtrap.test "translates an API Gateway event" test_http_api_gateway_event
+        ; Windtrap.test
+            "decodes a base64 API Gateway body"
+            test_http_api_gateway_base64_body
+        ; Windtrap.test "renders an API Gateway response" test_http_api_gateway_response
+        ; Windtrap.test
+            "serves only the declared route over HTTP"
+            test_http_public_server_serves_declared_route
+        ; Windtrap.test
+            "internal rejects anonymous invocation"
+            test_http_internal_server_rejects_anonymous
+        ; Windtrap.test "internal is refused on Lambda" test_http_internal_lambda_refused
         ]
     ]
 ;;

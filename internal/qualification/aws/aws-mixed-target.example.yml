@@ -1,0 +1,33 @@
+# Mixed serverless + Kubernetes qualification target.
+#
+# Copy to examples/pluto/sol/environments.local.yml, replace the bracketed values,
+# and run the AWS row with MIXED=1. The same disposition row must declare
+# `execution: mixed`; the harness refuses MIXED=1 otherwise.
+prod:
+  targets:
+    aws/us-east-1:
+      execution: mixed
+      shape: local
+      state_bucket: [unique-state-bucket]
+      registry: [account].dkr.ecr.us-east-1.amazonaws.com
+      cluster_name: [unique-cluster-name]
+      kube_context: [unique-cluster-name]
+      aws:
+        profile: sol-qual
+        state_lock_table: [unique-lock-table]
+        deploy_role_arn: arn:aws:iam::[account]:role/sol-deploy
+        cluster_access_role_arn: arn:aws:iam::[account]:role/sol-cluster-access
+        operator_role_arn: arn:aws:iam::[account]:role/sol-operator
+        provisioner_role_arn: arn:aws:iam::[account]:role/sol-provisioner
+      destroy_retention: none
+      # The row builds and publishes the OCaml application units and adds
+      # probe_fn as the serverless component. The TypeScript units are outside
+      # the production profile this row exercises.
+      services:
+        order_svc:
+          omit: true
+        fulfillment_worker:
+          omit: true
+        probe_fn: {}
+        probe_ts_fn:
+          omit: true

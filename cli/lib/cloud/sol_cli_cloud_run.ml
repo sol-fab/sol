@@ -1,6 +1,8 @@
 open Result.Syntax
 
-type ingress = Public
+type ingress =
+  | Public
+  | Internal
 
 type identity =
   { unit : string
@@ -18,6 +20,7 @@ type request =
   ; identity : identity
   ; ingress : ingress
   ; service_account : string
+  ; extra_env : (string * string) list
   ; record : string option
   }
 
@@ -50,11 +53,12 @@ type failure =
 
 let ingress_of_string = function
   | "public" -> Ok Public
+  | "internal" -> Ok Internal
   | value ->
     Error
       (Refused
          (Printf.sprintf
-            "unsupported ingress %S (experimental adapter supports public only)"
+            "unsupported ingress %S (expected \"public\" or \"internal\")"
             value))
 ;;
 
@@ -169,15 +173,20 @@ let preflight (request : request) =
         (Refused "the experimental Cloud Run adapter requires Google's canonical JWKS URI")
   in
   let* () =
-    match request.identity.callers with
-    | [] -> Error (Refused "at least one caller must be configured")
-    | callers ->
+    match request.ingress, request.identity.callers with
+    | Public, [] -> Ok ()
+    | Internal, [] ->
+      Error
+        (Refused
+           "an internal HTTP function requires at least one declared caller; internal \
+            exposure is enforced by the workload-identity check")
+    | _, callers ->
       if List.for_all valid_caller callers
       then Ok ()
       else Error (Refused "callers must be unit=non-Kubernetes-subject entries")
   in
   match request.ingress with
-  | Public -> Ok ()
+  | Public | Internal -> Ok ()
 ;;
 
 let env_vars (request : request) =
@@ -192,6 +201,7 @@ let env_vars (request : request) =
   ; "SOL_TRUSTED_WORKLOAD_JWKS_URI", request.identity.jwks_uri
   ; "SOL_WORKLOAD_SUBJECT_SCHEME", "google_oidc_service_account"
   ]
+  @ request.extra_env
 ;;
 
 let workspace_label () =
@@ -216,6 +226,10 @@ let deploy_argv (request : request) =
   ; request.image
   ; "--service-account"
   ; request.service_account
+  ; "--ingress"
+  ; (match request.ingress with
+     | Public -> "all"
+     | Internal -> "internal")
   ; "--allow-unauthenticated"
   ; "--port"
   ; "8080"
@@ -667,7 +681,7 @@ let serving_revision revision observed =
   List.exists (fun (name, percent) -> name = revision && percent = 100) observed.traffic
 ;;
 
-let rollback runner (request : request) ~revision ~token ~on_revision_moved =
+let rollback_with runner (request : request) ~revision ~on_revision_moved ~verify =
   let finish observed =
     if serving_revision revision observed
     then
@@ -681,8 +695,8 @@ let rollback runner (request : request) ~revision ~token ~on_revision_moved =
             ( "serving revision observed but release record update failed: " ^ message
             , Some observed ))
       in
-      match verify runner { request with record = None } ~token with
-      | Ok _ -> Ok observed
+      match verify observed with
+      | Ok () -> Ok observed
       | Error failure ->
         Error
           (Partial
@@ -733,6 +747,13 @@ let rollback runner (request : request) ~revision ~token ~on_revision_moved =
           | Error _ -> Error (Partial (message, None))))
 ;;
 
+let rollback runner (request : request) ~revision ~token ~on_revision_moved =
+  rollback_with runner request ~revision ~on_revision_moved ~verify:(fun _observed ->
+    match verify runner { request with record = None } ~token with
+    | Ok _ -> Ok ()
+    | Error failure -> Error failure)
+;;
+
 let destroy runner ~project ~region ~service ~record =
   let* provider_service = provider_service_of service in
   let* expected =
@@ -762,6 +783,7 @@ let destroy runner ~project ~region ~service ~record =
     ; identity = { unit = ""; callers = []; issuer = ""; jwks_uri = "" }
     ; ingress = Public
     ; service_account = expected.service_account
+    ; extra_env = []
     ; record = None
     }
   in

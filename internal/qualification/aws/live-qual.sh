@@ -38,6 +38,17 @@ WORKER_UNIT="${WORKER_UNIT:-notify_worker}"
 # production-single-region profile refuses a mutable tag. The profile qualifies
 # OCaml workloads only, and the example target omits the two TypeScript units.
 APP_UNITS="${APP_UNITS:-checkout_svc charge_svc notify_worker orders_svc fulfilment_worker}"
+MIXED="${MIXED:-0}"
+MIXED_FN_UNIT="${MIXED_FN_UNIT:-probe_fn}"
+MIXED_UPDATE_REPLICAS="${MIXED_UPDATE_REPLICAS:-2}"
+MIXED_PARTIAL_FAILURE="${MIXED_PARTIAL_FAILURE:-1}"
+if [ "$MIXED" = 1 ]; then
+  case " $APP_UNITS " in
+    *" $MIXED_FN_UNIT "*) ;;
+    *) APP_UNITS="$APP_UNITS $MIXED_FN_UNIT" ;;
+  esac
+fi
+export MIXED MIXED_FN_UNIT MIXED_UPDATE_REPLICAS MIXED_PARTIAL_FAILURE
 KAFKA_BEHAVIORAL_UNITS="charge_svc notify_worker"
 # The namespaces this row is configured to exercise; the cold-start boundary derives the
 # per-unit namespaces from the candidate and requires this declared set to be covered.
@@ -171,6 +182,9 @@ required
                     operator's ambient credentials (SEC-011 / ADR 0002). The read-only phases
                     (prepare, verify) and destroy do not need it.
 optional (defaults shown)
+  MIXED=0                        1 enables the mixed serverless+Kubernetes row; the target
+                                 must declare execution: mixed (GCP writes it from MIXED)
+  MIXED_FN_UNIT=probe_fn         the serverless unit added to the mixed row
   ROW=qualreg                    the stable logical row label
   TARGET=qualreg-<attempt>/aws/us-east-1   CONTINUE_ATTEMPT=0
   ECR_REGISTRY=<account>.dkr.ecr.us-east-1.amazonaws.com

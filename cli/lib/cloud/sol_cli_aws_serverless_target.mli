@@ -12,6 +12,7 @@ val deploy
   -> schedule:string option
   -> schedule_timezone:string option
   -> scheduler_identity:string option
+  -> http:Sol_cli_toml.http_trigger option
   -> (Yojson.Safe.t, string) result
 
 (** Dispatch on the ownership record's [kind]. The record, not the command line, is the

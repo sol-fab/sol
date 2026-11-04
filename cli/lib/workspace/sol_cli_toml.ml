@@ -7,6 +7,30 @@ type scheduled_concurrency =
   | Forbid
   | Replace
 
+type http_exposure =
+  | Http_public
+  | Http_internal
+
+type http_trigger =
+  { path : string
+  ; exposure : http_exposure
+  }
+
+let http_exposure_to_string = function
+  | Http_public -> "public"
+  | Http_internal -> "internal"
+;;
+
+let http_exposure_of_string = function
+  | "public" -> Ok Http_public
+  | "internal" -> Ok Http_internal
+  | other ->
+    Error
+      (Printf.sprintf
+         "unsupported http_exposure %S — valid values are \"public\" and \"internal\""
+         other)
+;;
+
 type canary_step =
   | Weight of int
   | Pause of int option
@@ -143,6 +167,7 @@ type t =
   ; schedule_timezone : string option
   ; scheduled_concurrency : scheduled_concurrency option
   ; backoff_limit : int option
+  ; http : http_trigger option
   ; calls : string list
   ; topics : string list
   ; events : event_decl list
@@ -167,6 +192,7 @@ let empty =
   ; schedule_timezone = None
   ; scheduled_concurrency = None
   ; backoff_limit = None
+  ; http = None
   ; calls = []
   ; topics = []
   ; events = []
@@ -347,6 +373,43 @@ let ingress_path_of_string s =
           whitespace or control characters"
          s)
   else Ok (Ingress_path s)
+;;
+
+(* An HTTP function route is an exact path on the function's HTTP trigger. It is not the
+   [infra.deploy.ingress_path] prefix used by a -svc: a function owns one route, so a
+   trailing slash (which Kubernetes treats as a prefix) and a query/fragment would make
+   the declared route differ from the path a caller reaches. *)
+let http_path_of_string s =
+  let len = String.length s in
+  let rec has_invalid_char i =
+    if i = len
+    then false
+    else (
+      match s.[i] with
+      | '\000' .. '\032' | '\127' | '?' | '#' | '*' | '{' | '}' -> true
+      | _ -> has_invalid_char (i + 1))
+  in
+  if len = 0 || s.[0] <> '/'
+  then
+    Error
+      (Printf.sprintf
+         "sol.toml: [service] http_path %S is invalid — paths must start with \"/\""
+         s)
+  else if len > 1 && s.[len - 1] = '/'
+  then
+    Error
+      (Printf.sprintf
+         "sol.toml: [service] http_path %S is invalid — a function route must not end \
+          with \"/\""
+         s)
+  else if has_invalid_char 0
+  then
+    Error
+      (Printf.sprintf
+         "sol.toml: [service] http_path %S is invalid — paths must not contain \
+          whitespace, control characters, \"?\", \"#\", \"*\", \"{\" or \"}\""
+         s)
+  else Ok s
 ;;
 
 let parse_rollout_strategy path s =
@@ -817,6 +880,8 @@ let schema =
         ; "schedule_timezone", Leaf
         ; "scheduled_concurrency", Leaf
         ; "backoff_limit", Leaf
+        ; "http_path", Leaf
+        ; "http_exposure", Leaf
         ; "calls", Leaf
         ; "topics", Leaf
         ] )
@@ -1105,6 +1170,43 @@ let load_result path =
       let schedule_timezone =
         Otoml.Helpers.find_string_opt doc [ "service"; "schedule_timezone" ]
       in
+      let* http =
+        match
+          ( Otoml.Helpers.find_string_opt doc [ "service"; "http_path" ]
+          , Otoml.Helpers.find_string_opt doc [ "service"; "http_exposure" ] )
+        with
+        | None, None -> Ok None
+        | Some path, None ->
+          validation_error
+            path
+            "sol.toml: [service] http_path requires http_exposure = \"public\" or \
+             \"internal\"; exposure is explicit, never inferred"
+        | None, Some _ ->
+          validation_error
+            path
+            "sol.toml: [service] http_exposure requires http_path, the exact route the \
+             function serves"
+        | Some path, Some exposure ->
+          let* path =
+            http_path_of_string path
+            |> Result.map_error (fun message -> Validation { path; message })
+          in
+          let* exposure =
+            http_exposure_of_string exposure
+            |> Result.map_error (fun message ->
+              Validation { path; message = "sol.toml: " ^ message })
+          in
+          Ok (Some { path; exposure })
+      in
+      let* () =
+        match schedule, http with
+        | Some _, Some _ ->
+          validation_error
+            path
+            "sol.toml: [service] declares both schedule and http_path; a -fn has exactly \
+             one trigger"
+        | _ -> Ok ()
+      in
       let* scheduled_concurrency =
         match
           Otoml.Helpers.find_string_opt doc [ "service"; "scheduled_concurrency" ]
@@ -1183,6 +1285,7 @@ let load_result path =
         ; schedule_timezone
         ; scheduled_concurrency
         ; backoff_limit
+        ; http
         ; calls
         ; topics
         ; events

@@ -11,6 +11,8 @@ type workload =
   ; schedule_timezone : string option
   ; scheduled_concurrency : string
   ; backoff_limit : int
+  ; http_path : string option
+  ; http_exposure : string option
   ; replicas : int
   ; availability : string
   ; consumes_kafka : bool

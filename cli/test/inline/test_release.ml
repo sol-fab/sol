@@ -31,6 +31,8 @@ let sample_workload : R.workload =
   ; schedule_timezone = None
   ; scheduled_concurrency = "forbid"
   ; backoff_limit = 0
+  ; http_path = None
+  ; http_exposure = None
   ; replicas = 2
   ; availability = "single"
   ; consumes_kafka = false
@@ -267,7 +269,7 @@ let test_a_pre_requirements_record_is_refused_by_name () =
     check_bool
       "and the version this CLI writes"
       true
-      (Sol_cli_string.contains ~needle:"sol-release-v7" msg);
+      (Sol_cli_string.contains ~needle:"sol-release-v8" msg);
     check_bool
       "and says it is a format change, not damage"
       true
@@ -531,13 +533,14 @@ let test_record_digest_is_total_for_duplicate_keys () =
     (R.record_digest (with_config [ "K", "b"; "K", "a" ]))
 ;;
 
-(* The vector moved with `sol-release-v6 -> v7` (#1422): every workload now folds its declared
-   requirements into the record content, so both the canonical form and the id derived from it
-   change. A pinned vector that moves silently would be the thing this test exists to catch. *)
+(* The vector moved with `sol-release-v7 -> v8`: every workload now folds an HTTP function's
+   route and exposure into the record content, so both the canonical form and the id derived
+   from it change. A pinned vector that moves silently would be the thing this test exists to
+   catch. *)
 let test_record_digest_known_vector () =
   check_string
     "known canonical digest"
-    "324a5c2836da571b448002ddaf915401"
+    "3b62303e27e3acfb43b737100b4ed7a0"
     (R.record_digest sample_record)
 ;;
 

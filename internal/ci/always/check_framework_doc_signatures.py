@@ -47,6 +47,7 @@ EXCLUSIONS = [
     ("framework/ocaml/sol-worker/sol-worker.md", "## Test injection", "an example of calling For_testing, not a declaration"),
     ("framework/ocaml/sol-fn/sol-fn.md", "## Signature", "documents Obs_prometheus.push, which lives in the external obs-prometheus-eio package"),
     ("framework/ocaml/sol-fn/sol-fn.md", "## Generated main", "a scaffolded entrypoint example"),
+    ("framework/ocaml/sol-fn/sol-fn.md", "## HTTP trigger", "an application's HTTP handler and generated entrypoint, not the package's declaration surface"),
     ("framework/ocaml/sol-obs/sol-obs.md", "## Example Usage", "an application example"),
     (
         "framework/ocaml/sol-jobs/sol-jobs.md",

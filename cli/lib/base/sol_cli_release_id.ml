@@ -19,6 +19,8 @@ type workload =
   ; schedule_timezone : string option
   ; scheduled_concurrency : string
   ; backoff_limit : int
+  ; http_path : string option
+  ; http_exposure : string option
   ; replicas : int
   ; availability : string
   ; consumes_kafka : bool
@@ -53,7 +55,7 @@ type t = string
 (* v7 records each workload's declared requirements. A v6 record cannot answer "what did this
    version require?", so the version gate refuses it by name rather than letting a rollback guess
    -- see [Sol_cli_release.stale_encoding_version_message] (#1422). *)
-let encoding_version = "sol-release-v7"
+let encoding_version = "sol-release-v8"
 
 let enc_string b s =
   Buffer.add_string b (Printf.sprintf "%d:" (String.length s));
@@ -127,6 +129,8 @@ let enc_workload b (w : workload) =
    | Some timezone -> enc_string b timezone);
   enc_string b w.scheduled_concurrency;
   enc_int b w.backoff_limit;
+  enc_option enc_string b w.http_path;
+  enc_option enc_string b w.http_exposure;
   enc_int b w.replicas;
   enc_string b w.availability;
   enc_int b (if w.consumes_kafka then 1 else 0);

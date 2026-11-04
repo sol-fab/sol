@@ -154,6 +154,40 @@ let decode_workload ~release_id ~workspace (w : Sol_cli_release.workload) =
       Sol_cli_toml.ingress_path_of_string
       w.ingress_path
   in
+  let* http_path =
+    decode_optional
+      ~release_id
+      ~workload_name:w.name
+      ~fact_of:(fun raw msg -> Printf.sprintf "has an invalid http_path %S: %s" raw msg)
+      Sol_cli_toml.http_path_of_string
+      w.http_path
+  in
+  let* http_exposure =
+    decode_optional
+      ~release_id
+      ~workload_name:w.name
+      ~fact_of:(fun raw msg ->
+        Printf.sprintf "has an invalid http_exposure %S: %s" raw msg)
+      Sol_cli_toml.http_exposure_of_string
+      w.http_exposure
+  in
+  let* http =
+    match http_path, http_exposure with
+    | None, None -> Ok None
+    | Some path, Some exposure -> Ok (Some { Sol_cli_toml.path; exposure })
+    | Some _, None ->
+      Error
+        (reconstruct_error
+           ~release_id
+           ~workload:w.name
+           ~fact:"recorded an http_path without an http_exposure")
+    | None, Some _ ->
+      Error
+        (reconstruct_error
+           ~release_id
+           ~workload:w.name
+           ~fact:"recorded an http_exposure without an http_path")
+  in
   let* calls = decode_calls ~release_id ~workload_name:w.name w.calls in
   let* availability =
     Sol_cli_availability.of_string w.availability
@@ -184,6 +218,7 @@ let decode_workload ~release_id ~workspace (w : Sol_cli_release.workload) =
     ; schedule_timezone = w.schedule_timezone
     ; scheduled_concurrency
     ; backoff_limit = w.backoff_limit
+    ; http
     ; replicas = w.replicas
     ; language = None
     ; availability
@@ -593,8 +628,11 @@ let live_resource_and_jsonpath kind =
 
 let live_kind_of_service (s : Sol_cli_deployment_plan.service_spec) =
   match s.primitive with
-  | Sol_cli_deployment_plan.Fn -> Live_cronjob
-  | Sol_cli_deployment_plan.Svc | Sol_cli_deployment_plan.Worker ->
+  | Sol_cli_deployment_plan.Fn when not (Sol_cli_deployment_plan.is_http_function s) ->
+    Live_cronjob
+  | Sol_cli_deployment_plan.Fn
+  | Sol_cli_deployment_plan.Svc
+  | Sol_cli_deployment_plan.Worker ->
     (match s.progressive_delivery with
      | Some _ -> Live_rollout
      | None -> Live_deployment)

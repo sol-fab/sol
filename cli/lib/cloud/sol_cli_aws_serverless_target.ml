@@ -170,6 +170,58 @@ let deploy_fn
   Ok (Sol_cli_aws_lambda_fn.release_json release)
 ;;
 
+let deploy_fn_http
+      ~(target : Sol_cli_config.target)
+      ~config
+      ~project
+      ~(service : Sol_cli_manifest.service)
+      ~image
+      ~record
+      ~runtime_service_account
+      ~(trigger : Sol_cli_toml.http_trigger)
+  =
+  let* () = Sol_cli_serverless_target_common.declared_uses config service in
+  let* () =
+    match trigger.exposure with
+    | Sol_cli_toml.Http_public -> Ok ()
+    | Sol_cli_toml.Http_internal ->
+      Error
+        "AWS HTTP functions support public exposure only: a Lambda Function URL is \
+         reachable from the public internet, so Sol will not create an endpoint it would \
+         have to describe as internal. Use a Kubernetes or GCP target for an internal \
+         HTTP function."
+  in
+  let* role_arn =
+    Option.to_result
+      ~none:"AWS serverless deploy requires a provisioned per-unit execution role"
+      runtime_service_account
+  in
+  let* () =
+    if String.trim role_arn = ""
+    then Error "AWS serverless execution role is empty"
+    else Ok ()
+  in
+  let* function_name = provider_name service in
+  let request =
+    { Sol_cli_aws_fn_http.profile = Sol_cli_config.provider_field target "profile"
+    ; region = target.region
+    ; service = service.name
+    ; function_name
+    ; image
+    ; role_arn
+    ; unit = Sol_cli_serverless_target_common.unit_of_service ~project service
+    ; http_path = trigger.path
+    ; record = Some record
+    ; run = runner
+    }
+  in
+  let* release =
+    Sol_cli_aws_fn_http.deploy request
+    |> Result.map_error Sol_cli_aws_fn_http.failure_to_string
+  in
+  Ok (Sol_cli_aws_fn_http.release_json release)
+;;
+
 let deploy
       ~(target : Sol_cli_config.target)
       ~config
@@ -181,23 +233,46 @@ let deploy
       ~schedule
       ~schedule_timezone
       ~scheduler_identity
+      ~http
   =
   let* () = ensure_aws target in
   match service.primitive with
   | Sol_cli_manifest.Svc ->
-    deploy_svc ~target ~config ~project ~service ~image ~record ~runtime_service_account
+    (match http with
+     | Some _ -> Error "http_path is only valid on a -fn; a -svc owns its HTTP contract"
+     | None ->
+       deploy_svc
+         ~target
+         ~config
+         ~project
+         ~service
+         ~image
+         ~record
+         ~runtime_service_account)
   | Sol_cli_manifest.Fn ->
-    deploy_fn
-      ~target
-      ~config
-      ~project
-      ~service
-      ~image
-      ~record
-      ~runtime_service_account
-      ~schedule
-      ~schedule_timezone
-      ~scheduler_identity
+    (match http with
+     | Some http ->
+       deploy_fn_http
+         ~target
+         ~config
+         ~project
+         ~service
+         ~image
+         ~record
+         ~runtime_service_account
+         ~trigger:http
+     | None ->
+       deploy_fn
+         ~target
+         ~config
+         ~project
+         ~service
+         ~image
+         ~record
+         ~runtime_service_account
+         ~schedule
+         ~schedule_timezone
+         ~scheduler_identity)
   | Sol_cli_manifest.Worker ->
     Error
       "target-scoped serverless dispatch does not support -worker: worker delivery needs \
@@ -304,6 +379,49 @@ let rollback_fn
   Ok (Sol_cli_aws_lambda_fn.observed_json observed)
 ;;
 
+let rollback_fn_http
+      ~(target : Sol_cli_config.target)
+      ~project
+      ~(service : Sol_cli_manifest.service)
+      ~record
+      ~version
+  =
+  let* release = Sol_cli_aws_fn_http.read_record ~path:record in
+  let* function_name = provider_name service in
+  let* () =
+    check_record
+      ~region:target.region
+      ~service:service.name
+      ~function_name
+      (release.region, release.service, release.function_name)
+  in
+  let request =
+    { Sol_cli_aws_fn_http.profile = Sol_cli_config.provider_field target "profile"
+    ; region = target.region
+    ; service = service.name
+    ; function_name
+    ; image = release.image
+    ; role_arn = release.role_arn
+    ; unit = Sol_cli_serverless_target_common.unit_of_service ~project service
+    ; http_path = release.http_path
+    ; record = None
+    ; run = runner
+    }
+  in
+  let write_record release =
+    Sol_cli_aws_fn_http.write_record ~path:record release
+    |> Result.map_error (fun message -> "could not update release record: " ^ message)
+  in
+  let on_alias_moved version = write_record { release with version; alias = "live" } in
+  let* observed =
+    Sol_cli_aws_fn_http.rollback request ~version ~on_alias_moved
+    |> Result.map_error Sol_cli_aws_fn_http.failure_to_string
+  in
+  let recorded = { observed with image = release.image; role_arn = release.role_arn } in
+  let* () = write_record recorded in
+  Ok (Sol_cli_aws_fn_http.release_json observed)
+;;
+
 let rollback
       ~(target : Sol_cli_config.target)
       ~project
@@ -320,6 +438,7 @@ let rollback
   match kind with
   | Some "svc" -> rollback_svc ~target ~project ~service ~record ~version ~token
   | Some "fn" -> rollback_fn ~target ~project ~service ~record ~version
+  | Some "fn_http" -> rollback_fn_http ~target ~project ~service ~record ~version
   | Some other ->
     Error
       (Printf.sprintf
@@ -373,6 +492,22 @@ let destroy ~(target : Sol_cli_config.target) ~service ~record =
     in
     Sol_cli_aws_lambda_fn.destroy request ~profile ~region:target.region ~service ~record
     |> Result.map_error Sol_cli_aws_lambda_fn.failure_to_string
+  | Some "fn_http" ->
+    let request =
+      { Sol_cli_aws_fn_http.profile
+      ; region = target.region
+      ; service
+      ; function_name = ""
+      ; image = ""
+      ; role_arn = ""
+      ; unit = ""
+      ; http_path = ""
+      ; record = None
+      ; run = runner
+      }
+    in
+    Sol_cli_aws_fn_http.destroy ~r:request ~profile ~region:target.region ~service ~record
+    |> Result.map_error Sol_cli_aws_fn_http.failure_to_string
   | Some other ->
     Error
       (Printf.sprintf

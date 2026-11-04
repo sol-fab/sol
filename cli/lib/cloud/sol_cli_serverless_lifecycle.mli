@@ -23,7 +23,19 @@ val deploy
   -> schedule:string option
   -> schedule_timezone:string option
   -> scheduler_identity:string option
+  -> http:Sol_cli_toml.http_trigger option
   -> (Yojson.Safe.t, string) result
+
+(** Refuse an exposure the selected backend cannot enforce before any provider or
+    authorization mutation. Public is available on both backends; internal is refused
+    on AWS because a Function URL is publicly reachable, and requires an explicit
+    caller set on GCP. *)
+val validate_http_exposure
+  :  target:Sol_cli_config.target
+  -> service:Sol_cli_manifest.service
+  -> language:Sol_cli_compat.language option
+  -> config:Sol_cli_toml.t
+  -> (unit, string) result
 
 val complete_units
   :  config:Sol_cli_config.t
@@ -48,6 +60,7 @@ val rollback
 
 val destroy
   :  target:Sol_cli_config.target
+  -> target_name:string
   -> service:string
   -> record:string
   -> (unit, string) result

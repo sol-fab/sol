@@ -348,3 +348,34 @@ require_grafana_oidc_inputs() {
   fi
   say "production preflight: Grafana OIDC inputs present"
 }
+
+# A genuine desired-state update for the mixed row: change one Kubernetes
+# workload's declared replica floor in the target file. This is target intent,
+# not a provider mutation and not a candidate-tree edit.
+mixed_set_replicas() {
+  local target_file="$1" service="$2" replicas="$3"
+  python3 - "$target_file" "$service" "$replicas" <<'PY'
+import sys, yaml
+path, service, replicas = sys.argv[1], sys.argv[2], int(sys.argv[3])
+with open(path) as handle:
+    original = handle.readlines()
+header = []
+for line in original:
+    if line.startswith("#"):
+        header.append(line)
+    else:
+        break
+with open(path) as handle:
+    document = yaml.safe_load(handle) or {}
+for environment in document.values():
+    if not isinstance(environment, dict):
+        continue
+    for target in (environment.get("targets") or {}).values():
+        services = target.setdefault("services", {})
+        entry = services.setdefault(service, {})
+        entry["scale_min"] = replicas
+with open(path, "w") as handle:
+    handle.writelines(header)
+    yaml.safe_dump(document, handle, sort_keys=False)
+PY
+}

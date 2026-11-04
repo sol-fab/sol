@@ -298,6 +298,7 @@ let sample_plan () : Sol_cli_deployment_plan.t =
     ; schedule_timezone = None
     ; scheduled_concurrency = Sol_cli_toml.Allow
     ; backoff_limit = 3
+    ; http = None
     ; replicas = 2
     ; availability = Sol_cli_availability.Single
     ; consumes_kafka = false
@@ -766,6 +767,7 @@ let make_worker_spec name domain =
   ; schedule_timezone = None
   ; scheduled_concurrency = Sol_cli_toml.Allow
   ; backoff_limit = 3
+  ; http = None
   ; replicas = 1
   ; availability = Sol_cli_availability.Single
   ; consumes_kafka = false
@@ -1608,7 +1610,9 @@ let test_fn_without_schedule_is_a_plan_error toml () =
       Windtrap.bool
       ~msg:"names the missing key"
       true
-      (matches_regex (Str.regexp_string "[service] schedule is required") msg)
+      (matches_regex
+         (Str.regexp_string "[service] schedule or http_path is required")
+         msg)
 ;;
 
 let test_function_volume_fails () =

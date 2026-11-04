@@ -113,8 +113,22 @@ sol plan prod/aws/us-east-1                     # full target preview; nothing i
 sol deploy prod/aws/us-east-1                   # reconcile infrastructure and workloads
 ```
 
-- `sol plan` previews the existing target Terraform roots, authorization, and workload changes.
-  Cluster and CRD prerequisites are reported as explicit deferrals when they are not yet present.
+- `sol plan` previews the existing target Terraform roots, authorization, and workload changes,
+  and prints the same workload/HTTP-route/gateway/trigger/identity/permission transition the
+  deploy will use. It supports Kubernetes, serverless and mixed targets, never prompts and never
+  mutates. `sol plan <target> --out plan.json` persists the transition.
+- `sol deploy` prints that transition first. Destructive changes — removing a workload, route,
+  gateway or scheduled trigger, or replacing a trigger/route — require confirmation; an
+  interactive run asks, and a noninteractive run fails closed unless `--yes` is passed. The
+  plan is derived from Sol's release records and serverless inventory, not from Terraform, and
+  the operations it shows are the ones the same deploy reconciliation executes.
+- `sol deploy <target> --plan plan.json` applies a reviewed transition only when the transition
+  recomputed at apply time is identical to the saved plan. A stale plan, a different target, or a
+  plan produced while ownership was unknown is refused before workload mutation. Destructive
+  confirmation still applies. Mixed-target plans persist serverless and Kubernetes components;
+  both are validated against current ownership state before either mutates. Mixed apply is not
+  atomic: serverless is reconciled first, and a later Kubernetes failure is reported as a
+  partial apply that is not automatically rolled back; re-run the same reviewed plan to converge.
 - `sol deploy` applies fresh Terraform plans for the existing roots, verifies the platform, then
   reconciles configured authorization, workloads, and removals. A service removed from the
   declarations is removed from the cluster only while its live object's UID still matches the UID
@@ -125,8 +139,10 @@ sol deploy prod/aws/us-east-1                   # reconcile infrastructure and w
 - `sol deploy` re-applies every declared workload, but each workload carries its own immutable
   identity; changing one workload's image or configuration does not change the Pod template of an
   unchanged one, so it does not roll out.
-- Target teardown is `sol destroy <target>`. It does
-  not remove the durable installation; use `sol uninstall` for that separate scope.
+- Target teardown is `sol destroy <target>`. `--apply` prints a Destruction plan before deleting
+  released workloads, serverless functions, HTTP routes, gateways and triggers, then reconciles
+  the target toward empty. It does not remove the durable installation; use `sol uninstall` for
+  that separate scope.
 - Add workspace Terraform under `sol/terraform/<provider>/{cluster,platform}`. It joins the
   matching existing root and state; see the
   [substrate reference](../reference/substrate.md#workspace-owned-terraform) for the stable

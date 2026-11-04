@@ -108,6 +108,236 @@ let target_authorization
     |> Result.map_error Sol_cli_exit.error
 ;;
 
+let serverless_desired_workloads declared =
+  List.map
+    (fun ((service : Sol_cli_manifest.service), image, (config : Sol_cli_toml.t), _) ->
+       { Sol_cli_transition.name = service.name
+       ; kind = Sol_cli_manifest.primitive_label service.primitive
+       ; image = Some image
+       ; schedule = Option.map Sol_cli_transition.normalize_schedule config.schedule
+       ; http =
+           Option.map
+             (fun (http : Sol_cli_toml.http_trigger) ->
+                http.path, Sol_cli_toml.http_exposure_to_string http.exposure)
+             config.http
+       ; config_digest =
+           Some
+             (Sol_cli_transition.digest_config
+                (config.env_config
+                 @ List.map (fun key -> "secret:" ^ key, "") config.secret_keys))
+       })
+    declared
+;;
+
+let previous_public_http ~target_name =
+  let open Result.Syntax in
+  let* entries =
+    Sol_cli_serverless_inventory.load ~target:target_name
+    |> Result.map_error Sol_cli_exit.error
+  in
+  entries
+  |> Sol_cli_result.map_list (fun (entry : Sol_cli_serverless_inventory.entry) ->
+    let* text =
+      Sol_cli_fs.read_file entry.record
+      |> Result.map_error (fun message ->
+        Sol_cli_exit.error
+          (Printf.sprintf
+             "cannot read the previous record for %s: %s"
+             entry.service
+             message))
+    in
+    let* json =
+      Sol_cli_json.decode ~what:"previous release record" text
+      |> Result.map_error Sol_cli_exit.error
+    in
+    let* workload =
+      Sol_cli_transition.of_serverless_record ~service:entry.service json
+      |> Result.map_error Sol_cli_exit.error
+    in
+    Ok
+      (match workload.Sol_cli_transition.http with
+       | Some (_, "public") -> true
+       | _ -> false))
+  |> Result.map (List.exists Fun.id)
+;;
+
+let load_plan_json path =
+  let* text =
+    Sol_cli_fs.read_file path
+    |> Result.map_error (fun message -> "cannot read plan: " ^ message)
+  in
+  Sol_cli_json.decode ~what:"transition plan" text
+  |> Result.map_error (fun message -> "plan is invalid: " ^ message)
+;;
+
+let plan_component_json json component =
+  match Sol_cli_json.field [ "components" ] json with
+  | `Assoc components ->
+    (match List.assoc_opt component components with
+     | Some component -> Ok component
+     | None -> Error (Printf.sprintf "plan has no %s component" component))
+  | _ -> Ok json
+;;
+
+let validate_transition_plan ~path ~component (expected : Sol_cli_transition.t) =
+  let* json = load_plan_json path in
+  let* json = plan_component_json json component in
+  let* loaded = Sol_cli_transition.of_json json in
+  let (loaded : Sol_cli_transition.t) = loaded in
+  if loaded.unknown <> []
+  then
+    Error
+      (Printf.sprintf
+         "plan %s was generated while ownership was unknown, so it cannot authorize a \
+          deployment"
+         path)
+  else if not (String.equal loaded.target expected.target)
+  then
+    Error
+      (Printf.sprintf
+         "plan %s is for target %s, not %s"
+         path
+         loaded.target
+         expected.target)
+  else if not (String.equal loaded.desired_fingerprint expected.desired_fingerprint)
+  then
+    Error
+      (Printf.sprintf
+         "plan %s no longer matches the desired state Sol would apply; review it again \
+          with `sol plan %s --out %s`\n\n\
+          --- reviewed plan ---\n\
+          %s\n\
+          --- current transition ---\n\
+          %s"
+         path
+         expected.target
+         path
+         (Sol_cli_transition.render loaded)
+         (Sol_cli_transition.render expected))
+  else (
+    let unplanned_destructive =
+      Sol_cli_transition.destructive expected
+      |> List.filter (fun change ->
+        not
+          (List.exists
+             (fun (reviewed : Sol_cli_transition.change) -> reviewed = change)
+             loaded.changes))
+    in
+    if unplanned_destructive = []
+    then Ok ()
+    else
+      Error
+        (Printf.sprintf
+           "plan %s did not include destructive change(s) the current state now \
+            requires; review it again with `sol plan %s --out %s`\n\n\
+            %s"
+           path
+           expected.target
+           path
+           (Sol_cli_transition.render
+              { expected with
+                Sol_cli_transition.changes = unplanned_destructive
+              ; unknown = []
+              })))
+;;
+
+let transition_permissions (target : Sol_cli_config.target) =
+  (Sol_cli_provider_capabilities.capabilities_of target.provider).transition_permissions
+;;
+
+let prune_all_serverless
+      ~(target_cfg : Sol_cli_config.target)
+      ~target_name
+      ~assume_yes
+      ~plan_file
+  =
+  let open Result.Syntax in
+  let* entries =
+    Sol_cli_serverless_inventory.load ~target:target_name
+    |> Result.map_error Sol_cli_exit.error
+  in
+  if entries = []
+  then Ok ()
+  else
+    let* previous =
+      entries
+      |> Sol_cli_result.map_list (fun (entry : Sol_cli_serverless_inventory.entry) ->
+        let* text =
+          Sol_cli_fs.read_file entry.record
+          |> Result.map_error (fun message ->
+            Sol_cli_exit.error
+              (Printf.sprintf
+                 "cannot read the previous record for %s: %s"
+                 entry.service
+                 message))
+        in
+        let* json =
+          Sol_cli_json.decode ~what:"previous release record" text
+          |> Result.map_error Sol_cli_exit.error
+        in
+        Sol_cli_transition.of_serverless_record ~service:entry.service json
+        |> Result.map_error Sol_cli_exit.error)
+    in
+    let transition =
+      Sol_cli_transition.compute
+        ~target:target_name
+        ~backend:`Serverless
+        ~previous
+        ~desired:[]
+        ~unknown:[]
+        ~permissions:(transition_permissions target_cfg)
+        ()
+    in
+    let* () =
+      match plan_file with
+      | None -> Ok ()
+      | Some path ->
+        validate_transition_plan ~path ~component:"serverless" transition
+        |> Result.map_error Sol_cli_exit.error
+    in
+    print_string (Sol_cli_transition.render transition);
+    print_newline ();
+    let* () =
+      let destructive = Sol_cli_transition.destructive transition in
+      if destructive = []
+      then Ok ()
+      else if assume_yes
+      then Ok ()
+      else if Sol_cli_confirm.interactive ()
+      then
+        if
+          Sol_cli_confirm.ask
+            ~question:"Proceed with deployment?"
+            ~default:false
+            ~print:print_string
+        then Ok ()
+        else Error (Sol_cli_exit.error "deployment cancelled; no workloads were removed")
+      else
+        Error
+          (Sol_cli_exit.error
+             "deployment plan includes destructive changes; re-run with --yes to \
+              authorize them")
+    in
+    let* () =
+      Sol_cli_http_gateway.reconcile_public ~target:target_cfg ~target_name ~routes:[]
+      |> Result.map (fun _ -> ())
+      |> Result.map_error Sol_cli_exit.error
+    in
+    entries
+    |> Sol_cli_result.map_list (fun (entry : Sol_cli_serverless_inventory.entry) ->
+      let* () =
+        Sol_cli_serverless_lifecycle.destroy
+          ~target:target_cfg
+          ~target_name
+          ~service:entry.service
+          ~record:entry.record
+        |> Result.map_error Sol_cli_exit.error
+      in
+      Sol_cli_serverless_inventory.remove ~target:target_name ~service:entry.service
+      |> Result.map_error Sol_cli_exit.error)
+    |> Result.map ignore
+;;
+
 let run_serverless
       ~(resolved_config : Sol_cli_config.t)
       ~(target_cfg : Sol_cli_config.target)
@@ -116,6 +346,10 @@ let run_serverless
       ~identities
       ~scheduler_identities
       ~target_name
+      ~assume_yes
+      ~preconfirmed
+      ~plan_file
+      ~component
       ~run_log
   =
   let* services =
@@ -247,11 +481,129 @@ let run_serverless
       workloads
     |> Result.map_error Sol_cli_exit.error
   in
+  let* () =
+    declared
+    |> Sol_cli_result.map_list
+         (fun ((service : Sol_cli_manifest.service), _, (config : Sol_cli_toml.t), _) ->
+            let language =
+              match
+                Sol_cli_config.services resolved_config
+                |> List.find_opt (fun (s : Sol_cli_config.service) ->
+                  String.equal s.name service.name)
+              with
+              | Some { language; _ } -> language
+              | None -> None
+            in
+            Sol_cli_serverless_lifecycle.validate_http_exposure
+              ~target:target_cfg
+              ~service
+              ~language
+              ~config
+            |> Result.map_error Sol_cli_exit.error)
+    |> Result.map ignore
+  in
+  let* () =
+    let public_routes =
+      List.filter_map
+        (fun ((service : Sol_cli_manifest.service), _, (config : Sol_cli_toml.t), _) ->
+           match config.http with
+           | Some (http : Sol_cli_toml.http_trigger)
+             when http.exposure = Sol_cli_toml.Http_public ->
+             Some
+               { Sol_cli_http_route.service = service.name
+               ; path = http.path
+               ; backend = "pending"
+               }
+           | _ -> None)
+        declared
+    in
+    Sol_cli_http_route.validate_routes public_routes
+    |> Result.map_error Sol_cli_exit.error
+  in
+  let* previous_entries =
+    Sol_cli_serverless_inventory.load ~target:target_name
+    |> Result.map_error Sol_cli_exit.error
+  in
+  let* previous =
+    previous_entries
+    |> Sol_cli_result.map_list (fun (entry : Sol_cli_serverless_inventory.entry) ->
+      let* text =
+        Sol_cli_fs.read_file entry.record
+        |> Result.map_error (fun message ->
+          Sol_cli_exit.error
+            (Printf.sprintf
+               "cannot read the previous record for %s: %s"
+               entry.service
+               message))
+      in
+      let* json =
+        Sol_cli_json.decode ~what:"previous release record" text
+        |> Result.map_error Sol_cli_exit.error
+      in
+      Sol_cli_transition.of_serverless_record ~service:entry.service json
+      |> Result.map_error Sol_cli_exit.error)
+  in
+  let desired = serverless_desired_workloads declared in
+  let transition =
+    Sol_cli_transition.compute
+      ~target:target_name
+      ~backend:`Serverless
+      ~previous
+      ~desired
+      ~unknown:[]
+      ~permissions:(transition_permissions target_cfg)
+      ()
+  in
+  (match Sol_cli_config.execution_of_target target_cfg with
+   | Sol_cli_config.Mixed ->
+     Printf.eprintf
+       "note: mixed-target apply reconciles the serverless component and then the \
+        Kubernetes component; it is not atomic. If one component fails, the other may \
+        remain applied; re-run the same reviewed plan to converge.\n\
+        %!"
+   | Sol_cli_config.Kubernetes | Sol_cli_config.Serverless -> ());
+  let* () =
+    match plan_file with
+    | None -> Ok ()
+    | Some _ when preconfirmed -> Ok ()
+    | Some path ->
+      validate_transition_plan ~path ~component transition
+      |> Result.map_error Sol_cli_exit.error
+  in
+  print_string (Sol_cli_transition.render transition);
+  print_newline ();
+  let* () =
+    let destructive = Sol_cli_transition.destructive transition in
+    if destructive = []
+    then Ok ()
+    else if assume_yes || preconfirmed
+    then (
+      if assume_yes then Printf.printf "Proceeding with --yes.\n%!";
+      Ok ())
+    else if Sol_cli_confirm.interactive ()
+    then
+      if
+        Sol_cli_confirm.ask
+          ~question:"Proceed with deployment?"
+          ~default:false
+          ~print:print_string
+      then Ok ()
+      else
+        Error
+          (Sol_cli_exit.error
+             "deployment cancelled; no provider workload changes were made")
+    else
+      Error
+        (Sol_cli_exit.error
+           "deployment plan includes destructive changes; re-run with --yes to authorize \
+            them")
+  in
   let single =
     match declared with
     | [ _ ] -> true
     | _ -> false
   in
+  let gateway_routes = ref [] in
   let* _ =
     declared
     |> Sol_cli_result.map_list
@@ -326,8 +678,17 @@ let run_serverless
                 ~schedule:config.Sol_cli_toml.schedule
                 ~schedule_timezone:config.Sol_cli_toml.schedule_timezone
                 ~scheduler_identity
+                ~http:config.Sol_cli_toml.http
               |> Result.map_error Sol_cli_exit.error
             in
+            let* route =
+              match config.Sol_cli_toml.http with
+              | None -> Ok None
+              | Some http ->
+                Sol_cli_http_route.of_release ~target:target_cfg http release
+                |> Result.map_error Sol_cli_exit.error
+            in
+            Option.iter (fun route -> gateway_routes := route :: !gateway_routes) route;
             let* () =
               Sol_cli_serverless_inventory.add
                 ~target:target_name
@@ -337,6 +698,51 @@ let run_serverless
             in
             print_endline (Yojson.Safe.to_string release);
             Ok ())
+  in
+  let* previous_public = previous_public_http ~target_name in
+  let* gateway =
+    if !gateway_routes = [] && not previous_public
+    then Ok None
+    else
+      Sol_cli_http_gateway.reconcile_public
+        ~target:target_cfg
+        ~target_name
+        ~routes:!gateway_routes
+      |> Result.map_error Sol_cli_exit.error
+  in
+  Option.iter
+    (fun (endpoint : Sol_cli_http_gateway.endpoint) ->
+       print_endline
+         (Yojson.Safe.to_string
+            (`Assoc
+                [ "kind", `String "http_gateway"
+                ; "name", `String endpoint.name
+                ; "url", `String endpoint.url
+                ])))
+    gateway;
+  let desired_names =
+    List.map (fun (service, _, _, _) -> service.Sol_cli_manifest.name) declared
+  in
+  let removed =
+    List.filter
+      (fun (entry : Sol_cli_serverless_inventory.entry) ->
+         not (List.mem entry.service desired_names))
+      previous_entries
+  in
+  let* () =
+    removed
+    |> Sol_cli_result.map_list (fun (entry : Sol_cli_serverless_inventory.entry) ->
+      let* () =
+        Sol_cli_serverless_lifecycle.destroy
+          ~target:target_cfg
+          ~target_name
+          ~service:entry.service
+          ~record:entry.record
+        |> Result.map_error Sol_cli_exit.error
+      in
+      Sol_cli_serverless_inventory.remove ~target:target_name ~service:entry.service
+      |> Result.map_error Sol_cli_exit.error)
+    |> Result.map ignore
   in
   Ok ()
 ;;
@@ -1286,6 +1692,10 @@ let run_apply
       ~accept_unresolved
       ~loki_push_url
       ~await_delegation
+      ~assume_yes
+      ~preconfirmed
+      ~plan_file
+      ~component
       ()
   =
   print_header
@@ -1376,6 +1786,103 @@ let run_apply
   in
   print_plan_preflight_passed plan;
   let ctx : Sol_cli_deploy_run.context = context_of ~destination in
+  let* previous =
+    Sol_cli_release_store.current_record
+      ~ctx:ctx.execution.cluster
+      ~workspace:planning.Sol_cli_deploy_selection.Target_plan_input.workspace
+    |> Result.map_error (fun message ->
+      Sol_cli_exit.error
+        (Printf.sprintf
+           "cannot read the current release, so a destructive transition cannot be ruled \
+            out: %s"
+           message))
+  in
+  let previous_workloads =
+    match previous with
+    | None -> []
+    | Some (release : Sol_cli_release.t) ->
+      List.map
+        (fun (recorded : Sol_cli_release.recorded_workload) ->
+           let spec = recorded.spec in
+           { Sol_cli_transition.name = spec.domain ^ "/" ^ spec.name
+           ; kind = spec.primitive
+           ; image = Some spec.image
+           ; schedule = spec.schedule
+           ; http =
+               (match spec.http_path with
+                | Some path ->
+                  Some (path, Option.value spec.http_exposure ~default:"public")
+                | None -> None)
+           ; config_digest = Some (Sol_cli_transition.digest_config spec.config)
+           })
+        release.workloads
+  in
+  let desired_workloads =
+    List.map
+      (fun (spec : Sol_cli_deployment_plan.service_spec) ->
+         let kind =
+           match spec.primitive with
+           | Sol_cli_deployment_plan.Svc -> "svc"
+           | Sol_cli_deployment_plan.Worker -> "worker"
+           | Sol_cli_deployment_plan.Fn -> "fn"
+         in
+         { Sol_cli_transition.name = spec.domain ^ "/" ^ spec.source_name
+         ; kind
+         ; image = Some spec.image
+         ; schedule = spec.schedule
+         ; http =
+             Option.map
+               (fun (http : Sol_cli_toml.http_trigger) ->
+                  http.path, Sol_cli_toml.http_exposure_to_string http.exposure)
+               spec.http
+         ; config_digest = Some (Sol_cli_transition.digest_config spec.config)
+         })
+      plan.services
+  in
+  let transition =
+    Sol_cli_transition.compute
+      ~target
+      ~backend:`Kubernetes
+      ~previous:previous_workloads
+      ~desired:desired_workloads
+      ~unknown:[]
+      ()
+  in
+  let* () =
+    match plan_file with
+    | None -> Ok ()
+    | Some path ->
+      validate_transition_plan ~path ~component transition
+      |> Result.map_error Sol_cli_exit.error
+  in
+  print_string (Sol_cli_transition.render transition);
+  print_newline ();
+  let* () =
+    let destructive = Sol_cli_transition.destructive transition in
+    if destructive = []
+    then Ok ()
+    else if assume_yes || preconfirmed
+    then (
+      if assume_yes then Printf.printf "Proceeding with --yes.\n%!";
+      Ok ())
+    else if Sol_cli_confirm.interactive ()
+    then
+      if
+        Sol_cli_confirm.ask
+          ~question:"Proceed with deployment?"
+          ~default:false
+          ~print:print_string
+      then Ok ()
+      else
+        Error
+          (Sol_cli_exit.error
+             "deployment cancelled; no provider workload changes were made")
+    else
+      Error
+        (Sol_cli_exit.error
+           "deployment plan includes destructive changes; re-run with --yes to authorize \
+            them")
+  in
   let* plan = project_trusted_workload_issuer ctx.target_cfg plan in
   let database_setup ~setup_image () =
     run_database_setup_step
@@ -1419,7 +1926,196 @@ let run_apply
   |> Result.map_error run_failed
 ;;
 
-let run (req : Sol_cli_command_request.deploy_request) =
+let preview_serverless
+      ~(target_cfg : Sol_cli_config.target)
+      ~target_name
+      ~(deployed : Sol_cli_deploy_selection.deployed)
+      ~(selection : Sol_cli_deploy_selection.selection)
+  =
+  let open Result.Syntax in
+  let* facts =
+    Sol_cli_workspace_model.load_cwd ()
+    |> Result.map_error (fun message -> Sol_cli_exit.error message)
+  in
+  let* entries =
+    Sol_cli_serverless_inventory.load ~target:target_name
+    |> Result.map_error Sol_cli_exit.error
+  in
+  let* previous =
+    entries
+    |> Sol_cli_result.map_list (fun (entry : Sol_cli_serverless_inventory.entry) ->
+      let* text =
+        Sol_cli_fs.read_file entry.record
+        |> Result.map_error (fun message ->
+          Sol_cli_exit.error
+            (Printf.sprintf
+               "cannot read the previous record for %s: %s"
+               entry.service
+               message))
+      in
+      let* json =
+        Sol_cli_json.decode ~what:"previous release record" text
+        |> Result.map_error Sol_cli_exit.error
+      in
+      Sol_cli_transition.of_serverless_record ~service:entry.service json
+      |> Result.map_error Sol_cli_exit.error)
+  in
+  let* desired =
+    deployed.services
+    |> Sol_cli_result.map_list (fun (service : Sol_cli_manifest.service) ->
+      let* image =
+        List.assoc_opt service.name selection.Sol_cli_deploy_selection.image_refs
+        |> Option.to_result
+             ~none:
+               (Sol_cli_exit.error
+                  (Printf.sprintf
+                     "serverless deployment requires --image-ref %s=REPO@sha256:DIGEST"
+                     service.name))
+      in
+      let* config =
+        match
+          Sol_cli_workspace_model.workloads facts
+          |> List.find_opt (fun (workload : Sol_cli_workspace_model.workload) ->
+            String.equal workload.service.Sol_cli_manifest.name service.name)
+        with
+        | Some { config = Ok config; _ } -> Ok config
+        | Some { config = Error error; _ } ->
+          Error (Sol_cli_exit.error (Sol_cli_toml.parse_error_to_string error))
+        | None ->
+          Error
+            (Sol_cli_exit.error
+               (Printf.sprintf "cannot find %s's declarations" service.name))
+      in
+      Ok
+        { Sol_cli_transition.name = service.name
+        ; kind = Sol_cli_manifest.primitive_label service.primitive
+        ; image = Some image
+        ; schedule = Option.map Sol_cli_transition.normalize_schedule config.schedule
+        ; http =
+            Option.map
+              (fun (http : Sol_cli_toml.http_trigger) ->
+                 http.path, Sol_cli_toml.http_exposure_to_string http.exposure)
+              config.http
+        ; config_digest =
+            Some
+              (Sol_cli_transition.digest_config
+                 (config.env_config
+                  @ List.map (fun key -> "secret:" ^ key, "") config.secret_keys))
+        })
+  in
+  Ok
+    (Sol_cli_transition.compute
+       ~target:target_name
+       ~backend:`Serverless
+       ~previous
+       ~desired
+       ~unknown:[]
+       ~permissions:(transition_permissions target_cfg)
+       ())
+;;
+
+let preview_kubernetes
+      ~target_name
+      ~(target_cfg : Sol_cli_config.target)
+      ~workspace
+      ~registry
+      ~sha
+      ~facts
+      ~inventory
+      ~image_refs
+      ~services
+      ~(config : Sol_cli_config.t)
+  =
+  let open Result.Syntax in
+  let planning : Sol_cli_deploy_selection.Target_plan_input.t =
+    { workspace
+    ; registry
+    ; sha
+    ; emit_to = None
+    ; config
+    ; facts
+    ; inventory
+    ; image_refs
+    ; services
+    }
+  in
+  let* plan = build_plan ~evaluation:Sol_cli_profile_preflight.All planning in
+  let plan = Sol_cli_deploy_selection.Target_plan.to_deployment_plan plan in
+  let* destination =
+    Sol_cli_config.destination_of_target target_cfg
+    |> Result.map_error (fun message ->
+      Sol_cli_exit.error
+        (Printf.sprintf
+           "cannot validate the Kubernetes component without a destination: %s"
+           message))
+  in
+  let ctx = Sol_cli_kube_destination.context_of_destination destination in
+  let* previous =
+    Sol_cli_release_store.current_record ~ctx ~workspace
+    |> Result.map_error (fun message ->
+      Sol_cli_exit.error
+        (Printf.sprintf
+           "cannot read the current Kubernetes release, so a destructive transition \
+            cannot be ruled out: %s"
+           message))
+  in
+  let previous_workloads =
+    match previous with
+    | None -> []
+    | Some (release : Sol_cli_release.t) ->
+      List.map
+        (fun (recorded : Sol_cli_release.recorded_workload) ->
+           let spec = recorded.spec in
+           { Sol_cli_transition.name = spec.domain ^ "/" ^ spec.name
+           ; kind = spec.primitive
+           ; image = Some spec.image
+           ; schedule = spec.schedule
+           ; http =
+               (match spec.http_path with
+                | Some path ->
+                  Some (path, Option.value spec.http_exposure ~default:"public")
+                | None -> None)
+           ; config_digest = Some (Sol_cli_transition.digest_config spec.config)
+           })
+        release.workloads
+  in
+  let desired =
+    List.map
+      (fun (spec : Sol_cli_deployment_plan.service_spec) ->
+         let kind =
+           match spec.primitive with
+           | Sol_cli_deployment_plan.Svc -> "svc"
+           | Sol_cli_deployment_plan.Worker -> "worker"
+           | Sol_cli_deployment_plan.Fn -> "fn"
+         in
+         { Sol_cli_transition.name = spec.domain ^ "/" ^ spec.source_name
+         ; kind
+         ; image = Some spec.image
+         ; schedule = spec.schedule
+         ; http =
+             Option.map
+               (fun (http : Sol_cli_toml.http_trigger) ->
+                  http.path, Sol_cli_toml.http_exposure_to_string http.exposure)
+               spec.http
+         ; config_digest = Some (Sol_cli_transition.digest_config spec.config)
+         })
+      plan.services
+  in
+  Ok
+    (Sol_cli_transition.compute
+       ~target:target_name
+       ~backend:`Kubernetes
+       ~previous:previous_workloads
+       ~desired
+       ~unknown:[]
+       ())
+;;
+
+let run ~assume_yes ~plan_file (req : Sol_cli_command_request.deploy_request) =
+  let serverless_preconfirmed = ref false in
+  let kubernetes_preconfirmed = ref false in
+  let authorization_applied = ref false in
+  let serverless_pruned = ref false in
   let workspace = workspace_name () in
   let sha = req.image_tag in
   let* facts = Sol_cli_workspace_model.load_cwd () |> Sol_cli_exit.of_msg in
@@ -1497,129 +2193,262 @@ let run (req : Sol_cli_command_request.deploy_request) =
                 service.name)))
     else Ok ()
   in
-  let identities = ref [] in
-  let scheduler_identities = ref [] in
   let* () =
-    Sol_cli_mixed_lifecycle.run
-      ~target:target_cfg
-      ~services:deployed.services
-      ~authorize:(fun () ->
-        match Sol_cli_config.execution_of_target target_cfg with
-        | Sol_cli_config.Kubernetes -> Ok ()
-        | Sol_cli_config.Serverless | Sol_cli_config.Mixed ->
-          let* identities', scheduler_identities' =
-            target_authorization
-              ~resolved_config
-              ~target_cfg
-              ~facts
-              ~serverless_all:
-                (Sol_cli_config.execution_of_target target_cfg = Sol_cli_config.Serverless)
-              ~run_log
-            |> Result.map_error (fun (failure : Sol_cli_exit.failure) -> failure.text)
-          in
-          identities := identities';
-          scheduler_identities := scheduler_identities';
-          Ok ())
-      ~serverless:(fun services ->
-        if services = []
-        then Ok ()
+    if plan_file = None && serverless_services = [] && kubernetes_services = []
+    then Ok ()
+    else
+      let* serverless_transition =
+        if serverless_services = []
+        then Ok None
         else
-          run_serverless
-            ~resolved_config
+          preview_serverless
             ~target_cfg
-            ~deployed:{ deployed with services }
-            ~selection
-            ~identities:!identities
-            ~scheduler_identities:!scheduler_identities
             ~target_name:req.target
-            ~run_log
-          |> Result.map_error (fun (failure : Sol_cli_exit.failure) -> failure.text))
-      ~kubernetes:(fun _ -> Ok ())
-    |> Result.map_error Sol_cli_exit.error
+            ~deployed:{ deployed with services = serverless_services }
+            ~selection
+          |> Result.map (fun transition -> Some transition)
+      in
+      let* kubernetes_transition =
+        if kubernetes_services = []
+        then Ok None
+        else (
+          match
+            preview_kubernetes
+              ~target_name:req.target
+              ~target_cfg
+              ~workspace
+              ~registry
+              ~sha
+              ~facts
+              ~inventory
+              ~image_refs
+              ~services:kubernetes_services
+              ~config:resolved_config
+          with
+          | Ok transition -> Ok (Some transition)
+          | Error failure
+            when plan_file = None
+                 && (Sol_cli_string.contains ~needle:"without a destination" failure.text
+                     || Sol_cli_string.contains ~needle:"preflight found" failure.text) ->
+            (* A first-run target has no destination yet. There is no previous
+               workload to destroy, and run_apply establishes the destination
+               before its own plan gate. *)
+            Ok None
+          | Error failure -> Error failure)
+      in
+      let components =
+        List.filter_map
+          Fun.id
+          [ Option.map (fun transition -> "serverless", transition) serverless_transition
+          ; Option.map (fun transition -> "kubernetes", transition) kubernetes_transition
+          ]
+      in
+      let* () =
+        match plan_file with
+        | None -> Ok ()
+        | Some path ->
+          components
+          |> Sol_cli_result.map_list (fun (component, transition) ->
+            validate_transition_plan ~path ~component transition)
+          |> Result.map ignore
+          |> Result.map_error Sol_cli_exit.error
+      in
+      List.iter
+        (fun (_, transition) ->
+           print_string (Sol_cli_transition.render transition);
+           print_newline ())
+        components;
+      let destructive =
+        List.concat_map
+          (fun (_, transition) -> Sol_cli_transition.destructive transition)
+          components
+      in
+      let* () =
+        if destructive = []
+        then Ok ()
+        else if assume_yes
+        then Ok ()
+        else if Sol_cli_confirm.interactive ()
+        then
+          if
+            Sol_cli_confirm.ask
+              ~question:"Proceed with deployment?"
+              ~default:false
+              ~print:print_string
+          then Ok ()
+          else Error (Sol_cli_exit.error "deployment cancelled; nothing was applied")
+        else
+          Error
+            (Sol_cli_exit.error
+               "deployment plan includes destructive changes; re-run with --yes to \
+                authorize them")
+      in
+      if List.mem_assoc "serverless" components then serverless_preconfirmed := true;
+      if List.mem_assoc "kubernetes" components then kubernetes_preconfirmed := true;
+      Ok ()
   in
-  if kubernetes_services = []
-  then Ok ()
-  else (
-    let services = kubernetes_services in
-    let emit_intent =
-      match req.action with
-      | Sol_cli_command_request.Deploy_dry_run { emit_to } -> emit_to
-      | Sol_cli_command_request.Deploy_emit_to dir -> Some dir
-      | Sol_cli_command_request.Deploy_apply -> None
-    in
-    let await_delegation = Option.value req.await_delegation ~default:300 in
-    let planning : Sol_cli_deploy_selection.Target_plan_input.t =
-      { workspace
-      ; registry
-      ; sha
-      ; emit_to = emit_intent
-      ; config = resolved_config
-      ; facts
-      ; inventory
-      ; image_refs
-      ; services
-      }
-    in
-    let context_of ~destination : Sol_cli_deploy_run.context =
-      { execution =
-          Sol_cli_execution.context
-            ~cluster:(Sol_cli_kube_destination.context_of_destination destination)
-            ~workspace
-            ~env:target_cfg.env
-            ()
-      ; sha
-      ; registry
-      ; facts
-      ; emit_plan_to = req.emit_plan_to
-      ; target_cfg
-      ; resolved_config
-      ; services
-      ; inventory
-      ; image_refs
-      ; target_name = req.target
-      ; run_log
-      ; keep_releases = req.keep_releases
-      }
-    in
-    match req.action with
-    | Sol_cli_command_request.Deploy_apply ->
-      run_apply
-        ~planning
-        ~context_of
-        ~target:req.target
+  let* () =
+    if
+      Sol_cli_config.execution_of_target target_cfg = Sol_cli_config.Mixed
+      && serverless_services = []
+    then (
+      let* () =
+        prune_all_serverless ~target_cfg ~target_name:req.target ~assume_yes ~plan_file
+      in
+      serverless_pruned := true;
+      Ok ())
+    else Ok ()
+  in
+  let* identities, scheduler_identities =
+    match Sol_cli_config.execution_of_target target_cfg with
+    | Sol_cli_config.Kubernetes -> Ok ([], [])
+    | Sol_cli_config.Serverless | Sol_cli_config.Mixed ->
+      target_authorization
+        ~resolved_config
+        ~target_cfg
+        ~facts
+        ~serverless_all:
+          (Sol_cli_config.execution_of_target target_cfg = Sol_cli_config.Serverless)
         ~run_log
-        ~confirm_group_change:req.confirm_group_change
-        ~confirm_ecr_removal:req.confirm_ecr_removal
-        ~accept_unresolved:req.accept_unresolved
-        ~loki_push_url:req.loki_push_url
-        ~await_delegation
-        ()
-    | Deploy_dry_run { emit_to } ->
-      let* destination, _, _ =
-        destination_or_environment_stage
+  in
+  authorization_applied
+  := Sol_cli_config.execution_of_target target_cfg <> Sol_cli_config.Kubernetes;
+  let apply_serverless () =
+    if serverless_services = []
+    then Ok ()
+    else
+      run_serverless
+        ~resolved_config
+        ~target_cfg
+        ~deployed:{ deployed with services = serverless_services }
+        ~selection
+        ~identities
+        ~scheduler_identities
+        ~target_name:req.target
+        ~assume_yes
+        ~preconfirmed:!serverless_preconfirmed
+        ~plan_file
+        ~component:"serverless"
+        ~run_log
+  in
+  let apply_kubernetes () =
+    if kubernetes_services = []
+    then Ok ()
+    else (
+      let services = kubernetes_services in
+      let emit_intent =
+        match req.action with
+        | Sol_cli_command_request.Deploy_dry_run { emit_to } -> emit_to
+        | Sol_cli_command_request.Deploy_emit_to dir -> Some dir
+        | Sol_cli_command_request.Deploy_apply -> None
+      in
+      let await_delegation = Option.value req.await_delegation ~default:300 in
+      let planning : Sol_cli_deploy_selection.Target_plan_input.t =
+        { workspace
+        ; registry
+        ; sha
+        ; emit_to = emit_intent
+        ; config = resolved_config
+        ; facts
+        ; inventory
+        ; image_refs
+        ; services
+        }
+      in
+      let context_of ~destination : Sol_cli_deploy_run.context =
+        { execution =
+            Sol_cli_execution.context
+              ~cluster:(Sol_cli_kube_destination.context_of_destination destination)
+              ~workspace
+              ~env:target_cfg.env
+              ()
+        ; sha
+        ; registry
+        ; facts
+        ; emit_plan_to = req.emit_plan_to
+        ; target_cfg
+        ; resolved_config
+        ; services
+        ; inventory
+        ; image_refs
+        ; target_name = req.target
+        ; run_log
+        ; keep_releases = req.keep_releases
+        }
+      in
+      match req.action with
+      | Sol_cli_command_request.Deploy_apply ->
+        run_apply
           ~planning
+          ~context_of
           ~target:req.target
           ~run_log
-          ~action:(Sol_cli_command_request.Deploy_dry_run { emit_to })
-          ~await_delegation
+          ~confirm_group_change:req.confirm_group_change
           ~confirm_ecr_removal:req.confirm_ecr_removal
           ~accept_unresolved:req.accept_unresolved
-          ()
-      in
-      run_dry_run (context_of ~destination) ~emit_to ~await_delegation
-    | Deploy_emit_to dir ->
-      let* destination, _, _ =
-        destination_or_environment_stage
-          ~planning
-          ~target:req.target
-          ~run_log
-          ~action:(Sol_cli_command_request.Deploy_emit_to dir)
+          ~loki_push_url:req.loki_push_url
           ~await_delegation
-          ~confirm_ecr_removal:req.confirm_ecr_removal
-          ~accept_unresolved:req.accept_unresolved
+          ~assume_yes
+          ~preconfirmed:!kubernetes_preconfirmed
+          ~plan_file
+          ~component:"kubernetes"
           ()
-      in
-      run_emit (context_of ~destination) ~dir)
+      | Deploy_dry_run { emit_to } ->
+        let* destination, _, _ =
+          destination_or_environment_stage
+            ~planning
+            ~target:req.target
+            ~run_log
+            ~action:(Sol_cli_command_request.Deploy_dry_run { emit_to })
+            ~await_delegation
+            ~confirm_ecr_removal:req.confirm_ecr_removal
+            ~accept_unresolved:req.accept_unresolved
+            ()
+        in
+        run_dry_run (context_of ~destination) ~emit_to ~await_delegation
+      | Deploy_emit_to dir ->
+        let* destination, _, _ =
+          destination_or_environment_stage
+            ~planning
+            ~target:req.target
+            ~run_log
+            ~action:(Sol_cli_command_request.Deploy_emit_to dir)
+            ~await_delegation
+            ~confirm_ecr_removal:req.confirm_ecr_removal
+            ~accept_unresolved:req.accept_unresolved
+            ()
+        in
+        run_emit (context_of ~destination) ~dir)
+  in
+  match Sol_cli_mixed_apply.run ~apply_serverless ~apply_kubernetes with
+  | Complete -> Ok ()
+  | Failed_serverless failure ->
+    if !authorization_applied
+    then
+      Error
+        { failure with
+          text =
+            failure.text
+            ^ "\n\
+               note: target authorization was reconciled before the serverless component \
+               failed; identity or permission changes may already be applied. Re-run to \
+               converge."
+        }
+    else Error failure
+  | Partial failure ->
+    let text =
+      if
+        Sol_cli_config.execution_of_target target_cfg = Sol_cli_config.Mixed
+        && (serverless_services <> [] || !serverless_pruned)
+      then
+        failure.text
+        ^ "\n\
+           note: the serverless component was applied before the Kubernetes component \
+           failed; mixed-target apply is not atomic and did not roll the serverless \
+           component back. Re-run the same reviewed plan to converge."
+      else failure.text
+    in
+    Error { failure with text }
 ;;
 
 let target_arg =
@@ -1768,6 +2597,31 @@ let await_delegation_arg =
            UNKNOWN rather than a silent success.")
 ;;
 
+let plan_file_arg =
+  Arg.(
+    value
+    & opt (some Sol_cli_args.text) None
+    & info
+        [ "plan" ]
+        ~docv:"FILE"
+        ~doc:
+          "Apply this reviewed transition plan. Sol refuses when the recomputed \
+           transition differs; destructive changes still require --yes or an interactive \
+           confirmation.")
+;;
+
+let assume_yes_flag =
+  Arg.(
+    value
+    & flag
+    & info
+        [ "yes" ]
+        ~doc:
+          "Proceed without prompting when the deployment plan contains \
+           destructive            changes. Noninteractive runs with destructive changes \
+           fail without it.")
+;;
+
 let man =
   [ `S Manpage.s_description
   ; `P
@@ -1836,6 +2690,8 @@ let cmd =
              loki_push_url
              keep_releases
              await_delegation
+             assume_yes
+             plan_file
            ->
            Sol_cli_exit.exit_on
              (let* req =
@@ -1856,7 +2712,7 @@ let cmd =
                   ~accept_unresolved
                 |> Sol_cli_exit.of_msg
               in
-              run req))
+              run ~assume_yes ~plan_file req))
       $ target_arg
       $ dry_run_flag
       $ emit_to_arg
@@ -1869,5 +2725,7 @@ let cmd =
       $ Cmd_cloud_tf.accept_unresolved_flag
       $ loki_push_url_arg
       $ keep_releases_arg
-      $ await_delegation_arg)
+      $ await_delegation_arg
+      $ assume_yes_flag
+      $ plan_file_arg)
 ;;

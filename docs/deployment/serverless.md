@@ -16,7 +16,9 @@ needs and independently verifies their absence afterwards.
 |---|---|---|---|---|
 | `-svc` HTTP | native `sol local run` | supported | target + standalone; live | target + standalone; live |
 | `-worker` | native run with explicit Kafka/Postgres | supported | not supported | not supported |
-| `-fn` | `sol local invoke` | CronJob | target deploy/execute/rollback/destroy; live | target deploy/invoke/rollback/destroy; fake + live |
+| `-fn` run-once | `sol local invoke` | CronJob | target deploy/execute/rollback/destroy; live | target deploy/invoke/rollback/destroy; fake + live |
+| `-fn` HTTP (public) | `sol local run` | Deployment + Service + Ingress | target deploy/rollback/destroy; fake | target deploy/rollback/destroy; fake |
+| `-fn` HTTP (internal) | not local | Deployment + Service, workload auth | target deploy/rollback/destroy; fake | refused: no network-private Lambda HTTP endpoint |
 | Queue/trigger | explicit Kafka/Postgres only | Kafka/Postgres | none | none |
 | Secrets/dependencies | injected locally | supported | env/identity proven; `uses:` refused | env/identity proven; `uses:` refused |
 | Identity | local explicit | supported | `-svc`: Google workload token, explicit callers; `-fn`: execution service account only, no incoming callers | `-svc`: Google app token, explicit callers; `-fn`: execution role only, no incoming callers |
@@ -148,7 +150,80 @@ The lifecycle is:
 
 No Function URL is created, and no HTTP authentication smoke is claimed. The
 record deliberately has no `url` field, so it cannot be mistaken for the HTTP
-lifecycle. A complete workspace example, including a TypeScript Lambda probe
+lifecycle.
+
+## HTTP-triggered `-fn`
+
+An HTTP `-fn` is a single handler exposed by the platform rather than an
+application-owned HTTP server. Declare the trigger in `sol.toml`:
+
+```toml
+[service]
+http_path = "/quote"
+http_exposure = "public"   # public | internal
+```
+
+The application module uses `Fn.Make_http` (`handle : Request.t -> Response.t`)
+instead of the run-once `run`. The same image runs on every backend: on Lambda
+it translates API Gateway/Function URL events, and elsewhere it serves the route
+(with `/healthz` and `/readyz`) over HTTP.
+
+Exposure is a declaration, not a hint:
+
+- **public** means the target's shared API is reachable anonymously. Sol
+  reconciles one public API per target: an AWS API Gateway HTTP API, a GCP API
+  Gateway, or the Kubernetes ingress host shared by all public HTTP functions.
+  Each function is one route on that API.
+- **internal** means the endpoint is not internet-reachable **and** the handler
+  keeps Sol's workload-identity check. Kubernetes renders a Service with no
+  Ingress (and its NetworkPolicy); GCP renders Cloud Run with
+  `--ingress internal` and injects the target's caller set. The caller set is
+  `serverless_callers` on a serverless target and the declared `calls` graph on
+  Kubernetes. An internal function with no callers is refused.
+
+AWS supports public HTTP functions only. A Lambda Function URL is reachable from
+the public internet even when it requires IAM, so Sol refuses an internal HTTP
+function on AWS instead of creating a public endpoint that the configuration
+calls internal.
+
+### Shared endpoint and routing
+
+Public HTTP functions in one target compose into one API:
+
+| Backend | Shared endpoint | Route owner |
+|---|---|---|
+| Kubernetes | one ingress host; every public HTTP function contributes an Ingress path | Deployment + Service + path |
+| AWS | API Gateway HTTP API `$default` stage | `ANY <http_path>` → Lambda `live` alias |
+| GCP | API Gateway gateway host | OpenAPI path → Cloud Run service |
+
+On Kubernetes, all public HTTP functions in a target must declare the same
+`[infra.deploy] ingress_host`; two functions may not claim the same path. On
+AWS and GCP, duplicate paths are refused before any provider mutation. Deploy
+reconciles the complete route set: adding a function adds its route, changing a
+path replaces it, and removing every public function deletes the gateway. A
+failed route reconciliation leaves the function records destroyable and the
+next deploy converges.
+
+AWS HTTP functions do not get Function URLs. The API Gateway route is their
+public HTTP address. GCP Cloud Run assigns a service URL to every service; the
+API Gateway host is the canonical composed endpoint, but the provider-native
+service URL still exists. Internal functions are never added to the public
+gateway.
+
+HTTP-function release records carry `"kind":"fn_http"`, the provider identity,
+and `http_path`/`http_exposure`. Deploy writes a destroyable record before
+mutation and names the observed serving revision/version before the readiness
+smoke, so a partial failure is recoverable. Rollback restores the record's
+serving version/revision and its route, so rolling back after a path change
+serves the previous path again. Destroy removes the function's route first, then
+the function; the last route removal deletes the gateway. Sol does
+not delete the execution role or ECR repository.
+
+Current limits: the HTTP-function runtime is OCaml (`Fn.Make_http`); a
+TypeScript HTTP function is refused rather than deployed without a serving
+contract. There is no shared **internal** HTTP gateway on AWS or GCP: internal
+functions remain individually private, and AWS refuses internal HTTP functions
+entirely. A complete workspace example, including a TypeScript Lambda probe
 and SQS task consumers, is in [`examples/pluto/SERVERLESS.md`](../../examples/pluto/SERVERLESS.md).
 
 ## GCP Cloud Run HTTP
@@ -180,10 +255,12 @@ policy is refused. `sol deploy production/aws/us-east-1 --image-ref
 checkout_svc=...@sha256:...` uses the verified Lambda lifecycle and writes
 `serverless-release.json` in the deploy run log with `"kind":"svc"`.
 
-Current limits: exactly one `-svc` or `-fn` per target deploy, no mixed-primitive
-deploy, no service dependencies, apply only (no dry-run/emit), and the application
-token for `-svc` remains the Google demonstration identity rather than AWS-native
-incoming identity.
+Current limits: a serverless-only target deploys exactly one `-svc` or `-fn`; a
+mixed target composes the serverless function with its Kubernetes units and applies
+both from one reviewed plan. In-cluster service dependencies remain unsupported
+(external queue/object bindings are allowed), serverless-only deploys have no
+dry-run/emit, and the application token for `-svc` remains the Google demonstration
+identity rather than AWS-native incoming identity.
 
 ## Target-scoped GCP Cloud Run HTTP
 
@@ -356,6 +433,8 @@ invocation through the `live` alias returns `{"status":"ok"}` with no `FunctionE
 Authorization with a caller token for `-svc` remains an explicit post-deploy
 verification step.
 
-`sol plan` currently refuses `execution: serverless` targets rather than projecting them as
-Kubernetes. Use `sol deploy` (serverless dispatch), `sol rollback`, and `sol destroy` for
-the target lifecycle; the provider commands remain available for diagnostics.
+`sol plan` projects serverless targets from the same release records and declarations the
+target deploy consumes; it never invokes a provider mutation. `sol plan --out` persists the
+transition and `sol deploy --plan` refuses to apply it if the recomputed transition differs.
+Use `sol deploy` (serverless dispatch), `sol rollback`, and `sol destroy` for the target
+lifecycle; the provider commands remain available for diagnostics.

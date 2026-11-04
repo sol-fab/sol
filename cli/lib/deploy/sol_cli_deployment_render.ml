@@ -39,6 +39,7 @@ type http_fields =
   ; ingress_host : Sol_cli_toml.hostname option
   ; ingress_path : Sol_cli_toml.ingress_path option
   ; cluster_issuer : string
+  ; exposure : Sol_cli_toml.http_exposure
   }
 
 type worker_fields = { deployment : deployment_fields }
@@ -53,7 +54,7 @@ type fn_fields =
   }
 
 type render_workload =
-  | Render_svc of http_fields
+  | Render_http of http_fields
   | Render_worker of worker_fields
   | Render_fn of fn_fields
 
@@ -187,6 +188,7 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
          in
          let deployment_resources
                ~shape
+               ~expose
                ~ingress_host
                ~ingress_path
                ~cluster_issuer
@@ -242,7 +244,7 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
                (match pd with
                 | Sol_cli_toml.Blue_green ->
                   let ingress =
-                    if shape = Http_service
+                    if shape = Http_service && expose
                     then
                       [ ingress_doc
                           ?ingress_host
@@ -258,10 +260,12 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
                   (rollout :: blue_green_service_docs ~ns ~name) @ ingress
                 | Sol_cli_toml.Canary _ ->
                   let svc =
-                    if shape = Http_service then [ service_doc ~ns ~name ] else []
+                    if shape = Http_service && expose
+                    then [ service_doc ~ns ~name ]
+                    else []
                   in
                   let ingr =
-                    if shape = Http_service
+                    if shape = Http_service && expose
                     then
                       [ ingress_doc
                           ?ingress_host
@@ -290,16 +294,19 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
          in
          let resources =
            match workload with
-           | Render_svc { deployment; ingress_host; ingress_path; cluster_issuer } ->
+           | Render_http
+               { deployment; ingress_host; ingress_path; cluster_issuer; exposure } ->
              let ingress_host = Option.map Sol_cli_toml.hostname_to_string ingress_host in
              let ingress_path =
                match ingress_path with
                | Some path -> Sol_cli_toml.ingress_path_to_string path
                | None -> "/"
              in
+             let exposed = exposure = Sol_cli_toml.Http_public in
              let resources =
                deployment_resources
                  ~shape:Http_service
+                 ~expose:exposed
                  ~ingress_host
                  ~ingress_path
                  ~cluster_issuer
@@ -309,12 +316,16 @@ let render ~workspace ?env ?(image = "") ~release_id { common; workload } =
               | Some _ -> resources
               | None ->
                 resources
-                @ [ service_doc ~ns ~name
-                  ; ingress_doc ?ingress_host ~ingress_path ~cluster_issuer ~ns ~name ()
-                  ])
+                @ [ service_doc ~ns ~name ]
+                @
+                if exposed
+                then
+                  [ ingress_doc ?ingress_host ~ingress_path ~cluster_issuer ~ns ~name () ]
+                else [])
            | Render_worker { deployment } ->
              deployment_resources
                ~shape:Background_worker
+               ~expose:false
                ~ingress_host:None
                ~ingress_path:"/"
                ~cluster_issuer:"letsencrypt-prod"
@@ -418,30 +429,46 @@ let render_spec
     match s.primitive with
     | Svc ->
       Ok
-        (Render_svc
+        (Render_http
            { deployment
            ; ingress_host = s.ingress_host
            ; ingress_path = s.ingress_path
            ; cluster_issuer = s.cluster_issuer
+           ; exposure = Sol_cli_toml.Http_public
            })
     | Worker -> Ok (Render_worker { deployment })
     | Fn ->
-      (match s.schedule with
-       | Some schedule ->
-         Ok
-           (Render_fn
-              { schedule
-              ; schedule_timezone = s.schedule_timezone
-              ; cpu = s.cpu
-              ; memory = s.memory
-              ; scheduled_concurrency = s.scheduled_concurrency
-              ; backoff_limit = s.backoff_limit
-              })
+      (match s.http with
+       | Some (http : Sol_cli_toml.http_trigger) ->
+         (match Sol_cli_toml.ingress_path_of_string http.path with
+          | Ok ingress_path ->
+            Ok
+              (Render_http
+                 { deployment
+                 ; ingress_host = s.ingress_host
+                 ; ingress_path = Some ingress_path
+                 ; cluster_issuer = s.cluster_issuer
+                 ; exposure = http.exposure
+                 })
+          | Error message -> Error message)
        | None ->
-         Error
-           (Printf.sprintf
-              "the -fn %s has no schedule; set [service] schedule in its sol.toml"
-              (Sol_cli_kubernetes_name.k8s_name_to_string s.k8s_name)))
+         (match s.schedule with
+          | Some schedule ->
+            Ok
+              (Render_fn
+                 { schedule
+                 ; schedule_timezone = s.schedule_timezone
+                 ; cpu = s.cpu
+                 ; memory = s.memory
+                 ; scheduled_concurrency = s.scheduled_concurrency
+                 ; backoff_limit = s.backoff_limit
+                 })
+          | None ->
+            Error
+              (Printf.sprintf
+                 "the -fn %s declares neither schedule nor http_path; set exactly one \
+                  trigger in its sol.toml"
+                 (Sol_cli_kubernetes_name.k8s_name_to_string s.k8s_name))))
   in
   Result.bind workload (fun workload ->
     render ~workspace ?env ~image ~release_id { common; workload })

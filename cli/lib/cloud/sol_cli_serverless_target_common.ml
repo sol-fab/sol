@@ -51,9 +51,10 @@ let services_by_backend (target : Sol_cli_config.target) services =
 ;;
 
 let ensure_serverless (target : Sol_cli_config.target) =
-  if Sol_cli_config.execution_of_target target = Sol_cli_config.Serverless
-  then Ok ()
-  else Error "target does not select execution: serverless"
+  match Sol_cli_config.execution_of_target target with
+  | Sol_cli_config.Serverless | Sol_cli_config.Mixed -> Ok ()
+  | Sol_cli_config.Kubernetes ->
+    Error "target does not select execution: serverless or mixed"
 ;;
 
 let declared_uses config (service : Sol_cli_manifest.service) =

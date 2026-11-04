@@ -294,3 +294,20 @@ live:
       1
       (List.length units)
 ;;
+
+let%test "a mixed target dispatches the serverless component" =
+  let mixed =
+    Result.get_ok (Sol_cli_config.parse_target "mixed/aws/us-east-1")
+    |> with_execution "mixed"
+  in
+  (match Sol_cli_serverless_target_common.ensure_serverless mixed with
+   | Ok () -> ()
+   | Error message -> Windtrap.fail message);
+  let kubernetes =
+    Result.get_ok (Sol_cli_config.parse_target "prod/aws/us-east-1")
+    |> with_execution "kubernetes"
+  in
+  match Sol_cli_serverless_target_common.ensure_serverless kubernetes with
+  | Ok () -> Windtrap.fail "a Kubernetes target accepted a serverless operation"
+  | Error _ -> ()
+;;

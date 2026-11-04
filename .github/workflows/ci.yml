@@ -347,6 +347,15 @@ jobs:
         timeout-minutes: 5
         run: internal/qualification/aws/stubbed-qual-test.sh
 
+      # Mixed execution is serverless-then-Kubernetes and is deliberately not
+      # atomic. These provider hooks drive plan/reapply/update/partial-failure
+      # and independent absence with every provider command stubbed, so the
+      # composition is tested without a live target.
+      - name: Mixed qualification hook test
+        if: needs.classify.outputs.kind != 'docs-only'
+        timeout-minutes: 5
+        run: internal/ci/test_mixed_qual_hooks.sh
+
       # The application a live run exercises must be built from the candidate
       # revision, not from whatever a checkout or a moving ref holds: a stale
       # checkout once produced images with another revision's framework while the

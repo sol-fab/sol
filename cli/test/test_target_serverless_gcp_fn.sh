@@ -182,7 +182,11 @@ grep -q '"execution":"projects/example-project/locations/us-west1/jobs/probe-fn/
 
 # Removing the schedule declaration removes the provider schedule.
 sed -i '/^schedule[[:space:]]*=/d; /^scheduled_concurrency[[:space:]]*=/d' "$work/ws/app/ops/probe_fn/sol.toml"
-"$sol" deploy live/gcp/us-west1 --image-tag test --image-ref "probe_fn=$image_a" > "$work/deploy-unscheduled"
+if "$sol" deploy live/gcp/us-west1 --image-tag test --image-ref "probe_fn=$image_a" > "$work/deploy-unscheduled-refused" 2>&1; then
+  echo "schedule removal was accepted without --yes" >&2; exit 1
+fi
+grep -q 're-run with --yes' "$work/deploy-unscheduled-refused"
+"$sol" deploy live/gcp/us-west1 --image-tag test --image-ref "probe_fn=$image_a" --yes > "$work/deploy-unscheduled"
 grep -q '"scheduler":null' "$work/deploy-unscheduled"
 [[ ! -f "$work/state/schedule" ]]
 

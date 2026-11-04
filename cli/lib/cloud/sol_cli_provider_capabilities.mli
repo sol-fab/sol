@@ -52,6 +52,10 @@ type t =
       -> (string list, string) result
   ; cluster_access_role_arn : Sol_cli_config.target -> (string option, string) result
   ; platform_storage : platform_storage
+  ; transition_permissions : Sol_cli_transition.permissions
+    (** Which authorization changes a serverless target's transition plan must
+        show. This is provider capability truth, not a planning-layer provider
+        branch. *)
   ; cluster_substrate :
       (outputs_json:string
        -> region:string

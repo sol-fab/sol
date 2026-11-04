@@ -158,3 +158,257 @@ module Make (F : FN) = struct
          result)
   ;;
 end
+
+module type HTTP = sig
+  val handle : Request.t -> Response.t
+end
+
+(* An HTTP function has one route and one handler. The platform owns the request
+   boundary: a public function is marked external (the gateway/ingress is the
+   security boundary), while an internal function keeps the workload-identity
+   check that [sol-svc] installs for every non-external route. *)
+module Make_http (H : HTTP) = struct
+  let fn_header = "x-sol-fn", "1"
+
+  let respond request =
+    let response = H.handle request in
+    { response with headers = fn_header :: response.headers }
+  ;;
+
+  let health path =
+    match path with
+    | "/healthz" -> Some (Response.json {|{"status":"ok"}|})
+    | "/readyz" -> Some (Response.json {|{"status":"ready"}|})
+    | _ -> None
+  ;;
+
+  let exposure () =
+    match Sol_runtime.setting "SOL_HTTP_EXPOSURE" with
+    | Some "public" -> Ok `Public
+    | Some "internal" -> Ok `Internal
+    | Some other ->
+      Error
+        (`Config
+            (Printf.sprintf
+               "SOL_HTTP_EXPOSURE must be \"public\" or \"internal\", got %S"
+               other))
+    | None ->
+      Error
+        (`Config
+            "SOL_HTTP_EXPOSURE is not set; an HTTP function must declare its exposure")
+  ;;
+
+  let path () =
+    match Sol_runtime.setting "SOL_HTTP_PATH" with
+    | Some path when String.length path > 0 && path.[0] = '/' -> Ok path
+    | Some path ->
+      Error (`Config (Printf.sprintf "SOL_HTTP_PATH must start with \"/\", got %S" path))
+    | None -> Error (`Config "SOL_HTTP_PATH is not set")
+  ;;
+
+  let route handler ~path exposure method_ =
+    let route =
+      match method_ with
+      | `GET -> Route.get path handler
+      | `POST -> Route.post path handler
+      | `PUT -> Route.put path handler
+      | `PATCH -> Route.patch path handler
+      | `DELETE -> Route.delete path handler
+    in
+    match exposure with
+    | `Public -> Route.external_ route
+    | `Internal -> route
+  ;;
+
+  let method_of_string = function
+    | "GET" -> Some `GET
+    | "POST" -> Some `POST
+    | "PUT" -> Some `PUT
+    | "PATCH" -> Some `PATCH
+    | "DELETE" -> Some `DELETE
+    | _ -> None
+  ;;
+
+  let json_string json path =
+    match Yojson.Safe.Util.member path json with
+    | `String value -> Some value
+    | _ -> None
+  ;;
+
+  let api_gateway_request payload =
+    match Yojson.Safe.from_string payload with
+    | exception Yojson.Json_error message ->
+      Error (Printf.sprintf "Lambda event is not JSON: %s" message)
+    | json ->
+      let method_string =
+        match
+          Yojson.Safe.Util.member "requestContext" json
+          |> Yojson.Safe.Util.member "http"
+          |> Yojson.Safe.Util.member "method"
+        with
+        | `String method_ -> method_
+        | _ ->
+          (match json_string json "httpMethod" with
+           | Some method_ -> method_
+           | None -> "GET")
+      in
+      (match method_of_string method_string with
+       | None -> Error (Printf.sprintf "unsupported HTTP method %S" method_string)
+       | Some method_ ->
+         let path =
+           match json_string json "rawPath" with
+           | Some path -> path
+           | None ->
+             (match json_string json "path" with
+              | Some path -> path
+              | None -> "/")
+         in
+         let query =
+           match json_string json "rawQueryString" with
+           | Some query -> query
+           | None -> ""
+         in
+         let headers =
+           match Yojson.Safe.Util.member "headers" json with
+           | `Assoc fields ->
+             fields
+             |> List.filter_map (fun (key, value) ->
+               match value with
+               | `String value -> Some (key, value)
+               | _ -> None)
+           | _ -> []
+         in
+         let body =
+           match json_string json "body" with
+           | None -> ""
+           | Some body ->
+             (match Yojson.Safe.Util.member "isBase64Encoded" json with
+              | `Bool true ->
+                (try Base64.decode_exn body with
+                 | _ -> body)
+              | _ -> body)
+         in
+         let uri =
+           let target = if query = "" then path else path ^ "?" ^ query in
+           Uri.of_string target
+         in
+         Ok
+           { Request.method_
+           ; path
+           ; headers = Http.Header.of_list headers
+           ; params = []
+           ; uri
+           ; body
+           ; auth = None
+           ; trace_ctx = None
+           })
+  ;;
+
+  let api_gateway_response (response : Response.t) =
+    let headers =
+      `Assoc (List.map (fun (key, value) -> key, `String value) response.headers)
+    in
+    Yojson.Safe.to_string
+      (`Assoc
+          [ "statusCode", `Int response.status
+          ; "headers", headers
+          ; "body", `String response.body
+          ; "isBase64Encoded", `Bool false
+          ])
+  ;;
+
+  let lambda_run ~env ?stop ~path () =
+    match Lambda_runtime.runtime_api_base () with
+    | Error error -> Error (`Config (Lambda_runtime.error_to_string error))
+    | Ok base ->
+      let signal_stop, signal_stop_r = Eio.Promise.create () in
+      let await_stop () =
+        match stop with
+        | None -> Eio.Promise.await signal_stop
+        | Some external_stop ->
+          Eio.Fiber.first
+            (fun () -> Eio.Promise.await signal_stop)
+            (fun () -> Eio.Promise.await external_stop)
+      in
+      Eio.Switch.run (fun sw ->
+        Sol_runtime.install_signal_handler ~sw signal_stop_r;
+        let runtime = Lambda_runtime.create ~net:env#net ~base in
+        Eio.Fiber.first
+          (fun () ->
+             Lambda_runtime.run_loop
+               runtime
+               ~clock:env#clock
+               ~handler:(fun (invocation : Lambda_runtime.invocation) ->
+                 match api_gateway_request invocation.payload with
+                 | Error message -> Error message
+                 | Ok request ->
+                   (match health request.Request.path with
+                    | Some response -> Ok (api_gateway_response response)
+                    | None ->
+                      if String.equal request.Request.path path
+                      then Ok (api_gateway_response (respond request))
+                      else (
+                        let response = Response.not_found in
+                        Ok
+                          (api_gateway_response
+                             { response with
+                               headers = ("x-sol-fn", "1") :: response.headers
+                             }))))
+               ();
+             Ok ())
+          (fun () ->
+             await_stop ();
+             Ok ()))
+  ;;
+
+  let http_run ~env ?port ?ot ?stop ?on_listen ~path ~exposure () =
+    let handler = respond in
+    let routes =
+      [ `GET; `POST; `PUT; `PATCH; `DELETE ]
+      |> List.map (fun method_ -> route handler ~path exposure method_)
+    in
+    let port =
+      match port with
+      | Some port -> Some port
+      | None ->
+        (match Sol_runtime.setting "PORT" with
+         | Some value ->
+           (match int_of_string_opt value with
+            | Some port -> Some port
+            | None -> None)
+         | None -> None)
+    in
+    let metrics_auth =
+      match exposure with
+      | `Public -> `Public
+      | `Internal -> `Workload_identity
+    in
+    match Service.run routes ~env ?port ?ot ?stop ?on_listen ~metrics_auth () with
+    | Ok () -> Ok ()
+    | Error (`Config message) -> Error (`Config message)
+  ;;
+
+  let run ~env ?port ?ot ?stop ?on_listen () =
+    match exposure (), path () with
+    | Error error, _ | _, Error error -> Error error
+    | Ok exposure, Ok path ->
+      (match Lambda_runtime.runtime_api_base () with
+       | Ok _ ->
+         (match exposure with
+          | `Public -> lambda_run ~env ?stop ~path ()
+          | `Internal ->
+            Error
+              (`Config
+                  "an internal HTTP function cannot run on Lambda: a Function URL is \
+                   publicly reachable and the Lambda runtime has no workload-identity \
+                   boundary"))
+       | Error Lambda_runtime.Missing_runtime_api ->
+         http_run ~env ?port ?ot ?stop ?on_listen ~path ~exposure ()
+       | Error error -> Error (`Config (Lambda_runtime.error_to_string error)))
+  ;;
+
+  module For_testing = struct
+    let api_gateway_request = api_gateway_request
+    let api_gateway_response = api_gateway_response
+  end
+end

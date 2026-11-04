@@ -114,6 +114,43 @@ let () =
 | Ordinary exception from `F.run ()` | caller policy, generated main exits non-zero |
 | SIGTERM / SIGINT | 130 |
 
+## HTTP trigger
+
+A `-fn` may declare an HTTP trigger instead of a schedule. The application
+module then implements `Fn.HTTP` and is run by `Fn.Make_http`:
+
+```ocaml
+module Handler = struct
+  let handle request =
+    Response.json ~status:200
+      (Printf.sprintf {|{"path":"%s"}|} request.path)
+end
+
+let () =
+  Eio_main.run @@ fun env ->
+  let module M = Fn.Make_http (Handler) in
+  match M.run ~env () with
+  | Ok () -> ()
+  | Error e -> failwith (Fn.run_error_to_string e)
+```
+
+`Fn.Make_http` reads `SOL_HTTP_PATH` and `SOL_HTTP_EXPOSURE` (both injected by
+Sol). Exposure is deliberately not defaulted: a missing or unknown value is a
+configuration error before the server starts.
+
+- **public**: the route is external; the provider endpoint is the security
+  boundary.
+- **internal**: the route keeps `sol-svc`'s workload-identity check, so a caller
+  must present a projected token from the declared caller set. The platform also
+  keeps the endpoint off the public network (Kubernetes Service without an
+  Ingress; Cloud Run `--ingress internal`).
+
+The same image adapts to the backend at runtime. If `AWS_LAMBDA_RUNTIME_API` is
+set, it serves the Lambda runtime and translates API Gateway v2 / Lambda
+Function URL events (`rawPath`, `rawQueryString`, headers, base64 body) into
+`Request.t` and back. Otherwise it serves the declared route plus `/healthz` and
+`/readyz` over HTTP on `PORT` (default 8080).
+
 ## Deployment: a run-once execution primitive (FEAT-079)
 
 `-fn` is formally a **run-once Kubernetes execution primitive**, not "a cron

@@ -56,7 +56,7 @@ let check_declared_units services =
   | _ -> Error (fail_unimplemented errors)
 ;;
 
-let run target_name image_refs var_file vars =
+let run target_name image_refs var_file vars out =
   let open Result.Syntax in
   let* cfg =
     Sol_cli_config.load_for_target ~target:target_name
@@ -64,16 +64,6 @@ let run target_name image_refs var_file vars =
   in
   let project = Option.value cfg.project ~default:(Filename.basename (Sys.getcwd ())) in
   let target = cfg.target in
-  let* () =
-    match Sol_cli_config.execution_of_target target with
-    | Sol_cli_config.Kubernetes | Sol_cli_config.Mixed -> Ok ()
-    | Sol_cli_config.Serverless ->
-      Error
-        (Sol_cli_exit.error
-           "sol plan does not implement execution: serverless targets; use the provider \
-            lifecycle or sol deploy target dispatch, which fails closed on unsupported \
-            configuration")
-  in
   let resources = Sol_cli_config.resources cfg in
   let services = Sol_cli_config.services cfg in
   let* () = check_declared_units services in
@@ -90,8 +80,130 @@ let run target_name image_refs var_file vars =
   let* provided =
     Sol_cli_image_ref.resolve ~service_names image_refs |> Sol_cli_exit.of_msg
   in
+  let execution = Sol_cli_config.execution_of_target target in
+  let serverless_transition =
+    if execution = Sol_cli_config.Kubernetes
+    then Ok None
+    else
+      let* entries =
+        Sol_cli_serverless_inventory.load ~target:target_name
+        |> Result.map_error Sol_cli_exit.error
+      in
+      let* previous =
+        entries
+        |> Sol_cli_result.map_list (fun (entry : Sol_cli_serverless_inventory.entry) ->
+          let* text =
+            Sol_cli_fs.read_file entry.record
+            |> Result.map_error (fun message ->
+              Sol_cli_exit.error
+                (Printf.sprintf
+                   "cannot read the previous record for %s: %s"
+                   entry.service
+                   message))
+          in
+          let* json =
+            Sol_cli_json.decode ~what:"previous release record" text
+            |> Result.map_error Sol_cli_exit.error
+          in
+          Sol_cli_transition.of_serverless_record ~service:entry.service json
+          |> Result.map_error Sol_cli_exit.error)
+      in
+      let serverless_selected =
+        match execution with
+        | Sol_cli_config.Mixed ->
+          List.filter
+            (fun (service : Sol_cli_manifest.service) ->
+               service.primitive = Sol_cli_manifest.Fn)
+            selected
+        | Kubernetes | Serverless -> selected
+      in
+      let* desired =
+        serverless_selected
+        |> Sol_cli_result.map_list (fun (service : Sol_cli_manifest.service) ->
+          let* config =
+            match
+              List.find_opt
+                (fun (workload : Sol_cli_workspace_model.workload) ->
+                   String.equal workload.service.Sol_cli_manifest.domain service.domain
+                   && String.equal workload.service.Sol_cli_manifest.name service.name)
+                facts.Sol_cli_workspace_model.workloads
+            with
+            | Some workload ->
+              workload.config
+              |> Result.map_error (fun error ->
+                Sol_cli_exit.error (Sol_cli_toml.parse_error_to_string error))
+            | None ->
+              Error
+                (Sol_cli_exit.error
+                   (Printf.sprintf
+                      "no sol.toml was found for target workload %s/%s"
+                      service.domain
+                      service.name))
+          in
+          let language =
+            match
+              List.find_opt
+                (fun (candidate : Sol_cli_config.service) ->
+                   String.equal candidate.name service.name)
+                (Sol_cli_config.services cfg)
+            with
+            | Some candidate -> candidate.language
+            | None -> None
+          in
+          let* () =
+            Sol_cli_serverless_lifecycle.validate_http_exposure
+              ~target
+              ~service
+              ~language
+              ~config
+            |> Result.map_error Sol_cli_exit.error
+          in
+          let image =
+            match List.assoc_opt service.name provided with
+            | Some image -> Some image
+            | None ->
+              List.find_map
+                (fun (workload : Sol_cli_transition.workload) ->
+                   if String.equal workload.name service.name
+                   then workload.image
+                   else None)
+                previous
+          in
+          Ok
+            { Sol_cli_transition.name = service.name
+            ; kind = Sol_cli_manifest.primitive_label service.primitive
+            ; image
+            ; schedule = Option.map Sol_cli_transition.normalize_schedule config.schedule
+            ; http =
+                Option.map
+                  (fun (http : Sol_cli_toml.http_trigger) ->
+                     http.path, Sol_cli_toml.http_exposure_to_string http.exposure)
+                  config.http
+            ; config_digest =
+                Some
+                  (Sol_cli_transition.digest_config
+                     (config.env_config
+                      @ List.map (fun key -> "secret:" ^ key, "") config.secret_keys))
+            })
+      in
+      let transition =
+        Sol_cli_transition.compute
+          ~target:target_name
+          ~backend:`Serverless
+          ~previous
+          ~desired
+          ~unknown:[]
+          ~permissions:
+            (Sol_cli_provider_capabilities.capabilities_of target.provider)
+              .transition_permissions
+          ()
+      in
+      Ok (Some transition)
+  in
   let* previous =
-    if List.length provided = List.length service_names
+    if
+      List.length provided = List.length service_names
+      || execution <> Sol_cli_config.Kubernetes
     then Ok []
     else
       let* destination =
@@ -134,255 +246,380 @@ let run target_name image_refs var_file vars =
                 | _ -> None)
              selected)
   in
-  let* image_refs =
-    Sol_cli_image_ref.resolve_with_previous ~service_names image_refs previous
-    |> Sol_cli_exit.of_msg
-  in
-  let registry = Option.value target.registry ~default:"resolved-image-refs" in
-  let* planning =
-    Sol_cli_deploy_selection.plan
-      { workspace = Sol_cli_workspace.current_name ()
-      ; registry
-      ; sha = "unused"
-      ; emit_to = None
-      ; config = cfg
-      ; facts
-      ; inventory
-      ; requested_scope = "target"
-      ; image_refs
-      ; services = selected
-      }
-    |> Result.map_error (function
-      | Sol_cli_deploy_selection.Refused message -> Sol_cli_exit.error message
-      | Preflight (profile, findings) ->
-        Sol_cli_exit.failure (Sol_cli_profile_preflight.report profile findings))
-  in
-  Printf.printf "Project: %s\n" project;
-  Printf.printf "Target: %s\n\n" target_name;
-  Printf.printf "Target config:\n";
-  print_opt "env" (Some target.env);
-  print_opt "provider" (Some (Sol_cli_provider.to_string target.provider));
-  print_opt "region" (Some target.region);
-  print_opt "registry" target.registry;
-  print_opt "cluster" target.cluster_name;
-  print_opt "domain" target.base_domain;
-  print_opt "cluster issuer" target.cluster_issuer;
-  Printf.printf "\nResources:\n";
-  if resources = [] then Printf.printf "  (none)\n";
-  resources
-  |> List.iter (fun (r : Sol_cli_config.resource) ->
-    let type_suffix =
-      match r.typ with
-      | None -> ""
-      | Some t -> " (" ^ t ^ ")"
+  let* serverless_transition = serverless_transition in
+  (match serverless_transition with
+   | None -> ()
+   | Some transition ->
+     Printf.printf "Project: %s\n" project;
+     Printf.printf "Target: %s\n\n" target_name;
+     print_string (Sol_cli_transition.render transition);
+     print_newline ());
+  (match out, execution, serverless_transition with
+   | Some path, Sol_cli_config.Serverless, Some transition ->
+     Sol_cli_fs.write_atomic
+       path
+       (Yojson.Safe.to_string (Sol_cli_transition.to_json transition) ^ "\n")
+     |> Sol_cli_exit.of_msg
+     |> Result.map ignore
+   | _ -> Ok ())
+  |> fun written ->
+  let* () = written in
+  if execution = Sol_cli_config.Serverless
+  then Ok ()
+  else
+    let* image_refs =
+      Sol_cli_image_ref.resolve_with_previous ~service_names image_refs previous
+      |> Sol_cli_exit.of_msg
     in
-    Printf.printf "  - %s%s\n" r.name type_suffix;
-    List.iter print_index r.indexes);
-  Printf.printf "\nServices:\n";
-  if services = [] then Printf.printf "  (none)\n";
-  services
-  |> List.iter (fun s ->
-    let type_suffix =
-      match s.Sol_cli_config.typ with
-      | None -> ""
-      | Some t -> " (" ^ t ^ ")"
+    let registry = Option.value target.registry ~default:"resolved-image-refs" in
+    let* planning =
+      Sol_cli_deploy_selection.plan
+        { workspace = Sol_cli_workspace.current_name ()
+        ; registry
+        ; sha = "unused"
+        ; emit_to = None
+        ; config = cfg
+        ; facts
+        ; inventory
+        ; requested_scope = "target"
+        ; image_refs
+        ; services = selected
+        }
+      |> Result.map_error (function
+        | Sol_cli_deploy_selection.Refused message -> Sol_cli_exit.error message
+        | Preflight (profile, findings) ->
+          Sol_cli_exit.failure (Sol_cli_profile_preflight.report profile findings))
     in
-    Printf.printf "  - %s%s\n" s.Sol_cli_config.name type_suffix;
-    print_opt "path" s.path;
-    if s.uses <> []
-    then
-      Printf.printf
-        "    uses: %s\n"
-        (String.concat ", " (List.map Sol_cli_config.format_use_ref s.uses));
-    match s.scale_min, s.scale_max with
-    | None, None -> ()
-    | min, max ->
-      Printf.printf
-        "    scale: %s..%s\n"
-        (Option.fold ~none:"?" ~some:string_of_int min)
-        (Option.fold ~none:"?" ~some:string_of_int max));
-  Printf.printf "\nWorkload plan (all target workloads):\n";
-  if planning.Sol_cli_deployment_plan.services = [] then Printf.printf "  (none)\n";
-  List.iter
-    (fun (service : Sol_cli_deployment_plan.service_spec) ->
-       Printf.printf
-         "  - %s/%s image=%s\n"
-         service.domain
-         service.source_name
-         service.image)
-    planning.services;
-  let* secret_authorities =
-    Sol_cli_deploy_selection.secret_authorities_for_plan ~config:cfg planning
-    |> Sol_cli_exit.of_msg
-  in
-  Printf.printf
-    "\nDeclared secret authorities (configuration does not prove provider access):\n";
-  List.iter
-    (fun (unit_address, key, authority) ->
-       let source =
-         match authority with
-         | Sol_cli_secret_source.Sol_managed ->
-           "declared Sol-managed Kubernetes Secret; value state deferred"
-         | Provider { secret } ->
-           Printf.sprintf
-             "declared provider-backed authority %s (%s); value state deferred"
-             (Sol_cli_provider_secret.reference secret)
-             (Sol_cli_provider_secret.provider_to_string secret.provider)
-         | External { store; key } ->
-           Printf.sprintf
-             "declared ESO SecretStore %s key %s; sync state deferred"
-             store
-             key
-         | Target_kafka { secret } ->
-           Printf.sprintf
-             "delivered by the target's managed Kafka authority into Secret %s; value \
-              state deferred"
-             secret
-       in
-       Printf.printf "  - %s/%s: %s\n" unit_address key source)
-    secret_authorities;
-  let workspace = Sol_cli_workspace.current_name () in
-  let declared =
-    List.map
-      (fun (spec : Sol_cli_deployment_plan.service_spec) ->
-         { Sol_cli_workload_ownership.resource =
-             Sol_cli_deployment_plan.resource_of_spec spec
-         ; namespace = Sol_cli_deployment_plan.namespace_to_string spec.namespace
-         ; name = Sol_cli_deployment_plan.k8s_name_to_string spec.k8s_name
-         })
-      planning.services
-  in
-  let delta =
-    match Sol_cli_config.destination_of_target target with
-    | Error message -> Sol_cli_plan_delta.Deferred message
-    | Ok destination ->
-      let ctx = Sol_cli_kube_destination.context_of_destination destination in
-      let evidence =
-        Sol_cli_release_store.current_record ~ctx ~workspace
-        |> Result.map (function
-          | None -> []
-          | Some (release : Sol_cli_release.t) ->
-            List.concat_map
-              (fun (w : Sol_cli_release.recorded_workload) -> w.Sol_cli_release_id.owned)
-              release.workloads)
-      in
-      Sol_cli_plan_delta.compute ~ctx ~workspace ~evidence ~declared
-  in
-  Printf.printf "\n%s\n" (Sol_cli_plan_delta.to_string delta);
-  let var_file =
-    let cwd = Sys.getcwd () in
-    let workspace_root =
-      Option.value (Sol_cli_workspace.find_root ~dir:cwd) ~default:cwd
+    let previous, plan_unknown =
+      match Sol_cli_config.destination_of_target target with
+      | Error message -> [], [ message ]
+      | Ok destination ->
+        let ctx = Sol_cli_kube_destination.context_of_destination destination in
+        (match
+           Sol_cli_release_store.current_record
+             ~ctx
+             ~workspace:(Sol_cli_workspace.current_name ())
+         with
+         | Error message -> [], [ message ]
+         | Ok None -> [], []
+         | Ok (Some (release : Sol_cli_release.t)) ->
+           ( List.map
+               (fun (recorded : Sol_cli_release.recorded_workload) ->
+                  let spec = recorded.spec in
+                  { Sol_cli_transition.name = spec.domain ^ "/" ^ spec.name
+                  ; kind = spec.primitive
+                  ; image = Some spec.image
+                  ; schedule = spec.schedule
+                  ; http =
+                      Option.map
+                        (fun path ->
+                           path, Option.value spec.http_exposure ~default:"public")
+                        spec.http_path
+                  ; config_digest = Some (Sol_cli_transition.digest_config spec.config)
+                  })
+               release.workloads
+           , [] ))
     in
-    Sol_cli_terraform_vars.var_file
-      ~cwd
-      ~workspace_root
-      ~flag:var_file
-      ~target:target.terraform_var_file
-  in
-  let run_log = Sol_cli_run_log.create ~prefix:"plan" () in
-  let* installation_established =
-    match Sol_cli_installation.of_target target with
-    | Error message ->
-      Printf.printf
-        "\n\
-         Infrastructure and bootstrap plans deferred: installation configuration is \
-         incomplete (%s).\n"
-        message;
-      Ok false
-    | Ok configuration ->
-      let verdicts =
-        Sol_cli_provider_capabilities.installation_probes target.provider configuration
-        |> Sol_cli_installation.observe
-             ~run:
-               (Sol_cli_provider_capabilities.installation_observation
-                  ~provider:target.provider)
-      in
-      Printf.printf
-        "\nInstallation prerequisites:\n%s\n"
-        (Sol_cli_installation.summary verdicts);
-      (match Sol_cli_installation.all_established verdicts with
-       | Ok () ->
-         let* () = Cmd_cloud_tf.check_terraform () in
-         let* assets = Cmd_cloud_tf.resolve_assets () in
-         (match
-            Sol_cli_environment_stage.plan_config
-              ~assets
-              ~run_log
-              ~config:cfg
-              ~var_file
-              ~vars
-              ()
-          with
-          | Ok () -> Ok true
-          | Error failure ->
-            Error
-              (Sol_cli_exit.error (Sol_cli_environment_stage.failure_to_string failure)))
-       | Error _ ->
-         let entirely_unmet =
-           verdicts <> []
-           && List.for_all
-                (function
-                  | _, Sol_cli_installation.Unmet _ -> true
-                  | _ -> false)
-                verdicts
-         in
-         if entirely_unmet
+    let desired =
+      List.map
+        (fun (spec : Sol_cli_deployment_plan.service_spec) ->
+           let kind =
+             match spec.primitive with
+             | Sol_cli_deployment_plan.Svc -> "svc"
+             | Sol_cli_deployment_plan.Worker -> "worker"
+             | Sol_cli_deployment_plan.Fn -> "fn"
+           in
+           { Sol_cli_transition.name = spec.domain ^ "/" ^ spec.source_name
+           ; kind
+           ; image = Some spec.image
+           ; schedule = spec.schedule
+           ; http =
+               Option.map
+                 (fun (http : Sol_cli_toml.http_trigger) ->
+                    http.path, Sol_cli_toml.http_exposure_to_string http.exposure)
+                 spec.http
+           ; config_digest = Some (Sol_cli_transition.digest_config spec.config)
+           })
+        (if execution = Sol_cli_config.Mixed
          then
+           List.filter
+             (fun (spec : Sol_cli_deployment_plan.service_spec) ->
+                spec.primitive <> Sol_cli_deployment_plan.Fn)
+             planning.services
+         else planning.services)
+    in
+    let kubernetes_transition =
+      Sol_cli_transition.compute
+        ~target:target_name
+        ~backend:`Kubernetes
+        ~previous
+        ~desired
+        ~unknown:plan_unknown
+        ()
+    in
+    print_string (Sol_cli_transition.render kubernetes_transition);
+    print_newline ();
+    let* () =
+      match out, execution, serverless_transition with
+      | None, _, _ -> Ok ()
+      | Some path, Sol_cli_config.Kubernetes, _ ->
+        Sol_cli_fs.write_atomic
+          path
+          (Yojson.Safe.to_string (Sol_cli_transition.to_json kubernetes_transition) ^ "\n")
+        |> Sol_cli_exit.of_msg
+        |> Result.map ignore
+      | Some path, Sol_cli_config.Mixed, Some serverless ->
+        let components =
+          `Assoc
+            [ "serverless", Sol_cli_transition.to_json serverless
+            ; "kubernetes", Sol_cli_transition.to_json kubernetes_transition
+            ]
+        in
+        Sol_cli_fs.write_atomic
+          path
+          (Yojson.Safe.to_string
+             (`Assoc
+                 [ "version", `Int 1
+                 ; "target", `String target_name
+                 ; "components", components
+                 ])
+           ^ "\n")
+        |> Sol_cli_exit.of_msg
+        |> Result.map ignore
+      | Some _, Sol_cli_config.Mixed, None ->
+        Error (Sol_cli_exit.error "mixed plan has no serverless component")
+      | Some _, Sol_cli_config.Serverless, _ ->
+        Error (Sol_cli_exit.error "serverless plan returned before writing")
+    in
+    Printf.printf "Project: %s\n" project;
+    Printf.printf "Target: %s\n\n" target_name;
+    Printf.printf "Target config:\n";
+    print_opt "env" (Some target.env);
+    print_opt "provider" (Some (Sol_cli_provider.to_string target.provider));
+    print_opt "region" (Some target.region);
+    print_opt "registry" target.registry;
+    print_opt "cluster" target.cluster_name;
+    print_opt "domain" target.base_domain;
+    print_opt "cluster issuer" target.cluster_issuer;
+    Printf.printf "\nResources:\n";
+    if resources = [] then Printf.printf "  (none)\n";
+    resources
+    |> List.iter (fun (r : Sol_cli_config.resource) ->
+      let type_suffix =
+        match r.typ with
+        | None -> ""
+        | Some t -> " (" ^ t ^ ")"
+      in
+      Printf.printf "  - %s%s\n" r.name type_suffix;
+      List.iter print_index r.indexes);
+    Printf.printf "\nServices:\n";
+    if services = [] then Printf.printf "  (none)\n";
+    services
+    |> List.iter (fun s ->
+      let type_suffix =
+        match s.Sol_cli_config.typ with
+        | None -> ""
+        | Some t -> " (" ^ t ^ ")"
+      in
+      Printf.printf "  - %s%s\n" s.Sol_cli_config.name type_suffix;
+      print_opt "path" s.path;
+      if s.uses <> []
+      then
+        Printf.printf
+          "    uses: %s\n"
+          (String.concat ", " (List.map Sol_cli_config.format_use_ref s.uses));
+      match s.scale_min, s.scale_max with
+      | None, None -> ()
+      | min, max ->
+        Printf.printf
+          "    scale: %s..%s\n"
+          (Option.fold ~none:"?" ~some:string_of_int min)
+          (Option.fold ~none:"?" ~some:string_of_int max));
+    Printf.printf "\nWorkload plan (all target workloads):\n";
+    if planning.Sol_cli_deployment_plan.services = [] then Printf.printf "  (none)\n";
+    List.iter
+      (fun (service : Sol_cli_deployment_plan.service_spec) ->
+         Printf.printf
+           "  - %s/%s image=%s\n"
+           service.domain
+           service.source_name
+           service.image)
+      planning.services;
+    let* secret_authorities =
+      Sol_cli_deploy_selection.secret_authorities_for_plan ~config:cfg planning
+      |> Sol_cli_exit.of_msg
+    in
+    Printf.printf
+      "\nDeclared secret authorities (configuration does not prove provider access):\n";
+    List.iter
+      (fun (unit_address, key, authority) ->
+         let source =
+           match authority with
+           | Sol_cli_secret_source.Sol_managed ->
+             "declared Sol-managed Kubernetes Secret; value state deferred"
+           | Provider { secret } ->
+             Printf.sprintf
+               "declared provider-backed authority %s (%s); value state deferred"
+               (Sol_cli_provider_secret.reference secret)
+               (Sol_cli_provider_secret.provider_to_string secret.provider)
+           | External { store; key } ->
+             Printf.sprintf
+               "declared ESO SecretStore %s key %s; sync state deferred"
+               store
+               key
+           | Target_kafka { secret } ->
+             Printf.sprintf
+               "delivered by the target's managed Kafka authority into Secret %s; value \
+                state deferred"
+               secret
+         in
+         Printf.printf "  - %s/%s: %s\n" unit_address key source)
+      secret_authorities;
+    let workspace = Sol_cli_workspace.current_name () in
+    let declared =
+      List.map
+        (fun (spec : Sol_cli_deployment_plan.service_spec) ->
+           { Sol_cli_workload_ownership.resource =
+               Sol_cli_deployment_plan.resource_of_spec spec
+           ; namespace = Sol_cli_deployment_plan.namespace_to_string spec.namespace
+           ; name = Sol_cli_deployment_plan.k8s_name_to_string spec.k8s_name
+           })
+        planning.services
+    in
+    let delta =
+      match Sol_cli_config.destination_of_target target with
+      | Error message -> Sol_cli_plan_delta.Deferred message
+      | Ok destination ->
+        let ctx = Sol_cli_kube_destination.context_of_destination destination in
+        let evidence =
+          Sol_cli_release_store.current_record ~ctx ~workspace
+          |> Result.map (function
+            | None -> []
+            | Some (release : Sol_cli_release.t) ->
+              List.concat_map
+                (fun (w : Sol_cli_release.recorded_workload) ->
+                   w.Sol_cli_release_id.owned)
+                release.workloads)
+        in
+        Sol_cli_plan_delta.compute ~ctx ~workspace ~evidence ~declared
+    in
+    Printf.printf "\n%s\n" (Sol_cli_plan_delta.to_string delta);
+    let var_file =
+      let cwd = Sys.getcwd () in
+      let workspace_root =
+        Option.value (Sol_cli_workspace.find_root ~dir:cwd) ~default:cwd
+      in
+      Sol_cli_terraform_vars.var_file
+        ~cwd
+        ~workspace_root
+        ~flag:var_file
+        ~target:target.terraform_var_file
+    in
+    let run_log = Sol_cli_run_log.create ~prefix:"plan" () in
+    let* installation_established =
+      match Sol_cli_installation.of_target target with
+      | Error message ->
+        Printf.printf
+          "\n\
+           Infrastructure and bootstrap plans deferred: installation configuration is \
+           incomplete (%s).\n"
+          message;
+        Ok false
+      | Ok configuration ->
+        let verdicts =
+          Sol_cli_provider_capabilities.installation_probes target.provider configuration
+          |> Sol_cli_installation.observe
+               ~run:
+                 (Sol_cli_provider_capabilities.installation_observation
+                    ~provider:target.provider)
+        in
+        Printf.printf
+          "\nInstallation prerequisites:\n%s\n"
+          (Sol_cli_installation.summary verdicts);
+        (match Sol_cli_installation.all_established verdicts with
+         | Ok () ->
            let* () = Cmd_cloud_tf.check_terraform () in
            let* assets = Cmd_cloud_tf.resolve_assets () in
-           Sol_cli_installation_stage.plan_fresh
-             ~assets
-             ~provider:target.provider
-             ~configuration
-             ~run_log
-             ~run:
-               (Sol_cli_provider_capabilities.installation_observation
-                  ~provider:target.provider)
-             ()
-           |> Sol_cli_exit.of_msg
-           |> Result.map (fun () -> false)
-         else (
-           Printf.printf
-             "\n\
-              Infrastructure plan deferred: installation prerequisites are partially \
-              established or unknown, so the durable root cannot be safely planned from \
-              empty state.\n";
-           Ok false))
-  in
-  let capabilities = Sol_cli_provider_capabilities.capabilities_of target.provider in
-  let* () =
-    if
-      installation_established
-      && capabilities.authorization_reconciler_field <> ""
-      && List.mem_assoc capabilities.authorization_reconciler_field target.provider_fields
-    then
-      let* () =
-        Cmd_grants.run
-          ~config:cfg
-          ~action:Cmd_grants.Plan
-          ~target:target_name
-          ~var_file
-          ~vars
-          ()
-        |> Result.map_error (fun (failure : Sol_cli_exit.failure) -> failure)
-      in
-      Ok ()
-    else (
-      Printf.printf
-        "\n\
-         Authorization plan deferred: installation or target reconciler prerequisites \
-         are not established.\n";
-      Ok ())
-  in
-  let* () =
-    Sol_cli_contract.plan_report
-      ~workspace:(Sys.getcwd ())
-      ~registry_url:(Sys.getenv_opt "SCHEMA_REGISTRY_URL")
-      ~scope:"workspace"
-    |> Sol_cli_exit.of_msg
-  in
-  Ok ()
+           (match
+              Sol_cli_environment_stage.plan_config
+                ~assets
+                ~run_log
+                ~config:cfg
+                ~var_file
+                ~vars
+                ()
+            with
+            | Ok () -> Ok true
+            | Error failure ->
+              Error
+                (Sol_cli_exit.error (Sol_cli_environment_stage.failure_to_string failure)))
+         | Error _ ->
+           let entirely_unmet =
+             verdicts <> []
+             && List.for_all
+                  (function
+                    | _, Sol_cli_installation.Unmet _ -> true
+                    | _ -> false)
+                  verdicts
+           in
+           if entirely_unmet
+           then
+             let* () = Cmd_cloud_tf.check_terraform () in
+             let* assets = Cmd_cloud_tf.resolve_assets () in
+             Sol_cli_installation_stage.plan_fresh
+               ~assets
+               ~provider:target.provider
+               ~configuration
+               ~run_log
+               ~run:
+                 (Sol_cli_provider_capabilities.installation_observation
+                    ~provider:target.provider)
+               ()
+             |> Sol_cli_exit.of_msg
+             |> Result.map (fun () -> false)
+           else (
+             Printf.printf
+               "\n\
+                Infrastructure plan deferred: installation prerequisites are partially \
+                established or unknown, so the durable root cannot be safely planned \
+                from empty state.\n";
+             Ok false))
+    in
+    let capabilities = Sol_cli_provider_capabilities.capabilities_of target.provider in
+    let* () =
+      if
+        installation_established
+        && capabilities.authorization_reconciler_field <> ""
+        && List.mem_assoc
+             capabilities.authorization_reconciler_field
+             target.provider_fields
+      then
+        let* () =
+          Cmd_grants.run
+            ~config:cfg
+            ~action:Cmd_grants.Plan
+            ~target:target_name
+            ~var_file
+            ~vars
+            ()
+          |> Result.map_error (fun (failure : Sol_cli_exit.failure) -> failure)
+        in
+        Ok ()
+      else (
+        Printf.printf
+          "\n\
+           Authorization plan deferred: installation or target reconciler prerequisites \
+           are not established.\n";
+        Ok ())
+    in
+    let* () =
+      Sol_cli_contract.plan_report
+        ~workspace:(Sys.getcwd ())
+        ~registry_url:(Sys.getenv_opt "SCHEMA_REGISTRY_URL")
+        ~scope:"workspace"
+      |> Sol_cli_exit.of_msg
+    in
+    Ok ()
 ;;
 
 let target_arg =
@@ -417,6 +654,18 @@ let var_arg =
     & info [ "var" ] ~docv:"KEY=VALUE" ~doc:"Terraform variable. Repeatable.")
 ;;
 
+let out_arg =
+  Arg.(
+    value
+    & opt (some Sol_cli_args.text) None
+    & info
+        [ "out" ]
+        ~docv:"FILE"
+        ~doc:
+          "Write this transition plan as JSON for review. Apply it with `sol deploy \
+           --plan FILE`; a plan whose recomputed transition differs is refused.")
+;;
+
 let cmd =
   Cmd.v
     (Cmd.info
@@ -425,10 +674,11 @@ let cmd =
          "Preview target infrastructure, authorization, workload intent, and the live \
           workload delta without applying changes.")
     Term.(
-      const (fun target refs var_file vars ->
-        Sol_cli_exit.exit_on (run target refs var_file vars))
+      const (fun target refs var_file vars out ->
+        Sol_cli_exit.exit_on (run target refs var_file vars out))
       $ target_arg
       $ image_ref_arg
       $ var_file_arg
-      $ var_arg)
+      $ var_arg
+      $ out_arg)
 ;;

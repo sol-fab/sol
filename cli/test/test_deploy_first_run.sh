@@ -390,6 +390,11 @@ esac
 exit 0
 EOF
 
+cat >"$tmp/bin-tf/docker" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+
 cat >"$tmp/bin-tf/kubectl" <<'EOF'
 #!/bin/sh
 case "\$1 \$2" in
@@ -397,6 +402,19 @@ case "\$1 \$2" in
     printf '%s\n' '{"status":{"userInfo":{"username":"first-run","extra":{"canonicalArn":"arn:aws:iam::111122223333:role/sol-cluster-access"}}}}'
     ;;
   "auth can-i") printf 'yes\n' ;;
+  *)
+    case "$*" in
+      *" get configmap "*sol-release-*)
+        if [ "${FAKE_RELEASE_UNREADABLE:-0}" = 1 ]; then
+          printf 'ok\n'
+          exit 0
+        fi
+        printf 'Error from server (NotFound): configmaps not found\n' >&2
+        exit 1
+        ;;
+      *) printf 'ok\n' ;;
+    esac
+    ;;
   *) printf 'ok\n' ;;
 esac
 exit 0
@@ -592,6 +610,13 @@ check_absent \
   " apply " \
   "$(terraform_log)"
 rm -f "$tmp/unreadable-state"
+
+export FAKE_RELEASE_UNREADABLE=1
+run_with stale/aws/us-east-1 "$tmp/bin-installed:$tmp/bin-tf:/usr/bin:/bin"   --confirm-group-change   --image-ref "charge_svc=registry.example.test/first-run/charge-svc@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+unset FAKE_RELEASE_UNREADABLE
+check "an unreadable current release refuses before authorization" 1 "$rc"
+check_contains   "the refusal names the unreadable release"   "cannot read the current Kubernetes release"   "$output"
+check_absent   "an unreadable release does not reach Terraform apply"   " apply "   "$(terraform_log)"
 
 run_with stale/aws/us-east-1 "$tmp/bin-installed:$tmp/bin-tf:$tmp/bin-kubectl:/usr/bin:/bin" --confirm-group-change
 check "a target whose cluster is unreachable exits 1" 1 "$rc"

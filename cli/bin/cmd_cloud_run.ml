@@ -156,6 +156,7 @@ let request
     ; identity = { unit; callers; issuer; jwks_uri }
     ; ingress
     ; service_account
+    ; extra_env = []
     ; record
     }
 ;;

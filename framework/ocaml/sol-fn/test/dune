@@ -1,6 +1,6 @@
 (test
  (name test_fn)
- (libraries sol_fn eio eio_main windtrap unix))
+ (libraries sol_fn sol-svc eio eio_main windtrap unix http yojson base64))
 
 (alias
  (name ci-unit)

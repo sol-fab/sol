@@ -190,6 +190,44 @@ GCP skips bootstrap mutation entirely.
 The offline harness tests protect fail-closed behavior and evidence accounting. They are regression
 tests, not substitutes for live evidence.
 
+## Mixed serverless + Kubernetes qualification
+
+The AWS and GCP rows support an optional mixed scenario with `MIXED=1`. The target must
+declare `execution: mixed`; the AWS row refuses `MIXED=1` otherwise rather than sending
+the function through the Kubernetes renderer. The row adds the candidate's `probe_fn` to
+its application unit set, so the serverless function is built, published and deployed by
+Sol alongside the existing Kubernetes workloads.
+
+After the normal application transaction, the provider hook applies a persisted plan:
+
+1. `sol plan <target> --out` writes the transition for both components.
+2. `sol deploy --plan` applies it.
+3. The same plan is applied again; a destructive operation in the reapply fails the row.
+4. A genuine desired-state update changes the Kubernetes target's `scale_min` from 1 to
+   `MIXED_UPDATE_REPLICAS` (default 2), writes a second persisted plan, applies it, and
+   verifies the live Deployment replicas.
+5. The row injects a safe Kubernetes image-verification failure after the serverless
+   component has applied, requires the partial-apply message, verifies the existing
+   Kubernetes Deployment was not changed, then applies the valid update plan to recover.
+6. The unrelated Kubernetes service is checked with `kubectl rollout status`.
+7. The provider-native serverless function is observed (`aws lambda get-function` or
+   `gcloud run jobs describe`).
+8. During destroy, the same provider read must positively report the function absent; an
+   unreadable or forbidden answer is UNKNOWN and fails the row.
+
+The evidence is written to `mixed-plan.json`, `mixed-plan.log`, `mixed-apply.log`,
+`mixed-reapply.log`, `mixed-update-plan.json`, `mixed-update-apply.log`,
+`mixed-update-reapply.log`, `mixed-partial-failure.log`, `mixed-recovery.log`,
+`mixed-unrelated-k8s.log`, `mixed-serverless.json` and `mixed-evidence.txt`. AWS and GCP each record their own evidence and verdict; neither
+provider's mixed evidence promotes the other's claim.
+
+The mode is implemented in both harnesses but **not live-qualified** until an authorized
+attempt produces those files for the candidate. The persisted-plan mechanism is tested
+offline by `cli/test/test_mixed_plan.sh` and the transition/mixed-apply inline tests; the
+provider hooks and the target-disposition guard are tested by
+`internal/ci/test_mixed_qual_hooks.sh`. Those are mechanism evidence, not provider
+behavior. No mixed row is currently claimed in either provider matrix.
+
 ## Managed Kafka evidence
 
 AWS/GCP rows let Sol generate and persist the Kafka authority, initialize Redpanda,
