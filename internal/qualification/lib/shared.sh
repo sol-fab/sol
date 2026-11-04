@@ -324,11 +324,11 @@ record_letsencrypt_rate_limit() {
   say "recorded the CA rate-limit window; the next attempt will refuse before provisioning"
 }
 
-# Production TLS and Grafana SSO are both part of the profile. Terraform's
-# OIDC variables default to empty, so a missing client is discovered only when
-# the platform apply reaches Grafana. Refuse before any provider mutation.
+# Every platform install publishes Grafana with OIDC, regardless of the
+# certificate issuer; staging is not a reason to omit SSO. Terraform's OIDC
+# variables default to empty, so a missing client is discovered only when the
+# platform apply reaches Grafana. Refuse before any provider mutation.
 require_grafana_oidc_inputs() {
-  [ "${CLUSTER_ISSUER:-}" = "letsencrypt-prod" ] || return 0
   local missing="" provider="${TF_VAR_grafana_oidc_provider:-google}" var value
   for var in TF_VAR_grafana_oidc_client_id TF_VAR_grafana_oidc_client_secret; do
     eval "value=\${$var:-}"
@@ -341,12 +341,12 @@ require_grafana_oidc_inputs() {
     done
   fi
   if [ -n "$missing" ]; then
-    say "REFUSING: production Grafana SSO inputs are missing:$missing"
+    say "REFUSING: Grafana SSO inputs are missing:$missing"
     say "  register a web client for redirect https://grafana.$BASE_DOMAIN/login/generic_oauth"
     say "  and export the TF_VAR_grafana_oidc_* values before provisioning; secrets are not recorded."
     return 1
   fi
-  say "production preflight: Grafana OIDC inputs present"
+  say "preflight: Grafana OIDC inputs present"
 }
 
 # A genuine desired-state update for the mixed row: change one Kubernetes
