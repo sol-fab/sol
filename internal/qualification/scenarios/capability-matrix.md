@@ -8,9 +8,10 @@ attempt/evidence contract.
 |---|---|---|
 | External queue/object bindings | Implemented, offline-tested | Implemented, offline-tested |
 | Serverless runtime | Lambda SQS/S3 mechanism-live; not production-qualified | Phase 1 adapter implemented; not run |
+| HTTP functions / shared public gateway | Implemented, offline-tested; not live-qualified | Implemented, offline-tested; not live-qualified |
 | Kubernetes runtime | Implemented; not live-qualified | Implemented; not live-qualified |
-| Mixed Kubernetes/serverless lifecycle | Existing harness; unqualified | Existing harness; unqualified |
-| Interrupted apply/resume | Catalogued adapter only; not executable through shared runner | Not separately implemented |
+| Mixed Kubernetes/serverless lifecycle | Provider hooks implemented, offline-tested; not live-qualified | Provider hooks implemented, offline-tested; not live-qualified |
+| Interrupted apply/resume | AWS `resume` phase implemented, diagnostic only; offline-tested; not live-qualified | Not separately implemented |
 | Resource inventory | Cross-cutting scenario requirement | Cross-cutting scenario requirement |
 | Independent absence verification | Cross-cutting scenario requirement | Cross-cutting scenario requirement |
 | External Secrets (ESO) | Existing scenario; NOT RUN | Existing scenario; NOT RUN |
@@ -40,5 +41,7 @@ the claim family.
 - **live-qualified**: behavioral evidence from a real provider run recorded through the attempt/evidence contract.
 
 The GCP Phase 1 and provider-secret scenarios are implemented, offline-tested, and
-plan-validated. None is live-qualified. The interrupted-apply entry remains
-catalogued only and is not executable through the shared runner.
+plan-validated. The mixed and HTTP-function paths are implemented and offline-tested;
+their provider hooks are exercised with stubbed commands, and no live run has been
+recorded. The AWS interrupted-apply entry is executable through the provider harness's
+diagnostic `resume` phase, not through the shared scenario runner.

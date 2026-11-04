@@ -54,6 +54,7 @@ type service_spec =
   ; schedule_timezone : string option
   ; scheduled_concurrency : Sol_cli_toml.scheduled_concurrency
   ; backoff_limit : int
+  ; http : Sol_cli_toml.http_trigger option
   ; replicas : int
   ; availability : Sol_cli_availability.t
   ; consumes_kafka : bool
@@ -255,7 +256,10 @@ let release_rollout_to_string (spec : service_spec) =
    they cannot disagree about which object a workload's evidence belongs to. *)
 let resource_of_spec (spec : service_spec) : string =
   match spec.primitive with
-  | Fn -> "cronjob"
+  | Fn ->
+    (match spec.http with
+     | Some _ -> "deployment"
+     | None -> "cronjob")
   | Svc | Worker ->
     (match spec.progressive_delivery with
      | Some _ -> "rollout"
@@ -307,6 +311,12 @@ let release_workload_of_spec (spec : service_spec) : Sol_cli_release_id.workload
   ; schedule_timezone = spec.schedule_timezone
   ; scheduled_concurrency =
       Sol_cli_toml.scheduled_concurrency_to_string spec.scheduled_concurrency
+  ; http_path = Option.map (fun (http : Sol_cli_toml.http_trigger) -> http.path) spec.http
+  ; http_exposure =
+      Option.map
+        (fun (http : Sol_cli_toml.http_trigger) ->
+           Sol_cli_toml.http_exposure_to_string http.exposure)
+        spec.http
   ; backoff_limit = spec.backoff_limit
   ; replicas = spec.replicas
   ; availability = Sol_cli_availability.to_string spec.availability
@@ -1080,6 +1090,121 @@ let database_for_uses ~target ~database uses =
   | _ -> Sol_cli_resource_binding.No_postgres_use
 ;;
 
+let validate_http_triggers (specs : service_spec list) =
+  specs
+  |> Sol_cli_result.map_list (fun (spec : service_spec) ->
+    let name = spec.source_name in
+    match spec.primitive, spec.http with
+    | (Svc | Worker), Some _ ->
+      Error
+        (Invalid_service_call
+           { service = name
+           ; ref = "http_path"
+           ; message =
+               Printf.sprintf
+                 "workload %s declares http_path but is not a -fn"
+                 spec.source_name
+           })
+    | Fn, Some http ->
+      if http.exposure = Sol_cli_toml.Http_internal && spec.called_by = []
+      then
+        Error
+          (Invalid_service_call
+             { service = name
+             ; ref = "called_by"
+             ; message =
+                 Printf.sprintf
+                   "internal HTTP function %s requires at least one called_by edge; an \
+                    internal endpoint with no declared caller is not reachable"
+                   spec.source_name
+             })
+      else if spec.language = Some Sol_cli_compat.Typescript
+      then
+        Error
+          (Invalid_service_call
+             { service = name
+             ; ref = "http_path"
+             ; message =
+                 Printf.sprintf
+                   "workload %s declares http_path, but the TypeScript framework has no \
+                    HTTP-function runtime"
+                   spec.source_name
+             })
+      else Ok ()
+    | _ -> Ok ())
+  |> Result.map ignore
+;;
+
+let is_http_function (spec : service_spec) =
+  match spec.primitive, spec.http with
+  | Fn, Some _ -> true
+  | _ -> false
+;;
+
+let validate_public_http_routes (specs : service_spec list) =
+  let public_http =
+    List.filter
+      (fun (spec : service_spec) ->
+         is_http_function spec
+         && List.exists
+              (fun (http : Sol_cli_toml.http_trigger) ->
+                 http.exposure = Sol_cli_toml.Http_public)
+              (Option.to_list spec.http))
+      specs
+  in
+  match public_http with
+  | [] -> Ok ()
+  | first :: rest ->
+    let host (spec : service_spec) =
+      Option.map Sol_cli_toml.hostname_to_string spec.ingress_host
+    in
+    let expected_host = host first in
+    let* () =
+      match List.find_opt (fun spec -> host spec <> expected_host) rest with
+      | None -> Ok ()
+      | Some spec ->
+        Error
+          (Invalid_service_call
+             { service = spec.source_name
+             ; ref = "ingress_host"
+             ; message =
+                 Printf.sprintf
+                   "public HTTP functions compose into one Kubernetes API and must \
+                    declare the same ingress_host; %s differs from %s"
+                   spec.source_name
+                   first.source_name
+             })
+    in
+    let seen = Hashtbl.create (List.length public_http) in
+    let rec loop = function
+      | [] -> Ok ()
+      | (spec : service_spec) :: rest ->
+        let path =
+          match spec.http with
+          | Some (http : Sol_cli_toml.http_trigger) -> http.path
+          | None -> ""
+        in
+        (match Hashtbl.find_opt seen path with
+         | Some owner ->
+           Error
+             (Invalid_service_call
+                { service = spec.source_name
+                ; ref = path
+                ; message =
+                    Printf.sprintf
+                      "public HTTP functions %s and %s declare the same route %S; one \
+                       shared API needs one owner per path"
+                      owner
+                      spec.source_name
+                      path
+                })
+         | None ->
+           Hashtbl.add seen path spec.source_name;
+           loop rest)
+    in
+    loop public_http
+;;
+
 let of_services_result
       ~workspace
       ~env
@@ -1312,22 +1437,32 @@ let of_services_result
              })
     in
     let* schedule =
-      match primitive with
-      | Fn ->
-        (match toml.schedule with
-         | Some schedule -> Ok (Some schedule)
-         | None ->
-           Error
-             (Toml_error
-                (Sol_cli_toml.Validation
-                   { path = Sol_cli_workspace.at_root (Filename.concat svc.dir "sol.toml")
-                   ; message =
-                       Printf.sprintf
-                         "sol.toml: [service] schedule is required for the -fn %S (e.g. \
-                          schedule = \"0 3 * * *\")"
-                         svc.name
-                   })))
-      | _ -> Ok None
+      match primitive, toml.schedule, toml.http with
+      | Fn, Some schedule, None -> Ok (Some schedule)
+      | Fn, None, Some _ -> Ok None
+      | Fn, Some _, Some _ ->
+        Error
+          (Toml_error
+             (Sol_cli_toml.Validation
+                { path = Sol_cli_workspace.at_root (Filename.concat svc.dir "sol.toml")
+                ; message =
+                    Printf.sprintf
+                      "sol.toml: the -fn %S declares both schedule and http_path; set \
+                       exactly one trigger"
+                      svc.name
+                }))
+      | Fn, None, None ->
+        Error
+          (Toml_error
+             (Sol_cli_toml.Validation
+                { path = Sol_cli_workspace.at_root (Filename.concat svc.dir "sol.toml")
+                ; message =
+                    Printf.sprintf
+                      "sol.toml: [service] schedule or http_path is required for the -fn \
+                       %S"
+                      svc.name
+                }))
+      | _, _, _ -> Ok None
     in
     let replicas =
       match sol_yml_replicas_override ~declared ~service_name:svc.name with
@@ -1375,6 +1510,7 @@ let of_services_result
       ; scheduled_concurrency =
           Option.value toml.scheduled_concurrency ~default:default_scheduled_concurrency
       ; backoff_limit = Option.value toml.backoff_limit ~default:default_backoff_limit
+      ; http = toml.http
       ; replicas
       ; availability = Option.value toml.availability ~default:Sol_cli_availability.Single
       ; consumes_kafka
@@ -1447,6 +1583,8 @@ let of_services_result
       in
       { svc with called_by })
   in
+  let* () = validate_http_triggers resolved_services in
+  let* () = validate_public_http_routes resolved_services in
   let contract = contract_of_facts facts.Sol_cli_workspace_model.events in
   let release_id =
     Sol_cli_release_id.of_content

@@ -81,6 +81,11 @@ if ! bash internal/qualification/secrets/test-scenario.sh; then
   failed=1
 fi
 
+echo "fast checks: mixed qualification hooks"
+if ! bash internal/ci/test_mixed_qual_hooks.sh; then
+  failed=1
+fi
+
 echo "fast checks: source invariants"
 if ! bash internal/tooling/scripts/verify.sh static; then
   failed=1

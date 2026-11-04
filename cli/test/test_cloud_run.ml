@@ -27,6 +27,7 @@ let request ?(record = None) () =
         }
     ; ingress = Public
     ; service_account = "sol-test@example.iam.gserviceaccount.com"
+    ; extra_env = []
     ; record
     }
 ;;
@@ -644,6 +645,7 @@ let test_verify_writes_release_record () =
            { (request ()) with
              image =
                "requested@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+           ; extra_env = []
            ; record = Some record
            }
            ~token:"token"

@@ -412,28 +412,43 @@ let plan ?(secret_values = []) ~root ~facts services =
                ]
              else []
            in
-           let base_env = base_env @ resource_env in
-           (match
-              local_secret_env
-                ~secret_values
-                ~secret_keys
-                ~database_consumer
-                ~unit_address:(svc.domain ^ "/" ^ svc.name)
-            with
+           let http_env =
+             match config.Sol_cli_toml.http with
+             | None -> Ok []
+             | Some (http : Sol_cli_toml.http_trigger) ->
+               (match http.exposure with
+                | Sol_cli_toml.Http_public ->
+                  Ok [ "SOL_HTTP_PATH", http.path; "SOL_HTTP_EXPOSURE", "public" ]
+                | Sol_cli_toml.Http_internal ->
+                  Error
+                    "an internal HTTP function requires a deployed target's workload \
+                     trust; local run supports public HTTP functions only")
+           in
+           (match http_env with
             | Error message -> Error (label svc, message)
-            | Ok secret_env ->
-              (match workload.Sol_cli_workspace_model.language with
-               | Some language ->
-                 (match recipe ~root ~base_env ~secret_env svc language with
-                  | Ok recipe -> Ok recipe
-                  | Error message -> Error (label svc, message))
-               | None ->
-                 Error
-                   ( label svc
-                   , Printf.sprintf
-                       "declares no language; add `language: ocaml` (or typescript) \
-                        under services.%s in sol.yml"
-                       svc.name )))))
+            | Ok http_env ->
+              let base_env = base_env @ resource_env @ http_env in
+              (match
+                 local_secret_env
+                   ~secret_values
+                   ~secret_keys
+                   ~database_consumer
+                   ~unit_address:(svc.domain ^ "/" ^ svc.name)
+               with
+               | Error message -> Error (label svc, message)
+               | Ok secret_env ->
+                 (match workload.Sol_cli_workspace_model.language with
+                  | Some language ->
+                    (match recipe ~root ~base_env ~secret_env svc language with
+                     | Ok recipe -> Ok recipe
+                     | Error message -> Error (label svc, message))
+                  | None ->
+                    Error
+                      ( label svc
+                      , Printf.sprintf
+                          "declares no language; add `language: ocaml` (or typescript) \
+                           under services.%s in sol.yml"
+                          svc.name ))))))
   in
   match
     List.filter_map

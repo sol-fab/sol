@@ -15,7 +15,7 @@ import letsencrypt_preflight as preflight  # noqa: E402
 
 checks = 0
 failures = 0
-NOW = dt.datetime(2026, 10, 26, 12, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime.now(dt.timezone.utc)
 
 
 def check(label: str, condition: bool) -> None:

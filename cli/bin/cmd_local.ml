@@ -2,6 +2,26 @@ open Cmdliner
 open Sol_cli_manifest
 open Result.Syntax
 
+(* A function with an HTTP trigger is a long-running request handler, not a run-once
+   workload; `sol local run` starts it like any other HTTP unit. A scheduled or
+   explicitly-invoked function keeps the run-once contract. *)
+let is_http_function
+      (facts : Sol_cli_workspace_model.t)
+      (service : Sol_cli_manifest.service)
+  =
+  service.primitive = Sol_cli_manifest.Fn
+  &&
+  match
+    List.find_opt
+      (fun (w : Sol_cli_workspace_model.workload) ->
+         String.equal w.service.domain service.domain
+         && String.equal w.service.name service.name)
+      (Sol_cli_workspace_model.workloads facts)
+  with
+  | Some { config = Ok config; _ } -> Option.is_some config.http
+  | _ -> false
+;;
+
 let prefix_lines_thread fd label redact =
   let ic = Unix.in_channel_of_descr fd in
   (try
@@ -37,7 +57,7 @@ let resolve_run ?(include_functions = true) ?(report_contract = true) workspace_
       let long_running, functions =
         List.partition
           (fun (service : Sol_cli_manifest.service) ->
-             service.primitive <> Sol_cli_manifest.Fn)
+             service.primitive <> Sol_cli_manifest.Fn || is_http_function facts service)
           resolved.services
       in
       match functions with
@@ -47,14 +67,15 @@ let resolve_run ?(include_functions = true) ?(report_contract = true) workspace_
          | Sol_cli_deployment_scope.Unit_named _ ->
            Error
              (Sol_cli_exit.error
-                "a -fn is run-once; use `sol local invoke <domain/name> [--event \
-                 <file>]`                  instead of `sol local run`")
+                "a scheduled -fn is run-once; use `sol local invoke <domain/name> \
+                 [--event <file>]` instead of `sol local run`")
          | Sol_cli_deployment_scope.Whole_workspace
          | Sol_cli_deployment_scope.Whole_domain _ ->
            List.iter
              (fun (service : Sol_cli_manifest.service) ->
                 Printf.eprintf
-                  "skipping %s/%s (-fn): use `sol local invoke %s/%s` to invoke it once\n\
+                  "skipping %s/%s (scheduled -fn): use `sol local invoke %s/%s` to \
+                   invoke it once\n\
                    %!"
                   service.domain
                   service.name
@@ -65,8 +86,8 @@ let resolve_run ?(include_functions = true) ?(report_contract = true) workspace_
            then
              Error
                (Sol_cli_exit.error
-                  "the selection contains only -fn units; use `sol local invoke \
-                   <domain/name>`")
+                  "the selection contains only scheduled -fn units; use `sol local \
+                   invoke <domain/name>`")
            else Ok long_running))
   in
   let* secret_values =
@@ -288,7 +309,17 @@ let invoke_unit workspace_dir unit event =
   in
   let* () =
     match services with
-    | [ service ] when service.primitive = Sol_cli_manifest.Fn -> Ok ()
+    | [ service ] when service.primitive = Sol_cli_manifest.Fn ->
+      (match Sol_cli_toml.load_result (Filename.concat service.dir "sol.toml") with
+       | Ok config when config.http <> None ->
+         Error
+           (Sol_cli_exit.error
+              (Printf.sprintf
+                 "%s is an HTTP function; use `sol local run %s/%s` to serve it"
+                 unit
+                 service.domain
+                 service.name))
+       | _ -> Ok ())
     | [ _ ] ->
       Error
         (Sol_cli_exit.error

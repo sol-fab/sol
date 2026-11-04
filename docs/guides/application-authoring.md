@@ -124,21 +124,45 @@ handler. Work that must outlive the process or run independently is handed to a 
 There is no fire-and-forget producer entry point in the framework, so a unit that produces
 events always has the delivery outcome in hand.
 
-### `-fn` — a scheduled function
+### `-fn` — a scheduled or HTTP function
 
 ```bash
 sol new fn billing/invoice      # creates app/billing/invoice_fn/
 ```
 
 The generated unit has a `run` function and a `sol.toml` whose `[service] schedule` (scaffolded
-as `"0 * * * *"`) is **required**: Sol reads the schedule from the unit's configuration and
-generates a Kubernetes `CronJob`, and a `-fn` without one is a plan error rather than an hourly
-job. That is the whole shape — *a function is `run : unit -> result`, the trigger is
-configuration* — and the walkthrough is in
-[tutorial.md § *New scheduled function*](tutorial.md#new-scheduled-function).
+as `"0 * * * *"`) makes it a **run-once** function: Sol reads the schedule from the unit's
+configuration and generates a Kubernetes `CronJob`. That is one trigger; a `-fn` without a
+trigger is a plan error.
 
-A function is ephemeral, so its metrics are pushed rather than scraped; the push contract is in
-[`sol-fn`](../../framework/ocaml/sol-fn/sol-fn.md). Use `sol local invoke <domain/name> [--event <file>]` to run one function once locally; `sol local run` starts only long-running services and workers.
+A second trigger turns the same primitive into a single HTTP handler without an application-owned
+HTTP server:
+
+```toml
+[service]
+http_path = "/quote"
+http_exposure = "public"    # public | internal
+```
+
+The application module implements `Fn.Make_http`'s one handler instead of `run` (see
+[`sol-fn`](../../framework/ocaml/sol-fn/sol-fn.md)). Sol deploys it as a Kubernetes
+Deployment + Service (+ Ingress when public), an AWS Lambda behind one target API
+Gateway, or a GCP Cloud Run service behind one target API Gateway, depending on the
+target's execution backend. All public HTTP functions in a target share one API
+endpoint and own distinct `http_path` routes. `http_exposure` is explicit:
+
+- **public** — the provider endpoint is the boundary; the handler receives anonymous requests.
+- **internal** — the endpoint is not internet-reachable (Kubernetes Service without an Ingress,
+  GCP Cloud Run `--ingress internal`) and the handler keeps Sol's workload-identity check, so
+  only a caller declared in `serverless_callers` / `calls` can invoke it. AWS has no
+  network-private function HTTP endpoint, so an internal HTTP function is refused on AWS rather
+  than exposed publicly under an internal label. Internal functions are not part of the
+  public shared API.
+
+A run-once function pushes metrics because it is ephemeral; an HTTP function is long-running and
+is scraped like a service. Use `sol local invoke <domain/name> [--event <file>]` for a run-once
+function; `sol local run` starts services, workers, and public HTTP functions. Internal HTTP
+functions require a deployed target's workload trust and are not run locally.
 
 ### Durable tasks
 
@@ -154,7 +178,8 @@ happen eventually but does not need Kafka ordering or replay. See
 |---|---|
 | A caller needs an answer now | `-svc` |
 | An event must be reacted to, at whatever pace, with retries | `-worker` |
-| A clock or a calendar triggers it | `-fn` |
+| A clock or a calendar triggers it | `-fn` (scheduled) |
+| An HTTP caller triggers it, but the unit owns no server | `-fn` (HTTP) |
 
 Most systems need all three: pluto serves `checkout_svc` and `charge_svc`, consumes with
 `notify_worker`, and a billing function would be the third shape rather than a variation of the

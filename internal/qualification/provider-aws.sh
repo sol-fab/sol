@@ -1,11 +1,43 @@
 #!/usr/bin/env bash
 # AWS hook implementations for the shared phase bodies.
 
+# MIXED=1 asks the row to apply a serverless component and a Kubernetes component.
+# A target that still says execution: kubernetes would send the function through
+# the Kubernetes renderer, so refuse rather than run a different disposition than
+# the catalog names.
+require_mixed_target() {
+  [ "${MIXED:-0}" = 1 ] || return 0
+  python3 - "$TARGET_FILE" "$TARGET" <<'PY'
+import sys, yaml
+path, target = sys.argv[1], sys.argv[2]
+parts = target.split("/")
+if len(parts) != 3:
+    print(f"REFUSING: target {target!r} is not <env>/<provider>/<region>", file=sys.stderr)
+    raise SystemExit(1)
+env, provider, region = parts
+try:
+    document = yaml.safe_load(open(path, encoding="utf-8")) or {}
+    declared = document[env]["targets"][f"{provider}/{region}"]
+except Exception as error:
+    print(f"REFUSING: cannot read {path} for {target}: {error}", file=sys.stderr)
+    raise SystemExit(1)
+execution = declared.get("execution", "kubernetes")
+if execution != "mixed":
+    print(
+        f"REFUSING: MIXED=1 runs a mixed target, but {target} declares "
+        f"execution: {execution}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
+}
+
 # A target var file and an issuer must exist before anything is bound or built. This is
 # AWS-specific: the target's Terraform variables are this provider's input.
 hook_aws_prepare_precondition() {
   require_target_terraform_var_file || return 1
   require_target_issuer || return 1
+  require_mixed_target || return 1
   mkdir -p "$LOG_DIR"
   cp "$TARGET_FILE" "$LOG_DIR/profile-target.yml"
 }
@@ -529,3 +561,118 @@ hook_aws_disposable_state_present() {
 # file rather than a harness-owned one, so the finish only returns the run's status.
 hook_aws_cleanup_stop_background() { :; }
 hook_aws_cleanup_finish() { return "$1"; }
+
+# Mixed qualification: the installed Sol applies a reviewed, persisted plan that
+# covers both components, reapplies it without destructive work, and keeps the
+# unrelated Kubernetes service in place. The serverless unit is observed directly.
+hook_aws_app_mixed() {
+  local image_ref_args="$1"
+  local plan="$LOG_DIR/mixed-plan.json"
+  local function_name
+  function_name="$(app_k8s_name "$MIXED_FN_UNIT")"
+  say "mixed: planning the persisted transition for serverless $MIXED_FN_UNIT and Kubernetes $APP_SERVICE"
+  # The installed Sol accepts repeated --image-ref flags, not a synthetic bundle.
+  # shellcheck disable=SC2086
+  ( cd "$WORKSPACE" && "$SOL" plan "$TARGET" $image_ref_args --out "$plan" ) \
+    >"$LOG_DIR/mixed-plan.log" 2>&1 || return 1
+  [ -s "$plan" ] || { say "mixed: sol plan wrote no persisted plan"; return 1; }
+  grep -q '"serverless"' "$plan" || { say "mixed: persisted plan has no serverless component"; return 1; }
+  grep -q '"kubernetes"' "$plan" || { say "mixed: persisted plan has no Kubernetes component"; return 1; }
+  # shellcheck disable=SC2086
+  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $image_ref_args --plan "$plan" --yes ) \
+    >"$LOG_DIR/mixed-apply.log" 2>&1 || return 1
+  # shellcheck disable=SC2086
+  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $image_ref_args --plan "$plan" --yes ) \
+    >"$LOG_DIR/mixed-reapply.log" 2>&1 || return 1
+  if grep -qE '^[[:space:]]*DELETE' "$LOG_DIR/mixed-reapply.log"; then
+    say "mixed: reapplying the reviewed plan proposed a destructive change"
+    return 1
+  fi
+  local update_plan="$LOG_DIR/mixed-update-plan.json" backup="$LOG_DIR/mixed-target.before-update.yml"
+  cp "$TARGET_FILE" "$backup"
+  mixed_set_replicas "$TARGET_FILE" "$APP_SERVICE" "$MIXED_UPDATE_REPLICAS" || return 1
+  # shellcheck disable=SC2086
+  ( cd "$WORKSPACE" && "$SOL" plan "$TARGET" $image_ref_args --out "$update_plan" ) \
+    >"$LOG_DIR/mixed-update-plan.log" 2>&1 || return 1
+  grep -q '"action":"update"' "$update_plan" || {
+    say "mixed: the replica update produced no UPDATE change"
+    mv "$backup" "$TARGET_FILE"
+    return 1
+  }
+  # shellcheck disable=SC2086
+  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $image_ref_args --plan "$update_plan" --yes ) \
+    >"$LOG_DIR/mixed-update-apply.log" 2>&1 || return 1
+  # shellcheck disable=SC2086
+  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $image_ref_args --plan "$update_plan" --yes ) \
+    >"$LOG_DIR/mixed-update-reapply.log" 2>&1 || return 1
+  if grep -qE '^[[:space:]]*DELETE' "$LOG_DIR/mixed-update-reapply.log"; then
+    say "mixed: reapplying the update plan proposed a destructive change"
+    mv "$backup" "$TARGET_FILE"
+    return 1
+  fi
+  kubectl rollout status deployment/"$(app_k8s_name "$APP_SERVICE")" \
+    -n "$APP_NS" >"$LOG_DIR/mixed-unrelated-k8s.log" 2>&1 || return 1
+  aws lambda get-function --function-name "$function_name" --region "$AWS_REGION" \
+    >"$LOG_DIR/mixed-serverless.json" 2>&1 || return 1
+  if [ "${MIXED_PARTIAL_FAILURE:-1}" = 1 ]; then
+    local bad_args bad_plan="$LOG_DIR/mixed-bad-plan.json"
+    bad_args="$(printf '%s' "$image_ref_args" | sed "s#$APP_SERVICE=[^ ]*#$APP_SERVICE=repo@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#")"
+    # shellcheck disable=SC2086
+    ( cd "$WORKSPACE" && "$SOL" plan "$TARGET" $bad_args --out "$bad_plan" ) \
+      >"$LOG_DIR/mixed-partial-plan.log" 2>&1 || return 1
+    # shellcheck disable=SC2086
+    if ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $bad_args --plan "$bad_plan" --yes ) \
+      >"$LOG_DIR/mixed-partial-failure.log" 2>&1; then
+      say "mixed: the injected Kubernetes image failure did not fail"
+      return 1
+    fi
+    grep -q 'serverless component was applied before the Kubernetes component failed' \
+      "$LOG_DIR/mixed-partial-failure.log" || {
+      say "mixed: partial failure did not identify the applied serverless component"
+      return 1
+    }
+    local after_failure
+    after_failure="$(kubectl get deployment "$(app_k8s_name "$APP_SERVICE")" -n "$APP_NS" \
+      -o jsonpath='{.spec.replicas}' 2>/dev/null)" || return 1
+    if [ "$after_failure" != "$MIXED_UPDATE_REPLICAS" ]; then
+      say "mixed: the failed Kubernetes component changed the unrelated deployment"
+      return 1
+    fi
+    # shellcheck disable=SC2086
+    ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $image_ref_args --plan "$update_plan" --yes ) \
+      >"$LOG_DIR/mixed-recovery.log" 2>&1 || return 1
+  fi
+  local replicas
+  replicas="$(kubectl get deployment "$(app_k8s_name "$APP_SERVICE")" -n "$APP_NS" \
+    -o jsonpath='{.spec.replicas}' 2>/dev/null)" || return 1
+  if [ "$replicas" != "$MIXED_UPDATE_REPLICAS" ]; then
+    say "mixed: desired replica update was not applied (got ${replicas:-none})"
+    mv "$backup" "$TARGET_FILE"
+    return 1
+  fi
+  mv "$backup" "$TARGET_FILE"
+  {
+    printf 'plan=%s\n' "$plan"
+    printf 'serverless=%s\n' "$function_name"
+    printf 'unrelated_k8s=%s/%s\n' "$APP_NS" "$(app_k8s_name "$APP_SERVICE")"
+    printf 'reapply_destructive=no\n'
+  } >"$LOG_DIR/mixed-evidence.txt"
+  say "mixed: persisted plan applied and reapplied without destructive work"
+}
+
+hook_aws_destroy_mixed_absent() {
+  local function_name
+  function_name="$(app_k8s_name "$MIXED_FN_UNIT")"
+  local rc=0
+  aws lambda get-function --function-name "$function_name" --region "$AWS_REGION" \
+    >"$LOG_DIR/mixed-destroy-lambda-probe.json" 2>&1 || rc=$?
+  if [ "$rc" = 0 ]; then
+    say "mixed destroy: serverless function $function_name is still present"
+    return 1
+  fi
+  if ! grep -qiE 'ResourceNotFoundException|Function not found' "$LOG_DIR/mixed-destroy-lambda-probe.json"; then
+    say "mixed destroy: Lambda absence for $function_name is UNKNOWN, not absence"
+    return 1
+  fi
+  say "mixed destroy: serverless function $function_name is absent"
+}

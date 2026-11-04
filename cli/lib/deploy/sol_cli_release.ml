@@ -320,6 +320,14 @@ let workload_to_json (w : workload) : Yojson.Safe.t =
         | Some s -> `String s )
     ; "scheduled_concurrency", `String w.scheduled_concurrency
     ; "backoff_limit", `Int w.backoff_limit
+    ; ( "http_path"
+      , match w.http_path with
+        | None -> `Null
+        | Some p -> `String p )
+    ; ( "http_exposure"
+      , match w.http_exposure with
+        | None -> `Null
+        | Some e -> `String e )
     ; "replicas", `Int w.replicas
     ; "availability", `String w.availability
     ; "consumes_kafka", `Bool w.consumes_kafka
@@ -518,6 +526,8 @@ let workload_of_json (json : Yojson.Safe.t) : workload =
   ; schedule_timezone = string_option "schedule_timezone" json
   ; scheduled_concurrency = str "scheduled_concurrency" json
   ; backoff_limit = int "backoff_limit" json
+  ; http_path = string_option "http_path" json
+  ; http_exposure = string_option "http_exposure" json
   ; replicas = int "replicas" json
   ; availability =
       (match Sol_cli_json.field [ "availability" ] json with

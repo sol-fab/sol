@@ -159,12 +159,12 @@ myapp/
   app/
     payments/charge_svc/         ← REST API service   (-svc)
     comms/notify_worker/         ← Kafka consumer      (-worker)
-    billing/invoice_fn/          ← scheduled function  (-fn)
+    billing/invoice_fn/          ← scheduled or HTTP function (-fn)
   db/migrations/
   dune-project
 ```
 
-`-svc` is a REST API service, `-worker` is a Kafka consumer, `-fn` is a scheduled function — the three primitives every domain team builds with. Teams don't share code across domains; they publish and subscribe to typed Kafka events, enforced at the wire level by Sol's schema registry integration.
+`-svc` is a REST API service, `-worker` is a Kafka consumer, and `-fn` is a scheduled function or a single HTTP-triggered handler — the three primitives every domain team builds with. Teams don't share code across domains; they publish and subscribe to typed Kafka events, enforced at the wire level by Sol's schema registry integration.
 
 See [Product Architecture](docs/architecture/product-architecture.md) for the full factory model and design principles.
 
@@ -173,8 +173,10 @@ See [Product Architecture](docs/architecture/product-architecture.md) for the fu
 A target with `execution: serverless` deploys the same `-svc` and `-fn`
 declarations without a Kubernetes cluster:
 
-- AWS Lambda for both `-svc` and `-fn`;
-- GCP Cloud Run for `-svc` and Cloud Run Jobs for `-fn`.
+- AWS Lambda for `-svc`, run-once `-fn`, and public HTTP `-fn` composed on one
+  API Gateway HTTP API;
+- GCP Cloud Run for `-svc` and HTTP `-fn` (public or internal), Cloud Run Jobs
+  for run-once `-fn`, and one API Gateway for public HTTP functions.
 
 Serverless execution is experimental and tracked separately from the primary
 Kubernetes path. The current `-worker` Kafka semantics are Kubernetes-only;

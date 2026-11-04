@@ -11,7 +11,8 @@ depends: [
   "ocaml" {>= "5.4.0"}
   "dune" {>= "3.0"}
   "eio" "lambda-eio" "obs-eio" "obs-prometheus-eio"
-  "sol-env" "sol-obs" "sol-runtime"
+  "sol-env" "sol-obs" "sol-runtime" "sol-svc"
+  "http" "uri" "yojson" "base64"
 ]
 pin-depends: [
   [ "lambda-eio.0.1.0" "git+https://github.com/loganbnielsen/lambda-eio.git#4a0cf964238fbef87e4b691c067b958f4cfe35bd" ]

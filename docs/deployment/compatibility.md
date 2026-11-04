@@ -116,14 +116,21 @@ Local is development by design. AWS and GCP Kubernetes targets and both
 serverless execution modes are contracted at the production profile. BYO is a
 development/experimental driver, not a production target.
 
-`-fn` is a run-once execution primitive. On a Kubernetes target it is a CronJob
-that can run on a schedule or be invoked manually as a Job created from the
-CronJob. On an AWS target with `execution: serverless` it is a Lambda function
-invoked on demand, using the `Fn.Lambda` runtime contract; on GCP it is a Cloud
-Run Job execution. Sol does not create a trigger or schedule for either
-serverless mapping. It is not a Kafka worker. The serverless execution modes are
-part of the v0.1 production scope under ADR 0011; their evidence and remaining
-gates are recorded in
+`-fn` has two trigger contracts. A scheduled `-fn` is a run-once execution
+primitive: on Kubernetes it is a CronJob that can run on a schedule or be
+invoked manually as a Job created from the CronJob; on an AWS target with
+`execution: serverless` it is a Lambda function invoked on demand, using the
+`Fn.Lambda` runtime contract; on GCP it is a Cloud Run Job execution. An HTTP
+`-fn` declares `http_path` and an explicit `http_exposure` and is a long-running
+single handler: a Kubernetes Deployment + Service (+ Ingress when public), an
+AWS Lambda behind one target API Gateway (public only), or a GCP Cloud Run
+service behind one target API Gateway for public exposure (internal functions
+stay on private Cloud Run ingress). Public functions in one target share one API
+endpoint and own distinct `http_path` routes. Internal exposure keeps the
+workload-identity check and is refused on AWS because a Lambda HTTP endpoint is
+publicly reachable. It is not a Kafka worker. The
+serverless execution modes are part of the v0.1 production scope under ADR 0011;
+their evidence and remaining gates are recorded in
 [`serverless.md`](serverless.md).
 
 A target's observability is one Grafana, reachable at a TLS-protected URL and

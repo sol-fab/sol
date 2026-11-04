@@ -76,6 +76,9 @@ phase_app_run() {
   "${hook}_app_transaction_primary" || { "${hook}_app_failed"; return 1; }
   app_verify_kafka_delivery || { "${hook}_app_failed"; return 1; }
   "${hook}_app_transaction_secondary" || { "${hook}_app_failed"; return 1; }
+  if [ "${MIXED:-0}" = 1 ]; then
+    "${hook}_app_mixed" "$image_ref_args" || { "${hook}_app_failed"; return 1; }
+  fi
   "${hook}_app_success"
   # Evidence last: GCP's bundle finalisation must see the phase's closing output, and
   # its status is the phase's status, as it was before the extraction.
@@ -159,7 +162,7 @@ app_verify_kafka_delivery() {
     case "$unit" in
       charge_svc | orders_svc) consumers+=(--consumer "$APP_NS/$(app_k8s_name "$unit")") ;;
       notify_worker | fulfilment_worker) consumers+=(--consumer "$WORKER_NS/$(app_k8s_name "$unit")") ;;
-      checkout_svc | order_svc | fulfillment_worker) ;;
+      checkout_svc | order_svc | fulfillment_worker | probe_fn | probe_ts_fn) ;;
       *)
         say "no Kafka qualification requirement defined for selected unit $unit"
         return 1
@@ -335,6 +338,9 @@ destroy_teardown_run() {
   destroy_kube_destination_run
   local destroy_rc=0
   "${hook}_destroy_substrate" || destroy_rc=$?
+  if [ "${MIXED:-0}" = 1 ]; then
+    "${hook}_destroy_mixed_absent" || return 1
+  fi
   "${hook}_destroy_verdict" || return 1
   "${hook}_destroy_evidence"
   return "$destroy_rc"

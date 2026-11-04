@@ -527,6 +527,7 @@ let external_workload_spec () : Sol_cli_deployment_plan.service_spec =
   ; schedule_timezone = None
   ; scheduled_concurrency = Sol_cli_toml.Allow
   ; backoff_limit = 3
+  ; http = None
   ; replicas = 1
   ; availability = Sol_cli_availability.Single
   ; consumes_kafka = false

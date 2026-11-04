@@ -66,6 +66,7 @@ type t =
       -> (string list, string) result
   ; cluster_access_role_arn : Sol_cli_config.target -> (string option, string) result
   ; platform_storage : platform_storage
+  ; transition_permissions : Sol_cli_transition.permissions
   ; cluster_substrate :
       (outputs_json:string
        -> region:string
@@ -1280,6 +1281,8 @@ let aws : t =
   ; backend_config = aws_backend_config
   ; cluster_access_role_arn = aws_cluster_access_role_arn
   ; platform_storage = { storage_class = "gp3"; csi_driver = "ebs.csi.aws.com" }
+  ; transition_permissions =
+      { Sol_cli_transition.scheduler_invoke = true; gateway_invoke = true }
   ; cluster_substrate = None
   ; installation_prerequisites =
       [ Sol_cli_installation.State_backend
@@ -1527,6 +1530,7 @@ let gcp : t =
   ; cluster_access_role_arn = (fun _target -> Ok None)
   ; platform_storage =
       { storage_class = "standard-rwo"; csi_driver = "pd.csi.storage.gke.io" }
+  ; transition_permissions = Sol_cli_transition.no_permissions
   ; cluster_substrate =
       Some
         (fun ~outputs_json ~region ~cluster_name ->
@@ -1627,6 +1631,7 @@ let byo : t =
   ; backend_config = (fun _ ~bucket:_ ~object_key:_ -> Error byo_no_root)
   ; cluster_access_role_arn = (fun _ -> Ok None)
   ; platform_storage = { storage_class = ""; csi_driver = "" }
+  ; transition_permissions = Sol_cli_transition.no_permissions
   ; cluster_substrate = None
   ; installation_prerequisites = []
   ; installation_probes = (fun _ -> [])

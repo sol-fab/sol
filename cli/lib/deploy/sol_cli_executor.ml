@@ -54,10 +54,13 @@ let apply_workload_phased
 let rollout_wait_s = 240
 
 let pod_expectation (spec : Sol_cli_deployment_plan.service_spec) =
-  match spec.primitive with
-  | Sol_cli_deployment_plan.Fn -> Sol_cli_rollout_diagnosis.Ephemeral
-  | Sol_cli_deployment_plan.Svc | Sol_cli_deployment_plan.Worker ->
-    Sol_cli_rollout_diagnosis.Continuous
+  if Sol_cli_deployment_plan.is_http_function spec
+  then Sol_cli_rollout_diagnosis.Continuous
+  else (
+    match spec.primitive with
+    | Sol_cli_deployment_plan.Fn -> Sol_cli_rollout_diagnosis.Ephemeral
+    | Sol_cli_deployment_plan.Svc | Sol_cli_deployment_plan.Worker ->
+      Sol_cli_rollout_diagnosis.Continuous)
 ;;
 
 let workload_kind (spec : Sol_cli_deployment_plan.service_spec) =
@@ -69,8 +72,11 @@ let workload_kind (spec : Sol_cli_deployment_plan.service_spec) =
 
 let wait_for_workload_ready ~ctx ~(spec : Sol_cli_deployment_plan.service_spec) =
   match spec.primitive with
-  | Sol_cli_deployment_plan.Fn -> Ok ()
-  | Sol_cli_deployment_plan.Svc | Sol_cli_deployment_plan.Worker ->
+  | Sol_cli_deployment_plan.Fn when not (Sol_cli_deployment_plan.is_http_function spec) ->
+    Ok ()
+  | Sol_cli_deployment_plan.Fn
+  | Sol_cli_deployment_plan.Svc
+  | Sol_cli_deployment_plan.Worker ->
     let namespace = Sol_cli_deployment_plan.namespace_to_string spec.namespace in
     let k8s_name = Sol_cli_deployment_plan.k8s_name_to_string spec.k8s_name in
     (match

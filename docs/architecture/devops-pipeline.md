@@ -485,7 +485,7 @@ release record as `sol-release-<id>.yaml` into the customer's own git
 repository, which is a second copy under the same owner. The record's identity is
 content-addressed from the workload boundary **and the deployed event contract**
 (`Sol_cli_release_id`; the encoding version is `Sol_cli_release_id.encoding_version`, which
-moves when the record's shape does — currently `sol-release-v7`, and v7 is where each workload
+moves when the record's shape does — currently `sol-release-v8`, and v8 is where each workload
 began recording the requirements it *declared*, so a rollback re-resolves them against the
 current target rather than against today's declarations), so a record can be re-derived
 and checked, not merely believed, and a contract-only change is still a distinct

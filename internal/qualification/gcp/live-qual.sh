@@ -36,6 +36,17 @@ TEARDOWN_LE_EMAIL="teardown@invalid"
 # The namespaces this row is configured to exercise; the cold-start boundary derives the
 # per-unit namespaces from the candidate and requires this declared set to be covered.
 APP_NS="${APP_NS:-pluto-payments}"
+MIXED="${MIXED:-0}"
+MIXED_FN_UNIT="${MIXED_FN_UNIT:-probe_fn}"
+MIXED_UPDATE_REPLICAS="${MIXED_UPDATE_REPLICAS:-2}"
+MIXED_PARTIAL_FAILURE="${MIXED_PARTIAL_FAILURE:-1}"
+if [ "$MIXED" = 1 ]; then
+  case " ${APP_SERVICES:-orders_svc fulfilment_worker order_svc fulfillment_worker} " in
+    *" $MIXED_FN_UNIT "*) ;;
+    *) APP_SERVICES="${APP_SERVICES:-orders_svc fulfilment_worker order_svc fulfillment_worker} $MIXED_FN_UNIT" ;;
+  esac
+fi
+export MIXED MIXED_FN_UNIT MIXED_UPDATE_REPLICAS MIXED_PARTIAL_FAILURE
 WORKER_NS="${WORKER_NS:-pluto-comms}"
 COLD_START_REQUIRED_NAMESPACES="${COLD_START_REQUIRED_NAMESPACES:-$APP_NS $WORKER_NS}"
 
@@ -255,6 +266,7 @@ $TARGET_ENV:
   targets:
     $TARGET_KEY:
       cluster_name: $CLUSTER
+      execution: $(if [ "$MIXED" = 1 ]; then printf mixed; else printf kubernetes; fi)
       base_domain: $BASE_DOMAIN
       dns_zone_ownership: sol
       # This row claims the production profile explicitly. The shape remains durable:
@@ -285,7 +297,7 @@ $(production_target_fields)
         fulfilment_worker: {}
         order_svc: {}
         fulfillment_worker: {}
-        probe_fn: {omit: true}
+        probe_fn: {omit: $(if [ "$MIXED" = 1 ]; then printf false; else printf true; fi)}
         probe_ts_fn: {omit: true}
         charge_svc:
           omit: true
@@ -2437,6 +2449,9 @@ required
                  run verifies the prefix is that candidate before it provisions anything
 
 optional (defaults shown)
+  MIXED=0                        1 enables the mixed serverless+Kubernetes row; the target
+                                 must declare execution: mixed (GCP writes it from MIXED)
+  MIXED_FN_UNIT=probe_fn         the serverless unit added to the mixed row
   ROW=qual                    the stable logical row label
   TARGET=qual-<attempt>/gcp/us-central1
   CONTINUE_ATTEMPT=0          set 1 to continue an occupied state key for the same ATTEMPT

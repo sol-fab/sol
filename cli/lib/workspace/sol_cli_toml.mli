@@ -7,6 +7,19 @@ type scheduled_concurrency =
   | Forbid
   | Replace
 
+type http_exposure =
+  | Http_public
+  | Http_internal
+
+type http_trigger =
+  { path : string
+  ; exposure : http_exposure
+  }
+
+val http_exposure_to_string : http_exposure -> string
+val http_exposure_of_string : string -> (http_exposure, string) result
+val http_path_of_string : string -> (string, string) result
+
 type canary_step =
   | Weight of int
   | Pause of int option
@@ -83,6 +96,7 @@ type t =
   ; schedule_timezone : string option
   ; scheduled_concurrency : scheduled_concurrency option
   ; backoff_limit : int option
+  ; http : http_trigger option
   ; calls : string list
   ; topics : string list
   ; events : event_decl list

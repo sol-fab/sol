@@ -351,6 +351,12 @@
 
 (rule
  (alias runtest)
+ (deps ../bin/main.exe test_target_serverless_fn_http.sh)
+ (action
+  (run bash %{dep:test_target_serverless_fn_http.sh} %{dep:../bin/main.exe})))
+
+(rule
+ (alias runtest)
  (deps ../bin/main.exe test_target_serverless_refusals.sh)
  (action
   (run bash %{dep:test_target_serverless_refusals.sh} %{dep:../bin/main.exe})))
@@ -386,3 +392,9 @@
  (deps ../bin/main.exe test_task_gcp.sh)
  (action
   (run bash %{dep:test_task_gcp.sh} %{dep:../bin/main.exe})))
+
+(rule
+ (alias runtest)
+ (deps ../bin/main.exe test_mixed_plan.sh)
+ (action
+  (run bash %{dep:test_mixed_plan.sh} %{dep:../bin/main.exe})))

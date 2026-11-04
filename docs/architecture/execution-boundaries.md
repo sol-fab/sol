@@ -18,7 +18,7 @@ and how Sol runs it. They are not interchangeable.
 |---|---|---|---|
 | `-svc` | HTTP request/response, `/readyz`, identity-checked routes | Deployment + Service | AWS Lambda through the request adapter (target `execution: serverless`); GCP Cloud Run |
 | `-worker` | Long-running Kafka consumer group, `Ack`/`Fail`, drain on SIGTERM | Deployment | **No managed mapping.** SQS/Pub/Sub are not substituted for Kafka semantics |
-| `-fn` | Run-to-completion; scheduled locally | CronJob | AWS Lambda run-once; GCP Cloud Run Jobs (target dispatch, live) |
+| `-fn` | Run-to-completion (scheduled) or one HTTP handler | CronJob; HTTP: Deployment + Service/Ingress | AWS Lambda run-once or target API Gateway; GCP Cloud Run Jobs, Cloud Run service, or target API Gateway |
 | `-jobs` (`sol-jobs`) | Durable leased Postgres jobs; retry/backoff, terminal failure, retention | Hosted by a `-worker` | No separate provider mapping; a cloud worker hosts the same loop |
 | `-task` (`sol-task`) | Durable task handler: stable `task_id`, `Ack`/`Retry`, at-least-once, provider-managed terminal delivery | Hosted by a `-worker` over `sol-jobs` (`sol-task.local`) | AWS SQS + Lambda (`sol-task.lambda`); GCP Pub/Sub + Cloud Run (`sol-task.pubsub`) |
 
@@ -36,7 +36,7 @@ production scope; target-scoped dispatch does not create task queues/triggers.
 | `sol-svc-core` | Shared HTTP/auth/lifecycle contracts, identity and observation types | `jose`, `yojson` |
 | `sol-svc` | HTTP server runtime, routing, response/request handling, auth cache | `sol-svc-core`, `sol-obs`, `sol-runtime`, Eio/Cohttp |
 | `sol-worker` | Kafka consumer runtime, offset/ack/drain lifecycle | `kafka-eio`, `kafka-eio-service`, `sol-obs`, `sol-runtime` |
-| `sol-fn` | Run-once Lambda runtime and scheduled function plumbing | `lambda-eio`, `sol-env`, `sol-obs`, `sol-runtime` |
+| `sol-fn` | Run-once Lambda runtime, scheduled plumbing, and the HTTP-function runtime (HTTP server + Lambda event adapter) | `lambda-eio`, `sol-svc`, `sol-env`, `sol-obs`, `sol-runtime` |
 | `sol-jobs` | Postgres durable jobs, leasing, retry/backoff, terminal/retention, metrics | `pg-eio`, `caqti`, `sol-retry`, `sol-obs`, `sol-runtime` |
 | `sol-task` core | Task envelope/identity/outcome contract only | `yojson`, `unix`, `threads` |
 | `sol-task.local` | Postgres task runtime over `sol-jobs` | `sol-task`, `sol-jobs` |
@@ -70,20 +70,30 @@ Within `sol_cli_cloud`:
 
 - **Shared policy:** `sol_cli_serverless_lifecycle` (target-scoped dispatch),
   `sol_cli_serverless_target_common` (target/identity/refusal policy),
-  `sol_cli_provider_registry`/`sol_cli_provider_capabilities` (provider
-  capabilities), `sol_cli_ownership_reconciliation`, and the Terraform/cluster
-  lifecycle modules. Release records and rollback policy live in
-  `sol_cli_deploy`.
+  `sol_cli_http_route`/`sol_cli_http_gateway` (shared public-API route model and
+  provider dispatch), `sol_cli_provider_registry`/`sol_cli_provider_capabilities`
+  (provider capabilities), `sol_cli_ownership_reconciliation`, and the
+  Terraform/cluster lifecycle modules. Release records and rollback policy live
+  in `sol_cli_deploy`.
 - **Provider adapters:** `sol_cli_aws_*`, `sol_cli_gcp_*`, `sol_cli_cloud_run`,
-  `sol_cli_aws_lambda*`, and the task-specific `sol_cli_aws_task` module.
+  `sol_cli_aws_lambda*`, `sol_cli_aws_http_gateway`,
+  `sol_cli_gcp_http_gateway`, and the task-specific `sol_cli_aws_task` module.
   Shared Lambda function/version/alias mechanics are in
   `sol_cli_aws_lambda_common`; Cloud Run service and Job mechanics are in
   `sol_cli_cloud_run`. Providers do not call each other's adapters. The task
   provider lifecycles are standalone; they are not part of target-scoped
   dispatch.
-- **Target serverless scope:** AWS supports `-svc` and `-fn`; GCP supports
-  `-svc` and Cloud Run Jobs `-fn`; both refuse `-worker`. This is explicit in the
-  adapters, not inferred from a service name.
+- **Target serverless scope:** AWS supports `-svc`, run-once `-fn`, and public
+  HTTP `-fn` composed behind one API Gateway HTTP API (an internal HTTP function
+  is refused because a Function URL is publicly reachable); GCP supports `-svc`,
+  Cloud Run Jobs `-fn`, and HTTP `-fn` with public or internal ingress, with
+  public functions composed behind one API Gateway. Both refuse `-worker`. This
+  is explicit in the adapters, not inferred from a service name.
+- **Shared HTTP API:** public routes are target-scoped. `sol_cli_http_route`
+  declares one route and `sol_cli_http_gateway` selects the provider gateway;
+  `sol_cli_aws_http_gateway` and `sol_cli_gcp_http_gateway` own provider identity,
+  route/permission reconciliation, and destruction. Internal routes stay on the
+  function's private provider endpoint and never enter the public gateway.
 
 ## Where shared invariants live
 

@@ -13,16 +13,66 @@ open Result.Syntax
    confirmation. Destroy deliberately does not borrow `sol deploy`'s apply-by-default
    posture: deploy is convergent and idempotent, destroy is destructive and not
    recoverable if mistaken, so the destructive confirmation stays explicit. *)
-let serverless_destroy ~config ~target_cfg ~action ~record ~service =
-  let* () =
-    match action with
-    | Cmd_cloud_tf.Plan ->
-      Error
-        (Sol_cli_exit.error
-           "serverless destroy requires --apply; plan does not mutate and the ownership \
-            record is the deletion authority")
-    | Cmd_cloud_tf.Apply -> Ok ()
+let read_serverless_workload ~service ~record =
+  let* text =
+    Sol_cli_fs.read_file record
+    |> Result.map_error (fun message ->
+      Sol_cli_exit.error
+        (Printf.sprintf "cannot read release record %s: %s" record message))
   in
+  let* json =
+    Sol_cli_json.decode ~what:"release record" text |> Result.map_error Sol_cli_exit.error
+  in
+  Sol_cli_transition.of_serverless_record ~service json
+  |> Result.map_error Sol_cli_exit.error
+;;
+
+let destruction_plan ~target_name ~permissions ~service ~record =
+  let* entries =
+    Sol_cli_serverless_inventory.load ~target:target_name
+    |> Result.map_error Sol_cli_exit.error
+  in
+  let* previous =
+    entries
+    |> Sol_cli_result.map_list (fun (entry : Sol_cli_serverless_inventory.entry) ->
+      read_serverless_workload ~service:entry.service ~record:entry.record)
+  in
+  let* previous =
+    if
+      List.exists
+        (fun (workload : Sol_cli_transition.workload) ->
+           String.equal workload.name service)
+        previous
+    then Ok previous
+    else
+      let* workload = read_serverless_workload ~service ~record in
+      Ok (workload :: previous)
+  in
+  let desired =
+    List.filter
+      (fun (workload : Sol_cli_transition.workload) ->
+         not (String.equal workload.name service))
+      previous
+  in
+  Ok
+    (Sol_cli_transition.compute
+       ~target:target_name
+       ~backend:`Serverless
+       ~previous
+       ~desired
+       ~unknown:[]
+       ~permissions
+       ())
+;;
+
+let serverless_destroy
+      ~config
+      ~(target_cfg : Sol_cli_config.target)
+      ~target_name
+      ~action
+      ~record
+      ~service
+  =
   let* service =
     Option.to_result
       ~none:(Sol_cli_exit.error "serverless destroy requires --service")
@@ -34,36 +84,111 @@ let serverless_destroy ~config ~target_cfg ~action ~record ~service =
       record
   in
   let* model = Sol_cli_workspace_model.load_cwd () |> Sol_cli_exit.of_msg in
-  let* () =
-    Sol_cli_serverless_lifecycle.destroy ~target:target_cfg ~service ~record
-    |> Result.map_error Sol_cli_exit.error
+  let permissions =
+    (Sol_cli_provider_capabilities.capabilities_of target_cfg.provider)
+      .transition_permissions
   in
-  let* assets = Cmd_cloud_tf.resolve_assets () in
-  let run_log = Sol_cli_run_log.create ~prefix:"destroy-identities" () in
-  let project =
-    match config.Sol_cli_config.project with
-    | Some project when String.trim project <> "" -> project
-    | _ -> service
-  in
-  let* serverless_units, scheduler_units =
-    Sol_cli_serverless_lifecycle.complete_units
-      ~config
-      ~project
-      ~target:target_cfg
-      ~model
-      ~exclude:(Some service)
-      ~serverless_all:false
-    |> Result.map_error Sol_cli_exit.error
-  in
-  let* _ =
-    Sol_cli_authorization_stage.reconcile_target_authorization
-      ~assets
-      ~run_log
-      ~target:target_cfg
-      { Sol_cli_authorization_stage.grants = []; serverless_units; scheduler_units }
-    |> Result.map_error Sol_cli_exit.error
-  in
-  Ok ()
+  let* transition = destruction_plan ~target_name ~permissions ~service ~record in
+  print_string (Sol_cli_transition.render ~title:"Destruction plan" transition);
+  print_newline ();
+  match action with
+  | Cmd_cloud_tf.Plan -> Ok ()
+  | Cmd_cloud_tf.Apply ->
+    let* () =
+      Sol_cli_serverless_lifecycle.destroy
+        ~target:target_cfg
+        ~target_name
+        ~service
+        ~record
+      |> Result.map_error Sol_cli_exit.error
+    in
+    let* () =
+      Sol_cli_serverless_inventory.remove ~target:target_name ~service
+      |> Result.map_error Sol_cli_exit.error
+    in
+    let* assets = Cmd_cloud_tf.resolve_assets () in
+    let run_log = Sol_cli_run_log.create ~prefix:"destroy-identities" () in
+    let project =
+      match config.Sol_cli_config.project with
+      | Some project when String.trim project <> "" -> project
+      | _ -> service
+    in
+    let* serverless_units, scheduler_units =
+      Sol_cli_serverless_lifecycle.complete_units
+        ~config
+        ~project
+        ~target:target_cfg
+        ~model
+        ~exclude:(Some service)
+        ~serverless_all:false
+      |> Result.map_error Sol_cli_exit.error
+    in
+    let* _ =
+      Sol_cli_authorization_stage.reconcile_target_authorization
+        ~assets
+        ~run_log
+        ~target:target_cfg
+        { Sol_cli_authorization_stage.grants = []; serverless_units; scheduler_units }
+      |> Result.map_error Sol_cli_exit.error
+    in
+    Ok ()
+;;
+
+let print_kubernetes_destroy_plan ~config ~target =
+  let title = "Destruction plan" in
+  match Sol_cli_config.destination_of_target config.Sol_cli_config.target with
+  | Error message ->
+    Printf.printf
+      "%s\nTarget: %s\n  workload inventory unavailable: %s\n\n"
+      title
+      target
+      message
+  | Ok destination ->
+    let ctx = Sol_cli_kube_destination.context_of_destination destination in
+    let workspace = Sol_cli_workspace.current_name () in
+    (match Sol_cli_release_store.current_record ~ctx ~workspace with
+     | Error message ->
+       Printf.printf
+         "%s\nTarget: %s\n  workload inventory unavailable: %s\n\n"
+         title
+         target
+         message
+     | Ok None ->
+       Printf.printf
+         "%s\n\
+          Target: %s\n\
+         \  DELETE    target infrastructure\n\
+         \  no released workloads are recorded\n\n"
+         title
+         target
+     | Ok (Some (release : Sol_cli_release.t)) ->
+       let previous =
+         List.map
+           (fun (recorded : Sol_cli_release.recorded_workload) ->
+              let spec = recorded.spec in
+              { Sol_cli_transition.name = spec.domain ^ "/" ^ spec.name
+              ; kind = spec.primitive
+              ; image = Some spec.image
+              ; schedule = spec.schedule
+              ; http =
+                  Option.map
+                    (fun path -> path, Option.value spec.http_exposure ~default:"public")
+                    spec.http_path
+              ; config_digest = Some (Sol_cli_transition.digest_config spec.config)
+              })
+           release.workloads
+       in
+       let transition =
+         Sol_cli_transition.compute
+           ~target
+           ~backend:`Kubernetes
+           ~previous
+           ~desired:[]
+           ~unknown:[]
+           ()
+       in
+       print_string (Sol_cli_transition.render ~title transition);
+       print_string "  DELETE    target infrastructure (Terraform)\n\n")
 ;;
 
 let run ~target ~var_file ~vars ~action ~accept_unreleased ~record ~service () =
@@ -76,6 +201,7 @@ let run ~target ~var_file ~vars ~action ~accept_unreleased ~record ~service () =
     serverless_destroy
       ~config:resolved_config
       ~target_cfg:resolved_config.target
+      ~target_name:target
       ~action
       ~record
       ~service
@@ -106,15 +232,20 @@ let run ~target ~var_file ~vars ~action ~accept_unreleased ~record ~service () =
              serverless_destroy
                ~config:resolved_config
                ~target_cfg:resolved_config.target
+               ~target_name:target
                ~action
                ~record:(Some entry.record)
                ~service:(Some entry.service)
            in
-           Sol_cli_serverless_inventory.remove ~target ~service:entry.service
-           |> Result.map_error Sol_cli_exit.error)
+           match action with
+           | Cmd_cloud_tf.Plan -> Ok ()
+           | Cmd_cloud_tf.Apply ->
+             Sol_cli_serverless_inventory.remove ~target ~service:entry.service
+             |> Result.map_error Sol_cli_exit.error)
         entries
       |> Result.map ignore
     in
+    print_kubernetes_destroy_plan ~config:resolved_config ~target;
     Cmd_cloud_tf.cloud_destroy
       ~target
       ~resolved_config
@@ -132,6 +263,7 @@ let run ~target ~var_file ~vars ~action ~accept_unreleased ~record ~service () =
           (Sol_cli_exit.error
              "--record/--service are only valid for execution: serverless targets")
     in
+    print_kubernetes_destroy_plan ~config:resolved_config ~target;
     Cmd_cloud_tf.cloud_destroy
       ~target
       ~resolved_config

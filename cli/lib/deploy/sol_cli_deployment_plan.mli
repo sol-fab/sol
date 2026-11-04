@@ -61,6 +61,7 @@ type service_spec =
   ; schedule_timezone : string option
   ; scheduled_concurrency : Sol_cli_toml.scheduled_concurrency
   ; backoff_limit : int
+  ; http : Sol_cli_toml.http_trigger option
   ; replicas : int
   ; availability : Sol_cli_availability.t
   ; consumes_kafka : bool
@@ -205,6 +206,15 @@ val primitive_to_string : primitive -> string
 val primitive_of_string : string -> (primitive, string) result
 val effective_rollout_strategy : service_spec -> effective_rollout_strategy
 val effective_rollout_strategy_to_string : effective_rollout_strategy -> string
+
+(** A [-fn] with an HTTP trigger is a long-running HTTP workload, not a run-once
+    CronJob. This is the one predicate applying/deployment code uses to choose the
+    Kubernetes object and readiness semantics. *)
+val is_http_function : service_spec -> bool
+
+(** Public HTTP functions form one Kubernetes API: they must share [ingress_host]
+    and may not claim the same route path. *)
+val validate_public_http_routes : service_spec list -> (unit, plan_error) result
 
 (** Whether a declared service's [uses] names one specific resource. The database setup
     step asks this, rather than the type form, so an externally bound database's consumers

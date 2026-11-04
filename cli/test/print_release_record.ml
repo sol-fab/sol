@@ -33,6 +33,8 @@ let workload_of_owned (o : Sol_cli_release_id.owned_object) : Sol_cli_release_id
   ; schedule_timezone = None
   ; scheduled_concurrency = "allow"
   ; backoff_limit = 3
+  ; http_path = None
+  ; http_exposure = None
   ; replicas = 1
   ; availability = "single"
   ; consumes_kafka = false

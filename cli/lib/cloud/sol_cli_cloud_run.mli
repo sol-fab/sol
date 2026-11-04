@@ -1,4 +1,6 @@
-type ingress = Public
+type ingress =
+  | Public
+  | Internal
 
 type identity =
   { unit : string
@@ -16,6 +18,7 @@ type request =
   ; identity : identity
   ; ingress : ingress
   ; service_account : string
+  ; extra_env : (string * string) list
   ; record : string option
   }
 
@@ -72,6 +75,18 @@ val rollback
   -> revision:string
   -> token:string
   -> on_revision_moved:(string -> (unit, string) result)
+  -> (observed, failure) result
+
+(** Move traffic to [revision] and run the caller's serving verification. The
+    ownership and runtime-identity checks are the same as {!rollback}; only the
+    postcondition differs, so an HTTP function can verify its own readiness
+    instead of the [/-svc] token flow. *)
+val rollback_with
+  :  runner
+  -> request
+  -> revision:string
+  -> on_revision_moved:(string -> (unit, string) result)
+  -> verify:(observed -> (unit, failure) result)
   -> (observed, failure) result
 
 val destroy

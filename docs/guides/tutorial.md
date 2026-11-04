@@ -994,6 +994,53 @@ See [`deployment/ci.md`](../deployment/ci.md) for the generated workflow and the
 
 ### Provisioning a production cluster
 
+### Reviewing the transition
+
+`sol deploy` prints a transition plan before it mutates anything. The plan is computed from
+Sol's own ownership state — the current release record, the serverless inventory, the declared
+HTTP routes and triggers — not from a Terraform plan. It groups `ADD`, `UPDATE`, `DELETE` and
+`PRESERVE` for workloads, HTTP routes, the shared API gateway and scheduled triggers.
+
+Changes that remove or replace something are listed under **Destructive changes** and require
+an explicit answer:
+
+```text
+Sol deployment plan
+Target: prod/aws/us-east-1
+  ADD       1 HTTP routes
+  DELETE    1 scheduled triggers
+
+Destructive changes:
+  DELETE   scheduled trigger  cleanup_fn (0 3 * * *)
+
+Proceed with deployment? [y/N]
+```
+
+An interactive run asks for confirmation. A noninteractive deployment with destructive changes
+fails closed unless the operator passes `--yes`; additive and in-place image updates do not
+prompt. `sol plan` prints the same transition for a Kubernetes or serverless target without
+prompting or mutating anything. The plan includes the runtime identity and provider IAM
+permission changes implied by workload, route and schedule changes.
+
+To review a plan out of band:
+
+```bash
+sol plan prod/aws/us-east-1 --out plan.json
+sol deploy prod/aws/us-east-1 --plan plan.json
+```
+
+`sol deploy --plan` refuses before mutation if the transition recomputed at apply time differs
+from the saved plan, if the target differs, or if the plan was produced while ownership was
+unknown. `sol plan --out` persists mixed targets' serverless and Kubernetes components together.
+`sol deploy --plan` validates both components against current ownership state before either
+mutates. Mixed apply is not atomic: it reconciles serverless and then Kubernetes, and a runtime
+failure after the serverless component was applied is reported as a partial apply and is not
+automatically rolled back; re-run the same reviewed plan to converge.
+
+`sol destroy --apply` prints a **Destruction plan** before it removes a serverless function,
+HTTP route, gateway, scheduled trigger or released Kubernetes workload. `--apply` is the
+destructive confirmation; `sol destroy` without it remains read-only.
+
 Use `sol plan` to preview a target and `sol deploy` to reconcile its infrastructure, authorization and workloads. `sol deploy` consumes pre-built images; pass immutable image refs for workloads that do not already have a recorded image. Sol keeps separate durable cloud and platform Terraform states and observes readiness before reporting success.
 
 **AWS (EKS, ECR, RDS, Route53):**

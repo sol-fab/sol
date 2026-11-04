@@ -190,7 +190,11 @@ fi
 grep -q 'not the recorded execution role' "$work/destroy-role"
 # Removing the schedule declaration removes the provider schedule before destroy.
 printf '[service]\n' > "$work/ws/app/checkout/checkout_fn/sol.toml"
-"$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/deploy-unscheduled"
+if "$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" > "$work/deploy-unscheduled-refused" 2>&1; then
+  echo "schedule removal was accepted without --yes" >&2; exit 1
+fi
+grep -q 're-run with --yes' "$work/deploy-unscheduled-refused"
+"$sol" deploy live/aws/us-east-1 --image-tag test --image-ref "checkout_fn=$image" --yes > "$work/deploy-unscheduled"
 grep -q '"scheduler":null' "$work/deploy-unscheduled"
 [[ ! -f "$work/state/schedule" ]]
 record=$(find "$work/home/.local/share/sol/runs" -name serverless-release.json -type f -print | sort | tail -1)

@@ -10,4 +10,9 @@
   lambda-eio
   sol_env
   sol_obs
-  sol_runtime))
+  sol_runtime
+  sol-svc
+  http
+  uri
+  yojson
+  base64))
