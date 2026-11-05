@@ -7,31 +7,36 @@ type check =
   ; argv : string list
   ; attributable : string -> bool
   ; normalize : string -> string
+  ; absent_on_404 : bool
   }
 
 let identity_check
       ?(attributable = fun _ -> true)
       ?(normalize = fun line -> line)
+      ?(absent_on_404 = false)
       ~resource_class
       ~identity
       ~attribution
       argv
   =
-  { resource_class; identity; attribution; argv; attributable; normalize }
+  { resource_class; identity; attribution; argv; attributable; normalize; absent_on_404 }
 ;;
 
 let checked_with argv = "gcloud " ^ String.concat " " argv
 
+let absent_observation ~check =
+  Absent
+    { resource_class = check.resource_class
+    ; identity = check.identity
+    ; attribution = check.attribution
+    ; checked_with = checked_with check.argv
+    }
+;;
+
 let ok_observation ~check found =
   let checked_with = checked_with check.argv in
   match found with
-  | [] ->
-    Absent
-      { resource_class = check.resource_class
-      ; identity = check.identity
-      ; attribution = check.attribution
-      ; checked_with
-      }
+  | [] -> absent_observation ~check
   | found ->
     Present
       { resource_class = check.resource_class
@@ -51,7 +56,14 @@ let benign_empty_list_warning stderr =
   |> List.for_all (fun line ->
     String.starts_with
       ~prefix:"WARNING: The following filter keys were not present in any resource"
-      line)
+      line
+    || String.starts_with ~prefix:"Listing items under project" line)
+;;
+
+let http_404 stderr =
+  Sol_cli_string.contains ~needle:"code=404" stderr
+  || Sol_cli_string.contains ~needle:"HTTPError 404" stderr
+  || Sol_cli_string.contains ~needle:"Error 404" stderr
 ;;
 
 (* Every GCP probe is an enumeration command. An empty successful listing is absence;
@@ -88,11 +100,14 @@ let run ?(previously_attributed = []) ~check () =
         (List.map check.normalize (List.rev_append attributed prior_matches)
          |> List.sort_uniq String.compare))
   | Error (Sol_cli_process.Non_zero r) ->
-    Unobservable
-      { resource_class = check.resource_class
-      ; reason = String.trim r.stderr
-      ; checked_with = checked_with check.argv
-      }
+    if check.absent_on_404 && http_404 r.stderr
+    then absent_observation ~check
+    else
+      Unobservable
+        { resource_class = check.resource_class
+        ; reason = String.trim r.stderr
+        ; checked_with = checked_with check.argv
+        }
   | Error _ ->
     Unobservable
       { resource_class = check.resource_class
@@ -163,8 +178,15 @@ let project_iam_binding_check ~project ~resource_class ~identity ~role ~member =
 
 let checks ~project ~region ~cluster_name =
   let p args = [ "--project"; project ] @ args in
-  let named ~resource_class ~identity ?(prefix = cluster_name ^ "-") argv =
+  let named
+        ?(absent_on_404 = false)
+        ~resource_class
+        ~identity
+        ?(prefix = cluster_name ^ "-")
+        argv
+    =
     identity_check
+      ~absent_on_404
       ~resource_class
       ~identity
       ~attribution:(Named_for_target (names_the_cluster cluster_name))
@@ -193,6 +215,7 @@ let checks ~project ~region ~cluster_name =
        ~normalize:Filename.basename
        (p [ "secrets"; "list"; "--format"; "value(name)" ]))
   ; identity_check
+      ~absent_on_404:true
       ~resource_class:"GKE node pool"
       ~identity:(cluster_name ^ "-*")
       ~attribution:(Named_for_target (names_the_cluster cluster_name))
@@ -231,6 +254,7 @@ let checks ~project ~region ~cluster_name =
       ~identity:(cluster_name ^ "-router")
       (p [ "compute"; "routers"; "list"; "--regions"; region; "--format"; "value(name)" ])
   ; named
+      ~absent_on_404:true
       ~resource_class:"Cloud NAT"
       ~identity:(cluster_name ^ "-nat")
       (p
