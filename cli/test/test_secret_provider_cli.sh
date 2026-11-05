@@ -75,7 +75,24 @@ name=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --secret-id|--name) name="$2"; shift 2 ;;
-    --tags) shift 2 ;;
+    --tags)
+      shift
+      mkdir -p "$(dirname "$STATE/$name.tags.pending")"
+      : >"$STATE/$name.tags.pending"
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          Key=*,Value=*)
+            entry="$1"
+            key="${entry#Key=}"
+            key="${key%%,Value=*}"
+            value="${entry#*,Value=}"
+            printf '%s=%s\n' "$key" "$value" >>"$STATE/$name.tags.pending"
+            shift
+            ;;
+          *) break ;;
+        esac
+      done
+      ;;
     --secret-string) secret_file="${2#file://}"; shift 2 ;;
     *) shift ;;
   esac
@@ -103,11 +120,7 @@ case "$command" in
       exit 254
     fi
     mkdir -p "$(dirname "$STATE/$name.tags")"
-    : >"$STATE/$name.tags"
-    shift 0
-    # The tags were consumed above; capture them from the log line instead of re-parsing.
-    grep -o -- '--tags Key=[^,]*,Value=[^ ]*' "$PROVIDER_LOG" | tail -n 4 \
-      | sed 's/^--tags Key=//; s/,Value=/=/' >"$STATE/$name.tags"
+    mv "$STATE/$name.tags.pending" "$STATE/$name.tags"
     ;;
   "secretsmanager put-secret-value")
     [ -f "$STATE/$name.tags" ] || { printf 'NotFound\n' >&2; exit 254; }

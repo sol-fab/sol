@@ -22,12 +22,17 @@ printf 'aws %s\n' "$*" >>"$LIFECYCLE_LOG"
     fi
     mkdir -p "$(dirname "$secret_state/$name.tags")"
     : >"$secret_state/$name.tags"
-    prev=""
+    collecting=0
     for arg in "$@"; do
-      if [ "$prev" = "--tags" ]; then
-        printf '%s\n' "$arg" | sed -e 's/^Key=//' -e 's/,Value=/=/' >>"$secret_state/$name.tags"
+      if [ "$collecting" = 1 ]; then
+        case "$arg" in
+          Key=*,Value=*)
+            printf '%s\n' "$arg" | sed -e 's/^Key=//' -e 's/,Value=/=/' >>"$secret_state/$name.tags"
+            ;;
+          *) collecting=0 ;;
+        esac
       fi
-      prev="$arg"
+      [ "$arg" = "--tags" ] && collecting=1
     done
     exit 0
   fi

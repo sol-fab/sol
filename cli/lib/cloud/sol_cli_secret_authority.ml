@@ -141,6 +141,16 @@ let observe secret =
               message))
 ;;
 
+let aws_create_args secret =
+  let tags =
+    Sol_cli_provider_secret.ownership_labels secret
+    |> List.map (fun (key, value) -> "Key=" ^ key ^ ",Value=" ^ value)
+  in
+  aws_args
+    secret
+    ([ "secretsmanager"; "create-secret"; "--name"; secret.name; "--tags" ] @ tags)
+;;
+
 let create secret =
   let labels = Sol_cli_provider_secret.ownership_labels secret in
   let already_exists message =
@@ -149,17 +159,7 @@ let create secret =
   in
   match secret.Sol_cli_provider_secret.provider with
   | Sol_cli_provider_secret.Aws ->
-    let tags =
-      List.concat_map
-        (fun (key, value) -> [ "--tags"; "Key=" ^ key ^ ",Value=" ^ value ])
-        labels
-    in
-    (match
-       run
-         (aws_args
-            secret
-            ([ "secretsmanager"; "create-secret"; "--name"; secret.name ] @ tags))
-     with
+    (match run (aws_create_args secret) with
      | Ok _ -> Ok ()
      | Error message ->
        (match Sol_cli_aws.error_code message with
