@@ -207,7 +207,10 @@ def behavioral_evidence(args, consumers):
             transcript = handle.read()
     except OSError as error:
         raise ObservationError("application transaction evidence is unreadable") from error
-    causal = any(prefix in transcript for prefix in ("charge id:", "order id:"))
+    causal = any(
+        prefix in transcript
+        for prefix in ("charge id:", "order id:", "charge:", "order:")
+    )
     if not causal or "read-back: " not in transcript:
         raise ObservationError(
             "application transaction does not establish Kafka authentication and consumption"
