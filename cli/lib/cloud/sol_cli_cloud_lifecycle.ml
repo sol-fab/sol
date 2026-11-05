@@ -322,14 +322,26 @@ type authorization =
   | Required
   | Forbidden
 
+(* The steady-state platform provisioner is read-only (#1870): it must be able to
+   read the platform objects it diagnoses, and it must not retain the mutation
+   authority the bootstrap window used. Checking both directions here prevents the
+   post-install probe from silently drifting back to a create expectation. *)
 let provisioner_authorization_checks =
-  [ ( Required
+  [ Required, [ "get"; "namespaces" ]
+  ; Required, [ "get"; "clusterroles" ]
+  ; Required, [ "get"; "storageclasses" ]
+  ; Required, [ "get"; "customresourcedefinitions.apiextensions.k8s.io" ]
+  ; Required, [ "get"; "clusterissuers.cert-manager.io" ]
+  ; Required, [ "get"; "deployments.apps"; "-n"; Sol_cli_manifest.monitoring_namespace ]
+  ; Required, [ "get"; "services"; "-n"; "ingress-nginx" ]
+  ; Forbidden, [ "create"; "namespaces" ]
+  ; Forbidden, [ "create"; "clusterroles" ]
+  ; Forbidden, [ "create"; "storageclasses.storage.k8s.io" ]
+  ; Forbidden, [ "create"; "customresourcedefinitions.apiextensions.k8s.io" ]
+  ; Forbidden, [ "create"; "clusterissuers.cert-manager.io" ]
+  ; ( Forbidden
     , [ "create"; "deployments.apps"; "-n"; Sol_cli_manifest.monitoring_namespace ] )
-  ; Required, [ "create"; "services"; "-n"; "ingress-nginx" ]
-  ; Required, [ "create"; "customresourcedefinitions.apiextensions.k8s.io" ]
-  ; Required, [ "create"; "storageclasses.storage.k8s.io" ]
-  ; Required, [ "create"; "clusterissuers.cert-manager.io" ]
-  ; Required, [ "create"; "namespaces" ]
+  ; Forbidden, [ "create"; "services"; "-n"; "ingress-nginx" ]
   ; Forbidden, [ "create"; "deployments.apps"; "-n"; "default" ]
   ; Forbidden, [ "create"; "services"; "-n"; "default" ]
   ; Forbidden, [ "create"; "jobs.batch"; "-n"; "default" ]
