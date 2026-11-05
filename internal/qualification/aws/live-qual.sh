@@ -49,7 +49,7 @@ if [ "$MIXED" = 1 ]; then
   esac
 fi
 export MIXED MIXED_FN_UNIT MIXED_UPDATE_REPLICAS MIXED_PARTIAL_FAILURE
-KAFKA_BEHAVIORAL_UNITS="charge_svc notify_worker"
+KAFKA_BEHAVIORAL_UNITS="${KAFKA_BEHAVIORAL_UNITS:-charge_svc notify_worker}"
 # The namespaces this row is configured to exercise; the cold-start boundary derives the
 # per-unit namespaces from the candidate and requires this declared set to be covered.
 COLD_START_REQUIRED_NAMESPACES="${COLD_START_REQUIRED_NAMESPACES:-$APP_NS $WORKER_NS}"
