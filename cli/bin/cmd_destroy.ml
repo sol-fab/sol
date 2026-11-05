@@ -223,7 +223,19 @@ let run ~target ~var_file ~vars ~action ~accept_unreleased ~record ~service () =
         ~service
         ~record
         ~declared_functions
+        ~accept_unreleased
       |> Result.map_error Sol_cli_exit.error
+    in
+    let* () =
+      if accept_unreleased && entries = [] && declared_functions > 0
+      then (
+        Sol_cli_report.warn
+          "the target declares %d serverless function(s) but no ownership inventory; \
+           --accept-unreleased was given, so Kubernetes destruction will proceed and the \
+           independent absence check decides the outcome"
+          declared_functions;
+        Ok ())
+      else Ok ()
     in
     let* () =
       Sol_cli_result.map_list

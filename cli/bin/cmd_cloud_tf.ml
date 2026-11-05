@@ -363,11 +363,20 @@ let cloud_destroy ~target ~resolved_config ~var_file ~vars ~action ~accept_unrel
          with
          | Ok evidence -> Ok evidence
          | Error message ->
-           refuse
-             (Printf.sprintf
-                "could not read the recorded UID evidence for this workspace (%s); \
-                 destruction cannot establish which namespaces were applied"
-                message))
+           if accept_unreleased
+           then (
+             Sol_cli_report.warn
+               "could not read the recorded UID evidence for this workspace (%s); \
+                --accept-unreleased was given, so destruction will proceed without it"
+               message;
+             Ok [])
+           else
+             refuse
+               (Printf.sprintf
+                  "could not read the recorded UID evidence for this workspace (%s); \
+                   destruction cannot establish which namespaces were applied. Pass \
+                   --accept-unreleased to destroy without that evidence."
+                  message))
     in
     let workload_namespaces =
       Sol_cli_workload_scope.release_namespaces
