@@ -8,7 +8,7 @@ terraform {
     }
     google = {
       source  = "hashicorp/google"
-      version = "~> 5.25"
+      version = "~> 6.0"
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"
@@ -98,14 +98,10 @@ resource "google_container_cluster" "main" {
     workload_pool = "${var.project_id}.svc.id.goog"
   }
 
-  # The Secret Manager add-on projects provider-backed values as mounted files. Its
-  # rotation interval is the add-on's, not a per-Pod watcher; the minimum is two minutes.
+  # The Secret Manager add-on projects provider-backed values as mounted files.
+  # Its rotation policy is the add-on's, not a per-Pod watcher.
   secret_manager_config {
     enabled = true
-    rotation_config {
-      enabled           = true
-      rotation_interval = "2m"
-    }
   }
 
   datapath_provider = "ADVANCED_DATAPATH"
