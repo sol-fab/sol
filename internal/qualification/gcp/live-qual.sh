@@ -1790,7 +1790,7 @@ build_app_images() {
       return 1
     }
     say "  docker build $ref (context: candidate $SOL_REVISION)"
-    docker build -f "$APP_BUILD_CONTEXT/$path/Dockerfile" -t "$ref" "$APP_BUILD_CONTEXT" || return 1
+    docker build --platform linux/amd64 --provenance=false --sbom=false -f "$APP_BUILD_CONTEXT/$path/Dockerfile" -t "$ref" "$APP_BUILD_CONTEXT" || return 1
   done
 }
 

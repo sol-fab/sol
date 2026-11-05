@@ -1607,9 +1607,9 @@ cp "$TMP/bin/curl" "$TMP/bin/curl.transaction"
 mv "$TMP/bin/curl.delegation" "$TMP/bin/curl"
 cp "$TMP/bin/curl" "$TMP/bin/curl.delegation"
 has "it builds each image from that service's own Dockerfile" \
-  "docker build -f $TMP/app-ok.logs/app-build-context/app/payments/orders_svc/Dockerfile" "$DOCKER_LOG"
+  "docker build --platform linux/amd64 --provenance=false --sbom=false -f $TMP/app-ok.logs/app-build-context/app/payments/orders_svc/Dockerfile" "$DOCKER_LOG"
 has "including the TypeScript namespace's service from its own Dockerfile" \
-  "docker build -f $TMP/app-ok.logs/app-build-context/app/demo_ts/order_svc/Dockerfile" "$DOCKER_LOG"
+  "docker build --platform linux/amd64 --provenance=false --sbom=false -f $TMP/app-ok.logs/app-build-context/app/demo_ts/order_svc/Dockerfile" "$DOCKER_LOG"
 has "and builds from the candidate revision's context, not the checkout" \
   " $TMP/app-ok.logs/app-build-context" "$DOCKER_LOG"
 present "$TMP/app-ok.logs/candidate-binding.txt" \

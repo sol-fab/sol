@@ -787,7 +787,7 @@ app_build_images() {
       return 1
     fi
     ref="$(sol_image_ref "$unit")"
-    run "app-build-$unit" docker build -f "$context/$dir/Dockerfile" -t "$ref" "$context" || return 1
+    run "app-build-$unit" docker build --platform linux/amd64 --provenance=false --sbom=false -f "$context/$dir/Dockerfile" -t "$ref" "$context" || return 1
     printf '%s=%s\n' "$unit" "$ref" >>"$LOG_DIR/app-built-tags.txt"
     say "  $unit built as $ref"
   done
