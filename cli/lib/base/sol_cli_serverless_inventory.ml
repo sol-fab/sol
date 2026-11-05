@@ -74,7 +74,7 @@ let remove ~target ~service =
   write ~target (List.filter (fun (entry : entry) -> entry.service <> service) entries)
 ;;
 
-let destroy_entries ~target ~service ~record ~declared_functions =
+let destroy_entries ~target ~service ~record ~declared_functions ~accept_unreleased =
   let open Result.Syntax in
   match service, record with
   | Some service, Some record -> Ok [ { service; record } ]
@@ -90,11 +90,12 @@ let destroy_entries ~target ~service ~record ~declared_functions =
             target))
   | None, _ ->
     let* entries = load ~target in
-    if entries = [] && declared_functions > 0
+    if entries = [] && declared_functions > 0 && not accept_unreleased
     then
       Error
         "mixed-target destroy found declared serverless functions but no ownership \
          inventory; refusing to destroy Kubernetes infrastructure and leave serverless \
-         workloads orphaned"
+         workloads orphaned. Pass --accept-unreleased to destroy without the inventory; \
+         the independent absence check decides the outcome."
     else Ok entries
 ;;

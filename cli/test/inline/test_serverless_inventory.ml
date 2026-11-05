@@ -51,6 +51,7 @@ let%test "mixed destroy refuses declared functions without inventory" =
       ~service:None
       ~record:None
       ~declared_functions:1
+      ~accept_unreleased:false
   in
   Sys.chdir previous;
   let () =
@@ -71,6 +72,41 @@ let%test "mixed destroy refuses declared functions without inventory" =
       ~msg:"inventory refusal names orphan risk"
       true
       (Sol_cli_string.contains ~needle:"orphaned" message)
+;;
+
+let%test "mixed destroy proceeds without inventory on explicit unreleased override" =
+  let root = Filename.temp_file "sol-inventory" "" in
+  Sys.remove root;
+  Unix.mkdir root 0o755;
+  let previous = Sys.getcwd () in
+  Sys.chdir root;
+  let result =
+    Sol_cli_serverless_inventory.destroy_entries
+      ~target:"live/aws/us-east-1"
+      ~service:None
+      ~record:None
+      ~declared_functions:1
+      ~accept_unreleased:true
+  in
+  Sys.chdir previous;
+  let () =
+    let rec remove path =
+      if Sys.is_directory path
+      then (
+        Sys.readdir path |> Array.iter (fun child -> remove (Filename.concat path child));
+        Unix.rmdir path)
+      else Sys.remove path
+    in
+    remove root
+  in
+  match result with
+  | Error message -> Windtrap.fail message
+  | Ok entries ->
+    Windtrap.equal
+      Windtrap.int
+      ~msg:"no inventory entry is invented by the override"
+      0
+      (List.length entries)
 ;;
 
 let%test "mixed destroy enumerates every recorded serverless function" =
@@ -98,6 +134,7 @@ let%test "mixed destroy enumerates every recorded serverless function" =
       ~service:None
       ~record:None
       ~declared_functions:2
+      ~accept_unreleased:false
   in
   Sys.chdir previous;
   let () =

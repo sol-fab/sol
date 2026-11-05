@@ -12,4 +12,5 @@ val destroy_entries
   -> service:string option
   -> record:string option
   -> declared_functions:int
+  -> accept_unreleased:bool
   -> (entry list, string) result
