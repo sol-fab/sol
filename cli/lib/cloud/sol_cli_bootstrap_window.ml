@@ -3,9 +3,12 @@
    Sol installs the privileged platform under a temporary cluster-admin
    elevation. On every provider the window is established by the same question
    -- can the installing identity escalate and bind ClusterRoles? -- and its
-   removal is demonstrated by the same successor question. Only how a provider
-   obtains cluster access differs, so the capability surface and its
-   interpretation live here rather than in each provider module. *)
+   removal is demonstrated by the successor question. The steady-state platform
+   provisioner is deliberately read-only (#1870), so the successor surface is
+   the read authority its diagnostics keep, never a restored mutation verb.
+   Only how a provider obtains cluster access differs, so the capability
+   surface and its interpretation live here rather than in each provider
+   module. *)
 
 let bootstrap_only =
   List.map
@@ -16,7 +19,7 @@ let bootstrap_only =
 let successor =
   List.map
     (fun (verb, resource) -> { Sol_cli_capability.verb; resource })
-    [ "create", "namespaces"; "create", "clusterroles"; "create", "storageclasses" ]
+    [ "get", "namespaces"; "get", "clusterroles"; "get", "storageclasses" ]
 ;;
 
 let can_i ~run { Sol_cli_capability.verb; resource } =

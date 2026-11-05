@@ -133,8 +133,11 @@ case " $* " in
     exit 0
     ;;
   *" auth can-i escalate clusterroles "*|*" auth can-i bind clusterroles "*|\
-    *" auth can-i create namespaces "*|*" auth can-i create clusterroles "*|\
-    *" auth can-i create storageclasses "*)
+    *" auth can-i get "*|\
+    *" auth can-i create "*|*" auth can-i delete "*|\
+    *" auth can-i update "*|*" auth can-i patch "*)
+    if [ "${RBAC_ABSENT:-}" = 1 ]; then exit 1; fi
+    if [ "${AUTH_ABSENT:-}" = 1 ]; then exit 94; fi
     case "$(cat "$FAIL_MARKER_DIR/kubeconfig-role" 2>/dev/null || true)" in
       sol-cluster-access|gcp-provisioner) : ;;
       *)
@@ -170,7 +173,7 @@ case " $* " in
         printf 'no - no RBAC policy matched\n'
         exit 1
         ;;
-      *" can-i create namespaces "*)
+      *" can-i get "*)
         if [ "${FAIL_ON:-}" = rbac ] && [ ! -e "$FAIL_MARKER_DIR/rbac" ]; then
           : >"$FAIL_MARKER_DIR/rbac"
           exit 20
@@ -183,14 +186,17 @@ case " $* " in
         printf 'yes\n'
         exit 0
         ;;
+      *" can-i create namespaces "*)
+        printf 'no - no RBAC policy matched\n'
+        exit 1
+        ;;
       *" can-i create clusterroles "*|*" can-i create storageclasses "*)
-        if [ "${SUCCESSOR_DENIED:-}" = 1 ] &&
-          [ "$(cat "$FAIL_MARKER_DIR/bootstrap-window" 2>/dev/null || true)" = "false" ]; then
-          printf 'no - no RBAC policy matched\n'
-          exit 1
-        fi
-        printf 'yes\n'
-        exit 0
+        printf 'no - no RBAC policy matched\n'
+        exit 1
+        ;;
+      *" can-i create "*|*" can-i delete "*|*" can-i update "*|*" can-i patch "*)
+        printf 'no - no RBAC policy matched\n'
+        exit 1
         ;;
     esac
 esac
@@ -424,7 +430,7 @@ if [ "${FAIL_ON:-}" = crds ] && [ ! -e "$FAIL_MARKER_DIR/crds" ] &&
   : >"$FAIL_MARKER_DIR/crds"; exit 20
 fi
 if [ "${FAIL_ON:-}" = rbac ] && [ ! -e "$FAIL_MARKER_DIR/rbac" ] &&
-   case "$*" in "auth can-i create namespaces") true;; *) false;; esac; then
+   case "$*" in "auth can-i get namespaces") true;; *) false;; esac; then
   : >"$FAIL_MARKER_DIR/rbac"; exit 20
 fi
 if [ "${FAIL_READINESS_ALWAYS:-}" = 1 ] &&

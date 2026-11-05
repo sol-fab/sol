@@ -545,12 +545,15 @@ let fake_gcp_commands () =
        ; "      open) printf 'yes\\n'; exit 0 ;;"
        ; "      *) printf 'no - no RBAC policy matched\\n'; exit 1 ;;"
        ; "    esac ;;"
+       ; "  *\" auth can-i get namespaces \"*|*\" auth can-i get clusterroles \"*|*\" \
+          auth can-i get storageclasses \"*)"
+       ; "    case \"${SOL_TEST_GCP_WINDOW:-}\" in"
+       ; "      locked) printf 'no - no RBAC policy matched\\n'; exit 1 ;;"
+       ; "      *) printf 'yes\\n'; exit 0 ;;"
+       ; "    esac ;;"
        ; "  *\" auth can-i create namespaces \"*|*\" auth can-i create clusterroles \
           \"*|*\" auth can-i create storageclasses \"*)"
-       ; "    case \"${SOL_TEST_GCP_WINDOW:-}\" in"
-       ; "      closed) printf 'yes\\n'; exit 0 ;;"
-       ; "      *) printf 'no - no RBAC policy matched\\n'; exit 1 ;;"
-       ; "    esac ;;"
+       ; "    printf 'no - no RBAC policy matched\\n'; exit 1 ;;"
        ; "esac"
        ; "exit 1"
        ]);
@@ -631,6 +634,13 @@ let test_gcp_installation_window () =
     (match window.successor () with
      | Ok () -> ()
      | Error message -> Windtrap.fail message);
+    (* The successor is the read-only platform provisioner's read authority.
+       Losing it is a failure; the read-only verbs are not mutation authority. *)
+    Unix.putenv "SOL_TEST_GCP_WINDOW" "locked";
+    (match window.successor () with
+     | Ok () -> Windtrap.fail "a successor with no read authority passed"
+     | Error _ -> ());
+    Unix.putenv "SOL_TEST_GCP_WINDOW" "closed";
     (* A capability still permitted after removal is refused. *)
     Unix.putenv "SOL_TEST_GCP_WINDOW" "open";
     match window.deescalated () with
