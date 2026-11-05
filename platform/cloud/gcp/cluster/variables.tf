@@ -61,6 +61,12 @@ variable "sql_tier" {
   default     = "db-g1-small"
 }
 
+variable "sql_edition" {
+  description = "Cloud SQL edition; the small shared-core tier is Enterprise, not Enterprise Plus"
+  type        = string
+  default     = "ENTERPRISE"
+}
+
 variable "sql_disk_gb" {
   type    = number
   default = 20
