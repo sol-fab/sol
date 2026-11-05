@@ -106,6 +106,35 @@ let%test "ownership accepts the exact claim on both providers" =
      | _ -> false)
 ;;
 
+let%test "AWS create-secret passes every ownership tag under one --tags flag" =
+  let argv = Sol_cli_secret_authority.aws_create_args aws_secret in
+  let tag_flags = List.filter (fun arg -> String.equal arg "--tags") argv in
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"one --tags flag, not one per tag"
+    1
+    (List.length tag_flags);
+  let rec tags_after = function
+    | [] -> []
+    | "--tags" :: rest -> rest
+    | _ :: rest -> tags_after rest
+  in
+  let tags = tags_after argv |> List.filter (String.starts_with ~prefix:"Key=") in
+  Windtrap.equal
+    Windtrap.int
+    ~msg:"all four ownership tags are passed"
+    4
+    (List.length tags);
+  List.iter
+    (fun tag ->
+       Windtrap.equal
+         Windtrap.bool
+         ~msg:("tag is a Key=,Value= entry: " ^ tag)
+         true
+         (String.contains tag ','))
+    tags
+;;
+
 let%test "a pending provider deletion is not absence" =
   match status (`Assoc [ "DeletedDate", `String "2026-01-01T00:00:00Z" ]) with
   | Sol_cli_secret_authority.Pending_deletion _ -> ()
