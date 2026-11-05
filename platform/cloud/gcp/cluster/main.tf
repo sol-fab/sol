@@ -207,6 +207,7 @@ resource "google_sql_database_instance" "postgres" {
 
   settings {
     tier                        = var.sql_tier
+    edition                     = var.sql_edition
     availability_type           = var.sql_high_availability ? "REGIONAL" : "ZONAL"
     deletion_protection_enabled = var.sql_deletion_protection
     disk_autoresize             = true
