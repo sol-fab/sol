@@ -79,6 +79,25 @@ redirect URI (`https://grafana.<base_domain>/login/generic_oauth`) and the
 missing `TF_VAR_grafana_oidc_*` names without recording their values. A custom
 provider additionally requires the authorization, token and userinfo URLs.
 
+### Local OAuth client files
+
+Provider OAuth client JSON is operator input, never repository content. Keep it under
+`.qualification/oauth/` (ignored by Git, directory mode `0700`, files mode `0600`), for
+example `oauth-sol-aws-client.json` and `oauth-sol-gcp-client.json`. Export the two
+Terraform variables in the run shell, without echoing the secret:
+
+```sh
+client=".qualification/oauth/oauth-sol-aws-client.json"   # or the GCP file; run from the repo root
+export TF_VAR_grafana_oidc_client_id="$(jq -r .web.client_id "$client")"
+export TF_VAR_grafana_oidc_client_secret="$(jq -r .web.client_secret "$client")"
+```
+
+The client's redirect URI must be
+`https://grafana.<base_domain>/login/generic_oauth`. Do not paste the secret into an
+issue, run record, attempt log, PR, or shell history; evidence records only whether the
+inputs were present. A run that cannot find them refuses before provisioning (see
+`require_grafana_oidc_inputs`).
+
 ### GCP quota preflight
 
 The GCP provider runs `require_gcp_ssd_headroom` before the first mutation. It

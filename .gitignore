@@ -29,3 +29,7 @@ override.tf.json
 # Installed-release smoke scratch (removed on exit)
 .smoke-reachback/
 __pycache__/
+
+# Local qualification attempts, installed candidates, and provider OAuth client
+# files. This directory is operator evidence/input, never repository content.
+.qualification/
