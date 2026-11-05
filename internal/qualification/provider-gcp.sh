@@ -641,7 +641,7 @@ hook_gcp_destroy_mixed_absent() {
     say "mixed destroy: serverless job $job is still present"
     return 1
   fi
-  if ! grep -qiE 'NOT_FOUND|not found|does not exist' "$LOG_DIR/mixed-destroy-job-probe.json"; then
+  if ! grep -qiE 'NOT_FOUND|not found|does not exist|cannot find' "$LOG_DIR/mixed-destroy-job-probe.json"; then
     say "mixed destroy: Cloud Run Job absence for $job is UNKNOWN, not absence"
     return 1
   fi
