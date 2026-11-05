@@ -42,6 +42,11 @@ cat > "$work/bin/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
 state="$FAKE_GCLOUD_STATE"
+if [[ "$1 $2 $3" == "run jobs add-iam-policy-binding" ]]; then
+  [[ "$*" == *roles/run.jobsExecutor* ]] || { echo "job binding lost its executor role" >&2; exit 1; }
+  echo "updated"
+  exit 0
+fi
 if [[ "$1 $2 $3" == "run jobs get-iam-policy" ]]; then
   printf '{"bindings":[{"role":"roles/run.jobsExecutor","members":["serviceAccount:sol-scheduler@example.iam.gserviceaccount.com"]}]}\n'
   exit 0

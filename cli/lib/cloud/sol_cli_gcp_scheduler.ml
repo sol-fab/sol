@@ -108,6 +108,31 @@ let create_or_update (r : request) ~name ~uri ~timezone =
     |> Result.map (fun _ -> ())
 ;;
 
+let grant_executor (r : request) =
+  gcloud
+    r
+    [ "run"
+    ; "jobs"
+    ; "add-iam-policy-binding"
+    ; r.job
+    ; "--member"
+    ; "serviceAccount:" ^ r.service_account
+    ; "--role"
+    ; "roles/run.jobsExecutor"
+    ; "--project"
+    ; r.project
+    ; "--region"
+    ; r.region
+    ; "--format"
+    ; "json"
+    ]
+  |> Result.map (fun _ -> ())
+  |> Result.map_error (fun message ->
+    Printf.sprintf
+      "could not grant the scheduler invoke role on the Cloud Run Job: %s"
+      message)
+;;
+
 let deploy (r : request) =
   let* () =
     if String.trim r.service_account = ""
@@ -117,6 +142,7 @@ let deploy (r : request) =
          authorization root must establish a dedicated scheduler service account"
     else Ok ()
   in
+  let* () = grant_executor r in
   let* policy =
     gcloud
       r

@@ -117,15 +117,6 @@ resource "google_service_account_iam_member" "scheduler_act_as" {
   member             = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-cloudscheduler.iam.gserviceaccount.com"
 }
 
-resource "google_cloud_run_v2_job_iam_member" "scheduler" {
-  for_each = local.scheduler_units
-  project  = var.project_id
-  location = var.region
-  name     = each.value.function_name
-  role     = "roles/run.jobsExecutor"
-  member   = "serviceAccount:${google_service_account.scheduler[each.key].email}"
-}
-
 resource "google_service_account" "serverless" {
   for_each     = local.serverless_units
   account_id   = "sol-${var.environment}-rt-${substr(sha1(each.value), 0, 8)}"
