@@ -2036,7 +2036,7 @@ KEEP_LOG_DIR=1 SKIP_PREPARE=1 run_phase alphaunits cloud \
   APP_UNITS="orders_svc fulfilment_worker" SVC_UNIT=orders_svc WORKER_UNIT=fulfilment_worker
 is "exit 0" "$(cat "$TMP/alphaunits.rc")" "0"
 has "the service image is built from the selected unit" \
-  "docker build -f $TMP/alphaunits.logs/app-build-context/app/payments/orders_svc/Dockerfile" \
+  "docker build --platform linux/amd64 --provenance=false --sbom=false -f $TMP/alphaunits.logs/app-build-context/app/payments/orders_svc/Dockerfile" \
   "$TMP/alphaunits.prepare-docker"
 has "and from the candidate revision's context, not the checkout" \
   " $TMP/alphaunits.logs/app-build-context" "$TMP/alphaunits.prepare-docker"
@@ -2078,7 +2078,7 @@ HARNESS_AHEAD="$(git -C "$WORKSPACE" rev-parse HEAD)"
 run_phase aheadoftag prepare APP_UNITS="orders_svc"
 is "the run exits 0" "$(cat "$TMP/aheadoftag.rc")" "0"
 has "the build context is the candidate revision's, not the harness's" \
-  "docker build -f $TMP/aheadoftag.logs/app-build-context/app/payments/orders_svc/Dockerfile" \
+  "docker build --platform linux/amd64 --provenance=false --sbom=false -f $TMP/aheadoftag.logs/app-build-context/app/payments/orders_svc/Dockerfile" \
   "$TMP/aheadoftag.docker"
 has "the binding names the candidate revision" \
   "candidate_revision: $CANDIDATE_REVISION" "$TMP/aheadoftag.logs/candidate-binding.txt"
