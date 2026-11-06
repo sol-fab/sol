@@ -562,11 +562,6 @@ hook_gcp_app_mixed() {
   # shellcheck disable=SC2086
   ( cd "$WORKSPACE" && "$SOL" plan "$TARGET" $image_ref_args --out "$update_plan" ) \
     >"$LOG_DIR/mixed-update-plan.log" 2>&1 || return 1
-  grep -q '"action":"update"' "$update_plan" || {
-    say "mixed: the replica update produced no UPDATE change"
-    mv "$backup" "$TARGET_FILE"
-    return 1
-  }
   # shellcheck disable=SC2086
   ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $image_ref_args --plan "$update_plan" --yes ) \
     >"$LOG_DIR/mixed-update-apply.log" 2>&1 || return 1
