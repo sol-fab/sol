@@ -454,9 +454,15 @@ let execute ~(r : request) ~job ~image ~generation =
 ;;
 
 let service_account_of_job json =
-  Sol_cli_json.string
-    (Sol_cli_json.field [ "spec"; "template"; "spec"; "serviceAccountName" ] json)
-  |> Option.value ~default:""
+  (* Cloud Run v2 Jobs nest the execution template inside the job template;
+     unlike a Service, the live shape is
+     spec.template.spec.template.spec.serviceAccountName. Keep the shallow
+     shape as a fallback for older emitters/fixtures. *)
+  let find path = Sol_cli_json.string (Sol_cli_json.field path json) in
+  match find [ "spec"; "template"; "spec"; "template"; "spec"; "serviceAccountName" ] with
+  | Some value when value <> "" -> value
+  | _ ->
+    find [ "spec"; "template"; "spec"; "serviceAccountName" ] |> Option.value ~default:""
 ;;
 
 let verify_runtime_service_account ~expected json =
