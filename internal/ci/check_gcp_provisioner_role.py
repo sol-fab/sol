@@ -11,6 +11,7 @@ ALLOWED = {
     "container.clusters.list",
     "container.clusters.getCredentials",
     "container.clusters.connect",
+    "container.serviceAccounts.createToken",
 }
 OBJECT_AUTHORITY = re.compile(
     r"^container\.(deployments|pods|namespaces|jobs|secrets|configMaps|clusterRoles|roleBindings)\."
@@ -44,14 +45,14 @@ def main():
     if any("roles/container.developer" in s for r in found for s in strings(r.body)):
         fail("predefined roles/container.developer grant is present")
     permissions = [tfconfig.unquote(p) for p in role.body.get("permissions", [])]
-    for permission in sorted(ALLOWED, key=["container.clusters.get", "container.clusters.list", "container.clusters.getCredentials", "container.clusters.connect"].index):
+    for permission in sorted(ALLOWED):
         if permission not in permissions:
             fail(f"custom role is missing {permission}")
     if any(OBJECT_AUTHORITY.match(p) for p in permissions):
         fail("custom role grants Kubernetes-object authority")
     if {p for p in permissions if p.startswith("container.")} != ALLOWED:
-        fail("custom role contains a container permission outside the four-item allowlist")
-    print("check_gcp_provisioner_role: provisioner IAM is discovery/credential-only")
+        fail("custom role contains a container permission outside the narrow allowlist")
+    print("check_gcp_provisioner_role: provisioner IAM is discovery/credential/token-only")
 
 
 main()

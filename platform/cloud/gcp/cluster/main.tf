@@ -304,6 +304,7 @@ resource "google_project_iam_custom_role" "provisioner_cluster_access" {
     "container.clusters.list",
     "container.clusters.getCredentials",
     "container.clusters.connect",
+    "container.serviceAccounts.createToken",
   ]
 }
 
