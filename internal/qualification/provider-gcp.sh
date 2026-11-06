@@ -539,7 +539,7 @@ hook_gcp_app_mixed() {
   local plan="$LOG_DIR/mixed-plan.json"
   local job
   job="$(app_k8s_name "$MIXED_FN_UNIT")"
-  say "mixed: planning the persisted transition for serverless $MIXED_FN_UNIT and Kubernetes $APP_SERVICE"
+  say "mixed: planning the persisted transition for serverless $MIXED_FN_UNIT and Kubernetes ${APP_SERVICE:-orders_svc}"
   # shellcheck disable=SC2086
   ( cd "$WORKSPACE" && "$SOL" plan "$TARGET" $image_ref_args --out "$plan" ) \
     >"$LOG_DIR/mixed-plan.log" 2>&1 || return 1
