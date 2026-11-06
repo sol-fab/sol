@@ -73,7 +73,7 @@ fi
 if [[ "$1 $2 $3" == "run jobs describe" ]]; then
   [[ -f "$state/job" ]] || { echo "ERROR: Cannot find job [probe-fn]." >&2; exit 1; }
   cat <<JSON
-{"spec":{"template":{"spec":{"serviceAccountName":"sol-runtime@example.iam.gserviceaccount.com"}}},"metadata":{"name":"probe-fn","labels":{"sol-owned":"cloud-run-job-experiment","sol-service":"probe-fn"},"generation":"2"}}
+{"spec":{"template":{"spec":{"template":{"spec":{"serviceAccountName":"sol-runtime@example.iam.gserviceaccount.com"}}}}},"metadata":{"name":"probe-fn","labels":{"sol-owned":"cloud-run-job-experiment","sol-service":"probe-fn"},"generation":"2"}}
 JSON
   exit 0
 fi
