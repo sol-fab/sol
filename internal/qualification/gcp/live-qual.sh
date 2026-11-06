@@ -1705,6 +1705,8 @@ app_context_path() {
     fulfilment_worker) printf 'app/comms/fulfilment_worker' ;;
     order_svc) printf 'app/demo_ts/order_svc' ;;
     fulfillment_worker) printf 'app/demo_ts/fulfillment_worker' ;;
+    probe_fn) printf 'app/ops/probe_fn' ;;
+    probe_ts_fn) printf 'app/demo_ts/probe_ts_fn' ;;
     *) return 1 ;;
   esac
 }
@@ -1725,6 +1727,7 @@ $TARGET_ENV:
   targets:
     $TARGET_KEY:
       cluster_name: $CLUSTER
+      execution: $(if [ "${MIXED:-0}" = 1 ]; then printf mixed; else printf kubernetes; fi)
       base_domain: $BASE_DOMAIN
       # The installation the cloud phase created is durable and Sol-owned, and the app
       # deploy re-establishes it before it deploys: without this the deploy refuses with
