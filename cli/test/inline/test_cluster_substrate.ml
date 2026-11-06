@@ -64,6 +64,8 @@ let test_absence_wording () =
          true
          (Sol_cli_gcloud.says_not_found wording))
     [ "NOT_FOUND: Resource was not found"
+    ; "ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret        \
+       [projects/819835583654/secrets/x] not found"
     ; "ERROR: (gcloud.container.clusters.describe) ResponseError: code=404, message=Not \
        found: projects/p/locations/r/clusters/c."
     ; "Could not fetch resource: - The resource 'x' was not found"
