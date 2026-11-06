@@ -541,7 +541,7 @@ hook_gcp_app_mixed() {
   job="$(app_k8s_name "$MIXED_FN_UNIT")"
   say "mixed: planning the persisted transition for serverless $MIXED_FN_UNIT and Kubernetes ${APP_SERVICE:-orders_svc}"
   # shellcheck disable=SC2086
-  ( cd "$WORKSPACE" && "$SOL" plan "$TARGET" --registry "$(app_registry)" $image_ref_args --out "$plan" ) \
+  ( cd "$WORKSPACE" && "$SOL" plan "$TARGET" $image_ref_args --out "$plan" ) \
     >"$LOG_DIR/mixed-plan.log" 2>&1 || return 1
   [ -s "$plan" ] || { say "mixed: sol plan wrote no persisted plan"; return 1; }
   grep -q '"serverless"' "$plan" || { say "mixed: persisted plan has no serverless component"; return 1; }
@@ -568,10 +568,10 @@ hook_gcp_app_mixed() {
     return 1
   }
   # shellcheck disable=SC2086
-  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $image_ref_args --plan "$update_plan" --yes ) \
+  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" --registry "$(app_registry)" $image_ref_args --plan "$update_plan" --yes ) \
     >"$LOG_DIR/mixed-update-apply.log" 2>&1 || return 1
   # shellcheck disable=SC2086
-  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $image_ref_args --plan "$update_plan" --yes ) \
+  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" --registry "$(app_registry)" $image_ref_args --plan "$update_plan" --yes ) \
     >"$LOG_DIR/mixed-update-reapply.log" 2>&1 || return 1
   if grep -qE '^[[:space:]]*DELETE' "$LOG_DIR/mixed-update-reapply.log"; then
     say "mixed: reapplying the update plan proposed a destructive change"
@@ -591,7 +591,7 @@ hook_gcp_app_mixed() {
     ( cd "$WORKSPACE" && "$SOL" plan "$TARGET" $bad_args --out "$bad_plan" ) \
       >"$LOG_DIR/mixed-partial-plan.log" 2>&1 || return 1
     # shellcheck disable=SC2086
-    if ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $bad_args --plan "$bad_plan" --yes ) \
+    if ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" --registry "$(app_registry)" $bad_args --plan "$bad_plan" --yes ) \
       >"$LOG_DIR/mixed-partial-failure.log" 2>&1; then
       say "mixed: the injected Kubernetes image failure did not fail"
       return 1
@@ -609,7 +609,7 @@ hook_gcp_app_mixed() {
       return 1
     fi
     # shellcheck disable=SC2086
-    ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $image_ref_args --plan "$update_plan" --yes ) \
+    ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" --registry "$(app_registry)" $image_ref_args --plan "$update_plan" --yes ) \
       >"$LOG_DIR/mixed-recovery.log" 2>&1 || return 1
   fi
   local replicas

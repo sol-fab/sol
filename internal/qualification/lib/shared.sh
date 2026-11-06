@@ -373,7 +373,11 @@ for environment in document.values():
     for target in (environment.get("targets") or {}).values():
         services = target.setdefault("services", {})
         entry = services.setdefault(service, {})
-        entry["scale_min"] = replicas
+        scale = entry.setdefault("scale", {})
+        if not isinstance(scale, dict):
+            scale = {}
+            entry["scale"] = scale
+        scale["min"] = replicas
 with open(path, "w") as handle:
     handle.writelines(header)
     yaml.safe_dump(document, handle, sort_keys=False)
