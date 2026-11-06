@@ -44,7 +44,14 @@ let says_not_found ?project text =
     | None -> true
     | Some project ->
       let project = String.lowercase_ascii project in
-      List.for_all (fun mentioned -> mentioned = project) (mentioned_projects text)
+      let mentions = mentioned_projects text in
+      (* gcloud often names the project by number in a Secret Manager NOT_FOUND,
+         while the command was scoped with the project ID. The numeric mention is
+         the same scope the CLI resolved; a named project ID must still match. *)
+      let numeric value =
+        value <> "" && String.for_all (fun c -> c >= '0' && c <= '9') value
+      in
+      List.for_all (fun mentioned -> mentioned = project || numeric mentioned) mentions
   in
   absent_wording && subject_matches
 ;;
