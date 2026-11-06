@@ -541,16 +541,16 @@ hook_gcp_app_mixed() {
   job="$(app_k8s_name "$MIXED_FN_UNIT")"
   say "mixed: planning the persisted transition for serverless $MIXED_FN_UNIT and Kubernetes ${APP_SERVICE:-orders_svc}"
   # shellcheck disable=SC2086
-  ( cd "$WORKSPACE" && "$SOL" plan "$TARGET" $image_ref_args --out "$plan" ) \
+  ( cd "$WORKSPACE" && "$SOL" plan "$TARGET" --registry "$(app_registry)" $image_ref_args --out "$plan" ) \
     >"$LOG_DIR/mixed-plan.log" 2>&1 || return 1
   [ -s "$plan" ] || { say "mixed: sol plan wrote no persisted plan"; return 1; }
   grep -q '"serverless"' "$plan" || { say "mixed: persisted plan has no serverless component"; return 1; }
   grep -q '"kubernetes"' "$plan" || { say "mixed: persisted plan has no Kubernetes component"; return 1; }
   # shellcheck disable=SC2086
-  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $image_ref_args --plan "$plan" --yes ) \
+  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" --registry "$(app_registry)" $image_ref_args --plan "$plan" --yes ) \
     >"$LOG_DIR/mixed-apply.log" 2>&1 || return 1
   # shellcheck disable=SC2086
-  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $image_ref_args --plan "$plan" --yes ) \
+  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" --registry "$(app_registry)" $image_ref_args --plan "$plan" --yes ) \
     >"$LOG_DIR/mixed-reapply.log" 2>&1 || return 1
   if grep -qE '^[[:space:]]*DELETE' "$LOG_DIR/mixed-reapply.log"; then
     say "mixed: reapplying the reviewed plan proposed a destructive change"
