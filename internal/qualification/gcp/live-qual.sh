@@ -1712,6 +1712,8 @@ app_context_path() {
 app_image_ref() { printf '%s/pluto/%s:%s' "$(app_registry)" "$(app_k8s_name "$1")" "$APP_TAG"; }
 
 write_app_target() {
+  local probe_omit=true
+  if [ "${MIXED:-0}" = 1 ]; then probe_omit=false; fi
   mkdir -p "$(dirname "$TARGET_FILE")"
   if [ -f "$TARGET_FILE" ] && ! owns_target_file; then
     say "REFUSING: $TARGET_FILE exists and was not written by this harness; move it aside first."
@@ -1758,7 +1760,7 @@ $(production_target_fields)
         fulfilment_worker: {}
         order_svc: {}
         fulfillment_worker: {}
-        probe_fn: {omit: true}
+        probe_fn: {omit: $probe_omit}
         probe_ts_fn: {omit: true}
         charge_svc:
           omit: true
