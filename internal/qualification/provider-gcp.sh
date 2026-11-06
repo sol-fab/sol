@@ -547,10 +547,10 @@ hook_gcp_app_mixed() {
   grep -q '"serverless"' "$plan" || { say "mixed: persisted plan has no serverless component"; return 1; }
   grep -q '"kubernetes"' "$plan" || { say "mixed: persisted plan has no Kubernetes component"; return 1; }
   # shellcheck disable=SC2086
-  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $image_ref_args --plan "$plan" --yes ) \
+  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" --registry "$(app_registry)" $image_ref_args --plan "$plan" --yes ) \
     >"$LOG_DIR/mixed-apply.log" 2>&1 || return 1
   # shellcheck disable=SC2086
-  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $image_ref_args --plan "$plan" --yes ) \
+  ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" --registry "$(app_registry)" $image_ref_args --plan "$plan" --yes ) \
     >"$LOG_DIR/mixed-reapply.log" 2>&1 || return 1
   if grep -qE '^[[:space:]]*DELETE' "$LOG_DIR/mixed-reapply.log"; then
     say "mixed: reapplying the reviewed plan proposed a destructive change"
