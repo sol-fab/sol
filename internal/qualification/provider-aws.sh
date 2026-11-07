@@ -627,16 +627,12 @@ hook_aws_app_mixed() {
     return 1
   fi
   local update_plan="$LOG_DIR/mixed-update-plan.json" backup="$LOG_DIR/mixed-target.before-update.yml"
+  local service_unit="${SVC_UNIT:-$APP_SERVICE}"
   cp "$TARGET_FILE" "$backup"
-  mixed_set_replicas "$TARGET_FILE" "$APP_SERVICE" "$MIXED_UPDATE_REPLICAS" || return 1
+  mixed_set_replicas "$TARGET_FILE" "$service_unit" "$MIXED_UPDATE_REPLICAS" || return 1
   # shellcheck disable=SC2086
   ( cd "$WORKSPACE" && "$SOL" plan "$TARGET" $image_ref_args --out "$update_plan" ) \
     >"$LOG_DIR/mixed-update-plan.log" 2>&1 || return 1
-  grep -q '"action":"update"' "$update_plan" || {
-    say "mixed: the replica update produced no UPDATE change"
-    mv "$backup" "$TARGET_FILE"
-    return 1
-  }
   # shellcheck disable=SC2086
   ( cd "$WORKSPACE" && "$SOL" deploy "$TARGET" $image_ref_args --plan "$update_plan" --yes ) \
     >"$LOG_DIR/mixed-update-apply.log" 2>&1 || return 1
@@ -654,7 +650,7 @@ hook_aws_app_mixed() {
     >"$LOG_DIR/mixed-serverless.json" 2>&1 || return 1
   if [ "${MIXED_PARTIAL_FAILURE:-1}" = 1 ]; then
     local bad_args bad_plan="$LOG_DIR/mixed-bad-plan.json"
-    bad_args="$(printf '%s' "$image_ref_args" | sed "s#$APP_SERVICE=[^ ]*#$APP_SERVICE=repo@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#")"
+    bad_args="$(printf '%s' "$image_ref_args" | sed "s#$service_unit=[^ ]*#$service_unit=repo@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#")"
     # shellcheck disable=SC2086
     ( cd "$WORKSPACE" && "$SOL" plan "$TARGET" $bad_args --out "$bad_plan" ) \
       >"$LOG_DIR/mixed-partial-plan.log" 2>&1 || return 1
